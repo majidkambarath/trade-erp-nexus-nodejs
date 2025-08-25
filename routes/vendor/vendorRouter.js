@@ -9,16 +9,16 @@ const router = express.Router();
 router.use(authenticateToken);
 
 router.post(
-  "/",
+  "/vendors",
   validate(vendorValidationRules),
   VendorController.createVendor
 );
-router.get("/", VendorController.getAllVendors);
-router.get("/:id", VendorController.getVendorById);
+router.get("/vendors", VendorController.getAllVendors);
+router.get("/vendors/:id", VendorController.getVendorById);
 router.put(
-  "/:id",
+  "/vendors/:id",
   VendorController.updateVendor
 );
-router.delete("/:id", VendorController.deleteVendor);
+router.delete("/vendors/:id", VendorController.deleteVendor);
 
 module.exports = router;

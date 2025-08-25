@@ -49,6 +49,7 @@ exports.deleteUOM = catchAsync(async (req, res) => {
 
 // UOM Conversion Controllers
 exports.createUOMConversion = catchAsync(async (req, res) => {
+  console.log(req.body)
   const conversion = await UOMService.createUOMConversion(req.body);
   res.status(201).json({ 
     success: true, 

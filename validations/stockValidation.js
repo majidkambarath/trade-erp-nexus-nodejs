@@ -1,135 +1,60 @@
-const { body } = require("express-validator");
+// stockValidation.js
+const { body, param } = require("express-validator");
 
 exports.stockValidationRules = [
-  body("sku")
-    .notEmpty()
-    .withMessage("SKU is required")
-    .isLength({ min: 3, max: 50 })
-    .withMessage("SKU must be between 3 and 50 characters"),
-
-  body("itemName")
-    .notEmpty()
-    .withMessage("Item name is required")
-    .isLength({ min: 2, max: 100 })
-    .withMessage("Item name must be between 2 and 100 characters"),
-
-  body("category")
-    .notEmpty()
-    .withMessage("Category is required")
-    .isLength({ min: 2, max: 50 })
-    .withMessage("Category must be between 2 and 50 characters"),
-
-  body("unitOfMeasure")
-    .notEmpty()
-    .withMessage("Unit of measure is required")
-    .isIn(["Piece", "Kg", "Liter", "Meter", "Box", "Carton"])
-    .withMessage("Invalid unit of measure"),
-
-  body("reorderLevel")
-    .optional()
-    .isNumeric()
-    .withMessage("Reorder level must be a number")
-    .isFloat({ min: 0 })
-    .withMessage("Reorder level must be positive"),
-
-  body("purchasePrice")
-    .optional()
-    .isNumeric()
-    .withMessage("Purchase price must be a number")
-    .isFloat({ min: 0 })
-    .withMessage("Purchase price must be positive"),
-
-  body("salesPrice")
-    .optional()
-    .isNumeric()
-    .withMessage("Sales price must be a number")
-    .isFloat({ min: 0 })
-    .withMessage("Sales price must be positive"),
-
+  body("sku").notEmpty().withMessage("SKU is required"),
+  body("itemName").notEmpty().withMessage("Item name is required"),
+  body("category").notEmpty().withMessage("Category is required"),
+  body("unitOfMeasure").notEmpty().withMessage("Unit of measure is required"),
   body("currentStock")
     .optional()
-    .isNumeric()
-    .withMessage("Current stock must be a number")
+    .isInt({ min: 0 })
+    .withMessage("Current stock must be a non-negative integer"),
+  body("reorderLevel")
+    .optional()
+    .isInt({ min: 0 })
+    .withMessage("Reorder level must be a non-negative integer"),
+  body("purchasePrice")
+    .optional()
     .isFloat({ min: 0 })
-    .withMessage("Current stock must be positive"),
-
-  body("status")
+    .withMessage("Purchase price must be a non-negative number"),
+  body("salesPrice")
     .optional()
-    .isIn(["Active", "Inactive"])
-    .withMessage("Status must be either Active or Inactive"),
-
-  body("expiryDate")
-    .optional()
-    .isISO8601()
-    .withMessage("Expiry date must be a valid date"),
-
-  body("barcodeQrCode")
-    .optional()
-    .isLength({ min: 3, max: 50 })
-    .withMessage("Barcode/QR code must be between 3 and 50 characters"),
+    .isFloat({ min: 0 })
+    .withMessage("Sales price must be a non-negative number"),
 ];
 
 exports.stockUpdateValidationRules = [
-  body("sku")
-    .optional()
-    .isLength({ min: 3, max: 50 })
-    .withMessage("SKU must be between 3 and 50 characters"),
-
-  body("itemName")
-    .optional()
-    .isLength({ min: 2, max: 100 })
-    .withMessage("Item name must be between 2 and 100 characters"),
-
-  body("category")
-    .optional()
-    .isLength({ min: 2, max: 50 })
-    .withMessage("Category must be between 2 and 50 characters"),
-
+  body("sku").optional().notEmpty().withMessage("SKU cannot be empty"),
+  body("itemName").optional().notEmpty().withMessage("Item name cannot be empty"),
+  body("category").optional().notEmpty().withMessage("Category cannot be empty"),
   body("unitOfMeasure")
     .optional()
-    .isIn(["Piece", "Kg", "Liter", "Meter", "Box", "Carton"])
-    .withMessage("Invalid unit of measure"),
-
-  body("reorderLevel")
-    .optional()
-    .isNumeric()
-    .withMessage("Reorder level must be a number")
-    .isFloat({ min: 0 })
-    .withMessage("Reorder level must be positive"),
-
-  body("purchasePrice")
-    .optional()
-    .isNumeric()
-    .withMessage("Purchase price must be a number")
-    .isFloat({ min: 0 })
-    .withMessage("Purchase price must be positive"),
-
-  body("salesPrice")
-    .optional()
-    .isNumeric()
-    .withMessage("Sales price must be a number")
-    .isFloat({ min: 0 })
-    .withMessage("Sales price must be positive"),
-
+    .notEmpty()
+    .withMessage("Unit of measure cannot be empty"),
   body("currentStock")
     .optional()
-    .isNumeric()
-    .withMessage("Current stock must be a number")
+    .isInt({ min: 0 })
+    .withMessage("Current stock must be a non-negative integer"),
+  body("reorderLevel")
+    .optional()
+    .isInt({ min: 0 })
+    .withMessage("Reorder level must be a non-negative integer"),
+  body("purchasePrice")
+    .optional()
     .isFloat({ min: 0 })
-    .withMessage("Current stock must be positive"),
-
-  body("status")
+    .withMessage("Purchase price must be a non-negative number"),
+  body("salesPrice")
     .optional()
-    .isIn(["Active", "Inactive"])
-    .withMessage("Status must be either Active or Inactive"),
+    .isFloat({ min: 0 })
+    .withMessage("Sales price must be a non-negative number"),
+];
 
-  body("expiryDate")
-    .optional()
-    .isISO8601()
-    .withMessage("Expiry date must be a valid date"),
-
-  body("barcodeQrCode")
-    .optional()
-    .isLength({ min: 3, max: 50 })
-    .withMessage("Barcode/QR code must be between 3 and 50 characters"),
+// New validation for quantity update
+exports.stockQuantityValidationRules = [
+  param("id").isMongoId().withMessage("Invalid stock ID"),
+  body("quantity")
+    .isInt({ min: 0 })
+    .withMessage("Quantity must be a non-negative integer"),
+  body("reason").optional().isString().withMessage("Reason must be a string"),
 ];

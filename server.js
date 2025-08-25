@@ -10,7 +10,8 @@ const customerRouter = require("./routes/customer/customerRouter"); // Add custo
 const adminRouter = require("./routes/core/adminRouter");
 const stockRouter = require("./routes/stock/stockRouter");
 const uomRouter = require("./routes/unit/uomRouter");
-
+const transactionRouter = require("./routes/orderPurchase/transactionRouter");
+const inventoryRouter = require("./routes/stock/inventoryMovementRoutes");
 dotenv.config();
 
 const app = express();
@@ -55,6 +56,8 @@ app.use("/api/v1/vendors", vendorRouter);
 app.use("/api/v1/customers", customerRouter);
 app.use("/api/v1/stock", stockRouter);
 app.use("/api/v1/uom", uomRouter);
+app.use("/api/v1/transactions", transactionRouter);
+app.use("/api/v1/inventory", inventoryRouter);
 
 
 // Health check endpoint
