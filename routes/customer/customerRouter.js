@@ -10,25 +10,19 @@ const router = express.Router();
 
 router.use(authenticateToken);
 
-
 router.get("/stats", CustomerController.getCustomerStats);
 router.get("/search", CustomerController.searchCustomers);
 router.get("/status/:status", CustomerController.getCustomersByStatus);
-router.get("/customer-id/:customerId", CustomerController.getCustomerByCustomerId);
+router.get(
+  "/customer-id/:customerId",
+  CustomerController.getCustomerByCustomerId
+);
 
 router.get("/customers", CustomerController.getAllCustomers);
-router.post(
-  "/",
-  validate(customerValidationRules),
-  CustomerController.createCustomer
-);
+router.post("/", CustomerController.createCustomer);
 
 router.get("/:id", CustomerController.getCustomerById);
-router.put(
-  "/:id",
-  validate(customerValidationRules),
-  CustomerController.updateCustomer
-);
+router.put("/:id", CustomerController.updateCustomer);
 router.patch("/:id/stats", CustomerController.updateCustomerStats);
 router.delete("/:id", CustomerController.deleteCustomer);
 

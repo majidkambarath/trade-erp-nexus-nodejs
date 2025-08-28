@@ -3,6 +3,8 @@ const InventoryMovement = require("../../models/modules/inventoryMovementModel")
 const StockService = require("../stock/stockService");
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
+const Vendor = require("../../models/modules/vendorModel");
+const Customer = require("../../models/modules/customerModel");
 
 function generateTransactionNo(type) {
   const prefix = {
@@ -17,11 +19,10 @@ function generateTransactionNo(type) {
 }
 
 class TransactionService {
-
   static async createTransaction(data, createdBy) {
     const session = await mongoose.startSession();
     session.startTransaction();
-    
+
     try {
       const { type, partyId, partyType, items, autoProcess, ...rest } = data;
 
@@ -36,10 +37,16 @@ class TransactionService {
       // Validate items exist in stock
       for (const item of items) {
         const stock = await StockService.getStockByItemId(item.itemId);
-        
+
         // For sales orders and purchase returns, check stock availability
-        if ((type === 'sales_order' || type === 'purchase_return') && stock.currentStock < item.qty) {
-          throw new AppError(`Insufficient stock for ${item.description}. Available: ${stock.currentStock}`, 400);
+        if (
+          (type === "sales_order" || type === "purchase_return") &&
+          stock.currentStock < item.qty
+        ) {
+          throw new AppError(
+            `Insufficient stock for ${item.description}. Available: ${stock.currentStock}`,
+            400
+          );
         }
       }
 
@@ -51,7 +58,7 @@ class TransactionService {
         const tax = lineValue * ((item.taxPercent || 0) / 100);
         return {
           ...item,
-          lineTotal: lineValue + tax
+          lineTotal: lineValue + tax,
         };
       });
 
@@ -62,9 +69,9 @@ class TransactionService {
 
       // Set appropriate status based on type
       let initialStatus = rest.status || "DRAFT";
-      
+
       // Returns are typically processed immediately
-      if (type.includes('_return') && autoProcess !== false) {
+      if (type.includes("_return") && autoProcess !== false) {
         initialStatus = "PROCESSED";
       }
 
@@ -80,13 +87,23 @@ class TransactionService {
         ...rest,
       };
 
-      const transaction = await Transaction.create([transactionData], { session });
+      const transaction = await Transaction.create([transactionData], {
+        session,
+      });
       const newTransaction = transaction[0];
 
       // Auto-process returns or if specifically requested
-      if ((type.includes('_return') && autoProcess !== false) || autoProcess === true) {
-        await this.processTransactionStock(newTransaction._id, newTransaction, createdBy, session);
-        
+      if (
+        (type.includes("_return") && autoProcess !== false) ||
+        autoProcess === true
+      ) {
+        await this.processTransactionStock(
+          newTransaction._id,
+          newTransaction,
+          createdBy,
+          session
+        );
+
         // Update transaction status
         newTransaction.status = this.getProcessedStatus(type);
         await newTransaction.save({ session });
@@ -94,7 +111,6 @@ class TransactionService {
 
       await session.commitTransaction();
       return newTransaction;
-      
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -106,7 +122,7 @@ class TransactionService {
   static async updateTransaction(id, data, createdBy) {
     const session = await mongoose.startSession();
     session.startTransaction();
-    
+
     try {
       const transaction = await Transaction.findById(id).session(session);
       if (!transaction) {
@@ -125,10 +141,10 @@ class TransactionService {
           const tax = lineValue * ((item.taxPercent || 0) / 100);
           return {
             ...item,
-            lineTotal: lineValue + tax
+            lineTotal: lineValue + tax,
           };
         });
-        
+
         data.totalAmount = processedItems.reduce(
           (sum, item) => sum + item.lineTotal,
           0
@@ -142,7 +158,6 @@ class TransactionService {
 
       await session.commitTransaction();
       return transaction;
-      
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -154,7 +169,7 @@ class TransactionService {
   static async processTransaction(id, action, createdBy) {
     const session = await mongoose.startSession();
     session.startTransaction();
-    
+
     try {
       const transaction = await Transaction.findById(id).session(session);
       if (!transaction) {
@@ -173,7 +188,6 @@ class TransactionService {
 
       await session.commitTransaction();
       return transaction;
-      
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -185,7 +199,7 @@ class TransactionService {
   static async deleteTransaction(id, createdBy) {
     const session = await mongoose.startSession();
     session.startTransaction();
-    
+
     try {
       const transaction = await Transaction.findById(id).session(session);
       if (!transaction) {
@@ -198,9 +212,8 @@ class TransactionService {
       }
 
       await Transaction.findByIdAndDelete(id).session(session);
-      
+
       await session.commitTransaction();
-      
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -210,13 +223,18 @@ class TransactionService {
   }
 
   // Process transaction stock changes
-  static async processTransactionStock(transactionId, transaction, createdBy, session = null) {
+  static async processTransactionStock(
+    transactionId,
+    transaction,
+    createdBy,
+    session = null
+  ) {
     const shouldEndSession = !session;
     if (!session) {
       session = await mongoose.startSession();
       session.startTransaction();
     }
-    
+
     try {
       const { type, items, transactionNo } = transaction;
       const stockUpdates = [];
@@ -229,46 +247,55 @@ class TransactionService {
 
         // Validate sufficient stock for outgoing transactions
         if (quantityChange < 0 && newStock < 0) {
-          throw new AppError(`Insufficient stock for ${item.description}. Available: ${stock.currentStock}, Required: ${item.qty}`, 400);
+          throw new AppError(
+            `Insufficient stock for ${item.description}. Available: ${stock.currentStock}, Required: ${item.qty}`,
+            400
+          );
         }
 
         // Update stock
-        await stock.constructor.findByIdAndUpdate(stock._id, { 
-          currentStock: newStock 
-        }, { session });
+        await stock.constructor.findByIdAndUpdate(
+          stock._id,
+          {
+            currentStock: newStock,
+          },
+          { session }
+        );
 
         // Create inventory movement
-        const movement = await this.createInventoryMovement({
-          stockId: item.itemId,
-          quantity: quantityChange,
-          previousStock: stock.currentStock,
-          newStock: newStock,
-          eventType: this.getEventType(type),
-          referenceType: "Transaction",
-          referenceId: transactionId,
-          referenceNumber: transactionNo,
-          unitCost: item.rate,
-          totalValue: Math.abs(quantityChange) * item.rate,
-          notes: `${this.getEventType(type)} - ${item.description}`,
-          createdBy,
-          batchNumber: stock.batchNumber,
-          expiryDate: stock.expiryDate
-        }, session);
+        const movement = await this.createInventoryMovement(
+          {
+            stockId: item.itemId,
+            quantity: quantityChange,
+            previousStock: stock.currentStock,
+            newStock: newStock,
+            eventType: this.getEventType(type),
+            referenceType: "Transaction",
+            referenceId: transactionId,
+            referenceNumber: transactionNo,
+            unitCost: item.rate,
+            totalValue: Math.abs(quantityChange) * item.rate,
+            notes: `${this.getEventType(type)} - ${item.description}`,
+            createdBy,
+            batchNumber: stock.batchNumber,
+            expiryDate: stock.expiryDate,
+          },
+          session
+        );
 
         stockUpdates.push({
           itemId: item.itemId,
           previousStock: stock.currentStock,
           newStock: newStock,
-          movement: movement
+          movement: movement,
         });
       }
 
       if (shouldEndSession) {
         await session.commitTransaction();
       }
-      
+
       return stockUpdates;
-      
     } catch (error) {
       if (shouldEndSession) {
         await session.abortTransaction();
@@ -282,13 +309,18 @@ class TransactionService {
   }
 
   // Reverse transaction stock changes
-  static async reverseTransactionStock(transactionId, transaction, createdBy, session = null) {
+  static async reverseTransactionStock(
+    transactionId,
+    transaction,
+    createdBy,
+    session = null
+  ) {
     const shouldEndSession = !session;
     if (!session) {
       session = await mongoose.startSession();
       session.startTransaction();
     }
-    
+
     try {
       const { transactionNo } = transaction;
 
@@ -296,7 +328,7 @@ class TransactionService {
       const existingMovements = await InventoryMovement.find({
         referenceId: transactionId,
         referenceType: "Transaction",
-        isReversed: false
+        isReversed: false,
       }).session(session);
 
       for (const movement of existingMovements) {
@@ -307,34 +339,41 @@ class TransactionService {
         const newStock = stock.currentStock + reversalQuantity;
 
         // Update stock
-        await stock.constructor.findByIdAndUpdate(stock._id, {
-          currentStock: newStock
-        }, { session });
+        await stock.constructor.findByIdAndUpdate(
+          stock._id,
+          {
+            currentStock: newStock,
+          },
+          { session }
+        );
 
         // Create reversal movement
-        const reversalMovement = await this.createInventoryMovement({
-          stockId: movement.stockId,
-          quantity: reversalQuantity,
-          previousStock: stock.currentStock,
-          newStock: newStock,
-          eventType: movement.eventType,
-          referenceType: "Transaction",
-          referenceId: transactionId,
-          referenceNumber: `REV-${transactionNo}`,
-          unitCost: movement.unitCost,
-          totalValue: Math.abs(reversalQuantity) * movement.unitCost,
-          notes: `Reversal of ${movement.notes}`,
-          createdBy,
-          batchNumber: movement.batchNumber,
-          expiryDate: movement.expiryDate
-        }, session);
+        const reversalMovement = await this.createInventoryMovement(
+          {
+            stockId: movement.stockId,
+            quantity: reversalQuantity,
+            previousStock: stock.currentStock,
+            newStock: newStock,
+            eventType: movement.eventType,
+            referenceType: "Transaction",
+            referenceId: transactionId,
+            referenceNumber: `REV-${transactionNo}`,
+            unitCost: movement.unitCost,
+            totalValue: Math.abs(reversalQuantity) * movement.unitCost,
+            notes: `Reversal of ${movement.notes}`,
+            createdBy,
+            batchNumber: movement.batchNumber,
+            expiryDate: movement.expiryDate,
+          },
+          session
+        );
 
         // Mark original movement as reversed
         await InventoryMovement.findByIdAndUpdate(
           movement._id,
-          { 
+          {
             isReversed: true,
-            reversalReference: reversalMovement._id
+            reversalReference: reversalMovement._id,
           },
           { session }
         );
@@ -343,7 +382,6 @@ class TransactionService {
       if (shouldEndSession) {
         await session.commitTransaction();
       }
-      
     } catch (error) {
       if (shouldEndSession) {
         await session.abortTransaction();
@@ -365,63 +403,69 @@ class TransactionService {
   // Helper method to determine quantity change based on transaction type
   static getQuantityChange(transactionType, quantity) {
     const quantityMap = {
-      'purchase_order': quantity,      // Add stock (items coming in)
-      'sales_order': -quantity,        // Reduce stock (items going out)  
-      'purchase_return': -quantity,    // Reduce stock (returning to supplier)
-      'sales_return': quantity         // Add stock (customer returning)
+      purchase_order: quantity, // Add stock (items coming in)
+      sales_order: -quantity, // Reduce stock (items going out)
+      purchase_return: -quantity, // Reduce stock (returning to supplier)
+      sales_return: quantity, // Add stock (customer returning)
     };
-    
+
     return quantityMap[transactionType] || 0;
   }
 
   // Helper method to determine event type
   static getEventType(transactionType) {
     const eventMap = {
-      'purchase_order': 'PURCHASE_RECEIVE',
-      'sales_order': 'SALES_DISPATCH',
-      'purchase_return': 'PURCHASE_RETURN',
-      'sales_return': 'SALES_RETURN'
+      purchase_order: "PURCHASE_RECEIVE",
+      sales_order: "SALES_DISPATCH",
+      purchase_return: "PURCHASE_RETURN",
+      sales_return: "SALES_RETURN",
     };
-    
+
     return eventMap[transactionType];
   }
 
   // Helper method to validate actions
   static validateAction(transactionType, action, currentStatus) {
     const validActions = {
-      'purchase_order': ['approve', 'reject'],
-      'sales_order': ['confirm', 'cancel'],
-      'purchase_return': ['process'],
-      'sales_return': ['process']
+      purchase_order: ["approve", "reject"],
+      sales_order: ["confirm", "cancel"],
+      purchase_return: ["process"],
+      sales_return: ["process"],
     };
 
     if (!validActions[transactionType]?.includes(action)) {
-      throw new AppError(`Invalid action '${action}' for transaction type '${transactionType}'`, 400);
+      throw new AppError(
+        `Invalid action '${action}' for transaction type '${transactionType}'`,
+        400
+      );
     }
 
     // Check if already processed
     if (this.isProcessed(currentStatus)) {
-      throw new AppError(`Transaction is already processed with status '${currentStatus}'`, 400);
+      throw new AppError(
+        `Transaction is already processed with status '${currentStatus}'`,
+        400
+      );
     }
   }
 
   // Helper method to update transaction status
   static updateTransactionStatus(transaction, action) {
     const statusMap = {
-      'purchase_order': {
-        'approve': { status: 'APPROVED', grnGenerated: true },
-        'reject': { status: 'REJECTED' }
+      purchase_order: {
+        approve: { status: "APPROVED", grnGenerated: true },
+        reject: { status: "REJECTED" },
       },
-      'sales_order': {
-        'confirm': { status: 'CONFIRMED', invoiceGenerated: true },
-        'cancel': { status: 'CANCELLED' }
+      sales_order: {
+        confirm: { status: "CONFIRMED", invoiceGenerated: true },
+        cancel: { status: "CANCELLED" },
       },
-      'purchase_return': {
-        'process': { status: 'PROCESSED' }
+      purchase_return: {
+        process: { status: "PROCESSED" },
       },
-      'sales_return': {
-        'process': { status: 'PROCESSED', creditNoteIssued: true }
-      }
+      sales_return: {
+        process: { status: "PROCESSED", creditNoteIssued: true },
+      },
     };
 
     const updates = statusMap[transaction.type]?.[action];
@@ -432,28 +476,28 @@ class TransactionService {
 
   // Helper method to check if transaction is processed
   static isProcessed(status) {
-    return ['APPROVED', 'CONFIRMED', 'PROCESSED', 'COMPLETED'].includes(status);
+    return ["APPROVED", "CONFIRMED", "PROCESSED", "COMPLETED"].includes(status);
   }
 
   // Helper method to get processed status based on type
   static getProcessedStatus(transactionType) {
     const statusMap = {
-      'purchase_order': 'APPROVED',
-      'sales_order': 'CONFIRMED',
-      'purchase_return': 'PROCESSED',
-      'sales_return': 'PROCESSED'
+      purchase_order: "APPROVED",
+      sales_order: "CONFIRMED",
+      purchase_return: "PROCESSED",
+      sales_return: "PROCESSED",
     };
-    return statusMap[transactionType] || 'PROCESSED';
+    return statusMap[transactionType] || "PROCESSED";
   }
 
   // Get all transactions with filters
   static async getAllTransactions(filters) {
     const query = {};
-    
+
     if (filters.type) query.type = filters.type;
     if (filters.status) query.status = filters.status;
     if (filters.partyId) query.partyId = filters.partyId;
-    
+
     if (filters.search) {
       query.$or = [
         { transactionNo: new RegExp(filters.search, "i") },
@@ -462,13 +506,13 @@ class TransactionService {
         { "items.description": new RegExp(filters.search, "i") },
       ];
     }
-    
+
     if (filters.dateFilter) {
       const today = new Date();
       const field = ["purchase_return", "sales_return"].includes(filters.type)
         ? "returnDate"
         : "date";
-        
+
       switch (filters.dateFilter) {
         case "TODAY":
           query[field] = {
@@ -490,7 +534,7 @@ class TransactionService {
           if (filters.startDate && filters.endDate) {
             query[field] = {
               $gte: new Date(filters.startDate),
-              $lte: new Date(filters.endDate)
+              $lte: new Date(filters.endDate),
             };
           }
           break;
@@ -502,30 +546,70 @@ class TransactionService {
     const limit = parseInt(filters.limit) || 20;
     const skip = (page - 1) * limit;
 
+    // Get transactions first
     const transactions = await Transaction.find(query)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('partyId', 'name email phone'); // Assuming party has these fields
+      .lean(); // Use lean() for better performance
+
+    // Add partyName to each transaction
+    const transactionsWithPartyName = await Promise.all(
+      transactions.map(async (transaction) => {
+        let partyName = "Unknown Party";
+
+        if (transaction.partyId) {
+          try {
+            if (transaction.partyType === "customer") {
+              // const Customer = mongoose.model("Customer");
+              const customer = await Customer.findById(
+                transaction.partyId
+              ).select("customerName");
+              if (customer) {
+                partyName = customer.customerName;
+              }
+              console.log(customer);
+            } else if (transaction.partyType === "vendor") {
+              // const Vendor = mongoose.model("Vendor");
+              const vendor = await Vendor.findById(transaction.partyId).select(
+                "vendorName"
+              );
+              if (vendor) {
+                partyName = vendor.vendorName;
+              }
+            }
+          } catch (error) {
+            console.error("Error fetching party name:", error);
+          }
+        }
+
+        return {
+          ...transaction,
+          partyName,
+        };
+      })
+    );
 
     const total = await Transaction.countDocuments(query);
 
     return {
-      transactions,
+      transactions: transactionsWithPartyName,
       pagination: {
         current: page,
         pages: Math.ceil(total / limit),
         total,
-        limit
-      }
+        limit,
+      },
     };
   }
 
   // Get transaction by ID
   static async getTransactionById(id) {
-    const transaction = await Transaction.findById(id)
-      .populate('partyId', 'name email phone address');
-    
+    const transaction = await Transaction.findById(id).populate(
+      "partyId",
+      "name email phone address"
+    );
+
     if (!transaction) {
       throw new AppError("Transaction not found", 404);
     }
@@ -537,22 +621,23 @@ class TransactionService {
     const transaction = await this.getTransactionById(id);
     const movements = await InventoryMovement.find({
       referenceId: id,
-      referenceType: 'Transaction'
+      referenceType: "Transaction",
     }).sort({ date: -1 });
 
     return {
       transaction,
-      inventoryMovements: movements
+      inventoryMovements: movements,
     };
   }
 
   // Get transaction statistics
   static async getTransactionStats(filters = {}) {
     const matchQuery = {};
-    
+
     if (filters.dateFrom || filters.dateTo) {
       matchQuery.createdAt = {};
-      if (filters.dateFrom) matchQuery.createdAt.$gte = new Date(filters.dateFrom);
+      if (filters.dateFrom)
+        matchQuery.createdAt.$gte = new Date(filters.dateFrom);
       if (filters.dateTo) matchQuery.createdAt.$lte = new Date(filters.dateTo);
     }
 
@@ -564,32 +649,32 @@ class TransactionService {
           totalTransactions: { $sum: 1 },
           totalValue: { $sum: "$totalAmount" },
           purchaseOrders: {
-            $sum: { $cond: [{ $eq: ["$type", "purchase_order"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$type", "purchase_order"] }, 1, 0] },
           },
           salesOrders: {
-            $sum: { $cond: [{ $eq: ["$type", "sales_order"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$type", "sales_order"] }, 1, 0] },
           },
           purchaseReturns: {
-            $sum: { $cond: [{ $eq: ["$type", "purchase_return"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$type", "purchase_return"] }, 1, 0] },
           },
           salesReturns: {
-            $sum: { $cond: [{ $eq: ["$type", "sales_return"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$type", "sales_return"] }, 1, 0] },
           },
           draftTransactions: {
-            $sum: { $cond: [{ $eq: ["$status", "DRAFT"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$status", "DRAFT"] }, 1, 0] },
           },
           processedTransactions: {
-            $sum: { 
+            $sum: {
               $cond: [
-                { $in: ["$status", ["APPROVED", "CONFIRMED", "PROCESSED"]] }, 
-                1, 
-                0
-              ] 
-            }
+                { $in: ["$status", ["APPROVED", "CONFIRMED", "PROCESSED"]] },
+                1,
+                0,
+              ],
+            },
           },
-          avgTransactionValue: { $avg: "$totalAmount" }
-        }
-      }
+          avgTransactionValue: { $avg: "$totalAmount" },
+        },
+      },
     ]);
 
     // Get monthly trends
@@ -600,14 +685,14 @@ class TransactionService {
           _id: {
             year: { $year: "$createdAt" },
             month: { $month: "$createdAt" },
-            type: "$type"
+            type: "$type",
           },
           count: { $sum: 1 },
-          totalValue: { $sum: "$totalAmount" }
-        }
+          totalValue: { $sum: "$totalAmount" },
+        },
       },
       { $sort: { "_id.year": -1, "_id.month": -1 } },
-      { $limit: 12 }
+      { $limit: 12 },
     ]);
 
     return {
@@ -620,39 +705,39 @@ class TransactionService {
         salesReturns: 0,
         draftTransactions: 0,
         processedTransactions: 0,
-        avgTransactionValue: 0
+        avgTransactionValue: 0,
       },
-      monthlyTrends: monthlyStats
+      monthlyTrends: monthlyStats,
     };
   }
 
   // Get pending transactions that need attention
   static async getPendingTransactions() {
     return Transaction.find({
-      status: { $in: ['DRAFT', 'PENDING'] }
+      status: { $in: ["DRAFT", "PENDING"] },
     })
-    .sort({ createdAt: 1 })
-    .populate('partyId', 'name');
+      .sort({ createdAt: 1 })
+      .populate("partyId", "name");
   }
 
   // Duplicate transaction (useful for recurring orders)
   static async duplicateTransaction(id, createdBy) {
     const originalTransaction = await this.getTransactionById(id);
-    
+
     const duplicateData = {
       type: originalTransaction.type,
       partyId: originalTransaction.partyId,
       partyType: originalTransaction.partyType,
-      items: originalTransaction.items.map(item => ({
+      items: originalTransaction.items.map((item) => ({
         itemId: item.itemId,
         description: item.description,
         qty: item.qty,
         rate: item.rate,
-        taxPercent: item.taxPercent
+        taxPercent: item.taxPercent,
       })),
       terms: originalTransaction.terms,
       notes: `Duplicate of ${originalTransaction.transactionNo}`,
-      priority: originalTransaction.priority
+      priority: originalTransaction.priority,
     };
 
     return this.createTransaction(duplicateData, createdBy);
@@ -662,21 +747,25 @@ class TransactionService {
   static async bulkProcessTransactions(transactionIds, action, createdBy) {
     const results = {
       successful: [],
-      failed: []
+      failed: [],
     };
 
     for (const id of transactionIds) {
       try {
-        const transaction = await this.processTransaction(id, action, createdBy);
+        const transaction = await this.processTransaction(
+          id,
+          action,
+          createdBy
+        );
         results.successful.push({
           id,
           transactionNo: transaction.transactionNo,
-          status: transaction.status
+          status: transaction.status,
         });
       } catch (error) {
         results.failed.push({
           id,
-          error: error.message
+          error: error.message,
         });
       }
     }
@@ -687,7 +776,7 @@ class TransactionService {
   // Generate reports
   static async generateTransactionReport(filters = {}) {
     const query = {};
-    
+
     if (filters.type) query.type = filters.type;
     if (filters.status) query.status = filters.status;
     if (filters.dateFrom || filters.dateTo) {
@@ -697,32 +786,32 @@ class TransactionService {
     }
 
     const transactions = await Transaction.find(query)
-      .populate('partyId', 'name')
+      .populate("partyId", "name")
       .sort({ createdAt: -1 });
 
     const summary = {
       totalTransactions: transactions.length,
       totalValue: transactions.reduce((sum, t) => sum + t.totalAmount, 0),
       byType: {},
-      byStatus: {}
+      byStatus: {},
     };
 
-    transactions.forEach(t => {
+    transactions.forEach((t) => {
       summary.byType[t.type] = (summary.byType[t.type] || 0) + 1;
       summary.byStatus[t.status] = (summary.byStatus[t.status] || 0) + 1;
     });
 
     return {
       summary,
-      transactions: transactions.map(t => ({
+      transactions: transactions.map((t) => ({
         transactionNo: t.transactionNo,
         type: t.type,
-        party: t.partyId?.name || 'Unknown',
+        party: t.partyId?.name || "Unknown",
         date: t.date,
         status: t.status,
         totalAmount: t.totalAmount,
-        itemCount: t.items.length
-      }))
+        itemCount: t.items.length,
+      })),
     };
   }
 
@@ -730,64 +819,70 @@ class TransactionService {
   static async convertPOToGRN(id, receivedItems, createdBy) {
     const session = await mongoose.startSession();
     session.startTransaction();
-    
+
     try {
       const po = await Transaction.findById(id).session(session);
-      if (!po || po.type !== 'purchase_order') {
+      if (!po || po.type !== "purchase_order") {
         throw new AppError("Purchase order not found", 404);
       }
 
-      if (po.status !== 'APPROVED') {
+      if (po.status !== "APPROVED") {
         throw new AppError("Purchase order must be approved first", 400);
       }
 
       // Validate received items
       const receivedItemsMap = new Map();
-      receivedItems.forEach(item => {
+      receivedItems.forEach((item) => {
         receivedItemsMap.set(item.itemId, item.receivedQty);
       });
 
       // Process stock updates for received quantities
       for (const item of po.items) {
         const receivedQty = receivedItemsMap.get(item.itemId) || 0;
-        
+
         if (receivedQty > 0) {
           const stock = await StockService.getStockByItemId(item.itemId);
           const newStock = stock.currentStock + receivedQty;
 
           // Update stock
-          await stock.constructor.findByIdAndUpdate(stock._id, {
-            currentStock: newStock
-          }, { session });
+          await stock.constructor.findByIdAndUpdate(
+            stock._id,
+            {
+              currentStock: newStock,
+            },
+            { session }
+          );
 
           // Create inventory movement
-          await this.createInventoryMovement({
-            stockId: item.itemId,
-            quantity: receivedQty,
-            previousStock: stock.currentStock,
-            newStock: newStock,
-            eventType: 'PURCHASE_RECEIVE',
-            referenceType: 'Transaction',
-            referenceId: po._id,
-            referenceNumber: `GRN-${po.transactionNo}`,
-            unitCost: item.rate,
-            totalValue: receivedQty * item.rate,
-            notes: `GRN for PO ${po.transactionNo} - ${item.description}`,
-            createdBy,
-            batchNumber: stock.batchNumber,
-            expiryDate: stock.expiryDate
-          }, session);
+          await this.createInventoryMovement(
+            {
+              stockId: item.itemId,
+              quantity: receivedQty,
+              previousStock: stock.currentStock,
+              newStock: newStock,
+              eventType: "PURCHASE_RECEIVE",
+              referenceType: "Transaction",
+              referenceId: po._id,
+              referenceNumber: `GRN-${po.transactionNo}`,
+              unitCost: item.rate,
+              totalValue: receivedQty * item.rate,
+              notes: `GRN for PO ${po.transactionNo} - ${item.description}`,
+              createdBy,
+              batchNumber: stock.batchNumber,
+              expiryDate: stock.expiryDate,
+            },
+            session
+          );
         }
       }
 
       // Update PO status
       po.grnGenerated = true;
-      po.status = 'COMPLETED';
+      po.status = "COMPLETED";
       await po.save({ session });
 
       await session.commitTransaction();
       return po;
-      
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -799,7 +894,7 @@ class TransactionService {
   // Get transactions by party (customer/vendor)
   static async getTransactionsByParty(partyId, filters = {}) {
     const query = { partyId };
-    
+
     if (filters.type) query.type = filters.type;
     if (filters.status) query.status = filters.status;
     if (filters.dateFrom || filters.dateTo) {
@@ -810,41 +905,44 @@ class TransactionService {
 
     return Transaction.find(query)
       .sort({ createdAt: -1 })
-      .populate('partyId', 'name email phone');
+      .populate("partyId", "name email phone");
   }
 
   // Get overdue transactions
   static async getOverdueTransactions() {
     const today = new Date();
-    
+
     return Transaction.find({
-      status: { $in: ['DRAFT', 'APPROVED', 'CONFIRMED'] },
+      status: { $in: ["DRAFT", "APPROVED", "CONFIRMED"] },
       $or: [
-        { 
+        {
           deliveryDate: { $lt: today },
-          type: { $in: ['purchase_order', 'sales_order'] }
+          type: { $in: ["purchase_order", "sales_order"] },
         },
         {
           expectedDispatch: { $lt: today },
-          type: 'sales_order'
-        }
-      ]
+          type: "sales_order",
+        },
+      ],
     })
-    .sort({ deliveryDate: 1, expectedDispatch: 1 })
-    .populate('partyId', 'name');
+      .sort({ deliveryDate: 1, expectedDispatch: 1 })
+      .populate("partyId", "name");
   }
 
   // Calculate transaction profitability (for sales)
   static async calculateTransactionProfit(id) {
     const transaction = await this.getTransactionById(id);
-    
-    if (!['sales_order', 'sales_return'].includes(transaction.type)) {
-      throw new AppError("Profit calculation only available for sales transactions", 400);
+
+    if (!["sales_order", "sales_return"].includes(transaction.type)) {
+      throw new AppError(
+        "Profit calculation only available for sales transactions",
+        400
+      );
     }
 
     let totalCost = 0;
     let totalRevenue = transaction.totalAmount;
-    
+
     for (const item of transaction.items) {
       const stock = await StockService.getStockByItemId(item.itemId);
       const itemCost = stock.purchasePrice * item.qty;
@@ -859,15 +957,15 @@ class TransactionService {
       totalRevenue,
       totalCost,
       profit,
-      profitMargin: Math.round(profitMargin * 100) / 100
+      profitMargin: Math.round(profitMargin * 100) / 100,
     };
   }
 
   // Get stock requirements based on pending sales orders
   static async getStockRequirements() {
     const pendingSalesOrders = await Transaction.find({
-      type: 'sales_order',
-      status: { $in: ['DRAFT', 'CONFIRMED'] }
+      type: "sales_order",
+      status: { $in: ["DRAFT", "CONFIRMED"] },
     });
 
     const requirements = new Map();
@@ -878,23 +976,23 @@ class TransactionService {
           itemId: item.itemId,
           description: item.description,
           totalRequired: 0,
-          orders: []
+          orders: [],
         };
-        
+
         existing.totalRequired += item.qty;
         existing.orders.push({
           transactionNo: order.transactionNo,
           qty: item.qty,
-          deliveryDate: order.deliveryDate
+          deliveryDate: order.deliveryDate,
         });
-        
+
         requirements.set(item.itemId, existing);
       }
     }
 
     // Check against current stock
     const requirementsArray = Array.from(requirements.values());
-    
+
     for (const req of requirementsArray) {
       try {
         const stock = await StockService.getStockByItemId(req.itemId);
@@ -907,7 +1005,7 @@ class TransactionService {
       }
     }
 
-    return requirementsArray.filter(req => req.shortfall > 0);
+    return requirementsArray.filter((req) => req.shortfall > 0);
   }
 }
 

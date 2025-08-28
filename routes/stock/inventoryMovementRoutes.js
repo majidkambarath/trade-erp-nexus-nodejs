@@ -10,11 +10,7 @@ const router = express.Router();
 
 router.use(authenticateToken);
 
-router.post(
-  "/inventory",
-  //   validate(movementValidationRules),
-  InventoryMovementController.createMovement
-);
+router.post("/inventory", InventoryMovementController.createMovement);
 router.get("/inventory", InventoryMovementController.getAllMovements);
 router.get("/inventory/stats", InventoryMovementController.getMovementStats);
 router.get("/inventory/:id", InventoryMovementController.getMovementById);

@@ -8,17 +8,10 @@ const router = express.Router();
 
 router.use(authenticateToken);
 
-router.post(
-  "/vendors",
-  validate(vendorValidationRules),
-  VendorController.createVendor
-);
+router.post("/vendors", VendorController.createVendor);
 router.get("/vendors", VendorController.getAllVendors);
 router.get("/vendors/:id", VendorController.getVendorById);
-router.put(
-  "/vendors/:id",
-  VendorController.updateVendor
-);
+router.put("/vendors/:id", VendorController.updateVendor);
 router.delete("/vendors/:id", VendorController.deleteVendor);
 
 module.exports = router;
