@@ -14,7 +14,7 @@ exports.createCustomer = async (data) => {
     paymentTerms, 
     status 
   } = data;
-
+  
   // Generate customerId if not provided
   const newCustomerId =
     customerId ||
@@ -22,12 +22,16 @@ exports.createCustomer = async (data) => {
       Math.floor(Math.random() * 1000) + 1
     ).padStart(3, "0")}`;
 
+  // Trim and format phone number
+  const trimmedPhone = phone ? phone.toString().trim().replace(/\s+/g, '') : null;
+  const trimmedContactPerson = contactPerson ? contactPerson.toString().trim().replace(/\s+/g, '') : null;
+
   const customer = await Customer.create({
     customerId: newCustomerId,
     customerName,
-    contactPerson,
+    contactPerson : trimmedContactPerson,
     email,
-    phone,
+    phone: trimmedPhone,
     billingAddress,
     shippingAddress,
     creditLimit: Number(creditLimit) || 0,

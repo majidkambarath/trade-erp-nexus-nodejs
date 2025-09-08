@@ -4,7 +4,16 @@ const stockSchema = new mongoose.Schema({
   itemId: { type: String, unique: true, required: true },
   sku: { type: String, unique: true, required: true },
   itemName: { type: String, required: true },
-  category: { type: String, required: true },
+  category: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Category",
+    required: [true, "Category is required"],
+  },
+  vendorId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Vendor",
+    required: [true, "Vendor is required"],
+  },
   unitOfMeasure: { type: String, required: true },
   barcodeQrCode: { type: String, sparse: true },
   reorderLevel: { type: Number, default: 0 },

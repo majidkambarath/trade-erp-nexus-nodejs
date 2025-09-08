@@ -2,6 +2,7 @@ const CustomerService = require("../../services/customer/customerService");
 const catchAsync = require("../../utils/catchAsync");
 
 exports.createCustomer = catchAsync(async (req, res) => {
+  console.log(req.body);
   const customer = await CustomerService.createCustomer(req.body);
   res.status(201).json({ 
     success: true, 

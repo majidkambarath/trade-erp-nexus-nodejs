@@ -12,6 +12,9 @@ const stockRouter = require("./routes/stock/stockRouter");
 const uomRouter = require("./routes/unit/uomRouter");
 const transactionRouter = require("./routes/orderPurchase/transactionRouter");
 const inventoryRouter = require("./routes/stock/inventoryMovementRoutes");
+const categoryRouter = require("./routes/stock/categoryRouter");
+const staffRoutes = require("./routes/staff/staffRoutes");
+
 dotenv.config();
 
 const app = express();
@@ -58,7 +61,8 @@ app.use("/api/v1/stock", stockRouter);
 app.use("/api/v1/uom", uomRouter);
 app.use("/api/v1/transactions", transactionRouter);
 app.use("/api/v1/inventory", inventoryRouter);
-
+app.use("/api/v1/categories", categoryRouter);
+app.use("/api/v1/staff", staffRoutes);
 
 // Health check endpoint
 app.get("/api/v1/health", (req, res) => {

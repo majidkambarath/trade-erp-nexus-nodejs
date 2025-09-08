@@ -1,10 +1,11 @@
 const Stock = require("../../models/modules/stockModel");
+const Category = require("../../models/modules/categoryModel");
+const Vendor = require("../../models/modules/vendorModel");
 const InventoryMovement = require("../../models/modules/inventoryMovementModel");
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
 
 class StockService {
-  // Create stock with initial inventory movement
   static async createStock(data, createdBy) {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -14,7 +15,8 @@ class StockService {
         itemId,
         sku,
         itemName,
-        category,
+        categoryId,
+        vendorId,
         unitOfMeasure,
         barcodeQrCode,
         reorderLevel,
@@ -26,12 +28,22 @@ class StockService {
         status,
       } = data;
 
+      // Validate category exists
+      const categoryExists = await Category.findById(categoryId).session(session);
+      if (!categoryExists) {
+        throw new AppError("Category not found", 404);
+      }
+
+      // Validate vendor exists
+      const vendorExists = await Vendor.findById(vendorId).session(session);
+      if (!vendorExists) {
+        throw new AppError("Vendor not found", 404);
+      }
+
       // Generate itemId if not provided
       const newItemId =
         itemId ||
-        `ITM${new Date().toISOString().slice(0, 4).replace(/-/g, "")}-${
-          Math.floor(Math.random() * 1000) + 100
-        }`;
+        `ITM${new Date().toISOString().slice(0, 4).replace(/-/g, "")}-${Math.floor(Math.random() * 1000) + 100}`;
 
       // Check if SKU already exists
       const existingSku = await Stock.findOne({ sku }).session(session);
@@ -46,7 +58,8 @@ class StockService {
             itemId: newItemId,
             sku,
             itemName,
-            category,
+            category:categoryId,
+            vendorId,
             unitOfMeasure,
             barcodeQrCode,
             reorderLevel: Number(reorderLevel) || 0,
@@ -95,7 +108,6 @@ class StockService {
     }
   }
 
-  // Update stock with inventory tracking
   static async updateStock(id, data, createdBy) {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -114,6 +126,22 @@ class StockService {
         }).session(session);
         if (existingSku) {
           throw new AppError("SKU already exists", 400);
+        }
+      }
+
+      // Validate category if provided
+      if (data.category) {
+        const categoryExists = await Category.findById(data.category).session(session);
+        if (!categoryExists) {
+          throw new AppError("Category not found", 404);
+        }
+      }
+
+      // Validate vendor if provided
+      if (data.vendorId) {
+        const vendorExists = await Vendor.findById(data.vendorId).session(session);
+        if (!vendorExists) {
+          throw new AppError("Vendor not found", 404);
         }
       }
 
@@ -176,7 +204,6 @@ class StockService {
       return updatedStock;
     } catch (error) {
       await session.abortTransaction();
-      // Log the error for debugging (consider using a proper logging library like Winston)
       console.error(`Error updating stock (ID: ${id}):`, error.message);
       throw error;
     } finally {
@@ -184,7 +211,6 @@ class StockService {
     }
   }
 
-  // Process transaction and update stock
   static async processTransactionStock(
     transactionId,
     transactionData,
@@ -208,7 +234,6 @@ class StockService {
         const quantityChange = this.getQuantityChange(type, item.qty);
         const newStock = stock.currentStock + quantityChange;
 
-        // Validate sufficient stock for outgoing transactions
         if (quantityChange < 0 && newStock < 0) {
           throw new AppError(
             `Insufficient stock for ${item.description}. Available: ${stock.currentStock}, Required: ${item.qty}`,
@@ -216,7 +241,6 @@ class StockService {
           );
         }
 
-        // Update stock
         await Stock.findByIdAndUpdate(
           stock._id,
           {
@@ -225,7 +249,6 @@ class StockService {
           { session }
         );
 
-        // Create inventory movement
         const movement = await this.createInventoryMovement(
           {
             stockId: item.itemId,
@@ -264,7 +287,6 @@ class StockService {
     }
   }
 
-  // Reverse transaction stock changes
   static async reverseTransactionStock(
     transactionId,
     transactionData,
@@ -276,7 +298,6 @@ class StockService {
     try {
       const { type, items, transactionNo } = transactionData;
 
-      // Find existing movements for this transaction
       const existingMovements = await InventoryMovement.find({
         referenceId: transactionId,
         referenceType: "Transaction",
@@ -288,18 +309,15 @@ class StockService {
         );
         if (!stock) continue;
 
-        // Reverse the quantity
         const reversalQuantity = -movement.quantity;
         const newStock = stock.currentStock + reversalQuantity;
 
-        // Update stock
         await Stock.findOneAndUpdate(
           { itemId: movement.stockId },
           { currentStock: newStock },
           { session }
         );
 
-        // Create reversal movement
         await this.createInventoryMovement(
           {
             stockId: movement.stockId,
@@ -320,7 +338,6 @@ class StockService {
           session
         );
 
-        // Mark original movement as reversed
         await InventoryMovement.findByIdAndUpdate(
           movement._id,
           { isReversed: true },
@@ -337,25 +354,22 @@ class StockService {
     }
   }
 
-  // Helper method to create inventory movement
   static async createInventoryMovement(movementData, session = null) {
     const movement = new InventoryMovement(movementData);
     return movement.save({ session });
   }
 
-  // Helper method to determine quantity change based on transaction type
   static getQuantityChange(transactionType, quantity) {
     const quantityMap = {
-      purchase_order: quantity, // Add stock
-      sales_order: -quantity, // Reduce stock
-      purchase_return: -quantity, // Reduce stock (returning to supplier)
-      sales_return: quantity, // Add stock (customer returning)
+      purchase_order: quantity,
+      sales_order: -quantity,
+      purchase_return: -quantity,
+      sales_return: quantity,
     };
 
     return quantityMap[transactionType] || 0;
   }
 
-  // Helper method to determine event type
   static getEventType(transactionType) {
     const eventMap = {
       purchase_order: "PURCHASE_RECEIVE",
@@ -367,14 +381,14 @@ class StockService {
     return eventMap[transactionType];
   }
 
-  // Get stock history for an item
   static async getStockHistory(itemId, startDate, endDate) {
     return InventoryMovement.getStockHistory(itemId, startDate, endDate);
   }
 
-  // Get current stock with movements summary
   static async getStockWithMovements(itemId) {
-    const stock = await Stock.findOne({ itemId });
+    const stock = await Stock.findOne({ itemId })
+      .populate("category")
+      .populate("vendorId");
     if (!stock) {
       throw new AppError("Stock item not found", 404);
     }
@@ -402,15 +416,16 @@ class StockService {
     };
   }
 
-  // Get low stock items
   static async getLowStockItems() {
     return Stock.find({
       $expr: { $lte: ["$currentStock", "$reorderLevel"] },
       status: "Active",
-    }).sort({ currentStock: 1 });
+    })
+      .populate("category")
+      .populate("vendorId")
+      .sort({ currentStock: 1 });
   }
 
-  // Get stock valuation
   static async getStockValuation() {
     return Stock.aggregate([
       {
@@ -432,33 +447,32 @@ class StockService {
     ]);
   }
 
-  // Existing methods with improvements...
   static async getAllStock(filters) {
     const query = {};
 
-    // Search functionality
     if (filters.search) {
       query.$or = [
         { itemId: new RegExp(filters.search, "i") },
         { sku: new RegExp(filters.search, "i") },
         { itemName: new RegExp(filters.search, "i") },
-        { category: new RegExp(filters.search, "i") },
         { batchNumber: new RegExp(filters.search, "i") },
       ];
     }
 
-    // Filter by status
     if (filters.status) query.status = filters.status;
 
-    // Filter by category
-    if (filters.category) query.category = filters.category;
+    if (filters.category) {
+      query.category = mongoose.Types.ObjectId(filters.category);
+    }
 
-    // Filter by low stock
+    if (filters.vendorId) {
+      query.vendorId = mongoose.Types.ObjectId(filters.vendorId);
+    }
+
     if (filters.lowStock === "true") {
       query.$expr = { $lte: ["$currentStock", "$reorderLevel"] };
     }
 
-    // Filter by stock range
     if (filters.minStock)
       query.currentStock = { $gte: Number(filters.minStock) };
     if (filters.maxStock) {
@@ -468,7 +482,6 @@ class StockService {
       };
     }
 
-    // Filter by price range
     if (filters.minPrice) query.salesPrice = { $gte: Number(filters.minPrice) };
     if (filters.maxPrice) {
       query.salesPrice = {
@@ -477,30 +490,36 @@ class StockService {
       };
     }
 
-    return Stock.find(query).sort({ createdAt: -1 });
+    return Stock.find(query)
+      .populate("category")
+      .populate("vendorId")
+      .sort({ createdAt: -1 });
   }
 
   static async getStockById(id) {
-    const stock = await Stock.findById(id);
+    const stock = await Stock.findById(id)
+      .populate("category")
+      .populate("vendorId");
     if (!stock) throw new AppError("Stock item not found", 404);
     return stock;
   }
 
   static async getStockByItemId(itemId) {
-    const stock = await Stock.findOne({ itemId });
+    const stock = await Stock.findOne({ itemId })
+      .populate("category")
+      .populate("vendorId");
     if (!stock) throw new AppError("Stock item not found", 404);
     return stock;
   }
 
   static async deleteStock(id) {
-    console.log(id);
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
       const stock = await Stock.findById(id).session(session);
       if (!stock) throw new AppError("Stock item not found", 404);
-      // Check if there are any pending transactions
+
       const movements = await InventoryMovement.find({
         stockId: stock.itemId,
       }).session(session);
@@ -562,22 +581,6 @@ class StockService {
         totalCurrentStock: 0,
       }
     );
-  }
-
-  static async getCategoriesWithCount() {
-    return Stock.aggregate([
-      {
-        $group: {
-          _id: "$category",
-          count: { $sum: 1 },
-          totalStock: { $sum: "$currentStock" },
-          totalValue: {
-            $sum: { $multiply: ["$currentStock", "$purchasePrice"] },
-          },
-        },
-      },
-      { $sort: { count: -1 } },
-    ]);
   }
 }
 

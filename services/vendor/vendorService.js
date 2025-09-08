@@ -2,17 +2,33 @@ const Vendor = require("../../models/modules/vendorModel");
 const AppError = require("../../utils/AppError");
 
 exports.createVendor = async (data) => {
-  const { vendorId, vendorName, contactPerson, email, phone, address, paymentTerms, status } = data;
-  const newVendorId =
-    vendorId ||
-    `VEND${new Date().toISOString().slice(0, 5).replace(/-/g, "")}-${Math.floor(Math.random() * 1000) + 100}`;
-
-  const vendor = await Vendor.create({
-    vendorId: newVendorId,
+  const {
+    vendorId,
     vendorName,
     contactPerson,
     email,
     phone,
+    address,
+    paymentTerms,
+    status,
+  } = data;
+  const newVendorId =
+    vendorId ||
+    `VEND${new Date().toISOString().slice(0, 5).replace(/-/g, "")}-${
+      Math.floor(Math.random() * 1000) + 100
+    }`;
+  const trimmedPhone = phone
+    ? phone.toString().trim().replace(/\s+/g, "")
+    : null;
+  const trimmedContactPerson = contactPerson
+    ? contactPerson.toString().trim().replace(/\s+/g, "")
+    : null;
+  const vendor = await Vendor.create({
+    vendorId: newVendorId,
+    vendorName,
+    contactPerson : trimmedContactPerson,
+    email,
+    phone : trimmedPhone,
     address,
     paymentTerms,
     status,
@@ -44,7 +60,10 @@ exports.getVendorById = async (id) => {
 };
 
 exports.updateVendor = async (id, data) => {
-  const vendor = await Vendor.findByIdAndUpdate(id, data, { new: true, runValidators: true });
+  const vendor = await Vendor.findByIdAndUpdate(id, data, {
+    new: true,
+    runValidators: true,
+  });
   if (!vendor) throw new AppError("Vendor not found", 404);
   return vendor;
 };

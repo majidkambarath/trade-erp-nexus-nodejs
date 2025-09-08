@@ -17,11 +17,10 @@ router.use(authenticateToken);
 router.post("/stock", StockController.createStock);
 router.get("/stock", StockController.getAllStock);
 router.get("/stock/stats", StockController.getStockStats);
-router.get("/stock/categories", StockController.getCategoriesWithCount);
 router.get("/stock/:id", StockController.getStockById);
 router.get("/stock/item/:itemId", StockController.getStockByItemId);
 router.put("/stock/:id", StockController.updateStock);
-router.patch("/stock/:id/quantity", StockController.updateStockQuantity); // Ensure this references the new method
+router.patch("/stock/:id/quantity", StockController.updateStockQuantity);
 router.delete("/stock/:id", StockController.deleteStock);
 
 module.exports = router;
