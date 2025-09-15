@@ -22,7 +22,7 @@ class TransactionService {
   static async createTransaction(data, createdBy) {
     const session = await mongoose.startSession();
     session.startTransaction();
-
+    console.log(data)
     try {
       const { type, partyId, partyType, items, autoProcess, ...rest } = data;
 

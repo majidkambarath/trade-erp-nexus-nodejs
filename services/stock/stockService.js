@@ -29,7 +29,9 @@ class StockService {
       } = data;
 
       // Validate category exists
-      const categoryExists = await Category.findById(categoryId).session(session);
+      const categoryExists = await Category.findById(categoryId).session(
+        session
+      );
       if (!categoryExists) {
         throw new AppError("Category not found", 404);
       }
@@ -43,7 +45,9 @@ class StockService {
       // Generate itemId if not provided
       const newItemId =
         itemId ||
-        `ITM${new Date().toISOString().slice(0, 4).replace(/-/g, "")}-${Math.floor(Math.random() * 1000) + 100}`;
+        `ITM${new Date().toISOString().slice(0, 4).replace(/-/g, "")}-${
+          Math.floor(Math.random() * 1000) + 100
+        }`;
 
       // Check if SKU already exists
       const existingSku = await Stock.findOne({ sku }).session(session);
@@ -58,7 +62,7 @@ class StockService {
             itemId: newItemId,
             sku,
             itemName,
-            category:categoryId,
+            category: categoryId,
             vendorId,
             unitOfMeasure,
             barcodeQrCode,
@@ -131,7 +135,9 @@ class StockService {
 
       // Validate category if provided
       if (data.category) {
-        const categoryExists = await Category.findById(data.category).session(session);
+        const categoryExists = await Category.findById(data.category).session(
+          session
+        );
         if (!categoryExists) {
           throw new AppError("Category not found", 404);
         }
@@ -139,7 +145,9 @@ class StockService {
 
       // Validate vendor if provided
       if (data.vendorId) {
-        const vendorExists = await Vendor.findById(data.vendorId).session(session);
+        const vendorExists = await Vendor.findById(data.vendorId).session(
+          session
+        );
         if (!vendorExists) {
           throw new AppError("Vendor not found", 404);
         }
@@ -505,7 +513,10 @@ class StockService {
   }
 
   static async getStockByItemId(itemId) {
-    const stock = await Stock.findOne({ itemId })
+    console.log(itemId);
+    const stock = await Stock.findOne({
+      _id: new mongoose.Types.ObjectId(itemId),
+    })
       .populate("category")
       .populate("vendorId");
     if (!stock) throw new AppError("Stock item not found", 404);
