@@ -28,7 +28,7 @@ class FinancialService {
     session.startTransaction();
 
     try {
-      const { voucherType, ...voucherData } = data;
+      const { voucherType,attachments = [], ...voucherData } = data;
       
       if (!voucherType) {
         throw new AppError('Voucher type is required', 400);
@@ -62,6 +62,7 @@ class FinancialService {
         voucherNo,
         voucherType,
         createdBy,
+         attachments: attachments,
         ...processedData
       };
 
@@ -621,23 +622,28 @@ class FinancialService {
         throw new AppError('Cannot update approved voucher', 400);
       }
 
+        // Handle attachments: merge old + new
+    if (data.attachments && data.attachments.length > 0) {
+      voucher.attachments = [...voucher.attachments, ...data.attachments];
+    }
+
       // If updating amounts or entries, reverse previous ledger entries
       if (data.totalAmount || data.entries) {
         await this.reverseLedgerEntries(id, session);
       }
 
-      // Update voucher
-      Object.assign(voucher, data);
-      voucher.updatedBy = updatedBy;
-      await voucher.save({ session });
+        // Update voucher fields (excluding attachments since handled above)
+    Object.assign(voucher, { ...data, attachments: voucher.attachments });
+    voucher.updatedBy = updatedBy;
+    await voucher.save({ session });
 
-      // Recreate ledger entries if needed
-      if (data.totalAmount || data.entries) {
-        await this.createLedgerEntries(voucher, updatedBy, session);
-      }
+    // Recreate ledger entries if needed
+    if (data.totalAmount || data.entries) {
+      await this.createLedgerEntries(voucher, updatedBy, session);
+    }
 
-      await session.commitTransaction();
-      return voucher;
+    await session.commitTransaction();
+    return voucher;
 
     } catch (error) {
       await session.abortTransaction();

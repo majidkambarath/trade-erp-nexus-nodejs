@@ -8,7 +8,11 @@ exports.createVendor = catchAsync(async (req, res) => {
 
 exports.getAllVendors = catchAsync(async (req, res) => {
   const { search, status, paymentTerms } = req.query;
-  const vendors = await VendorService.getAllVendors({ search, status, paymentTerms });
+  const vendors = await VendorService.getAllVendors({
+    search,
+    status,
+    paymentTerms,
+  });
   res.json({ success: true, data: vendors });
 });
 

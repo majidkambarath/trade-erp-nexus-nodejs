@@ -2,7 +2,6 @@ const CustomerService = require("../../services/customer/customerService");
 const catchAsync = require("../../utils/catchAsync");
 
 exports.createCustomer = catchAsync(async (req, res) => {
-  console.log(req.body);
   const customer = await CustomerService.createCustomer(req.body);
   res.status(201).json({ 
     success: true, 
@@ -13,13 +12,11 @@ exports.createCustomer = catchAsync(async (req, res) => {
 
 exports.getAllCustomers = catchAsync(async (req, res) => {
   const { search, status, paymentTerms } = req.query;
-  console.log("first")
   const customers = await CustomerService.getAllCustomers({ 
     search, 
     status, 
     paymentTerms 
   });
-  console.log(customers)
   res.json({ 
     success: true, 
     count: customers.length,

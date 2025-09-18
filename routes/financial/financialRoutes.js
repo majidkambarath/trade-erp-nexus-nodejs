@@ -1,17 +1,25 @@
 const express = require("express");
 const { authenticateToken } = require("../../middleware/authMiddleware");
 const FinancialController = require("../../controllers/financial/financialController");
-
+const { uploadSingle } = require("../../middleware/upload");
 const router = express.Router();
 
 // Apply authentication middleware to all routes
 router.use(authenticateToken);
 
 // Main voucher CRUD operations
-router.post("/vouchers", FinancialController.createVoucher);
+router.post(
+  "/vouchers",
+  uploadSingle("attachedProof"), // <-- handle file upload
+  FinancialController.createVoucher
+);
 router.get("/vouchers", FinancialController.getAllVouchers);
 router.get("/vouchers/:id", FinancialController.getVoucherById);
-router.put("/vouchers/:id", FinancialController.updateVoucher);
+router.put(
+  "/vouchers/:id",
+  uploadSingle("attachedProof"), // <-- handle file upload
+  FinancialController.updateVoucher
+);
 router.delete("/vouchers/:id", FinancialController.deleteVoucher);
 
 // Voucher approval workflow

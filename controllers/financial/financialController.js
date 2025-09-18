@@ -1,31 +1,44 @@
 const FinancialService = require("../../services/financial/financialService");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
+const { extractFileInfo } = require("../../middleware/upload");
 
 // Create any type of voucher (receipt, payment, journal, contra, expense)
 exports.createVoucher = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || req.body.createdBy || "system";
-  const voucher = await FinancialService.createVoucher(req.body, createdBy);
+  const createdBy = req.admin?.id || req.body.createdBy || "system";
+
+  // Parse payload if coming from multipart/form-data
+  const bodyData = req.body.data ? JSON.parse(req.body.data) : req.body;
+
+  // Handle uploaded file
+  const fileInfo = extractFileInfo(req.file);
+  if (fileInfo) {
+    bodyData.attachments = [
+      {
+        fileName: fileInfo.originalName,
+        filePath: fileInfo.url,
+        fileType: fileInfo.format,
+        fileSize: fileInfo.size,
+      },
+    ];
+  }
+  // console.log(bodyData);
+  const voucher = await FinancialService.createVoucher(bodyData, createdBy);
 
   res.status(201).json({
     status: "success",
-    data: {
-      voucher
-    }
+    data: voucher,
   });
 });
 
 // Get all vouchers with filters and pagination
 exports.getAllVouchers = catchAsync(async (req, res) => {
   const result = await FinancialService.getAllVouchers(req.query);
-
   res.status(200).json({
     status: "success",
     results: result.vouchers.length,
     pagination: result.pagination,
-    data: {
-      vouchers: result.vouchers
-    }
+    data: result.vouchers,
   });
 });
 
@@ -35,44 +48,61 @@ exports.getVoucherById = catchAsync(async (req, res) => {
 
   res.status(200).json({
     status: "success",
-    data: result
+    data: result,
   });
 });
 
 // Update voucher
 exports.updateVoucher = catchAsync(async (req, res) => {
-  const updatedBy = req.user?.id || req.body.updatedBy || "system";
+  const updatedBy = req.admin?.id || req.body.updatedBy || "system";
+
+  // Parse payload if coming from multipart/form-data
+  const bodyData = req.body.data ? JSON.parse(req.body.data) : req.body;
+
+  // Handle uploaded file
+  const fileInfo = extractFileInfo(req.file);
+  if (fileInfo) {
+    bodyData.attachments = [
+      {
+        fileName: fileInfo.originalName,
+        filePath: fileInfo.url,
+        fileType: fileInfo.format,
+        fileSize: fileInfo.size,
+      },
+    ];
+  }
+
   const voucher = await FinancialService.updateVoucher(
     req.params.id,
-    req.body,
+    bodyData,
     updatedBy
   );
 
   res.status(200).json({
     status: "success",
     data: {
-      voucher
-    }
+      voucher,
+    },
   });
 });
 
 // Delete/Cancel voucher
 exports.deleteVoucher = catchAsync(async (req, res) => {
-  const deletedBy = req.user?.id || "system";
+  const deletedBy = req.admin?.id || "system";
   const result = await FinancialService.deleteVoucher(req.params.id, deletedBy);
 
   res.status(200).json({
     status: "success",
-    data: result
+    data: result,
   });
 });
 
 // Approve or reject voucher
 exports.processVoucherApproval = catchAsync(async (req, res) => {
   const { action, comments } = req.body;
-  const approvedBy = req.user?.id || req.body.approvedBy || "system";
+  const approvedBy = req.admin?.id || req.body.approvedBy || "system";
 
-  if (!action || !['approve', 'reject'].includes(action)) {
+  if (!action || !["approve", "reject"].includes(action)) {
     throw new AppError("Valid action (approve/reject) is required", 400);
   }
 
@@ -86,8 +116,8 @@ exports.processVoucherApproval = catchAsync(async (req, res) => {
   res.status(200).json({
     status: "success",
     data: {
-      voucher
-    }
+      voucher,
+    },
   });
 });
 
@@ -104,8 +134,8 @@ exports.getVouchersByType = catchAsync(async (req, res) => {
     pagination: result.pagination,
     data: {
       vouchers: result.vouchers,
-      type
-    }
+      type,
+    },
   });
 });
 
@@ -137,15 +167,15 @@ exports.getExpenseVouchers = catchAsync(async (req, res) => {
 
 // Get pending vouchers for approval
 exports.getPendingVouchers = catchAsync(async (req, res) => {
-  const filters = { ...req.query, status: 'pending' };
+  const filters = { ...req.query, status: "pending" };
   const result = await FinancialService.getAllVouchers(filters);
 
   res.status(200).json({
     status: "success",
     results: result.vouchers.length,
     data: {
-      vouchers: result.vouchers
-    }
+      vouchers: result.vouchers,
+    },
   });
 });
 
@@ -156,8 +186,8 @@ exports.getFinancialReports = catchAsync(async (req, res) => {
   res.status(200).json({
     status: "success",
     data: {
-      report
-    }
+      report,
+    },
   });
 });
 
@@ -168,15 +198,15 @@ exports.getDashboardStats = catchAsync(async (req, res) => {
   res.status(200).json({
     status: "success",
     data: {
-      stats
-    }
+      stats,
+    },
   });
 });
 
 // Bulk operations
 exports.bulkProcessVouchers = catchAsync(async (req, res) => {
   const { voucherIds, action, comments } = req.body;
-  const processedBy = req.user?.id || req.body.processedBy || "system";
+  const processedBy = req.admin?.id || req.body.processedBy || "system";
 
   if (!voucherIds || !Array.isArray(voucherIds) || !action) {
     throw new AppError("Voucher IDs array and action are required", 400);
@@ -184,7 +214,7 @@ exports.bulkProcessVouchers = catchAsync(async (req, res) => {
 
   const results = {
     successful: [],
-    failed: []
+    failed: [],
   };
 
   for (const id of voucherIds) {
@@ -198,12 +228,12 @@ exports.bulkProcessVouchers = catchAsync(async (req, res) => {
       results.successful.push({
         id,
         voucherNo: voucher.voucherNo,
-        status: voucher.status
+        status: voucher.status,
       });
     } catch (error) {
       results.failed.push({
         id,
-        error: error.message
+        error: error.message,
       });
     }
   }
@@ -215,28 +245,26 @@ exports.bulkProcessVouchers = catchAsync(async (req, res) => {
       summary: {
         total: voucherIds.length,
         successful: results.successful.length,
-        failed: results.failed.length
-      }
-    }
+        failed: results.failed.length,
+      },
+    },
   });
 });
 
 // Export vouchers to Excel/PDF
 exports.exportVouchers = catchAsync(async (req, res) => {
-  const { format = 'excel', ...filters } = req.query;
-  
+  const { format = "excel", ...filters } = req.query;
+
   const result = await FinancialService.getAllVouchers(filters);
-  
-  // Here you would implement actual export logic
-  // For now, just return the data
-  const exportData = result.vouchers.map(voucher => ({
+
+  const exportData = result.vouchers.map((voucher) => ({
     voucherNo: voucher.voucherNo,
     type: voucher.voucherType,
     date: voucher.date,
     party: voucher.partyName,
     amount: voucher.totalAmount,
     status: voucher.status,
-    narration: voucher.narration
+    narration: voucher.narration,
   }));
 
   res.status(200).json({
@@ -244,37 +272,37 @@ exports.exportVouchers = catchAsync(async (req, res) => {
     data: {
       exportData,
       format,
-      totalRecords: exportData.length
-    }
+      totalRecords: exportData.length,
+    },
   });
 });
 
 // Duplicate voucher
 exports.duplicateVoucher = catchAsync(async (req, res) => {
   const originalVoucher = await FinancialService.getVoucherById(req.params.id);
-  const createdBy = req.user?.id || req.body.createdBy || "system";
+  const createdBy = req.admin?.id || req.body.createdBy || "system";
 
-  // Remove fields that should not be duplicated
   const duplicateData = {
     ...originalVoucher.voucher.toObject(),
     _id: undefined,
     voucherNo: undefined,
-    status: 'draft',
+    status: "draft",
     createdAt: undefined,
     updatedAt: undefined,
     approvedBy: undefined,
-    approvedAt: undefined
+    approvedAt: undefined,
   };
 
-  const voucher = await FinancialService.createVoucher(duplicateData, createdBy);
+  const voucher = await FinancialService.createVoucher(
+    duplicateData,
+    createdBy
+  );
 
   res.status(201).json({
     status: "success",
     data: {
       voucher,
-      originalVoucherNo: originalVoucher.voucher.voucherNo
-    }
+      originalVoucherNo: originalVoucher.voucher.voucherNo,
+    },
   });
 });
-
-

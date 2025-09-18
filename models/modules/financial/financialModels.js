@@ -49,10 +49,8 @@ const voucherSchema = new mongoose.Schema({
   // Linked invoices (for receipt/payment)
   linkedInvoices: [
     {
-      invoiceId: { type: mongoose.Schema.Types.ObjectId },
-      invoiceNo: { type: String },
-      amount: { type: Number, min: 0 },
-      balanceAmount: { type: Number, min: 0 },
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Transaction",
     },
   ],
 
@@ -84,7 +82,7 @@ const voucherSchema = new mongoose.Schema({
   expenseType: { type: String },
   submittedBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
+    ref: "Admin",
   },
   approvalStatus: {
     type: String,
@@ -93,7 +91,7 @@ const voucherSchema = new mongoose.Schema({
   },
   approvedBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
+    ref: "Admin",
   },
   approvedAt: { type: Date },
 
@@ -129,12 +127,12 @@ const voucherSchema = new mongoose.Schema({
   // Audit fields
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
+    ref: "Admin",
     required: true,
   },
   updatedBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
+    ref: "Admin",
   },
   createdAt: {
     type: Date,
@@ -208,12 +206,12 @@ module.exports = mongoose.model("Voucher", voucherSchema);
 const ledgerAccountSchema = new mongoose.Schema({
   accountCode: {
     type: String,
-    unique: true,
-    required: true,
+    required: false, // 🔥 allow saving without code for now
+    default: null,
   },
   accountName: {
     type: String,
-    required: true,
+    // required: true,
   },
   accountType: {
     type: String,
@@ -252,7 +250,7 @@ const ledgerAccountSchema = new mongoose.Schema({
 
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
+    ref: "Admin",
     required: true,
   },
   createdAt: { type: Date, default: Date.now },
@@ -306,7 +304,7 @@ const expenseCategorySchema = new mongoose.Schema({
 
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
+    ref: "Admin",
     required: true,
   },
   createdAt: { type: Date, default: Date.now },
@@ -354,7 +352,8 @@ const ledgerEntrySchema = new mongoose.Schema({
   },
   accountCode: {
     type: String,
-    required: true,
+    required: false, // 🔥 allow saving without code for now
+    default: null,
   },
 
   date: {
@@ -401,7 +400,7 @@ const ledgerEntrySchema = new mongoose.Schema({
 
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "User",
+    ref: "Admin",
     required: true,
   },
   createdAt: {

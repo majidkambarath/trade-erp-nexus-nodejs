@@ -2,30 +2,36 @@ const TransactionService = require("../../services/orderPurchase/transactionServ
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
 
-// Create new transaction
-exports.createTransaction = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || req.body.createdBy || "system";
-  const transaction = await TransactionService.createTransaction(
-    req.body,
-    createdBy
-  );
+// Helper to resolve createdBy consistently
+const resolveCreatedBy = (req) =>
+  req.user?.id || req.body.createdBy || "system";
 
-  res.status(201).json({
-    status: "success",
-    data: transaction,
-  });
-});
-
-// Get all transactions with filters and pagination
-exports.getAllTransactions = catchAsync(async (req, res) => {
-  const result = await TransactionService.getAllTransactions(req.query);
-
+// Helper to send paginated results
+const sendPaginated = (res, result) => {
   res.status(200).json({
     status: "success",
     results: result.transactions.length,
     pagination: result.pagination,
     data: result.transactions,
   });
+};
+
+// ---------- Controllers ----------
+
+// Create new transaction
+exports.createTransaction = catchAsync(async (req, res) => {
+  const transaction = await TransactionService.createTransaction(
+    req.body,
+    resolveCreatedBy(req)
+  );
+  res.status(201).json({ status: "success", data: transaction });
+});
+
+// Get all transactions
+exports.getAllTransactions = catchAsync(async (req, res) => {
+  console.log(req.query);
+  const result = await TransactionService.getAllTransactions(req.query);
+  sendPaginated(res, result);
 });
 
 // Get transaction by ID
@@ -33,64 +39,39 @@ exports.getTransactionById = catchAsync(async (req, res) => {
   const transaction = await TransactionService.getTransactionById(
     req.params.id
   );
-
-  res.status(200).json({
-    status: "success",
-    data: {
-      transaction,
-    },
-  });
+  res.status(200).json({ status: "success", data: { transaction } });
 });
 
 // Update transaction
 exports.updateTransaction = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || req.body.createdBy || "system";
   const transaction = await TransactionService.updateTransaction(
     req.params.id,
     req.body,
-    createdBy
+    resolveCreatedBy(req)
   );
-
-  res.status(200).json({
-    status: "success",
-    data: {
-      transaction,
-    },
-  });
+  res.status(200).json({ status: "success", data: { transaction } });
 });
 
 // Delete transaction
 exports.deleteTransaction = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || "system";
-  await TransactionService.deleteTransaction(req.params.id, createdBy);
-
-  res.status(204).json({
-    status: "success",
-    data: null,
-  });
+  await TransactionService.deleteTransaction(
+    req.params.id,
+    resolveCreatedBy(req)
+  );
+  res.status(204).json({ status: "success", data: null });
 });
 
-// Process transaction (approve PO, confirm SO, process returns)
+// Process transaction (approve/confirm/process)
 exports.processTransaction = catchAsync(async (req, res) => {
   const { action } = req.body;
-  const createdBy = req.user?.id || req.body.createdBy || "system";
-
-  if (!action) {
-    throw new AppError("Action is required", 400);
-  }
+  if (!action) throw new AppError("Action is required", 400);
 
   const transaction = await TransactionService.processTransaction(
     req.params.id,
     action,
-    createdBy
+    resolveCreatedBy(req)
   );
-
-  res.status(200).json({
-    status: "success",
-    data: {
-      transaction,
-    },
-  });
+  res.status(200).json({ status: "success", data: { transaction } });
 });
 
 // Get transaction with inventory movements
@@ -98,69 +79,47 @@ exports.getTransactionWithMovements = catchAsync(async (req, res) => {
   const result = await TransactionService.getTransactionWithMovements(
     req.params.id
   );
-
-  res.status(200).json({
-    status: "success",
-    data: result,
-  });
+  res.status(200).json({ status: "success", data: result });
 });
 
-// Get transaction statistics
+// Get transaction stats
 exports.getTransactionStats = catchAsync(async (req, res) => {
   const stats = await TransactionService.getTransactionStats(req.query);
-
-  res.status(200).json({
-    status: "success",
-    data: {
-      stats,
-    },
-  });
+  res.status(200).json({ status: "success", data: { stats } });
 });
 
 // Get pending transactions
 exports.getPendingTransactions = catchAsync(async (req, res) => {
   const transactions = await TransactionService.getPendingTransactions();
-
-  res.status(200).json({
-    status: "success",
-    results: transactions.length,
-    data: {
-      transactions,
-    },
-  });
+  res
+    .status(200)
+    .json({
+      status: "success",
+      results: transactions.length,
+      data: { transactions },
+    });
 });
 
 // Duplicate transaction
 exports.duplicateTransaction = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || req.body.createdBy || "system";
   const transaction = await TransactionService.duplicateTransaction(
     req.params.id,
-    createdBy
+    resolveCreatedBy(req)
   );
-
-  res.status(201).json({
-    status: "success",
-    data: {
-      transaction,
-    },
-  });
+  res.status(201).json({ status: "success", data: { transaction } });
 });
 
 // Bulk process transactions
 exports.bulkProcessTransactions = catchAsync(async (req, res) => {
   const { transactionIds, action } = req.body;
-  const createdBy = req.user?.id || req.body.createdBy || "system";
-
-  if (!transactionIds || !Array.isArray(transactionIds) || !action) {
+  if (!transactionIds?.length || !action)
     throw new AppError("Transaction IDs array and action are required", 400);
-  }
 
   const results = await TransactionService.bulkProcessTransactions(
     transactionIds,
     action,
-    createdBy
+    resolveCreatedBy(req)
   );
-
   res.status(200).json({
     status: "success",
     data: {
@@ -177,102 +136,68 @@ exports.bulkProcessTransactions = catchAsync(async (req, res) => {
 // Generate transaction report
 exports.generateTransactionReport = catchAsync(async (req, res) => {
   const report = await TransactionService.generateTransactionReport(req.query);
-
-  res.status(200).json({
-    status: "success",
-    data: {
-      report,
-    },
-  });
+  res.status(200).json({ status: "success", data: { report } });
 });
 
-// Get transactions by type
+// Generic get transactions by type
 exports.getTransactionsByType = catchAsync(async (req, res) => {
-  const { type } = req.params;
-  const filters = { ...req.query, type };
-
+  const filters = { ...req.query, type: req.params.type };
   const result = await TransactionService.getAllTransactions(filters);
-
-  res.status(200).json({
-    status: "success",
-    results: result.transactions.length,
-    pagination: result.pagination,
-    data: {
-      transactions: result.transactions,
-      type,
-    },
-  });
+  sendPaginated(res, result);
 });
 
-// Get purchase orders
-exports.getPurchaseOrders = catchAsync(async (req, res) => {
+// Shorthand routes for types
+exports.getPurchaseOrders = (req, res) => {
   req.params.type = "purchase_order";
   return exports.getTransactionsByType(req, res);
-});
-
-// Get sales orders
-exports.getSalesOrders = catchAsync(async (req, res) => {
+};
+exports.getSalesOrders = (req, res) => {
   req.params.type = "sales_order";
   return exports.getTransactionsByType(req, res);
-});
-
-// Get purchase returns
-exports.getPurchaseReturns = catchAsync(async (req, res) => {
+};
+exports.getPurchaseReturns = (req, res) => {
   req.params.type = "purchase_return";
   return exports.getTransactionsByType(req, res);
-});
-
-// Get sales returns
-exports.getSalesReturns = catchAsync(async (req, res) => {
+};
+exports.getSalesReturns = (req, res) => {
   req.params.type = "sales_return";
   return exports.getTransactionsByType(req, res);
-});
+};
 
 // Convert quote to sales order
 exports.convertQuoteToSalesOrder = catchAsync(async (req, res) => {
   const quote = await TransactionService.getTransactionById(req.params.id);
-
-  if (quote.type !== "quote") {
+  if (quote.type !== "quote")
     throw new AppError("Can only convert quotes to sales orders", 400);
-  }
-
-  const createdBy = req.user?.id || req.body.createdBy || "system";
-
-  const salesOrderData = {
-    type: "sales_order",
-    partyId: quote.partyId,
-    partyType: quote.partyType,
-    items: quote.items,
-    terms: quote.terms,
-    notes: `Converted from quote: ${quote.transactionNo}`,
-    quoteRef: quote.transactionNo,
-    priority: quote.priority,
-  };
 
   const salesOrder = await TransactionService.createTransaction(
-    salesOrderData,
-    createdBy
+    {
+      type: "sales_order",
+      partyId: quote.partyId,
+      partyType: quote.partyType,
+      items: quote.items,
+      terms: quote.terms,
+      notes: `Converted from quote: ${quote.transactionNo}`,
+      quoteRef: quote.transactionNo,
+      priority: quote.priority,
+    },
+    resolveCreatedBy(req)
   );
 
   res.status(201).json({
     status: "success",
-    data: {
-      salesOrder,
-      originalQuote: quote.transactionNo,
-    },
+    data: { salesOrder, originalQuote: quote.transactionNo },
   });
 });
 
-// Get transaction timeline/audit trail
+// Transaction timeline
 exports.getTransactionTimeline = catchAsync(async (req, res) => {
   const transaction = await TransactionService.getTransactionById(
     req.params.id
   );
-  const result = await TransactionService.getTransactionWithMovements(
-    req.params.id
-  );
+  const { inventoryMovements } =
+    await TransactionService.getTransactionWithMovements(req.params.id);
 
-  // Combine transaction updates with inventory movements for timeline
   const timeline = [
     {
       date: transaction.createdAt,
@@ -288,73 +213,45 @@ exports.getTransactionTimeline = catchAsync(async (req, res) => {
       user: transaction.createdBy,
       data: { status: transaction.status },
     },
-  ];
-
-  // Add inventory movements to timeline
-  result.inventoryMovements.forEach((movement) => {
-    timeline.push({
-      date: movement.date,
+    ...inventoryMovements.map((m) => ({
+      date: m.date,
       event: "STOCK_MOVEMENT",
-      description: movement.notes,
-      user: movement.createdBy,
+      description: m.notes,
+      user: m.createdBy,
       data: {
-        stockId: movement.stockId,
-        quantity: movement.quantity,
-        eventType: movement.eventType,
+        stockId: m.stockId,
+        quantity: m.quantity,
+        eventType: m.eventType,
       },
-    });
-  });
+    })),
+  ].sort((a, b) => new Date(a.date) - new Date(b.date));
 
-  // Sort timeline by date
-  timeline.sort((a, b) => new Date(a.date) - new Date(b.date));
-
-  res.status(200).json({
-    status: "success",
-    data: {
-      transaction,
-      timeline,
-    },
-  });
+  res.status(200).json({ status: "success", data: { transaction, timeline } });
 });
 
 // Cancel transaction
 exports.cancelTransaction = catchAsync(async (req, res) => {
   const { reason } = req.body;
-  const createdBy = req.user?.id || req.body.createdBy || "system";
-
   const transaction = await TransactionService.updateTransaction(
     req.params.id,
     {
       status: "CANCELLED",
-      notes: `${transaction.notes || ""}\nCancelled: ${
+      notes: `${req.body.notes || ""}\nCancelled: ${
         reason || "No reason provided"
       }`,
     },
-    createdBy
+    resolveCreatedBy(req)
   );
 
-  res.status(200).json({
-    status: "success",
-    data: {
-      transaction,
-    },
-  });
+  res.status(200).json({ status: "success", data: { transaction } });
 });
 
 // Reopen cancelled transaction
 exports.reopenTransaction = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || req.body.createdBy || "system";
-
   const transaction = await TransactionService.updateTransaction(
     req.params.id,
     { status: "DRAFT" },
-    createdBy
+    resolveCreatedBy(req)
   );
-
-  res.status(200).json({
-    status: "success",
-    data: {
-      transaction,
-    },
-  });
+  res.status(200).json({ status: "success", data: { transaction } });
 });

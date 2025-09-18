@@ -64,7 +64,9 @@ app.use("/api/v1/transactions", transactionRouter);
 app.use("/api/v1/inventory", inventoryRouter);
 app.use("/api/v1/categories", categoryRouter);
 app.use("/api/v1/staff", staffRoutes);
-app.use("api/v1/vouchers", financialRouter);
+app.use("/api/v1/vouchers", financialRouter);
+
+
 // Health check endpoint
 app.get("/api/v1/health", (req, res) => {
   res.json({
