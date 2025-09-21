@@ -17,8 +17,20 @@ const transactionSchema = new mongoose.Schema({
     enum: ["purchase_order", "sales_order", "purchase_return", "sales_return"],
     required: true,
   },
-  partyId: { type: mongoose.Schema.Types.ObjectId, required: true }, // ref Vendor or Customer based on type
-  partyType: { type: String, enum: ["vendor", "customer"], required: true },
+  partyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: true,
+    refPath: "partyTypeRef",
+  },
+  partyType: {
+    type: String,
+    required: true,
+  },
+  partyTypeRef: {
+    type: String,
+    required: true,
+    // enum: ["Vendor", "Customer"],
+  },
   date: { type: Date, default: Date.now },
   deliveryDate: { type: Date }, // for orders
   returnDate: { type: Date }, // for returns

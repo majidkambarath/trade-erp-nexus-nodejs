@@ -79,7 +79,8 @@ class TransactionService {
         transactionNo: generateTransactionNo(type),
         type,
         partyId,
-        partyType,
+        partyType :partyType === "vendor" ? "Vendor" : "Customer",
+        partyTypeRef :partyType === "vendor" ? "Vendor" : "Customer",
         items: processedItems,
         totalAmount,
         status: initialStatus,
@@ -160,83 +161,110 @@ class TransactionService {
   );
 
   // Get all Transactions
-  static async getAllTransactions(filters) {
-    const query = {};
-    if (filters.type) query.type = filters.type;
-    if (filters.status) query.status = filters.status;
-    if (filters.partyId)
-      query.partyId = new mongoose.Types.ObjectId(filters.partyId);
-    if (filters.partyType) query.partyType = filters.partyType;
+ static async getAllTransactions(filters) {
+  const query = {};
 
-    if (filters.search) {
-      query.$or = [
-        { transactionNo: new RegExp(filters.search, "i") },
-        { notes: new RegExp(filters.search, "i") },
-        { createdBy: new RegExp(filters.search, "i") },
-        { "items.description": new RegExp(filters.search, "i") },
-      ];
+  // ✅ Handle single or multiple transaction types
+  if (filters.type) {
+    if (Array.isArray(filters.type)) {
+      query.type = { $in: filters.type };
+    } else {
+      query.type = filters.type;
     }
-
-    if (filters.dateFilter) {
-      const today = new Date();
-      const field = ["purchase_return", "sales_return"].includes(filters.type)
-        ? "returnDate"
-        : "date";
-      switch (filters.dateFilter) {
-        case "TODAY":
-          query[field] = {
-            $gte: new Date(today.setHours(0, 0, 0, 0)),
-            $lte: new Date(today.setHours(23, 59, 59, 999)),
-          };
-          break;
-        case "WEEK":
-          query[field] = { $gte: new Date(today.getTime() - 7 * 86400000) };
-          break;
-        case "MONTH":
-          query[field] = {
-            $gte: new Date(today.getFullYear(), today.getMonth(), 1),
-          };
-          break;
-        case "CUSTOM":
-          if (filters.startDate && filters.endDate) {
-            query[field] = {
-              $gte: new Date(filters.startDate),
-              $lte: new Date(filters.endDate),
-            };
-          }
-          break;
-      }
-    }
-
-    const page = parseInt(filters.page) || 1;
-    const limit = parseInt(filters.limit) || 20;
-    const skip = (page - 1) * limit;
-
-    const transactions = await Transaction.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate({ path: "partyId", select: "customerName vendorName" }) // auto-handle both
-      .lean();
-
-    const transactionsWithPartyName = transactions.map((t) => ({
-      ...t,
-      partyName:
-        t.partyId?.customerName || t.partyId?.vendorName || "Unknown Party",
-    }));
-
-    const total = await Transaction.countDocuments(query);
-
-    return {
-      transactions: transactionsWithPartyName,
-      pagination: {
-        current: page,
-        pages: Math.ceil(total / limit),
-        total,
-        limit,
-      },
-    };
   }
+
+  if (filters.status) query.status = filters.status;
+  if (filters.partyId) {
+    query.partyId = new mongoose.Types.ObjectId(filters.partyId);
+  }
+  if (filters.partyType) query.partyType = filters.partyType;
+
+  // ✅ Search across multiple fields
+  if (filters.search) {
+    query.$or = [
+      { transactionNo: new RegExp(filters.search, "i") },
+      { notes: new RegExp(filters.search, "i") },
+      { createdBy: new RegExp(filters.search, "i") },
+      { "items.description": new RegExp(filters.search, "i") },
+    ];
+  }
+
+  // ✅ Date filter (works for multiple types)
+  if (filters.dateFilter) {
+    const today = new Date();
+    const types = Array.isArray(filters.type) ? filters.type : [filters.type];
+
+    // If any type is a "return" type → use returnDate
+    const field = types.some((t) =>
+      ["purchase_return", "sales_return"].includes(t)
+    )
+      ? "returnDate"
+      : "date";
+
+    switch (filters.dateFilter) {
+      case "TODAY":
+        query[field] = {
+          $gte: new Date(today.setHours(0, 0, 0, 0)),
+          $lte: new Date(today.setHours(23, 59, 59, 999)),
+        };
+        break;
+
+      case "WEEK":
+        query[field] = {
+          $gte: new Date(today.getTime() - 7 * 86400000),
+        };
+        break;
+
+      case "MONTH":
+        query[field] = {
+          $gte: new Date(today.getFullYear(), today.getMonth(), 1),
+        };
+        break;
+
+      case "CUSTOM":
+        if (filters.startDate && filters.endDate) {
+          query[field] = {
+            $gte: new Date(filters.startDate),
+            $lte: new Date(filters.endDate),
+          };
+        }
+        break;
+    }
+  }
+
+  // ✅ Pagination
+  const page = parseInt(filters.page) || 1;
+  const limit = parseInt(filters.limit) || 20;
+  const skip = (page - 1) * limit;
+
+  // ✅ Query DB
+  const transactions = await Transaction.find(query)
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .populate({ path: "partyId", select: "customerName vendorName" })
+    .lean();
+
+  // ✅ Map partyName for convenience
+  const transactionsWithPartyName = transactions.map((t) => ({
+    ...t,
+    partyName:
+      t.partyId?.customerName || t.partyId?.vendorName || "Unknown Party",
+  }));
+
+  const total = await Transaction.countDocuments(query);
+
+  return {
+    transactions: transactionsWithPartyName,
+    pagination: {
+      current: page,
+      pages: Math.ceil(total / limit),
+      total,
+      limit,
+    },
+  };
+}
+
 
   // ---------- Stock Handling ----------
   static async processTransactionStock(
