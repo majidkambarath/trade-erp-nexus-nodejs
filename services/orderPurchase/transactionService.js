@@ -423,7 +423,7 @@ class TransactionService {
         reject: { status: "REJECTED" },
       },
       sales_order: {
-        confirm: { status: "CONFIRMED", invoiceGenerated: true },
+        confirm: { status: "APPROVED", invoiceGenerated: true },
         cancel: { status: "CANCELLED" },
       },
       purchase_return: { process: { status: "PROCESSED" } },
@@ -443,7 +443,7 @@ class TransactionService {
     return (
       {
         purchase_order: "APPROVED",
-        sales_order: "CONFIRMED",
+        sales_order: "APPROVED",
         purchase_return: "PROCESSED",
         sales_return: "PROCESSED",
       }[type] || "PROCESSED"
