@@ -1,4 +1,3 @@
-// models/financial/voucherModel.js
 const mongoose = require("mongoose");
 
 // Base voucher line item schema
@@ -49,20 +48,36 @@ const voucherSchema = new mongoose.Schema({
   // Linked invoices (for receipt/payment)
   linkedInvoices: [
     {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Transaction",
+      invoiceId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Transaction",
+      },
+      allocatedAmount: { type: Number, min: 0 },
+      previousBalance: { type: Number },
+      newBalance: { type: Number, min: 0 },
     },
   ],
 
   // Payment/Transfer details
   paymentMode: {
     type: String,
-    enum: ["cash", "bank", "cheque", "online", "transfer", null],
+    enum: ["cash", "bank", "cheque", "online", null],
     default: null,
   },
-  chequeNo: { type: String },
-  chequeDate: { type: Date },
-  bankName: { type: String },
+  paymentDetails: {
+    bankDetails: {
+      accountNumber: { type: String },
+      accountName: { type: String },
+    },
+    chequeDetails: {
+      chequeNumber: { type: String },
+      chequeDate: { type: Date },
+    },
+    onlineDetails: {
+      transactionId: { type: String },
+      transactionDate: { type: Date },
+    },
+  },
 
   // For contra vouchers
   fromAccountId: {
@@ -168,25 +183,16 @@ voucherSchema.pre("save", function (next) {
   this.year = date.getFullYear();
 
   // Calculate financial year (April to March)
-  const fyStart =
-    date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
+  const fyStart = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
   this.financialYear = `${fyStart}-${fyStart + 1}`;
 
   // Validate double entry for journal vouchers
   if (this.voucherType === "journal") {
-    const totalDebits = this.entries.reduce(
-      (sum, entry) => sum + entry.debitAmount,
-      0
-    );
-    const totalCredits = this.entries.reduce(
-      (sum, entry) => sum + entry.creditAmount,
-      0
-    );
+    const totalDebits = this.entries.reduce((sum, entry) => sum + entry.debitAmount, 0);
+    const totalCredits = this.entries.reduce((sum, entry) => sum + entry.creditAmount, 0);
 
     if (Math.abs(totalDebits - totalCredits) > 0.01) {
-      return next(
-        new Error("Debits and credits must be equal for journal vouchers")
-      );
+      return next(new Error("Debits and credits must be equal for journal vouchers"));
     }
   }
 
@@ -206,12 +212,11 @@ module.exports = mongoose.model("Voucher", voucherSchema);
 const ledgerAccountSchema = new mongoose.Schema({
   accountCode: {
     type: String,
-    required: false, // 🔥 allow saving without code for now
+    required: false,
     default: null,
   },
   accountName: {
     type: String,
-    // required: true,
   },
   accountType: {
     type: String,
@@ -319,10 +324,7 @@ expenseCategorySchema.pre("save", function (next) {
 expenseCategorySchema.index({ isActive: 1, level: 1 });
 expenseCategorySchema.index({ parentCategoryId: 1 });
 
-const ExpenseCategory = mongoose.model(
-  "ExpenseCategory",
-  expenseCategorySchema
-);
+const ExpenseCategory = mongoose.model("ExpenseCategory", expenseCategorySchema);
 
 // models/financial/ledgerEntryModel.js
 const ledgerEntrySchema = new mongoose.Schema({
@@ -352,7 +354,7 @@ const ledgerEntrySchema = new mongoose.Schema({
   },
   accountCode: {
     type: String,
-    required: false, // 🔥 allow saving without code for now
+    required: false,
     default: null,
   },
 
@@ -416,8 +418,7 @@ ledgerEntrySchema.pre("save", function (next) {
   this.year = date.getFullYear();
 
   // Calculate financial year (April to March)
-  const fyStart =
-    date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
+  const fyStart = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
   this.financialYear = `${fyStart}-${fyStart + 1}`;
 
   next();

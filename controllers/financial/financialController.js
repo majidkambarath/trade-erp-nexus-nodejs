@@ -9,7 +9,7 @@ exports.createVoucher = catchAsync(async (req, res) => {
 
   // Parse payload if coming from multipart/form-data
   const bodyData = req.body.data ? JSON.parse(req.body.data) : req.body;
-
+ console.log(bodyData)
   // Handle uploaded file
   const fileInfo = extractFileInfo(req.file);
   if (fileInfo) {
