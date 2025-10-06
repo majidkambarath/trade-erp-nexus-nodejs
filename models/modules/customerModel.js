@@ -5,7 +5,7 @@ const customerSchema = new mongoose.Schema({
   customerName: { type: String, required: true },
   contactPerson: { type: String, required: true },
   email: { type: String, match: /\S+@\S+\.\S+/, sparse: true },
-  phone: { type: String, match: /^\+?\d{10,15}$/, sparse: true },
+  phone: { type: String, sparse: true },
   billingAddress: { type: String, default: null },
   shippingAddress: { type: String, default: null },
   creditLimit: { type: Number, default: 0, min: 0 },
@@ -23,6 +23,7 @@ const customerSchema = new mongoose.Schema({
   totalOrders: { type: Number, default: 0 },
   totalSpent: { type: Number, default: 0 },
   lastOrder: { type: Date },
+  cashBalance: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

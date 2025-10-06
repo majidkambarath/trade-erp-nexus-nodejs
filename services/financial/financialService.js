@@ -27,6 +27,22 @@ class FinancialService {
     return `${prefixes[type]}-${dateStr}-${sequence}`;
   }
 
+  // Helper: Centralized cash balance adjustment (for Customer/Vendor)
+  static async adjustPartyCashBalance(partyId, partyType, amount, session, operation = 'add') {
+    if (!partyId || amount <= 0) return; // No-op for zero/negative
+
+    const PartyModel = partyType === "Customer" ? Customer : Vendor;
+    const party = await PartyModel.findById(partyId).session(session);
+    if (!party) {
+      throw new AppError(`${partyType} not found`, 404);
+    }
+
+    const delta = operation === 'add' ? amount : -amount;
+    party.cashBalance = Math.max(0, (party.cashBalance || 0) + delta); // Prevent negative
+    await party.save({ session });
+    console.log(`[CashBalance] ${partyType} ${partyId}: Adjusted by ${delta} (new: ${party.cashBalance})`);
+  }
+
   // Create any type of voucher
   static async createVoucher(data, createdBy) {
     const session = await mongoose.startSession();
@@ -89,7 +105,7 @@ class FinancialService {
     }
   }
 
-  // Process Receipt Voucher
+  // Process Receipt Voucher (money received from customer)
   static async processReceiptVoucher(data, session) {
     const {
       date = new Date(),
@@ -128,7 +144,7 @@ class FinancialService {
       throw new AppError("Bank details required for bank payment", 400);
     }
 
-    // Validate and allocate linked invoices
+    // Validate and allocate linked invoices (allow partial for on-account)
     let validatedInvoices = [];
     let totalAllocated = 0;
     if (linkedInvoices.length > 0) {
@@ -168,11 +184,15 @@ class FinancialService {
 
         totalAllocated += allocated;
       }
-
-      if (Math.abs(totalAllocated - totalAmount) > 0.01) {
-        throw new AppError("Total allocated amounts must equal total amount", 400);
-      }
     }
+
+    const onAccountAmount = totalAmount - totalAllocated;
+    if (onAccountAmount < 0) {
+      throw new AppError("Allocated amount cannot exceed total amount", 400);
+    }
+
+    // Update customer cashBalance for on-account (advance from customer)
+    await this.adjustPartyCashBalance(customerId, "Customer", onAccountAmount, session, 'add');
 
     // Create entries for double-entry accounting
     const entries = [];
@@ -187,19 +207,37 @@ class FinancialService {
       description: `Receipt from ${customer.customerName}`,
     });
 
-    // Credit: Customer Account (Accounts Receivable)
-    const customerAccount = await this.getOrCreateCustomerAccount(
-      customerId,
-      customer.customerName,
-      session
-    );
-    entries.push({
-      accountId: customerAccount._id,
-      accountName: customerAccount.accountName,
-      debitAmount: 0,
-      creditAmount: totalAmount,
-      description: `Payment received from ${customer.customerName}`,
-    });
+    // Credit: Customer Receivable Account (for allocated part)
+    if (totalAllocated > 0) {
+      const customerAccount = await this.getOrCreateCustomerAccount(
+        customerId,
+        customer.customerName,
+        session
+      );
+      entries.push({
+        accountId: customerAccount._id,
+        accountName: customerAccount.accountName,
+        debitAmount: 0,
+        creditAmount: totalAllocated,
+        description: `Payment received from ${customer.customerName} (allocated)`,
+      });
+    }
+
+    // Credit: Customer Advance Liability Account (for on-account part)
+    if (onAccountAmount > 0) {
+      const advanceAccount = await this.getOrCreateCustomerAdvanceAccount(
+        customerId,
+        customer.customerName,
+        session
+      );
+      entries.push({
+        accountId: advanceAccount._id,
+        accountName: advanceAccount.accountName,
+        debitAmount: 0,
+        creditAmount: onAccountAmount,
+        description: `Advance received from ${customer.customerName}`,
+      });
+    }
 
     return {
       date,
@@ -210,13 +248,14 @@ class FinancialService {
       paymentMode,
       paymentDetails,
       totalAmount,
+      onAccountAmount,
       narration,
       entries,
       status: "approved", // Receipts are typically approved immediately
     };
   }
 
-  // Process Payment Voucher
+  // Process Payment Voucher (money paid to vendor)
   static async processPaymentVoucher(data, session) {
     const {
       date = new Date(),
@@ -254,7 +293,7 @@ class FinancialService {
       throw new AppError("Bank details required for bank payment", 400);
     }
 
-    // Validate and allocate linked invoices
+    // Validate and allocate linked invoices (allow partial for on-account/advance to vendor)
     let validatedInvoices = [];
     let totalAllocated = 0;
     if (linkedInvoices.length > 0) {
@@ -294,16 +333,20 @@ class FinancialService {
 
         totalAllocated += allocated;
       }
-
-      if (Math.abs(totalAllocated - totalAmount) > 0.01) {
-        throw new AppError("Total allocated amounts must equal total amount", 400);
-      }
     }
+
+    const onAccountAmount = totalAmount - totalAllocated;
+    if (onAccountAmount < 0) {
+      throw new AppError("Allocated amount cannot exceed total amount", 400);
+    }
+
+    // Update vendor cashBalance for on-account (advance to vendor)
+    await this.adjustPartyCashBalance(vendorId, "Vendor", onAccountAmount, session, 'add');
 
     // Create entries for double-entry accounting
     const entries = [];
 
-    // Credit: Cash/Bank Account (based on payment mode)
+    // Credit: Cash/Bank Account (outflow)
     const cashBankAccount = await this.getCashBankAccount(paymentMode, session);
     entries.push({
       accountId: cashBankAccount._id,
@@ -313,19 +356,37 @@ class FinancialService {
       description: `Payment to ${vendor.vendorName}`,
     });
 
-    // Debit: Vendor Account (Accounts Payable)
-    const vendorAccount = await this.getOrCreateVendorAccount(
-      vendorId,
-      vendor.vendorName,
-      session
-    );
-    entries.push({
-      accountId: vendorAccount._id,
-      accountName: vendorAccount.accountName,
-      debitAmount: totalAmount,
-      creditAmount: 0,
-      description: `Payment made to ${vendor.vendorName}`,
-    });
+    // Debit: Vendor Payable Account (for allocated part, reduce liability)
+    if (totalAllocated > 0) {
+      const vendorAccount = await this.getOrCreateVendorAccount(
+        vendorId,
+        vendor.vendorName,
+        session
+      );
+      entries.push({
+        accountId: vendorAccount._id,
+        accountName: vendorAccount.accountName,
+        debitAmount: totalAllocated,
+        creditAmount: 0,
+        description: `Payment to ${vendor.vendorName} (allocated)`,
+      });
+    }
+
+    // Debit: Vendor Advance Asset Account (for on-account part, prepayment)
+    if (onAccountAmount > 0) {
+      const advanceAccount = await this.getOrCreateVendorAdvanceAccount(
+        vendorId,
+        vendor.vendorName,
+        session
+      );
+      entries.push({
+        accountId: advanceAccount._id,
+        accountName: advanceAccount.accountName,
+        debitAmount: onAccountAmount,
+        creditAmount: 0,
+        description: `Advance payment to ${vendor.vendorName}`,
+      });
+    }
 
     return {
       date,
@@ -336,6 +397,7 @@ class FinancialService {
       paymentMode,
       paymentDetails,
       totalAmount,
+      onAccountAmount,
       narration,
       entries,
       status: "approved",
@@ -539,6 +601,126 @@ class FinancialService {
     };
   }
 
+  // Helper: Get or create customer receivable account (asset)
+  static async getOrCreateCustomerAccount(customerId, customerName, session) {
+    const accountName = `Customer - ${customerName}`;
+    let account = await LedgerAccount.findOne({
+      accountName,
+      accountType: "asset",
+      subType: "current_asset",
+    }).session(session);
+
+    if (!account) {
+      account = await LedgerAccount.create(
+        [
+          {
+            accountCode: `CUST${customerId.toString().slice(-6)}`,
+            accountName,
+            accountType: "asset",
+            subType: "current_asset",
+            allowDirectPosting: true,
+            description: `Receivables from ${customerName}`,
+            createdBy: new mongoose.Types.ObjectId(),
+          },
+        ],
+        { session }
+      );
+      account = account[0];
+    }
+
+    return account;
+  }
+
+  // Helper: Get or create customer advance account (liability)
+  static async getOrCreateCustomerAdvanceAccount(customerId, customerName, session) {
+    const accountName = `Customer Advance - ${customerName}`;
+    let account = await LedgerAccount.findOne({
+      accountName,
+      accountType: "liability",
+      subType: "current_liability",
+    }).session(session);
+
+    if (!account) {
+      account = await LedgerAccount.create(
+        [
+          {
+            accountCode: `CADV${customerId.toString().slice(-6)}`,
+            accountName,
+            accountType: "liability",
+            subType: "current_liability",
+            allowDirectPosting: true,
+            description: `Advances from ${customerName}`,
+            createdBy: new mongoose.Types.ObjectId(),
+          },
+        ],
+        { session }
+      );
+      account = account[0];
+    }
+
+    return account;
+  }
+
+  // Helper: Get or create vendor payable account (liability)
+  static async getOrCreateVendorAccount(vendorId, vendorName, session) {
+    const accountName = `Vendor - ${vendorName}`;
+    let account = await LedgerAccount.findOne({
+      accountName,
+      accountType: "liability",
+      subType: "current_liability",
+    }).session(session);
+
+    if (!account) {
+      account = await LedgerAccount.create(
+        [
+          {
+            accountCode: `VEND${vendorId.toString().slice(-6)}`,
+            accountName,
+            accountType: "liability",
+            subType: "current_liability",
+            allowDirectPosting: true,
+            description: `Payables to ${vendorName}`,
+            createdBy: new mongoose.Types.ObjectId(),
+          },
+        ],
+        { session }
+      );
+      account = account[0];
+    }
+
+    return account;
+  }
+
+  // Helper: Get or create vendor advance account (asset)
+  static async getOrCreateVendorAdvanceAccount(vendorId, vendorName, session) {
+    const accountName = `Advance to Vendor - ${vendorName}`;
+    let account = await LedgerAccount.findOne({
+      accountName,
+      accountType: "asset",
+      subType: "current_asset",
+    }).session(session);
+
+    if (!account) {
+      account = await LedgerAccount.create(
+        [
+          {
+            accountCode: `VADV${vendorId.toString().slice(-6)}`,
+            accountName,
+            accountType: "asset",
+            subType: "current_asset",
+            allowDirectPosting: true,
+            description: `Advances to ${vendorName}`,
+            createdBy: new mongoose.Types.ObjectId(),
+          },
+        ],
+        { session }
+      );
+      account = account[0];
+    }
+
+    return account;
+  }
+
   // Create ledger entries for double-entry accounting
   static async createLedgerEntries(voucher, createdBy, session) {
     const ledgerEntries = voucher.entries.map((entry) => ({
@@ -607,66 +789,6 @@ class FinancialService {
             subType: "current_asset",
             allowDirectPosting: true,
             isSystemAccount: true,
-            createdBy: new mongoose.Types.ObjectId(),
-          },
-        ],
-        { session }
-      );
-      account = account[0];
-    }
-
-    return account;
-  }
-
-  // Helper method to get or create customer account
-  static async getOrCreateCustomerAccount(customerId, customerName, session) {
-    const accountName = `Customer - ${customerName}`;
-    let account = await LedgerAccount.findOne({
-      accountName,
-      accountType: "asset",
-      subType: "current_asset",
-    }).session(session);
-
-    if (!account) {
-      account = await LedgerAccount.create(
-        [
-          {
-            accountCode: `CUST${customerId.toString().slice(-6)}`,
-            accountName,
-            accountType: "asset",
-            subType: "current_asset",
-            allowDirectPosting: true,
-            description: `Receivables from ${customerName}`,
-            createdBy: new mongoose.Types.ObjectId(),
-          },
-        ],
-        { session }
-      );
-      account = account[0];
-    }
-
-    return account;
-  }
-
-  // Helper method to get or create vendor account
-  static async getOrCreateVendorAccount(vendorId, vendorName, session) {
-    const accountName = `Vendor - ${vendorName}`;
-    let account = await LedgerAccount.findOne({
-      accountName,
-      accountType: "liability",
-      subType: "current_liability",
-    }).session(session);
-
-    if (!account) {
-      account = await LedgerAccount.create(
-        [
-          {
-            accountCode: `VEND${vendorId.toString().slice(-6)}`,
-            accountName,
-            accountType: "liability",
-            subType: "current_liability",
-            allowDirectPosting: true,
-            description: `Payables to ${vendorName}`,
             createdBy: new mongoose.Types.ObjectId(),
           },
         ],
@@ -786,12 +908,12 @@ class FinancialService {
     session.startTransaction();
 
     try {
-      const voucher = await Voucher.findById(id).session(session);
-      if (!voucher) {
+      const oldVoucher = await Voucher.findById(id).session(session);
+      if (!oldVoucher) {
         throw new AppError("Voucher not found", 404);
       }
 
-      if (voucher.status === "approved" && !data.forceUpdate) {
+      if (oldVoucher.status === "approved" && !data.forceUpdate) {
         throw new AppError("Cannot update approved voucher", 400);
       }
 
@@ -801,22 +923,28 @@ class FinancialService {
         data.entries ||
         data.linkedInvoices ||
         data.paymentMode ||
-        data.paymentDetails
+        data.paymentDetails ||
+        data.voucherType === "receipt" ||
+        data.voucherType === "payment"
       ) {
         await this.reverseLedgerEntries(id, session);
-        await this.reverseAllocations(voucher, session);
+        await this.reverseAllocations(oldVoucher, session);
+        // Reverse old cashBalance adjustment
+        if (oldVoucher.partyType && oldVoucher.onAccountAmount > 0) {
+          await this.adjustPartyCashBalance(oldVoucher.partyId, oldVoucher.partyType, oldVoucher.onAccountAmount, session, 'subtract');
+        }
         needReprocess = true;
       }
 
       // Handle attachments: merge old + new
       if (data.attachments && data.attachments.length > 0) {
-        voucher.attachments = [...voucher.attachments, ...data.attachments];
+        oldVoucher.attachments = [...oldVoucher.attachments, ...data.attachments];
       }
 
       if (needReprocess) {
-        const processData = { ...voucher.toObject(), ...data };
+        const processData = { ...oldVoucher.toObject(), ...data };
         let processedData;
-        switch (voucher.voucherType) {
+        switch (oldVoucher.voucherType) {
           case "receipt":
             processedData = await this.processReceiptVoucher(processData, session);
             break;
@@ -835,22 +963,22 @@ class FinancialService {
           default:
             throw new AppError("Invalid voucher type", 400);
         }
-        Object.assign(voucher, processedData);
+        Object.assign(oldVoucher, processedData);
       } else {
-        Object.assign(voucher, data);
+        Object.assign(oldVoucher, data);
       }
 
-      voucher.updatedBy = updatedBy;
-      await voucher.save({ session });
+      oldVoucher.updatedBy = updatedBy;
+      await oldVoucher.save({ session });
 
-      if (needReprocess && voucher.status === "approved") {
-        await this.createLedgerEntries(voucher, updatedBy, session);
+      if (needReprocess && oldVoucher.status === "approved") {
+        await this.createLedgerEntries(oldVoucher, updatedBy, session);
       }
 
       await session.commitTransaction();
       return {
-        ...voucher.toObject(),
-        linkedInvoices: voucher.linkedInvoices.map((inv) => ({
+        ...oldVoucher.toObject(),
+        linkedInvoices: oldVoucher.linkedInvoices.map((inv) => ({
           invoiceId: inv.invoiceId,
           amount: inv.allocatedAmount,
           balance: inv.newBalance,
@@ -934,6 +1062,10 @@ class FinancialService {
       if (voucher.status === "approved") {
         await this.reverseLedgerEntries(id, session);
         await this.reverseAllocations(voucher, session);
+        // Reverse cashBalance adjustment
+        if (voucher.partyType && voucher.onAccountAmount > 0) {
+          await this.adjustPartyCashBalance(voucher.partyId, voucher.partyType, voucher.onAccountAmount, session, 'subtract');
+        }
       }
 
       // Mark as cancelled instead of hard delete

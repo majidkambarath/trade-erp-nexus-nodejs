@@ -20,7 +20,7 @@ function generateTransactionNo(type) {
 
 function calculateItems(items) {
   return items.map((item) => {
-    const lineValue = item.qty * item.rate;
+    const lineValue = item.qty * item.price;
     const tax = lineValue * ((item.taxPercent || 0) / 100);
     return { ...item, lineTotal: lineValue + tax };
   });
@@ -48,6 +48,7 @@ class TransactionService {
   // Create Transaction
   static createTransaction = withTransactionSession(
     async (data, createdBy, session) => {
+      console.log(data)
       const { type, partyId, partyType, items, autoProcess, ...rest } = data;
 
       if (!type || !partyId || !partyType)

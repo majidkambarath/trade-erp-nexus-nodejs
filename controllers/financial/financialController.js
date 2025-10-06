@@ -9,7 +9,7 @@ exports.createVoucher = catchAsync(async (req, res) => {
 
   // Parse payload if coming from multipart/form-data
   const bodyData = req.body.data ? JSON.parse(req.body.data) : req.body;
- console.log(bodyData)
+
   // Handle uploaded file
   const fileInfo = extractFileInfo(req.file);
   if (fileInfo) {
@@ -22,7 +22,7 @@ exports.createVoucher = catchAsync(async (req, res) => {
       },
     ];
   }
-  // console.log(bodyData);
+
   const voucher = await FinancialService.createVoucher(bodyData, createdBy);
 
   res.status(201).json({
@@ -97,6 +97,38 @@ exports.deleteVoucher = catchAsync(async (req, res) => {
   });
 });
 
+// Get vouchers by type (unified handler)
+exports.getVouchersByType = catchAsync(async (req, res) => {
+  const { type } = req.params;
+  const filters = { ...req.query, voucherType: type };
+
+  const result = await FinancialService.getAllVouchers(filters);
+
+  res.status(200).json({
+    status: "success",
+    results: result.vouchers.length,
+    pagination: result.pagination,
+    data: {
+      vouchers: result.vouchers,
+      type,
+    },
+  });
+});
+
+// Get pending vouchers for approval
+exports.getPendingVouchers = catchAsync(async (req, res) => {
+  const filters = { ...req.query, status: "pending" };
+  const result = await FinancialService.getAllVouchers(filters);
+
+  res.status(200).json({
+    status: "success",
+    results: result.vouchers.length,
+    data: {
+      vouchers: result.vouchers,
+    },
+  });
+});
+
 // Approve or reject voucher
 exports.processVoucherApproval = catchAsync(async (req, res) => {
   const { action, comments } = req.body;
@@ -117,64 +149,6 @@ exports.processVoucherApproval = catchAsync(async (req, res) => {
     status: "success",
     data: {
       voucher,
-    },
-  });
-});
-
-// Get vouchers by type
-exports.getVouchersByType = catchAsync(async (req, res) => {
-  const { type } = req.params;
-  const filters = { ...req.query, voucherType: type };
-
-  const result = await FinancialService.getAllVouchers(filters);
-
-  res.status(200).json({
-    status: "success",
-    results: result.vouchers.length,
-    pagination: result.pagination,
-    data: {
-      vouchers: result.vouchers,
-      type,
-    },
-  });
-});
-
-// Specific voucher type handlers
-exports.getReceiptVouchers = catchAsync(async (req, res) => {
-  req.params.type = "receipt";
-  return exports.getVouchersByType(req, res);
-});
-
-exports.getPaymentVouchers = catchAsync(async (req, res) => {
-  req.params.type = "payment";
-  return exports.getVouchersByType(req, res);
-});
-
-exports.getJournalVouchers = catchAsync(async (req, res) => {
-  req.params.type = "journal";
-  return exports.getVouchersByType(req, res);
-});
-
-exports.getContraVouchers = catchAsync(async (req, res) => {
-  req.params.type = "contra";
-  return exports.getVouchersByType(req, res);
-});
-
-exports.getExpenseVouchers = catchAsync(async (req, res) => {
-  req.params.type = "expense";
-  return exports.getVouchersByType(req, res);
-});
-
-// Get pending vouchers for approval
-exports.getPendingVouchers = catchAsync(async (req, res) => {
-  const filters = { ...req.query, status: "pending" };
-  const result = await FinancialService.getAllVouchers(filters);
-
-  res.status(200).json({
-    status: "success",
-    results: result.vouchers.length,
-    data: {
-      vouchers: result.vouchers,
     },
   });
 });

@@ -5,7 +5,7 @@ const vendorSchema = new mongoose.Schema({
   vendorName: { type: String, required: true },
   contactPerson: { type: String, required: true },
   email: { type: String, match: /\S+@\S+\.\S+/, sparse: true },
-  phone: { type: String, match: /^\+?\d{10,15}$/, sparse: true },
+  phone: { type: String, sparse: true },
   address: { type: String, required: true },
   paymentTerms: {
     type: String,
@@ -18,6 +18,7 @@ const vendorSchema = new mongoose.Schema({
     default: "Pending",
   },
   enrollDate: { type: Date, default: Date.now },
+  cashBalance: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

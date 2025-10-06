@@ -1,3 +1,4 @@
+// models/modules/financial/financialModels.js
 const mongoose = require("mongoose");
 
 // Base voucher line item schema
@@ -24,7 +25,7 @@ const voucherSchema = new mongoose.Schema({
   },
   voucherType: {
     type: String,
-    enum: ["receipt", "payment", "journal", "contra", "expense"],
+    // enum: ["receipt", "payment", "journal", "contra", "expense"],
     required: true,
   },
   date: {
@@ -57,6 +58,9 @@ const voucherSchema = new mongoose.Schema({
       newBalance: { type: Number, min: 0 },
     },
   ],
+
+  // On-account amount (unallocated advance/prepayment)
+  onAccountAmount: { type: Number, default: 0, min: 0 },
 
   // Payment/Transfer details
   paymentMode: {
@@ -101,7 +105,7 @@ const voucherSchema = new mongoose.Schema({
   },
   approvalStatus: {
     type: String,
-    enum: ["pending", "approved", "rejected"],
+    // enum: ["pending", "approved", "rejected"],
     default: "pending",
   },
   approvedBy: {
@@ -135,7 +139,7 @@ const voucherSchema = new mongoose.Schema({
   // Status and workflow
   status: {
     type: String,
-    enum: ["draft", "pending", "approved", "rejected", "cancelled"],
+    // enum: ["draft", "pending", "approved", "rejected", "cancelled"],
     default: "draft",
   },
 
@@ -206,9 +210,9 @@ voucherSchema.index({ status: 1, createdAt: -1 });
 voucherSchema.index({ financialYear: 1, month: 1 });
 voucherSchema.index({ createdBy: 1, date: -1 });
 
-module.exports = mongoose.model("Voucher", voucherSchema);
+const Voucher = mongoose.model("Voucher", voucherSchema);
 
-// models/financial/ledgerAccountModel.js
+// Ledger Account Model
 const ledgerAccountSchema = new mongoose.Schema({
   accountCode: {
     type: String,
@@ -272,7 +276,7 @@ ledgerAccountSchema.index({ isActive: 1, allowDirectPosting: 1 });
 
 const LedgerAccount = mongoose.model("LedgerAccount", ledgerAccountSchema);
 
-// models/financial/expenseCategoryModel.js
+// Expense Category Model
 const expenseCategorySchema = new mongoose.Schema({
   categoryName: {
     type: String,
@@ -326,7 +330,7 @@ expenseCategorySchema.index({ parentCategoryId: 1 });
 
 const ExpenseCategory = mongoose.model("ExpenseCategory", expenseCategorySchema);
 
-// models/financial/ledgerEntryModel.js
+// Ledger Entry Model
 const ledgerEntrySchema = new mongoose.Schema({
   voucherId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -339,7 +343,7 @@ const ledgerEntrySchema = new mongoose.Schema({
   },
   voucherType: {
     type: String,
-    enum: ["receipt", "payment", "journal", "contra", "expense"],
+    // enum: ["receipt", "payment", "journal", "contra", "expense"],
     required: true,
   },
 
@@ -434,9 +438,8 @@ ledgerEntrySchema.index({ date: -1, createdAt: -1 });
 
 const LedgerEntry = mongoose.model("LedgerEntry", ledgerEntrySchema);
 
-// Export all models
 module.exports = {
-  Voucher: mongoose.model("Voucher", voucherSchema),
+  Voucher,
   LedgerAccount,
   ExpenseCategory,
   LedgerEntry,
