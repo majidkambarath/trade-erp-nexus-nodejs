@@ -1,31 +1,32 @@
-// models/modules/financial/financialModels.js
 const mongoose = require("mongoose");
 
-// Base voucher line item schema
+// Voucher Line Item Schema
 const voucherLineSchema = new mongoose.Schema({
   accountId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "LedgerAccount",
     required: true,
   },
-  accountName: { type: String, required: true },
+  accountName: { type: String, required: true, trim: true },
+  accountCode: { type: String, trim: true },
   debitAmount: { type: Number, default: 0, min: 0 },
   creditAmount: { type: Number, default: 0, min: 0 },
-  description: { type: String },
+  description: { type: String, trim: true },
   taxPercent: { type: Number, default: 0, min: 0, max: 100 },
   taxAmount: { type: Number, default: 0, min: 0 },
 });
 
-// Main unified voucher schema
+// Voucher Schema
 const voucherSchema = new mongoose.Schema({
   voucherNo: {
     type: String,
     unique: true,
     required: true,
+    trim: true,
   },
   voucherType: {
     type: String,
-    // enum: ["receipt", "payment", "journal", "contra", "expense"],
+    enum: ["receipt", "payment", "journal", "contra", "expense"],
     required: true,
   },
   date: {
@@ -33,8 +34,6 @@ const voucherSchema = new mongoose.Schema({
     default: Date.now,
     required: true,
   },
-
-  // Party information (for receipt/payment vouchers)
   partyId: {
     type: mongoose.Schema.Types.ObjectId,
     refPath: "partyType",
@@ -44,9 +43,7 @@ const voucherSchema = new mongoose.Schema({
     enum: ["Customer", "Vendor", null],
     default: null,
   },
-  partyName: { type: String },
-
-  // Linked invoices (for receipt/payment)
+  partyName: { type: String, trim: true },
   linkedInvoices: [
     {
       invoiceId: {
@@ -54,15 +51,11 @@ const voucherSchema = new mongoose.Schema({
         ref: "Transaction",
       },
       allocatedAmount: { type: Number, min: 0 },
-      previousBalance: { type: Number },
+      previousBalance: { type: Number, min: 0 },
       newBalance: { type: Number, min: 0 },
     },
   ],
-
-  // On-account amount (unallocated advance/prepayment)
   onAccountAmount: { type: Number, default: 0, min: 0 },
-
-  // Payment/Transfer details
   paymentMode: {
     type: String,
     enum: ["cash", "bank", "cheque", "online", null],
@@ -70,42 +63,38 @@ const voucherSchema = new mongoose.Schema({
   },
   paymentDetails: {
     bankDetails: {
-      accountNumber: { type: String },
-      accountName: { type: String },
+      accountNumber: { type: String, trim: true },
+      accountName: { type: String, trim: true },
     },
     chequeDetails: {
-      chequeNumber: { type: String },
+      chequeNumber: { type: String, trim: true },
       chequeDate: { type: Date },
     },
     onlineDetails: {
-      transactionId: { type: String },
+      transactionId: { type: String, trim: true },
       transactionDate: { type: Date },
     },
   },
-
-  // For contra vouchers
   fromAccountId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "LedgerAccount",
+    ref: "Transactor",
   },
   toAccountId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "LedgerAccount",
+    ref: "Transactor",
   },
-
-  // For expense vouchers
   expenseCategoryId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "ExpenseCategory",
   },
-  expenseType: { type: String },
+  expenseType: { type: String, trim: true },
   submittedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Admin",
   },
   approvalStatus: {
     type: String,
-    // enum: ["pending", "approved", "rejected"],
+    enum: ["pending", "approved", "rejected"],
     default: "pending",
   },
   approvedBy: {
@@ -113,37 +102,27 @@ const voucherSchema = new mongoose.Schema({
     ref: "Admin",
   },
   approvedAt: { type: Date },
-
-  // Common fields
   totalAmount: {
     type: Number,
     required: true,
     min: 0,
   },
-  narration: { type: String },
-  notes: { type: String },
-
-  // Voucher entries (double entry system)
+  narration: { type: String, trim: true },
+  notes: { type: String, trim: true },
   entries: [voucherLineSchema],
-
-  // File attachments
   attachments: [
     {
-      fileName: { type: String },
-      filePath: { type: String },
-      fileType: { type: String },
-      fileSize: { type: Number },
+      fileName: { type: String, trim: true },
+      filePath: { type: String, trim: true },
+      fileType: { type: String, trim: true },
+      fileSize: { type: Number, min: 0 },
     },
   ],
-
-  // Status and workflow
   status: {
     type: String,
-    // enum: ["draft", "pending", "approved", "rejected", "cancelled"],
+    enum: ["draft", "pending", "approved", "rejected", "cancelled"],
     default: "draft",
   },
-
-  // Audit fields
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Admin",
@@ -161,18 +140,14 @@ const voucherSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
-
-  // References for integration
   referenceType: {
     type: String,
     enum: ["invoice", "order", "manual", null],
     default: "manual",
   },
   referenceId: { type: mongoose.Schema.Types.ObjectId },
-  referenceNo: { type: String },
-
-  // Financial period
-  financialYear: { type: String },
+  referenceNo: { type: String, trim: true },
+  financialYear: { type: String, trim: true },
   month: { type: Number, min: 1, max: 12 },
   year: { type: Number },
 });
@@ -180,47 +155,49 @@ const voucherSchema = new mongoose.Schema({
 // Pre-save middleware
 voucherSchema.pre("save", function (next) {
   this.updatedAt = Date.now();
-
-  // Set financial period
   const date = new Date(this.date);
   this.month = date.getMonth() + 1;
   this.year = date.getFullYear();
-
-  // Calculate financial year (April to March)
   const fyStart = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
   this.financialYear = `${fyStart}-${fyStart + 1}`;
-
-  // Validate double entry for journal vouchers
   if (this.voucherType === "journal") {
     const totalDebits = this.entries.reduce((sum, entry) => sum + entry.debitAmount, 0);
     const totalCredits = this.entries.reduce((sum, entry) => sum + entry.creditAmount, 0);
-
     if (Math.abs(totalDebits - totalCredits) > 0.01) {
       return next(new Error("Debits and credits must be equal for journal vouchers"));
     }
   }
-
   next();
 });
 
-// Indexes for performance
-voucherSchema.index({ voucherType: 1, date: -1 });
-voucherSchema.index({ partyId: 1, voucherType: 1 });
-voucherSchema.index({ status: 1, createdAt: -1 });
-voucherSchema.index({ financialYear: 1, month: 1 });
-voucherSchema.index({ createdBy: 1, date: -1 });
+// Pre-update middleware
+voucherSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
+  this.set({ updatedAt: Date.now() });
+  next();
+});
+
+// Indexes (removed duplicate voucherNo index)
+voucherSchema.index({ voucherType: 1, date: -1 }); // For FinancialService.getAllVouchers
+voucherSchema.index({ partyId: 1, partyType: 1, status: 1 }); // For FinancialService.getPartyStatement
+voucherSchema.index({ status: 1, approvalStatus: 1 }); // For FinancialService.getAllVouchers
+voucherSchema.index({ financialYear: 1, month: 1 }); // For FinancialService.getFinancialReports
+voucherSchema.index({ createdBy: 1, createdAt: -1 }); // For FinancialService.getDashboardStats
 
 const Voucher = mongoose.model("Voucher", voucherSchema);
 
-// Ledger Account Model
+// Ledger Account Schema
 const ledgerAccountSchema = new mongoose.Schema({
   accountCode: {
     type: String,
     required: false,
     default: null,
+    trim: true,
+    sparse: true,
   },
   accountName: {
     type: String,
+    required: true,
+    trim: true,
   },
   accountType: {
     type: String,
@@ -247,16 +224,13 @@ const ledgerAccountSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "LedgerAccount",
   },
-  level: { type: Number, default: 0 },
+  level: { type: Number, default: 0, min: 0 },
   isActive: { type: Boolean, default: true },
-  openingBalance: { type: Number, default: 0 },
+  openingBalance: { type: Number, default: 0, min: 0 },
   currentBalance: { type: Number, default: 0 },
-  description: { type: String },
-
-  // Account behavior
+  description: { type: String, trim: true },
   allowDirectPosting: { type: Boolean, default: true },
   isSystemAccount: { type: Boolean, default: false },
-
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Admin",
@@ -266,51 +240,55 @@ const ledgerAccountSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
+// Pre-save middleware
 ledgerAccountSchema.pre("save", function (next) {
   this.updatedAt = Date.now();
   next();
 });
 
-ledgerAccountSchema.index({ accountType: 1, subType: 1 });
-ledgerAccountSchema.index({ isActive: 1, allowDirectPosting: 1 });
+// Pre-update middleware
+ledgerAccountSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
+  this.set({ updatedAt: Date.now() });
+  next();
+});
+
+// Indexes (removed duplicate accountCode index)
+ledgerAccountSchema.index({ accountName: 1, isActive: 1 }); // For FinancialService.getCashBankAccount
+ledgerAccountSchema.index({ accountType: 1, subType: 1 }); // For FinancialService.getOrCreateCustomerAccount
+ledgerAccountSchema.index({ isActive: 1, allowDirectPosting: 1 }); // For FinancialService.processJournalVoucher
 
 const LedgerAccount = mongoose.model("LedgerAccount", ledgerAccountSchema);
 
-// Expense Category Model
+// Expense Category Schema
 const expenseCategorySchema = new mongoose.Schema({
   categoryName: {
     type: String,
     required: true,
     unique: true,
+    trim: true,
   },
   categoryCode: {
     type: String,
     required: true,
     unique: true,
+    trim: true,
   },
-  description: { type: String },
+  description: { type: String, trim: true },
   parentCategoryId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "ExpenseCategory",
   },
-  level: { type: Number, default: 0 },
+  level: { type: Number, default: 0, min: 0 },
   isActive: { type: Boolean, default: true },
-
-  // Budget controls
-  monthlyBudget: { type: Number, default: 0 },
-  yearlyBudget: { type: Number, default: 0 },
-  currentSpent: { type: Number, default: 0 },
-
-  // Approval requirements
+  monthlyBudget: { type: Number, default: 0, min: 0 },
+  yearlyBudget: { type: Number, default: 0, min: 0 },
+  currentSpent: { type: Number, default: 0, min: 0 },
   requiresApproval: { type: Boolean, default: true },
-  approvalLimit: { type: Number, default: 0 },
-
-  // Default ledger account for this category
+  approvalLimit: { type: Number, default: 0, min: 0 },
   defaultAccountId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "LedgerAccount",
   },
-
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Admin",
@@ -320,17 +298,25 @@ const expenseCategorySchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now },
 });
 
+// Pre-save middleware
 expenseCategorySchema.pre("save", function (next) {
   this.updatedAt = Date.now();
   next();
 });
 
-expenseCategorySchema.index({ isActive: 1, level: 1 });
-expenseCategorySchema.index({ parentCategoryId: 1 });
+// Pre-update middleware
+expenseCategorySchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
+  this.set({ updatedAt: Date.now() });
+  next();
+});
+
+// Indexes (removed duplicate categoryName and categoryCode indexes)
+expenseCategorySchema.index({ isActive: 1 }); // For FinancialService.processExpenseVoucher
+expenseCategorySchema.index({ parentCategoryId: 1 }); // For hierarchical queries
 
 const ExpenseCategory = mongoose.model("ExpenseCategory", expenseCategorySchema);
 
-// Ledger Entry Model
+// Ledger Entry Schema
 const ledgerEntrySchema = new mongoose.Schema({
   voucherId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -340,13 +326,13 @@ const ledgerEntrySchema = new mongoose.Schema({
   voucherNo: {
     type: String,
     required: true,
+    trim: true,
   },
   voucherType: {
     type: String,
-    // enum: ["receipt", "payment", "journal", "contra", "expense"],
+    enum: ["receipt", "payment", "journal", "contra", "expense"],
     required: true,
   },
-
   accountId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "LedgerAccount",
@@ -355,18 +341,18 @@ const ledgerEntrySchema = new mongoose.Schema({
   accountName: {
     type: String,
     required: true,
+    trim: true,
   },
   accountCode: {
     type: String,
     required: false,
     default: null,
+    trim: true,
   },
-
   date: {
     type: Date,
     required: true,
   },
-
   debitAmount: {
     type: Number,
     default: 0,
@@ -377,10 +363,7 @@ const ledgerEntrySchema = new mongoose.Schema({
     default: 0,
     min: 0,
   },
-
-  narration: { type: String },
-
-  // Party information for receivables/payables tracking
+  narration: { type: String, trim: true },
   partyId: {
     type: mongoose.Schema.Types.ObjectId,
     refPath: "partyType",
@@ -390,20 +373,13 @@ const ledgerEntrySchema = new mongoose.Schema({
     enum: ["Customer", "Vendor", null],
     default: null,
   },
-
-  // Reference information
-  referenceType: { type: String },
+  referenceType: { type: String, trim: true },
   referenceId: { type: mongoose.Schema.Types.ObjectId },
-  referenceNo: { type: String },
-
-  // Financial period
-  financialYear: { type: String },
+  referenceNo: { type: String, trim: true },
+  financialYear: { type: String, trim: true },
   month: { type: Number, min: 1, max: 12 },
   year: { type: Number },
-
-  // Running balance for the account
   runningBalance: { type: Number, default: 0 },
-
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Admin",
@@ -413,28 +389,25 @@ const ledgerEntrySchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  isReversed: { type: Boolean, default: false },
+  reversedAt: { type: Date },
 });
 
-// Pre-save middleware to set financial period
+// Pre-save middleware
 ledgerEntrySchema.pre("save", function (next) {
   const date = new Date(this.date);
   this.month = date.getMonth() + 1;
   this.year = date.getFullYear();
-
-  // Calculate financial year (April to March)
   const fyStart = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
   this.financialYear = `${fyStart}-${fyStart + 1}`;
-
   next();
 });
 
-// Indexes for optimal query performance
-ledgerEntrySchema.index({ accountId: 1, date: -1 });
-ledgerEntrySchema.index({ voucherId: 1 });
-ledgerEntrySchema.index({ voucherType: 1, date: -1 });
-ledgerEntrySchema.index({ partyId: 1, partyType: 1, date: -1 });
-ledgerEntrySchema.index({ financialYear: 1, month: 1 });
-ledgerEntrySchema.index({ date: -1, createdAt: -1 });
+// Indexes
+ledgerEntrySchema.index({ voucherId: 1, accountId: 1, date: 1 }); // For FinancialService.reverseLedgerEntries
+ledgerEntrySchema.index({ accountId: 1, date: 1 }); // For FinancialService.getTrialBalance
+ledgerEntrySchema.index({ partyId: 1, partyType: 1 }); // For FinancialService.getPartyStatement
+ledgerEntrySchema.index({ financialYear: 1, month: 1 }); // For FinancialService.getFinancialReports
 
 const LedgerEntry = mongoose.model("LedgerEntry", ledgerEntrySchema);
 

@@ -46,4 +46,5 @@ router.get("/vouchers/export/data", FinancialController.exportVouchers);
 router.get("/reports/financial", FinancialController.getFinancialReports);
 router.get("/dashboard/stats", FinancialController.getDashboardStats);
 
+router.get("/ledger-entries", FinancialController.getAllLedgerEntries);
 module.exports = router;

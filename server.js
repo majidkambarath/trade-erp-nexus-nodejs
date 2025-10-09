@@ -16,6 +16,9 @@ const categoryRouter = require("./routes/stock/categoryRouter");
 const staffRoutes = require("./routes/staff/staffRoutes");
 const financialRouter = require("./routes/financial/financialRoutes");
 const accountRouter = require("./routes/financial/accountRouter");
+const transactorRouter = require("./routes/financial/transactorRoutes");
+
+
 dotenv.config();
 
 const app = express();
@@ -66,7 +69,7 @@ app.use("/api/v1/categories", categoryRouter);
 app.use("/api/v1/staff", staffRoutes);
 app.use("/api/v1/vouchers", financialRouter);
 app.use("/api/v1/account", accountRouter);
-
+app.use("/api/v1/account-v2", transactorRouter);
 // Health check endpoint
 app.get("/api/v1/health", (req, res) => {
   res.json({

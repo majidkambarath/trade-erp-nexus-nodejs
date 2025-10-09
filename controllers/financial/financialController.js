@@ -2,6 +2,7 @@ const FinancialService = require("../../services/financial/financialService");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
 const { extractFileInfo } = require("../../middleware/upload");
+const LedgerService = require("../../services/financial/ledgerService");
 
 // Create any type of voucher (receipt, payment, journal, contra, expense)
 exports.createVoucher = catchAsync(async (req, res) => {
@@ -9,7 +10,7 @@ exports.createVoucher = catchAsync(async (req, res) => {
 
   // Parse payload if coming from multipart/form-data
   const bodyData = req.body.data ? JSON.parse(req.body.data) : req.body;
-
+  console.log(bodyData);
   // Handle uploaded file
   const fileInfo = extractFileInfo(req.file);
   if (fileInfo) {
@@ -33,7 +34,10 @@ exports.createVoucher = catchAsync(async (req, res) => {
 
 // Get all vouchers with filters and pagination
 exports.getAllVouchers = catchAsync(async (req, res) => {
+  console.log("object");
+  console.log(req.query);
   const result = await FinancialService.getAllVouchers(req.query);
+  console.log(result.vouchers.length);
   res.status(200).json({
     status: "success",
     results: result.vouchers.length,
@@ -278,5 +282,29 @@ exports.duplicateVoucher = catchAsync(async (req, res) => {
       voucher,
       originalVoucherNo: originalVoucher.voucher.voucherNo,
     },
+  });
+});
+
+exports.getAllLedgerEntries = catchAsync(async (req,res) => {
+  const filters = {
+    voucherType: req.query.voucherType,
+    accountId: req.query.accountId,
+    partyId: req.query.partyId,
+    partyType: req.query.partyType,
+    dateFrom: req.query.dateFrom,
+    dateTo: req.query.dateTo,
+    search: req.query.search,
+    page: req.query.page,
+    limit: req.query.limit,
+    sortBy: req.query.sortBy || "date",
+    sortOrder: req.query.sortOrder || "desc",
+  };
+
+  const result = await LedgerService.getAllLedgerEntries(filters);
+
+  return res.status(200).json({
+    status: "success",
+    data: result.ledgerEntries,
+    pagination: result.pagination,
   });
 });

@@ -1,7 +1,6 @@
 const express = require("express");
 const { authenticateToken } = require("../../middleware/authMiddleware");
 const TransactionController = require("../../controllers/orderPurchase/transactionController");
-// Validation rules can be added similar to previous
 
 const router = express.Router();
 

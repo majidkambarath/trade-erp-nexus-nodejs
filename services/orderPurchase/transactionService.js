@@ -48,8 +48,7 @@ class TransactionService {
   // Create Transaction
   static createTransaction = withTransactionSession(
     async (data, createdBy, session) => {
-      console.log(data)
-      const { type, partyId, partyType, items, autoProcess, ...rest } = data;
+      const { type, partyId, partyType, items, ...rest } = data;
 
       if (!type || !partyId || !partyType)
         throw new AppError("Missing required fields", 400);
@@ -57,6 +56,7 @@ class TransactionService {
 
       // Validate stock for sales orders & purchase returns
       for (const item of items) {
+        console.log(item)
         const stock = await StockService.getStockByItemId(item.itemId);
         if (
           (type === "sales_order" || type === "purchase_return") &&
@@ -72,19 +72,15 @@ class TransactionService {
         0
       );
 
-      let initialStatus = rest.status || "DRAFT";
-      if (type.includes("_return") && autoProcess !== false)
-        initialStatus = "PROCESSED";
-
       const transactionData = {
         transactionNo: generateTransactionNo(type),
         type,
         partyId,
-        partyType :partyType === "vendor" ? "Vendor" : "Customer",
-        partyTypeRef :partyType === "vendor" ? "Vendor" : "Customer",
+        partyType: partyType === "vendor" ? "Vendor" : "Customer",
+        partyTypeRef: partyType === "vendor" ? "Vendor" : "Customer",
         items: processedItems,
         totalAmount,
-        status: initialStatus,
+        status: "DRAFT",
         createdBy,
         ...rest,
       };
@@ -92,21 +88,6 @@ class TransactionService {
       const [newTransaction] = await Transaction.create([transactionData], {
         session,
       });
-
-      // Auto-process if returns or requested
-      if (
-        (type.includes("_return") && autoProcess !== false) ||
-        autoProcess === true
-      ) {
-        await this.processTransactionStock(
-          newTransaction._id,
-          newTransaction,
-          createdBy,
-          session
-        );
-        newTransaction.status = this.getProcessedStatus(type);
-        await newTransaction.save({ session });
-      }
 
       return newTransaction;
     }
@@ -145,7 +126,7 @@ class TransactionService {
     }
   );
 
-  // Process Transaction (stock changes + status updates)
+  // Process Transaction (approve/reject/cancel)
   static processTransaction = withTransactionSession(
     async (id, action, createdBy, session) => {
       const transaction = await Transaction.findById(id).session(session);
@@ -153,7 +134,10 @@ class TransactionService {
 
       this.validateAction(transaction.type, action, transaction.status);
 
-      await this.processTransactionStock(id, transaction, createdBy, session);
+      if (action === "approve") {
+        await this.processTransactionStock(id, transaction, createdBy, session);
+      }
+
       this.updateTransactionStatus(transaction, action);
 
       await transaction.save({ session });
@@ -162,110 +146,99 @@ class TransactionService {
   );
 
   // Get all Transactions
- static async getAllTransactions(filters) {
-  const query = {};
+  static async getAllTransactions(filters) {
+    const query = {};
 
-  // ✅ Handle single or multiple transaction types
-  if (filters.type) {
-    if (Array.isArray(filters.type)) {
-      query.type = { $in: filters.type };
-    } else {
-      query.type = filters.type;
+    if (filters.type) {
+      if (Array.isArray(filters.type)) {
+        query.type = { $in: filters.type };
+      } else {
+        query.type = filters.type;
+      }
     }
-  }
 
-  if (filters.status) query.status = filters.status;
-  if (filters.partyId) {
-    query.partyId = new mongoose.Types.ObjectId(filters.partyId);
-  }
-  if (filters.partyType) query.partyType = filters.partyType;
+    if (filters.status) query.status = filters.status;
+    if (filters.partyId) {
+      query.partyId = new mongoose.Types.ObjectId(filters.partyId);
+    }
+    if (filters.partyType) query.partyType = filters.partyType;
 
-  // ✅ Search across multiple fields
-  if (filters.search) {
-    query.$or = [
-      { transactionNo: new RegExp(filters.search, "i") },
-      { notes: new RegExp(filters.search, "i") },
-      { createdBy: new RegExp(filters.search, "i") },
-      { "items.description": new RegExp(filters.search, "i") },
-    ];
-  }
+    if (filters.search) {
+      query.$or = [
+        { transactionNo: new RegExp(filters.search, "i") },
+        { notes: new RegExp(filters.search, "i") },
+        { createdBy: new RegExp(filters.search, "i") },
+        { "items.description": new RegExp(filters.search, "i") },
+      ];
+    }
 
-  // ✅ Date filter (works for multiple types)
-  if (filters.dateFilter) {
-    const today = new Date();
-    const types = Array.isArray(filters.type) ? filters.type : [filters.type];
+    if (filters.dateFilter) {
+      const today = new Date();
+      const types = Array.isArray(filters.type) ? filters.type : [filters.type];
 
-    // If any type is a "return" type → use returnDate
-    const field = types.some((t) =>
-      ["purchase_return", "sales_return"].includes(t)
-    )
-      ? "returnDate"
-      : "date";
+      const field = types.some((t) =>
+        ["purchase_return", "sales_return"].includes(t)
+      )
+        ? "returnDate"
+        : "date";
 
-    switch (filters.dateFilter) {
-      case "TODAY":
-        query[field] = {
-          $gte: new Date(today.setHours(0, 0, 0, 0)),
-          $lte: new Date(today.setHours(23, 59, 59, 999)),
-        };
-        break;
-
-      case "WEEK":
-        query[field] = {
-          $gte: new Date(today.getTime() - 7 * 86400000),
-        };
-        break;
-
-      case "MONTH":
-        query[field] = {
-          $gte: new Date(today.getFullYear(), today.getMonth(), 1),
-        };
-        break;
-
-      case "CUSTOM":
-        if (filters.startDate && filters.endDate) {
+      switch (filters.dateFilter) {
+        case "TODAY":
           query[field] = {
-            $gte: new Date(filters.startDate),
-            $lte: new Date(filters.endDate),
+            $gte: new Date(today.setHours(0, 0, 0, 0)),
+            $lte: new Date(today.setHours(23, 59, 59, 999)),
           };
-        }
-        break;
+          break;
+        case "WEEK":
+          query[field] = {
+            $gte: new Date(today.getTime() - 7 * 86400000),
+          };
+          break;
+        case "MONTH":
+          query[field] = {
+            $gte: new Date(today.getFullYear(), today.getMonth(), 1),
+          };
+          break;
+        case "CUSTOM":
+          if (filters.startDate && filters.endDate) {
+            query[field] = {
+              $gte: new Date(filters.startDate),
+              $lte: new Date(filters.endDate),
+            };
+          }
+          break;
+      }
     }
+
+    const page = parseInt(filters.page) || 1;
+    const limit = parseInt(filters.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const transactions = await Transaction.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate({ path: "partyId", select: "customerName vendorName" })
+      .lean();
+
+    const transactionsWithPartyName = transactions.map((t) => ({
+      ...t,
+      partyName:
+        t.partyId?.customerName || t.partyId?.vendorName || "Unknown Party",
+    }));
+
+    const total = await Transaction.countDocuments(query);
+
+    return {
+      transactions: transactionsWithPartyName,
+      pagination: {
+        current: page,
+        pages: Math.ceil(total / limit),
+        total,
+        limit,
+      },
+    };
   }
-
-  // ✅ Pagination
-  const page = parseInt(filters.page) || 1;
-  const limit = parseInt(filters.limit) || 20;
-  const skip = (page - 1) * limit;
-
-  // ✅ Query DB
-  const transactions = await Transaction.find(query)
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(limit)
-    .populate({ path: "partyId", select: "customerName vendorName" })
-    .lean();
-
-  // ✅ Map partyName for convenience
-  const transactionsWithPartyName = transactions.map((t) => ({
-    ...t,
-    partyName:
-      t.partyId?.customerName || t.partyId?.vendorName || "Unknown Party",
-  }));
-
-  const total = await Transaction.countDocuments(query);
-
-  return {
-    transactions: transactionsWithPartyName,
-    pagination: {
-      current: page,
-      pages: Math.ceil(total / limit),
-      total,
-      limit,
-    },
-  };
-}
-
 
   // ---------- Stock Handling ----------
   static async processTransactionStock(
@@ -279,22 +252,42 @@ class TransactionService {
 
     for (const item of items) {
       const stock = await StockService.getStockByItemId(item.itemId);
+      console.log("object")
+      console.log(stock)
       const quantityChange = this.getQuantityChange(type, item.qty);
       const newStock = stock.currentStock + quantityChange;
-
       if (quantityChange < 0 && newStock < 0) {
         throw new AppError(`Insufficient stock for ${item.description}`, 400);
       }
 
+      let newPurchasePrice = stock.purchasePrice;
+      let price = item.rate/item.qty
+      if (type === "purchase_order") {
+        // Calculate weighted average price for purchase orders
+        const currentValue = stock.purchasePrice * stock.currentStock;
+         
+        const newValue = price * item.qty;
+        const totalQuantity = stock.currentStock + item.qty;
+        newPurchasePrice = totalQuantity > 0 ? (currentValue + newValue) / totalQuantity : stock.purchasePrice;
+      }
+   
+      // Update stock with new quantity and purchase price
       await stock.constructor.findByIdAndUpdate(
         stock._id,
-        { currentStock: newStock },
+        {
+          currentStock: newStock,
+          purchasePrice: +newPurchasePrice.toFixed(2),
+          updatedAt: new Date(),
+        },
         { session }
       );
-
+console.log("+++++++")
+console.log(price)
+console.log(item)
+console.log("----------------")
       const movement = await this.createInventoryMovement(
         {
-          stockId: item.itemId,
+          stockId: stock.itemId,
           quantity: quantityChange,
           previousStock: stock.currentStock,
           newStock,
@@ -302,8 +295,8 @@ class TransactionService {
           referenceType: "Transaction",
           referenceId: transactionId,
           referenceNumber: transactionNo,
-          unitCost: item.rate,
-          totalValue: Math.abs(quantityChange) * item.rate,
+          unitCost: price, // Use transaction item price
+          totalValue: Math.abs(quantityChange) * price,
           notes: `${this.getEventType(type)} - ${item.description}`,
           createdBy,
           batchNumber: stock.batchNumber,
@@ -316,6 +309,7 @@ class TransactionService {
         itemId: item.itemId,
         previousStock: stock.currentStock,
         newStock,
+        newPurchasePrice, // Include new purchase price in response
         movement,
       });
     }
@@ -340,15 +334,17 @@ class TransactionService {
       const reversalQuantity = -movement.quantity;
       const newStock = stock.currentStock + reversalQuantity;
 
+      // Note: Not updating purchasePrice on reversal to avoid complexity
+      // If needed, implement logic to recalculate purchasePrice based on historical data
       await stock.constructor.findByIdAndUpdate(
         stock._id,
-        { currentStock: newStock },
+        { currentStock: newStock, updatedAt: new Date() },
         { session }
       );
 
       const reversalMovement = await this.createInventoryMovement(
         {
-          stockId: movement.stockId,
+          stockId: stock.itemId,
           quantity: reversalQuantity,
           previousStock: stock.currentStock,
           newStock,
@@ -401,15 +397,10 @@ class TransactionService {
   }
 
   static validateAction(type, action, status) {
-    const validActions = {
-      purchase_order: ["approve", "reject"],
-      sales_order: ["confirm", "cancel"],
-      purchase_return: ["process"],
-      sales_return: ["process"],
-    };
+    const validActions = ["approve", "reject", "cancel"];
 
-    if (!validActions[type]?.includes(action))
-      throw new AppError(`Invalid action '${action}' for type '${type}'`, 400);
+    if (!validActions.includes(action))
+      throw new AppError(`Invalid action '${action}'`, 400);
     if (this.isProcessed(status))
       throw new AppError(
         `Transaction already processed with status '${status}'`,
@@ -418,37 +409,22 @@ class TransactionService {
   }
 
   static updateTransactionStatus(transaction, action) {
-    const map = {
-      purchase_order: {
-        approve: { status: "APPROVED", grnGenerated: true },
-        reject: { status: "REJECTED" },
+    const statusMap = {
+      approve: {
+        status: "APPROVED",
+        grnGenerated: transaction.type === "purchase_order" ? true : undefined,
+        invoiceGenerated: transaction.type === "sales_order" ? true : undefined,
+        creditNoteIssued: transaction.type === "sales_return" ? true : undefined,
       },
-      sales_order: {
-        confirm: { status: "APPROVED", invoiceGenerated: true },
-        cancel: { status: "CANCELLED" },
-      },
-      purchase_return: { process: { status: "PROCESSED" } },
-      sales_return: {
-        process: { status: "PROCESSED", creditNoteIssued: true },
-      },
+      reject: { status: "REJECTED" },
+      cancel: { status: "CANCELLED" },
     };
 
-    Object.assign(transaction, map[transaction.type]?.[action] || {});
+    Object.assign(transaction, statusMap[action] || {});
   }
 
   static isProcessed(status) {
-    return ["APPROVED", "CONFIRMED", "PROCESSED", "COMPLETED"].includes(status);
-  }
-
-  static getProcessedStatus(type) {
-    return (
-      {
-        purchase_order: "APPROVED",
-        sales_order: "APPROVED",
-        purchase_return: "PROCESSED",
-        sales_return: "PROCESSED",
-      }[type] || "PROCESSED"
-    );
+    return ["APPROVED", "REJECTED", "CANCELLED", "PAID", "PARTIAL"].includes(status);
   }
 }
 

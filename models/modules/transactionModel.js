@@ -1,17 +1,18 @@
 const mongoose = require("mongoose");
 
 const itemSchema = new mongoose.Schema({
-  itemId: { type: String, required: true }, // from Stock.itemId
-  description: { type: String, required: true },
+  itemId: { type: String, required: true, trim: true },
+  description: { type: String, required: true, trim: true },
   qty: { type: Number, required: true, min: 0 },
   rate: { type: Number, required: true, min: 0 },
   taxPercent: { type: Number, default: 5, min: 0 },
+  taxAmount: { type: Number, default: 0, min: 0 },
   lineTotal: { type: Number, required: true, min: 0 },
-  reason: { type: String }, // for returns
+  reason: { type: String, trim: true },
 });
 
 const transactionSchema = new mongoose.Schema({
-  transactionNo: { type: String, unique: true, required: true },
+  transactionNo: { type: String, unique: true, required: true, trim: true },
   type: {
     type: String,
     enum: ["purchase_order", "sales_order", "purchase_return", "sales_return"],
@@ -24,26 +25,32 @@ const transactionSchema = new mongoose.Schema({
   },
   partyType: {
     type: String,
+    enum: ["Customer", "Vendor"],
     required: true,
   },
   partyTypeRef: {
     type: String,
+    enum: ["Customer", "Vendor"],
     required: true,
-    // enum: ["Vendor", "Customer"],
   },
   date: { type: Date, default: Date.now },
-  deliveryDate: { type: Date }, // for orders
-  returnDate: { type: Date }, // for returns
-  expectedDispatch: { type: Date }, // for sales
-  status: { type: String, default: "DRAFT" },
+  deliveryDate: { type: Date },
+  returnDate: { type: Date },
+  expectedDispatch: { type: Date },
+  status: {
+    type: String,
+    default: "DRAFT",
+  },
   totalAmount: { type: Number, required: true, min: 0 },
+  paidAmount: { type: Number, default: 0, min: 0 },
+  outstandingAmount: { type: Number, default: 0, min: 0 },
   items: [itemSchema],
-  terms: { type: String },
-  notes: { type: String },
-  quoteRef: { type: String }, // for sales
-  linkedRef: { type: String }, // linked GRN/invoice
-  creditNoteIssued: { type: Boolean, default: false }, // for sales return
-  createdBy: { type: String, required: true },
+  terms: { type: String, trim: true },
+  notes: { type: String, trim: true },
+  quoteRef: { type: String, trim: true },
+  linkedRef: { type: String, trim: true },
+  creditNoteIssued: { type: Boolean, default: false },
+  createdBy: { type: String, required: true, trim: true },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
   priority: {
@@ -51,20 +58,32 @@ const transactionSchema = new mongoose.Schema({
     enum: ["High", "Medium", "Low"],
     default: "Medium",
   },
-  grnGenerated: { type: Boolean, default: false }, // for purchase
-  invoiceGenerated: { type: Boolean, default: false }, // for sales
+  grnGenerated: { type: Boolean, default: false },
+  invoiceGenerated: { type: Boolean, default: false },
 });
 
+// Pre-save middleware
 transactionSchema.pre("save", function (next) {
   this.updatedAt = Date.now();
-  // Calculate totalAmount if not set
   if (!this.totalAmount) {
-    this.totalAmount = this.items.reduce(
-      (sum, item) => sum + item.lineTotal,
-      0
-    );
+    this.totalAmount = this.items.reduce((sum, item) => sum + item.lineTotal, 0);
   }
+  if (this.isNew || this.isModified("totalAmount") || this.isModified("paidAmount")) {
+    this.outstandingAmount = this.totalAmount - this.paidAmount;
+  }
+  // Remove automatic status changes based on payment
   next();
 });
+
+// Pre-update middleware
+transactionSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
+  this.set({ updatedAt: Date.now() });
+  next();
+});
+
+// Indexes
+transactionSchema.index({ partyId: 1, partyType: 1 });
+transactionSchema.index({ status: 1 });
+transactionSchema.index({ date: -1 });
 
 module.exports = mongoose.model("Transaction", transactionSchema);

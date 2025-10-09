@@ -29,7 +29,6 @@ exports.createTransaction = catchAsync(async (req, res) => {
 
 // Get all transactions
 exports.getAllTransactions = catchAsync(async (req, res) => {
-  console.log(req.query);
   const result = await TransactionService.getAllTransactions(req.query);
   sendPaginated(res, result);
 });
@@ -61,10 +60,11 @@ exports.deleteTransaction = catchAsync(async (req, res) => {
   res.status(204).json({ status: "success", data: null });
 });
 
-// Process transaction (approve/confirm/process)
+// Process transaction (approve/reject/cancel)
 exports.processTransaction = catchAsync(async (req, res) => {
   const { action } = req.body;
-  if (!action) throw new AppError("Action is required", 400);
+  if (!["approve", "reject", "cancel"].includes(action))
+    throw new AppError("Invalid action. Use 'approve', 'reject', or 'cancel'", 400);
 
   const transaction = await TransactionService.processTransaction(
     req.params.id,
@@ -112,8 +112,8 @@ exports.duplicateTransaction = catchAsync(async (req, res) => {
 // Bulk process transactions
 exports.bulkProcessTransactions = catchAsync(async (req, res) => {
   const { transactionIds, action } = req.body;
-  if (!transactionIds?.length || !action)
-    throw new AppError("Transaction IDs array and action are required", 400);
+  if (!transactionIds?.length || !["approve", "reject", "cancel"].includes(action))
+    throw new AppError("Transaction IDs array and valid action are required", 400);
 
   const results = await TransactionService.bulkProcessTransactions(
     transactionIds,
@@ -232,14 +232,9 @@ exports.getTransactionTimeline = catchAsync(async (req, res) => {
 // Cancel transaction
 exports.cancelTransaction = catchAsync(async (req, res) => {
   const { reason } = req.body;
-  const transaction = await TransactionService.updateTransaction(
+  const transaction = await TransactionService.processTransaction(
     req.params.id,
-    {
-      status: "CANCELLED",
-      notes: `${req.body.notes || ""}\nCancelled: ${
-        reason || "No reason provided"
-      }`,
-    },
+    "cancel",
     resolveCreatedBy(req)
   );
 

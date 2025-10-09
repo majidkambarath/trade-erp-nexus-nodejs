@@ -29,9 +29,7 @@ class StockService {
       } = data;
 
       // Validate category exists
-      const categoryExists = await Category.findById(categoryId).session(
-        session
-      );
+      const categoryExists = await Category.findById(categoryId).session(session);
       if (!categoryExists) {
         throw new AppError("Category not found", 404);
       }
@@ -135,9 +133,7 @@ class StockService {
 
       // Validate category if provided
       if (data.category) {
-        const categoryExists = await Category.findById(data.category).session(
-          session
-        );
+        const categoryExists = await Category.findById(data.category).session(session);
         if (!categoryExists) {
           throw new AppError("Category not found", 404);
         }
@@ -145,9 +141,7 @@ class StockService {
 
       // Validate vendor if provided
       if (data.vendorId) {
-        const vendorExists = await Vendor.findById(data.vendorId).session(
-          session
-        );
+        const vendorExists = await Vendor.findById(data.vendorId).session(session);
         if (!vendorExists) {
           throw new AppError("Vendor not found", 404);
         }
@@ -232,9 +226,7 @@ class StockService {
       const stockUpdates = [];
 
       for (const item of items) {
-        const stock = await Stock.findOne({ itemId: item.itemId }).session(
-          session
-        );
+        const stock = await Stock.findOne({ itemId: item.itemId }).session(session);
         if (!stock) {
           throw new AppError(`Stock item ${item.itemId} not found`, 404);
         }
@@ -249,10 +241,21 @@ class StockService {
           );
         }
 
+        let newPurchasePrice = stock.purchasePrice;
+        if (type === "purchase_order") {
+          // Calculate weighted average price
+          const currentValue = stock.purchasePrice * stock.currentStock;
+          const newValue = item.price * item.qty;
+          const totalQuantity = stock.currentStock + item.qty;
+          newPurchasePrice = totalQuantity > 0 ? (currentValue + newValue) / totalQuantity : stock.purchasePrice;
+        }
+
         await Stock.findByIdAndUpdate(
           stock._id,
           {
             currentStock: newStock,
+            purchasePrice: newPurchasePrice,
+            updatedAt: new Date(),
           },
           { session }
         );
@@ -262,13 +265,13 @@ class StockService {
             stockId: item.itemId,
             quantity: quantityChange,
             previousStock: stock.currentStock,
-            newStock: newStock,
+            newStock,
             eventType: this.getEventType(type),
             referenceType: "Transaction",
             referenceId: transactionId,
             referenceNumber: transactionNo,
-            unitCost: item.rate,
-            totalValue: Math.abs(quantityChange) * item.rate,
+            unitCost: item.price,
+            totalValue: Math.abs(quantityChange) * item.price,
             notes: `${this.getEventType(type)} - ${item.description}`,
             createdBy,
             batchNumber: stock.batchNumber,
@@ -280,8 +283,9 @@ class StockService {
         stockUpdates.push({
           itemId: item.itemId,
           previousStock: stock.currentStock,
-          newStock: newStock,
-          movement: movement,
+          newStock,
+          newPurchasePrice,
+          movement,
         });
       }
 
@@ -312,17 +316,16 @@ class StockService {
       }).session(session);
 
       for (const movement of existingMovements) {
-        const stock = await Stock.findOne({ itemId: movement.stockId }).session(
-          session
-        );
+        const stock = await Stock.findOne({ itemId: movement.stockId }).session(session);
         if (!stock) continue;
 
         const reversalQuantity = -movement.quantity;
         const newStock = stock.currentStock + reversalQuantity;
 
+        // Note: Not updating purchasePrice on reversal
         await Stock.findOneAndUpdate(
           { itemId: movement.stockId },
-          { currentStock: newStock },
+          { currentStock: newStock, updatedAt: new Date() },
           { session }
         );
 
@@ -331,7 +334,7 @@ class StockService {
             stockId: movement.stockId,
             quantity: reversalQuantity,
             previousStock: stock.currentStock,
-            newStock: newStock,
+            newStock,
             eventType: movement.eventType,
             referenceType: "Transaction",
             referenceId: transactionId,
@@ -513,12 +516,13 @@ class StockService {
   }
 
   static async getStockByItemId(itemId) {
-    console.log(itemId);
+    
     const stock = await Stock.findOne({
-      _id: new mongoose.Types.ObjectId(itemId),
+      _id: itemId,
     })
       .populate("category")
       .populate("vendorId");
+      console.log(stock)
     if (!stock) throw new AppError("Stock item not found", 404);
     return stock;
   }
