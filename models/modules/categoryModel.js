@@ -16,8 +16,7 @@ const categorySchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ["ACTIVE", "INACTIVE"],
-    default: "ACTIVE",
+    default: "Active",
   },
   createdAt: {
     type: Date,
