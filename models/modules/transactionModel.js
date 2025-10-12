@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const itemSchema = new mongoose.Schema({
   itemId: { type: String, required: true, trim: true },
+    itemCode: { type: String, default:"" },
   description: { type: String, required: true, trim: true },
   qty: { type: Number, required: true, min: 0 },
   rate: { type: Number, required: true, min: 0 },

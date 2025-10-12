@@ -18,11 +18,11 @@ function generateTransactionNo(type) {
   return `${prefix}-${dateStr}-${sequence}`;
 }
 
-function calculateItems(items) {
+function calculateItems(items, code) {
   return items.map((item) => {
     const lineValue = item.qty * item.price;
-    const tax = lineValue * ((item.taxPercent || 0) / 100);
-    return { ...item, lineTotal: lineValue + tax };
+   const lineTotal =  (lineValue + (lineValue * item.taxPercent ) / 100).toFixed(2)
+    return { ...item, itemCode: code, lineTotal: +lineTotal };
   });
 }
 
@@ -55,9 +55,10 @@ class TransactionService {
       if (!items?.length) throw new AppError("Items are required", 400);
 
       // Validate stock for sales orders & purchase returns
+      let code;
       for (const item of items) {
-        console.log(item)
         const stock = await StockService.getStockByItemId(item.itemId);
+        code = stock.itemId;
         if (
           (type === "sales_order" || type === "purchase_return") &&
           stock.currentStock < item.qty
@@ -66,7 +67,7 @@ class TransactionService {
         }
       }
 
-      const processedItems = calculateItems(items);
+      const processedItems = calculateItems(items,code);  
       const totalAmount = processedItems.reduce(
         (sum, i) => sum + i.lineTotal,
         0
@@ -85,6 +86,7 @@ class TransactionService {
         ...rest,
       };
 
+    console.log(transactionData)
       const [newTransaction] = await Transaction.create([transactionData], {
         session,
       });
@@ -252,8 +254,8 @@ class TransactionService {
 
     for (const item of items) {
       const stock = await StockService.getStockByItemId(item.itemId);
-      console.log("object")
-      console.log(stock)
+      console.log("object");
+      console.log(stock);
       const quantityChange = this.getQuantityChange(type, item.qty);
       const newStock = stock.currentStock + quantityChange;
       if (quantityChange < 0 && newStock < 0) {
@@ -261,16 +263,19 @@ class TransactionService {
       }
 
       let newPurchasePrice = stock.purchasePrice;
-      let price = item.rate/item.qty
+      let price = item.rate / item.qty;
       if (type === "purchase_order") {
         // Calculate weighted average price for purchase orders
         const currentValue = stock.purchasePrice * stock.currentStock;
-         
+
         const newValue = price * item.qty;
         const totalQuantity = stock.currentStock + item.qty;
-        newPurchasePrice = totalQuantity > 0 ? (currentValue + newValue) / totalQuantity : stock.purchasePrice;
+        newPurchasePrice =
+          totalQuantity > 0
+            ? (currentValue + newValue) / totalQuantity
+            : stock.purchasePrice;
       }
-   
+
       // Update stock with new quantity and purchase price
       await stock.constructor.findByIdAndUpdate(
         stock._id,
@@ -281,10 +286,10 @@ class TransactionService {
         },
         { session }
       );
-console.log("+++++++")
-console.log(price)
-console.log(item)
-console.log("----------------")
+      console.log("+++++++");
+      console.log(price);
+      console.log(item);
+      console.log("----------------");
       const movement = await this.createInventoryMovement(
         {
           stockId: stock.itemId,
@@ -414,7 +419,8 @@ console.log("----------------")
         status: "APPROVED",
         grnGenerated: transaction.type === "purchase_order" ? true : undefined,
         invoiceGenerated: transaction.type === "sales_order" ? true : undefined,
-        creditNoteIssued: transaction.type === "sales_return" ? true : undefined,
+        creditNoteIssued:
+          transaction.type === "sales_return" ? true : undefined,
       },
       reject: { status: "REJECTED" },
       cancel: { status: "CANCELLED" },
@@ -424,7 +430,9 @@ console.log("----------------")
   }
 
   static isProcessed(status) {
-    return ["APPROVED", "REJECTED", "CANCELLED", "PAID", "PARTIAL"].includes(status);
+    return ["APPROVED", "REJECTED", "CANCELLED", "PAID", "PARTIAL"].includes(
+      status
+    );
   }
 }
 
