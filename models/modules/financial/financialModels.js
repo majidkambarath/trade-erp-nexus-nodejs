@@ -26,7 +26,7 @@ const voucherSchema = new mongoose.Schema({
   },
   voucherType: {
     type: String,
-    enum: ["receipt", "payment", "journal", "contra", "expense"],
+    // enum: ["receipt", "payment", "journal", "contra", "expense"],
     required: true,
   },
   date: {
@@ -94,7 +94,7 @@ const voucherSchema = new mongoose.Schema({
   },
   approvalStatus: {
     type: String,
-    enum: ["pending", "approved", "rejected"],
+    // enum: ["pending", "approved", "rejected"],
     default: "pending",
   },
   approvedBy: {
@@ -120,7 +120,7 @@ const voucherSchema = new mongoose.Schema({
   ],
   status: {
     type: String,
-    enum: ["draft", "pending", "approved", "rejected", "cancelled"],
+    // enum: ["draft", "pending", "approved", "rejected", "cancelled"],
     default: "draft",
   },
   createdBy: {
@@ -330,7 +330,7 @@ const ledgerEntrySchema = new mongoose.Schema({
   },
   voucherType: {
     type: String,
-    enum: ["receipt", "payment", "journal", "contra", "expense"],
+    // enum: ["receipt", "payment", "journal", "contra", "expense"],
     required: true,
   },
   accountId: {

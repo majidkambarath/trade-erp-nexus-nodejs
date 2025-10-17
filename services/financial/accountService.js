@@ -84,21 +84,30 @@ class AccountService {
         session
       );
 
-      // Check if this is an on-account payment (no invoice allocation)
+      // Check if this is an on-account payment or all invoices are fully paid
       const isOnAccountPayment = !invoiceBalances || invoiceBalances.length === 0 ||
         invoiceBalances.every(inv => parseFloat(inv.balanceAmount) === 0);
+      const isFullyPaid = validatedInvoices.every(inv => inv.newBalance === 0 && inv.allocatedAmount === 0);
 
       const effectivePaidAmount = isOnAccountPayment ? (paidAmount || onAccountAmount) : totalAllocated;
 
       // Step 3: Generate accounting entries (Debit/Credit)
-      const entries = await this.generateAccountingEntries(
-        isPurchaseOrPayment,
-        effectivePaidAmount,
-        party,
-        partyId,
-        validatedInvoices,
-        session
-      );
+      let entries = [];
+      let paymentStatusNote = "";
+      if (effectivePaidAmount === 0 && isFullyPaid) {
+        paymentStatusNote = "All linked invoices are already fully paid.";
+      } else if (effectivePaidAmount === 0) {
+        paymentStatusNote = "No payment recorded for this voucher.";
+      } else {
+        entries = await this.generateAccountingEntries(
+          isPurchaseOrPayment,
+          effectivePaidAmount,
+          party,
+          partyId,
+          validatedInvoices,
+          session
+        );
+      }
 
       // Step 4: Determine new voucher status
       const newVoucherStatus = requiresApproval
@@ -151,13 +160,15 @@ class AccountService {
         month: new Date(date).getMonth() + 1,
         year: new Date(date).getFullYear(),
         financialYear: this.getFinancialYear(new Date(date)),
+        paymentStatusNote, // New field to indicate payment status
       };
 
       const [newVoucher] = await Voucher.create([voucherDoc], { session });
 
-      // Step 6: Create ledger entries if voucher is settled/approved
-      if (newVoucher.status === this.PAYMENT_VOUCHER_STATUS.SETTLED ||
-          newVoucher.status === this.PAYMENT_VOUCHER_STATUS.APPROVED) {
+      // Step 6: Create ledger entries if voucher is settled/approved and has non-zero payment
+      if ((newVoucher.status === this.PAYMENT_VOUCHER_STATUS.SETTLED ||
+           newVoucher.status === this.PAYMENT_VOUCHER_STATUS.APPROVED) &&
+          effectivePaidAmount > 0) {
         await this.createLedgerEntries(newVoucher, createdBy, session);
       }
 
@@ -173,12 +184,13 @@ class AccountService {
           oldVouchersRefreshed: refreshedOldVouchers.length,
           refreshedVouchers: refreshedOldVouchers,
           isOnAccountPayment,
+          paymentStatusNote,
           breakdown: validatedInvoices.map((inv) => ({
             transactionNo: inv.transactionNo,
             previousBalance: inv.previousBalance,
             amountPaid: inv.allocatedAmount,
             newBalance: inv.newBalance,
-            status: inv.newBalance === 0 ? "PAID" : "PARTIAL",
+            status: inv.status, // Use the status from validatedInvoices
           })),
         },
       };
@@ -319,13 +331,6 @@ class AccountService {
       const { invoiceId, balanceAmount, transactionNo } = inv;
       const allocated = parseFloat(balanceAmount);
 
-      if (allocated === 0 || isNaN(allocated)) continue;
-
-      if (allocated < 0) {
-        errors.push(`Invalid allocation amount for ${transactionNo}: ${balanceAmount}`);
-        continue;
-      }
-
       const invoice = await Transaction.findById(invoiceId).session(session);
       if (!invoice) {
         errors.push(`Invoice ${transactionNo} not found`);
@@ -338,6 +343,25 @@ class AccountService {
       }
 
       let curOut = invoice.outstandingAmount ?? (invoice.totalAmount - (invoice.paidAmount || 0));
+      let status = invoice.status || (curOut === 0 ? "PAID" : curOut < invoice.totalAmount ? "PARTIAL" : "UNPAID");
+
+      if (allocated === 0 && curOut === 0) {
+        // Invoice is already fully paid
+        validatedInvoices.push({
+          invoiceId: invoice._id,
+          allocatedAmount: 0,
+          previousBalance: curOut,
+          newBalance: curOut,
+          transactionNo,
+          status: "ALREADY_PAID", // Explicit status for already paid invoices
+        });
+        continue;
+      }
+
+      if (allocated < 0) {
+        errors.push(`Invalid allocation amount for ${transactionNo}: ${balanceAmount}`);
+        continue;
+      }
 
       if (allocated > curOut) {
         errors.push(`Allocation for ${transactionNo} (${allocated}) exceeds outstanding (${curOut})`);
@@ -350,10 +374,13 @@ class AccountService {
 
       if (newBal === 0) {
         invoice.status = "PAID";
+        status = "PAID";
       } else if (invoice.paidAmount > 0) {
         invoice.status = "PARTIAL";
+        status = "PARTIAL";
       } else {
         invoice.status = "UNPAID";
+        status = "UNPAID";
       }
 
       await invoice.save({ session });
@@ -364,6 +391,7 @@ class AccountService {
         previousBalance: curOut,
         newBalance: newBal,
         transactionNo,
+        status, // Include the computed status
       });
       totalAllocated += allocated;
     }
@@ -377,7 +405,8 @@ class AccountService {
         `Paid amount (${paidAmount}) does not match total allocated (${totalAllocated}). ` +
         `Details: ${JSON.stringify(validatedInvoices.map(inv => ({
           transactionNo: inv.transactionNo,
-          allocated: inv.allocatedAmount
+          allocated: inv.allocatedAmount,
+          status: inv.status
         })))}`
       );
     }
@@ -387,7 +416,32 @@ class AccountService {
 
   static async generateAccountingEntries(isPurchaseOrPayment, paidAmount, party, partyId, linkedInvoices, session) {
     const entries = [];
-    const invoiceNos = linkedInvoices.map(inv => inv.transactionNo).join(", ");
+    const invoiceNos = linkedInvoices.map(inv => inv.transactionNo).join(", ") || "N/A";
+    const allInvoicesPaid = linkedInvoices.every(inv => inv.status === "ALREADY_PAID" || inv.newBalance === 0);
+
+    if (paidAmount === 0 && allInvoicesPaid) {
+      // Add a placeholder entry to indicate all invoices are already paid
+      entries.push({
+        accountId: null,
+        accountName: "N/A",
+        debitAmount: 0,
+        creditAmount: 0,
+        description: `All invoices already paid for ${isPurchaseOrPayment ? 'vendor' : 'customer'} ${party ? (isPurchaseOrPayment ? party.vendorName : party.customerName) : 'party'}. Invoices: ${invoiceNos}`,
+      });
+      return entries;
+    }
+
+    if (paidAmount === 0) {
+      // Add a placeholder entry for no payment
+      entries.push({
+        accountId: null,
+        accountName: "N/A",
+        debitAmount: 0,
+        creditAmount: 0,
+        description: `No payment processed for ${isPurchaseOrPayment ? 'vendor' : 'customer'} ${party ? (isPurchaseOrPayment ? party.vendorName : party.customerName) : 'party'}. Invoices: ${invoiceNos}`,
+      });
+      return entries;
+    }
 
     if (isPurchaseOrPayment) {
       const vendorAccount = await this.getOrCreateVendorAccount(partyId, party?.vendorName || "Vendor", session);
@@ -515,6 +569,10 @@ class AccountService {
 
   static async createLedgerEntries(voucher, createdBy, session) {
     const ledgerEntries = await Promise.all(voucher.entries.map(async (entry) => {
+      if (!entry.accountId) {
+        // Skip placeholder entries with no accountId
+        return null;
+      }
       const account = await LedgerAccount.findById(entry.accountId).session(session);
       return {
         voucherId: voucher._id,
@@ -535,7 +593,14 @@ class AccountService {
       };
     }));
 
-    const createdEntries = await LedgerEntry.insertMany(ledgerEntries, { session });
+    // Filter out null entries
+    const validLedgerEntries = ledgerEntries.filter(entry => entry !== null);
+
+    if (validLedgerEntries.length === 0) {
+      return; // No valid entries to create
+    }
+
+    const createdEntries = await LedgerEntry.insertMany(validLedgerEntries, { session });
 
     for (const entry of createdEntries) {
       const account = await LedgerAccount.findById(entry.accountId).session(session);
@@ -762,6 +827,11 @@ class AccountService {
         voucher.entries = entries;
         voucher.totalAmount = totalAllocated;
         voucher.status = this.PAYMENT_VOUCHER_STATUS.SETTLED;
+        voucher.paymentStatusNote = validatedInvoices.every(inv => inv.status === "ALREADY_PAID" || inv.newBalance === 0)
+          ? "All linked invoices are already fully paid."
+          : totalAllocated === 0
+            ? "No payment recorded for this voucher."
+            : "Payment processed normally";
       }
 
       if (data.date) voucher.date = data.date;
@@ -849,7 +919,7 @@ class AccountService {
 
       if (action === "approve") {
         const existing = await LedgerEntry.findOne({ voucherId: id }).session(session);
-        if (!existing) {
+        if (!existing && voucher.totalAmount > 0) {
           await this.createLedgerEntries(voucher, approvedBy, session);
         }
       }
@@ -872,6 +942,8 @@ class AccountService {
     const entries = await LedgerEntry.find({ voucherId }).session(session);
 
     for (const entry of entries) {
+      if (!entry.accountId) continue; // Skip placeholder entries
+
       await LedgerEntry.create([{
         ...entry.toObject(),
         _id: undefined,
@@ -879,7 +951,7 @@ class AccountService {
         creditAmount: entry.debitAmount,
         narration: `Reversal: ${entry.narration}`,
         createdAt: new Date(),
-        runningBalance: 0, // Will be updated after account balance adjustment
+        runningBalance: 0,
       }], { session });
 
       const account = await LedgerAccount.findById(entry.accountId).session(session);
@@ -890,7 +962,6 @@ class AccountService {
           : originalNetChange;
         await account.save({ session });
 
-        // Update running balance for the reversal entry
         const reversalEntry = await LedgerEntry.findOne({
           voucherId,
           accountId: entry.accountId,
@@ -912,6 +983,8 @@ class AccountService {
 
   static async reverseAllocations(voucher, session) {
     for (const linked of voucher.linkedInvoices || []) {
+      if (linked.status === "ALREADY_PAID") continue; // Skip already paid invoices
+
       const invoice = await Transaction.findById(linked.invoiceId).session(session);
       if (invoice) {
         invoice.paidAmount = Math.max(0, (invoice.paidAmount || 0) - linked.allocatedAmount);
@@ -943,9 +1016,10 @@ class AccountService {
             previousBalance: inv.previousBalance,
             newBalance: inv.newBalance,
             transactionNo: inv.transactionNo,
-            status: inv.newBalance === 0 ? 'PAID' : 'PARTIAL'
+            status: inv.status || (inv.newBalance === 0 ? 'PAID' : 'PARTIAL'), // Use stored status
           }))
         : [],
+      paymentStatusNote: voucher.paymentStatusNote || "Payment processed normally",
     };
   }
 
