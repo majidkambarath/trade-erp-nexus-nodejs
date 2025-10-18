@@ -1,10 +1,10 @@
 const {
   Voucher,
   LedgerAccount,
-  ExpenseCategory,
   LedgerEntry,
 } = require("../../models/modules/financial/financialModels");
 const Customer = require("../../models/modules/customerModel");
+const ExpenseType = require("../../models/modules/financial/expenseTypeModel");
 const Vendor = require("../../models/modules/vendorModel");
 const Transaction = require("../../models/modules/transactionModel");
 const Transactor = require("../../models/modules/financial/transactorModel");
@@ -23,16 +23,28 @@ class FinancialService {
     };
 
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const sequence = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0");
+    const sequence = String(Math.floor(Math.random() * 999) + 1).padStart(
+      3,
+      "0"
+    );
     return `${prefixes[type]}-${dateStr}-${sequence}`;
   }
 
   // Helper: Centralized cash balance adjustment (for Customer/Vendor)
-  static async adjustPartyCashBalance(partyId, partyType, amount, session, operation = "add") {
-    if (!partyId || amount <= 0 || !mongoose.Types.ObjectId.isValid(partyId)) return; // Early exit
+  static async adjustPartyCashBalance(
+    partyId,
+    partyType,
+    amount,
+    session,
+    operation = "add"
+  ) {
+    if (!partyId || amount <= 0 || !mongoose.Types.ObjectId.isValid(partyId))
+      return; // Early exit
 
     const PartyModel = partyType === "Customer" ? Customer : Vendor;
-    const party = await PartyModel.findById(partyId).select('cashBalance').session(session);
+    const party = await PartyModel.findById(partyId)
+      .select("cashBalance")
+      .session(session);
     if (!party) {
       throw new AppError(`${partyType} not found`, 404);
     }
@@ -40,7 +52,9 @@ class FinancialService {
     const delta = operation === "add" ? amount : -amount;
     party.cashBalance = Math.max(0, (party.cashBalance || 0) + delta);
     await party.save({ session });
-    console.log(`[CashBalance] ${partyType} ${partyId}: Adjusted by ${delta} (new: ${party.cashBalance})`);
+    console.log(
+      `[CashBalance] ${partyType} ${partyId}: Adjusted by ${delta} (new: ${party.cashBalance})`
+    );
   }
 
   // Retry wrapper for transactions to handle TransientTransactionError
@@ -49,9 +63,15 @@ class FinancialService {
       try {
         return await fn();
       } catch (error) {
-        if (error.name === 'MongoServerError' && error.code === 251 && attempt < maxRetries) {
-          console.log(`[Retry] Transaction attempt ${attempt} failed: ${error.message}. Retrying...`);
-          await new Promise(resolve => setTimeout(resolve, 100 * attempt)); // Exponential backoff
+        if (
+          error.name === "MongoServerError" &&
+          error.code === 251 &&
+          attempt < maxRetries
+        ) {
+          console.log(
+            `[Retry] Transaction attempt ${attempt} failed: ${error.message}. Retrying...`
+          );
+          await new Promise((resolve) => setTimeout(resolve, 100 * attempt)); // Exponential backoff
           continue;
         }
         throw error;
@@ -75,25 +95,42 @@ class FinancialService {
         }
 
         const voucherNo = this.generateVoucherNo(voucherType);
-        console.log(`[Transaction] Started for voucher ${voucherNo} with session ${session.id}`);
+        console.log(
+          `[Transaction] Started for voucher ${voucherNo} with session ${session.id}`
+        );
 
         // Validate and process based on voucher type
         let processedData;
         switch (voucherType) {
           case "receipt":
-            processedData = await this.processReceiptVoucher(voucherData, session);
+            processedData = await this.processReceiptVoucher(
+              voucherData,
+              session
+            );
             break;
           case "payment":
-            processedData = await this.processPaymentVoucher(voucherData, session);
+            processedData = await this.processPaymentVoucher(
+              voucherData,
+              session
+            );
             break;
           case "journal":
-            processedData = await this.processJournalVoucher(voucherData, session);
+            processedData = await this.processJournalVoucher(
+              voucherData,
+              session
+            );
             break;
           case "contra":
-            processedData = await this.processContraVoucher(voucherData, session);
+            processedData = await this.processContraVoucher(
+              voucherData,
+              session
+            );
             break;
           case "expense":
-            processedData = await this.processExpenseVoucher(voucherData, session);
+            processedData = await this.processExpenseVoucher(
+              voucherData,
+              session
+            );
             break;
           default:
             throw new AppError("Invalid voucher type", 400);
@@ -146,11 +183,16 @@ class FinancialService {
     } = data;
 
     if (!customerId || !mongoose.Types.ObjectId.isValid(customerId)) {
-      throw new AppError("Valid Customer ID is required for receipt voucher", 400);
+      throw new AppError(
+        "Valid Customer ID is required for receipt voucher",
+        400
+      );
     }
 
     // Validate customer exists (with projection)
-    const customer = await Customer.findById(customerId).select('customerName').session(session);
+    const customer = await Customer.findById(customerId)
+      .select("customerName")
+      .session(session);
     if (!customer) {
       throw new AppError("Customer not found", 404);
     }
@@ -161,13 +203,27 @@ class FinancialService {
     }
 
     // Validate payment details based on payment mode
-    if (paymentMode === "cheque" && (!paymentDetails.chequeDetails || !paymentDetails.chequeDetails.chequeNumber)) {
+    if (
+      paymentMode === "cheque" &&
+      (!paymentDetails.chequeDetails ||
+        !paymentDetails.chequeDetails.chequeNumber)
+    ) {
       throw new AppError("Cheque details required for cheque payment", 400);
     }
-    if (paymentMode === "online" && (!paymentDetails.onlineDetails || !paymentDetails.onlineDetails.transactionId)) {
-      throw new AppError("Online transaction details required for online payment", 400);
+    if (
+      paymentMode === "online" &&
+      (!paymentDetails.onlineDetails ||
+        !paymentDetails.onlineDetails.transactionId)
+    ) {
+      throw new AppError(
+        "Online transaction details required for online payment",
+        400
+      );
     }
-    if (paymentMode === "bank" && (!paymentDetails.bankDetails || !paymentDetails.bankDetails.accountNumber)) {
+    if (
+      paymentMode === "bank" &&
+      (!paymentDetails.bankDetails || !paymentDetails.bankDetails.accountNumber)
+    ) {
       throw new AppError("Bank details required for bank payment", 400);
     }
 
@@ -178,25 +234,44 @@ class FinancialService {
       const invoicePromises = linkedInvoices.map(async (linked) => {
         const { invoiceId, amount: allocated, balance: expectedNew } = linked;
         if (allocated <= 0 || !mongoose.Types.ObjectId.isValid(invoiceId)) {
-          throw new AppError(`Invalid allocation for invoice ${invoiceId}`, 400);
+          throw new AppError(
+            `Invalid allocation for invoice ${invoiceId}`,
+            400
+          );
         }
 
         const invoice = await Transaction.findById(invoiceId).session(session);
         if (!invoice) {
           throw new AppError(`Invoice not found: ${invoiceId}`, 404);
         }
-        if (invoice.partyId.toString() !== customerId.toString() || invoice.partyType !== "Customer") {
-          throw new AppError(`Invoice ${invoiceId} does not belong to this customer`, 400);
+        if (
+          invoice.partyId.toString() !== customerId.toString() ||
+          invoice.partyType !== "Customer"
+        ) {
+          throw new AppError(
+            `Invoice ${invoiceId} does not belong to this customer`,
+            400
+          );
         }
 
         const current = invoice.outstandingAmount;
         if (Math.abs(current - (allocated + expectedNew)) > 0.01) {
-          throw new AppError(`Invoice balance mismatch for ${invoiceId}. Expected: ${current}, Provided: ${allocated + expectedNew}`, 409);
+          throw new AppError(
+            `Invoice balance mismatch for ${invoiceId}. Expected: ${current}, Provided: ${
+              allocated + expectedNew
+            }`,
+            409
+          );
         }
 
         invoice.paidAmount += allocated;
         invoice.outstandingAmount = expectedNew;
-        invoice.status = expectedNew === 0 ? "paid" : invoice.paidAmount > 0 ? "partial" : "unpaid";
+        invoice.status =
+          expectedNew === 0
+            ? "paid"
+            : invoice.paidAmount > 0
+            ? "partial"
+            : "unpaid";
         await invoice.save({ session });
 
         return {
@@ -208,7 +283,10 @@ class FinancialService {
       });
 
       validatedInvoices = await Promise.all(invoicePromises); // Parallel processing
-      totalAllocated = validatedInvoices.reduce((sum, inv) => sum + inv.allocatedAmount, 0);
+      totalAllocated = validatedInvoices.reduce(
+        (sum, inv) => sum + inv.allocatedAmount,
+        0
+      );
     }
 
     const onAccountAmount = totalAmount - totalAllocated;
@@ -217,12 +295,24 @@ class FinancialService {
     }
 
     // Update customer cashBalance for on-account
-    await this.adjustPartyCashBalance(customerId, "Customer", onAccountAmount, session, "add");
+    await this.adjustPartyCashBalance(
+      customerId,
+      "Customer",
+      onAccountAmount,
+      session,
+      "add"
+    );
 
     // Create entries for double-entry accounting (parallel fetch)
     const [cashBankAccount, customerAccount] = await Promise.all([
       this.getCashBankAccount(paymentMode, session),
-      totalAllocated > 0 ? this.getOrCreateCustomerAccount(customerId, customer.customerName, session) : null,
+      totalAllocated > 0
+        ? this.getOrCreateCustomerAccount(
+            customerId,
+            customer.customerName,
+            session
+          )
+        : null,
     ]);
 
     const entries = [];
@@ -249,7 +339,11 @@ class FinancialService {
 
     // Credit: Customer Advance Liability Account (for on-account part)
     if (onAccountAmount > 0) {
-      const advanceAccount = await this.getOrCreateCustomerAdvanceAccount(customerId, customer.customerName, session);
+      const advanceAccount = await this.getOrCreateCustomerAdvanceAccount(
+        customerId,
+        customer.customerName,
+        session
+      );
       entries.push({
         accountId: advanceAccount._id,
         accountName: advanceAccount.accountName,
@@ -292,11 +386,16 @@ class FinancialService {
     } = data;
 
     if (!vendorId || !mongoose.Types.ObjectId.isValid(vendorId)) {
-      throw new AppError("Valid Vendor ID is required for payment voucher", 400);
+      throw new AppError(
+        "Valid Vendor ID is required for payment voucher",
+        400
+      );
     }
 
     // Validate vendor exists
-    const vendor = await Vendor.findById(vendorId).select('vendorName').session(session);
+    const vendor = await Vendor.findById(vendorId)
+      .select("vendorName")
+      .session(session);
     if (!vendor) {
       throw new AppError("Vendor not found", 404);
     }
@@ -305,13 +404,27 @@ class FinancialService {
     if (!["cash", "bank", "cheque", "online"].includes(paymentMode)) {
       throw new AppError("Invalid payment mode", 400);
     }
-    if (paymentMode === "cheque" && (!paymentDetails.chequeDetails || !paymentDetails.chequeDetails.chequeNumber)) {
+    if (
+      paymentMode === "cheque" &&
+      (!paymentDetails.chequeDetails ||
+        !paymentDetails.chequeDetails.chequeNumber)
+    ) {
       throw new AppError("Cheque details required for cheque payment", 400);
     }
-    if (paymentMode === "online" && (!paymentDetails.onlineDetails || !paymentDetails.onlineDetails.transactionId)) {
-      throw new AppError("Online transaction details required for online payment", 400);
+    if (
+      paymentMode === "online" &&
+      (!paymentDetails.onlineDetails ||
+        !paymentDetails.onlineDetails.transactionId)
+    ) {
+      throw new AppError(
+        "Online transaction details required for online payment",
+        400
+      );
     }
-    if (paymentMode === "bank" && (!paymentDetails.bankDetails || !paymentDetails.bankDetails.accountNumber)) {
+    if (
+      paymentMode === "bank" &&
+      (!paymentDetails.bankDetails || !paymentDetails.bankDetails.accountNumber)
+    ) {
       throw new AppError("Bank details required for bank payment", 400);
     }
 
@@ -322,25 +435,44 @@ class FinancialService {
       const invoicePromises = linkedInvoices.map(async (linked) => {
         const { invoiceId, amount: allocated, balance: expectedNew } = linked;
         if (allocated <= 0 || !mongoose.Types.ObjectId.isValid(invoiceId)) {
-          throw new AppError(`Invalid allocation for invoice ${invoiceId}`, 400);
+          throw new AppError(
+            `Invalid allocation for invoice ${invoiceId}`,
+            400
+          );
         }
 
         const invoice = await Transaction.findById(invoiceId).session(session);
         if (!invoice) {
           throw new AppError(`Invoice not found: ${invoiceId}`, 404);
         }
-        if (invoice.partyId.toString() !== vendorId.toString() || invoice.partyType !== "Vendor") {
-          throw new AppError(`Invoice ${invoiceId} does not belong to this vendor`, 400);
+        if (
+          invoice.partyId.toString() !== vendorId.toString() ||
+          invoice.partyType !== "Vendor"
+        ) {
+          throw new AppError(
+            `Invoice ${invoiceId} does not belong to this vendor`,
+            400
+          );
         }
 
         const current = invoice.outstandingAmount;
         if (Math.abs(current - (allocated + expectedNew)) > 0.01) {
-          throw new AppError(`Invoice balance mismatch for ${invoiceId}. Expected: ${current}, Provided: ${allocated + expectedNew}`, 409);
+          throw new AppError(
+            `Invoice balance mismatch for ${invoiceId}. Expected: ${current}, Provided: ${
+              allocated + expectedNew
+            }`,
+            409
+          );
         }
 
         invoice.paidAmount += allocated;
         invoice.outstandingAmount = expectedNew;
-        invoice.status = expectedNew === 0 ? "paid" : invoice.paidAmount > 0 ? "partial" : "unpaid";
+        invoice.status =
+          expectedNew === 0
+            ? "paid"
+            : invoice.paidAmount > 0
+            ? "partial"
+            : "unpaid";
         await invoice.save({ session });
 
         return {
@@ -352,7 +484,10 @@ class FinancialService {
       });
 
       validatedInvoices = await Promise.all(invoicePromises);
-      totalAllocated = validatedInvoices.reduce((sum, inv) => sum + inv.allocatedAmount, 0);
+      totalAllocated = validatedInvoices.reduce(
+        (sum, inv) => sum + inv.allocatedAmount,
+        0
+      );
     }
 
     const onAccountAmount = totalAmount - totalAllocated;
@@ -361,12 +496,20 @@ class FinancialService {
     }
 
     // Update vendor cashBalance for on-account
-    await this.adjustPartyCashBalance(vendorId, "Vendor", onAccountAmount, session, "add");
+    await this.adjustPartyCashBalance(
+      vendorId,
+      "Vendor",
+      onAccountAmount,
+      session,
+      "add"
+    );
 
     // Create entries (parallel fetch)
     const [cashBankAccount, vendorAccount] = await Promise.all([
       this.getCashBankAccount(paymentMode, session),
-      totalAllocated > 0 ? this.getOrCreateVendorAccount(vendorId, vendor.vendorName, session) : null,
+      totalAllocated > 0
+        ? this.getOrCreateVendorAccount(vendorId, vendor.vendorName, session)
+        : null,
     ]);
 
     const entries = [];
@@ -393,7 +536,11 @@ class FinancialService {
 
     // Debit: Vendor Advance Asset Account (for on-account part)
     if (onAccountAmount > 0) {
-      const advanceAccount = await this.getOrCreateVendorAdvanceAccount(vendorId, vendor.vendorName, session);
+      const advanceAccount = await this.getOrCreateVendorAdvanceAccount(
+        vendorId,
+        vendor.vendorName,
+        session
+      );
       entries.push({
         accountId: advanceAccount._id,
         accountName: advanceAccount.accountName,
@@ -431,7 +578,10 @@ class FinancialService {
 
     // Validate required fields
     if (!debitAccount || !creditAccount || !totalAmount || totalAmount <= 0) {
-      throw new AppError("Debit account, credit account, and valid total amount are required", 400);
+      throw new AppError(
+        "Debit account, credit account, and valid total amount are required",
+        400
+      );
     }
 
     if (debitAccount === creditAccount) {
@@ -440,28 +590,52 @@ class FinancialService {
 
     // Fetch accounts from Transactor collection by accountCode (parallel)
     const [debitAccountDoc, creditAccountDoc] = await Promise.all([
-      Transactor.findOne({ accountCode: debitAccount, isActive: true, deletedAt: null })
-        .select('accountCode accountName accountType allowDirectPosting currentBalance')
+      Transactor.findOne({
+        accountCode: debitAccount,
+        isActive: true,
+        deletedAt: null,
+      })
+        .select(
+          "accountCode accountName accountType allowDirectPosting currentBalance"
+        )
         .session(session),
-      Transactor.findOne({ accountCode: creditAccount, isActive: true, deletedAt: null })
-        .select('accountCode accountName accountType allowDirectPosting currentBalance')
+      Transactor.findOne({
+        accountCode: creditAccount,
+        isActive: true,
+        deletedAt: null,
+      })
+        .select(
+          "accountCode accountName accountType allowDirectPosting currentBalance"
+        )
         .session(session),
     ]);
 
     // Validate accounts exist
     if (!debitAccountDoc) {
-      throw new AppError(`Debit account not found or inactive: ${debitAccount}`, 404);
+      throw new AppError(
+        `Debit account not found or inactive: ${debitAccount}`,
+        404
+      );
     }
     if (!creditAccountDoc) {
-      throw new AppError(`Credit account not found or inactive: ${creditAccount}`, 404);
+      throw new AppError(
+        `Credit account not found or inactive: ${creditAccount}`,
+        404
+      );
     }
 
     // Validate direct posting
     if (!debitAccountDoc.allowDirectPosting) {
-      throw new AppError(`Direct posting not allowed for account: ${debitAccountDoc.accountName} (${debitAccountDoc.accountCode})`, 400);
+      throw new AppError(
+        `Direct posting not allowed for account: ${debitAccountDoc.accountName} (${debitAccountDoc.accountCode})`,
+        400
+      );
     }
     if (!creditAccountDoc.allowDirectPosting) {
-      throw new AppError(`Direct posting not allowed for account: ${creditAccountDoc.accountName} (${creditAccountDoc.accountCode})`, 400);
+      throw new AppError(
+        `Direct posting not allowed for account: ${creditAccountDoc.accountName} (${creditAccountDoc.accountCode})`,
+        400
+      );
     }
 
     // Update account balances in Transactor collection
@@ -476,7 +650,9 @@ class FinancialService {
       creditAccountDoc.save({ session }),
     ]);
 
-    console.log(`[Journal] Debit ${totalAmount} to ${debitAccountDoc.accountName} (${debitAccountDoc.accountCode}), Credit ${totalAmount} from ${creditAccountDoc.accountName} (${creditAccountDoc.accountCode})`);
+    console.log(
+      `[Journal] Debit ${totalAmount} to ${debitAccountDoc.accountName} (${debitAccountDoc.accountCode}), Credit ${totalAmount} from ${creditAccountDoc.accountName} (${creditAccountDoc.accountCode})`
+    );
 
     // Create entries for double-entry accounting
     const entries = [
@@ -486,7 +662,8 @@ class FinancialService {
         accountCode: debitAccountDoc.accountCode,
         debitAmount: totalAmount,
         creditAmount: 0,
-        description: narration || `Journal entry debiting ${debitAccountDoc.accountName}`,
+        description:
+          narration || `Journal entry debiting ${debitAccountDoc.accountName}`,
       },
       {
         accountId: creditAccountDoc._id,
@@ -494,7 +671,9 @@ class FinancialService {
         accountCode: creditAccountDoc.accountCode,
         debitAmount: 0,
         creditAmount: totalAmount,
-        description: narration || `Journal entry crediting ${creditAccountDoc.accountName}`,
+        description:
+          narration ||
+          `Journal entry crediting ${creditAccountDoc.accountName}`,
       },
     ];
 
@@ -519,7 +698,10 @@ class FinancialService {
 
     // Validate required fields
     if (!fromAccount || !toAccount) {
-      throw new AppError("From and To account codes are required for contra voucher", 400);
+      throw new AppError(
+        "From and To account codes are required for contra voucher",
+        400
+      );
     }
 
     if (!totalAmount || totalAmount <= 0) {
@@ -532,17 +714,32 @@ class FinancialService {
 
     // Fetch accounts by accountCode (parallel)
     const [fromAccountDoc, toAccountDoc] = await Promise.all([
-      Transactor.findOne({ accountCode: fromAccount, isActive: true, deletedAt: null })
-        .select('accountCode accountName accountType allowDirectPosting currentBalance')
+      Transactor.findOne({
+        accountCode: fromAccount,
+        isActive: true,
+        deletedAt: null,
+      })
+        .select(
+          "accountCode accountName accountType allowDirectPosting currentBalance"
+        )
         .session(session),
-      Transactor.findOne({ accountCode: toAccount, isActive: true, deletedAt: null })
-        .select('accountCode accountName accountType allowDirectPosting currentBalance')
+      Transactor.findOne({
+        accountCode: toAccount,
+        isActive: true,
+        deletedAt: null,
+      })
+        .select(
+          "accountCode accountName accountType allowDirectPosting currentBalance"
+        )
         .session(session),
     ]);
 
     // Validate accounts exist
     if (!fromAccountDoc) {
-      throw new AppError(`From account not found or inactive: ${fromAccount}`, 404);
+      throw new AppError(
+        `From account not found or inactive: ${fromAccount}`,
+        404
+      );
     }
     if (!toAccountDoc) {
       throw new AppError(`To account not found or inactive: ${toAccount}`, 404);
@@ -550,15 +747,24 @@ class FinancialService {
 
     // Validate both accounts allow direct posting
     if (!fromAccountDoc.allowDirectPosting) {
-      throw new AppError(`Direct posting not allowed for account: ${fromAccountDoc.accountName} (${fromAccountDoc.accountCode})`, 400);
+      throw new AppError(
+        `Direct posting not allowed for account: ${fromAccountDoc.accountName} (${fromAccountDoc.accountCode})`,
+        400
+      );
     }
     if (!toAccountDoc.allowDirectPosting) {
-      throw new AppError(`Direct posting not allowed for account: ${toAccountDoc.accountName} (${toAccountDoc.accountCode})`, 400);
+      throw new AppError(
+        `Direct posting not allowed for account: ${toAccountDoc.accountName} (${toAccountDoc.accountCode})`,
+        400
+      );
     }
 
     // Validate sufficient balance in fromAccount
     if (fromAccountDoc.currentBalance < totalAmount) {
-      throw new AppError(`Insufficient balance in ${fromAccountDoc.accountName}. Available: ${fromAccountDoc.currentBalance}, Required: ${totalAmount}`, 400);
+      throw new AppError(
+        `Insufficient balance in ${fromAccountDoc.accountName}. Available: ${fromAccountDoc.currentBalance}, Required: ${totalAmount}`,
+        400
+      );
     }
 
     // Update account balances in Transactor collection
@@ -574,7 +780,9 @@ class FinancialService {
       toAccountDoc.save({ session }),
     ]);
 
-    console.log(`[Contra] Transfer ${totalAmount} from ${fromAccountDoc.accountName} (${fromAccountDoc.accountCode}) to ${toAccountDoc.accountName} (${toAccountDoc.accountCode})`);
+    console.log(
+      `[Contra] Transfer ${totalAmount} from ${fromAccountDoc.accountName} (${fromAccountDoc.accountCode}) to ${toAccountDoc.accountName} (${toAccountDoc.accountCode})`
+    );
 
     // Create entries for double-entry accounting
     const entries = [
@@ -601,7 +809,9 @@ class FinancialService {
       fromAccountId: fromAccountDoc._id,
       toAccountId: toAccountDoc._id,
       totalAmount,
-      narration: narration || `Fund transfer from ${fromAccountDoc.accountName} to ${toAccountDoc.accountName}`,
+      narration:
+        narration ||
+        `Fund transfer from ${fromAccountDoc.accountName} to ${toAccountDoc.accountName}`,
       notes: `From: ${fromAccountDoc.accountCode} | To: ${toAccountDoc.accountCode}`,
       entries,
       status: "approved",
@@ -612,7 +822,8 @@ class FinancialService {
   static async processExpenseVoucher(data, session) {
     const {
       date = new Date(),
-      expenseCategoryId,
+      expenseTypeId,
+      transactorId,
       totalAmount,
       description,
       submittedBy,
@@ -624,75 +835,166 @@ class FinancialService {
       },
     } = data;
 
-    if (!expenseCategoryId || !mongoose.Types.ObjectId.isValid(expenseCategoryId)) {
-      throw new AppError("Valid Expense category ID is required", 400);
+    // Validate required fields
+    if (!expenseTypeId || !mongoose.Types.ObjectId.isValid(expenseTypeId)) {
+      throw new AppError("Valid Expense type ID is required", 400);
     }
 
-    // Validate expense category
-    const category = await ExpenseCategory.findById(expenseCategoryId).select('categoryName defaultAccountId requiresApproval approvalLimit').session(session);
-    if (!category) {
-      throw new AppError("Expense category not found", 404);
+    if (!transactorId || !mongoose.Types.ObjectId.isValid(transactorId)) {
+      throw new AppError(
+        "Valid Transactor ID is required for expense payment",
+        400
+      );
     }
 
-    // Validate payment mode and details (same as above)
+    if (!totalAmount || totalAmount <= 0) {
+      throw new AppError("Valid total amount is required", 400);
+    }
+
+    if (!description || description.trim() === "") {
+      throw new AppError("Description is required for expense voucher", 400);
+    }
+
+    // Validate payment mode and details
     if (!["cash", "bank", "cheque", "online"].includes(paymentMode)) {
       throw new AppError("Invalid payment mode", 400);
     }
-    if (paymentMode === "cheque" && (!paymentDetails.chequeDetails || !paymentDetails.chequeDetails.chequeNumber)) {
+
+    if (
+      paymentMode === "cheque" &&
+      !paymentDetails.chequeDetails?.chequeNumber
+    ) {
       throw new AppError("Cheque details required for cheque payment", 400);
     }
-    if (paymentMode === "online" && (!paymentDetails.onlineDetails || !paymentDetails.onlineDetails.transactionId)) {
-      throw new AppError("Online transaction details required for online payment", 400);
+
+    if (
+      paymentMode === "online" &&
+      !paymentDetails.onlineDetails?.transactionId
+    ) {
+      throw new AppError(
+        "Online transaction details required for online payment",
+        400
+      );
     }
-    if (paymentMode === "bank" && (!paymentDetails.bankDetails || !paymentDetails.bankDetails.accountNumber)) {
+
+    if (paymentMode === "bank" && !paymentDetails.bankDetails?.accountNumber) {
       throw new AppError("Bank details required for bank payment", 400);
     }
 
-    // Get default expense account (with fallback)
-    let expenseAccount;
-    try {
-      if (category.defaultAccountId) {
-        expenseAccount = await LedgerAccount.findById(category.defaultAccountId).select('accountName').session(session);
-      } else {
-        expenseAccount = await LedgerAccount.findOne({ accountType: "expense", isActive: true }).select('accountName').session(session);
-      }
+    // Parallel fetch: expense type and transactor (payment source)
+    const [expenseType, transactor] = await Promise.all([
+      ExpenseType.findById(expenseTypeId)
+        .select("name categoryId")
+        .session(session),
+      Transactor.findById(transactorId)
+        .select(
+          "accountCode accountName accountType currentBalance isActive allowDirectPosting"
+        )
+        .session(session),
+    ]);
 
-      if (!expenseAccount) {
-        throw new AppError("No expense account found for this category", 400);
-      }
-    } catch (err) {
-      throw new AppError("Failed to fetch expense account", 500);
+    if (!expenseType) {
+      throw new AppError("Expense type not found", 404);
     }
 
-    // Get cash/bank account
-    const cashBankAccount = await this.getCashBankAccount(paymentMode, session);
+    if (!transactor) {
+      throw new AppError("Transactor account not found", 404);
+    }
 
-    // Create entries
+    // Validate transactor is active and allows direct posting
+    if (!transactor.isActive) {
+      throw new AppError(
+        `Transactor account is inactive: ${transactor.accountName}`,
+        400
+      );
+    }
+
+    if (!transactor.allowDirectPosting) {
+      throw new AppError(
+        `Direct posting not allowed for account: ${transactor.accountName} (${transactor.accountCode})`,
+        400
+      );
+    }
+
+    // Validate sufficient balance in transactor account
+    if (transactor.currentBalance < totalAmount) {
+      throw new AppError(
+        `Insufficient balance in ${transactor.accountName}. Available: ${transactor.currentBalance}, Required: ${totalAmount}`,
+        400
+      );
+    }
+
+    // Create entries for double-entry accounting using Transactor accounts
+    // Debit: Transactor account marked as expense type (increases expense)
+    // Credit: Payment source Transactor (decreases cash/bank)
+
+    // Get or create expense transactor account based on expense type
+    let expenseTransactor = await Transactor.findOne({
+      accountType: "expense",
+      isActive: true,
+      deletedAt: null,
+    })
+      .select("_id accountCode accountName currentBalance")
+      .session(session);
+
+    if (!expenseTransactor) {
+      throw new AppError("No active expense transactor account found", 400);
+    }
+
+    // Create entries - both using Transactor accounts
     const entries = [
       {
-        accountId: expenseAccount._id,
-        accountName: expenseAccount.accountName,
+        accountId: expenseTransactor._id,
+        accountName: expenseTransactor.accountName,
+        accountCode: expenseTransactor.accountCode,
         debitAmount: totalAmount,
         creditAmount: 0,
-        description: description,
+        description: `${description} (${expenseType.name})`,
+        taxPercent: 0,
+        taxAmount: 0,
       },
       {
-        accountId: cashBankAccount._id,
-        accountName: cashBankAccount.accountName,
+        accountId: transactor._id,
+        accountName: transactor.accountName,
+        accountCode: transactor.accountCode,
         debitAmount: 0,
         creditAmount: totalAmount,
-        description: `Expense payment - ${category.categoryName}`,
+        description: `Expense payment - ${expenseType.name}`,
+        taxPercent: 0,
+        taxAmount: 0,
       },
     ];
 
-    // Determine approval status
-    const requiresApproval = category.requiresApproval && (category.approvalLimit === 0 || totalAmount > category.approvalLimit);
+    // Update both transactor balances
+    // Credit account: reduce balance (payment out)
+    transactor.currentBalance -= totalAmount;
+    transactor.updatedAt = new Date();
+
+    // Debit account: increase balance (expense in)
+    expenseTransactor.currentBalance += totalAmount;
+    expenseTransactor.updatedAt = new Date();
+
+    await Promise.all([
+      transactor.save({ session }),
+      expenseTransactor.save({ session }),
+    ]);
+
+    console.log(
+      `[Expense] Type: ${expenseType.name}, Amount: ${totalAmount}, From: ${transactor.accountName} (${transactor.accountCode}), To: ${expenseTransactor.accountName}`
+    );
+
+    // Determine approval status based on transactor settings
+    const requiresApproval =
+      transactor.requiresApproval &&
+      (transactor.approvalLimit === 0 ||
+        totalAmount > transactor.approvalLimit);
 
     return {
       date,
-      expenseCategoryId,
-      expenseType: category.categoryName,
-      submittedBy,
+      expenseTypeId,
+      expenseTypeName: expenseType.name,
+      transactorId,
+      transactorName: transactor.accountName,
       totalAmount,
       description,
       paymentMode,
@@ -713,20 +1015,25 @@ class FinancialService {
       accountName,
       accountType: "asset",
       subType: "current_asset",
-    }).select('accountCode accountName').session(session);
+    })
+      .select("accountCode accountName")
+      .session(session);
 
     if (!account) {
-      account = await LedgerAccount.create([
-        {
-          accountCode: `CUST${customerId.toString().slice(-6)}`,
-          accountName,
-          accountType: "asset",
-          subType: "current_asset",
-          allowDirectPosting: true,
-          description: `Receivables from ${customerName}`,
-          createdBy: new mongoose.Types.ObjectId(),
-        },
-      ], { session });
+      account = await LedgerAccount.create(
+        [
+          {
+            accountCode: `CUST${customerId.toString().slice(-6)}`,
+            accountName,
+            accountType: "asset",
+            subType: "current_asset",
+            allowDirectPosting: true,
+            description: `Receivables from ${customerName}`,
+            createdBy: new mongoose.Types.ObjectId(),
+          },
+        ],
+        { session }
+      );
       account = account[0];
       console.log(`[Account] Created customer account: ${accountName}`);
     }
@@ -735,7 +1042,11 @@ class FinancialService {
   }
 
   // Helper: Get or create customer advance account (liability)
-  static async getOrCreateCustomerAdvanceAccount(customerId, customerName, session) {
+  static async getOrCreateCustomerAdvanceAccount(
+    customerId,
+    customerName,
+    session
+  ) {
     if (!mongoose.Types.ObjectId.isValid(customerId)) {
       throw new AppError("Invalid customer ID", 400);
     }
@@ -744,20 +1055,25 @@ class FinancialService {
       accountName,
       accountType: "liability",
       subType: "current_liability",
-    }).select('accountCode accountName').session(session);
+    })
+      .select("accountCode accountName")
+      .session(session);
 
     if (!account) {
-      account = await LedgerAccount.create([
-        {
-          accountCode: `CADV${customerId.toString().slice(-6)}`,
-          accountName,
-          accountType: "liability",
-          subType: "current_liability",
-          allowDirectPosting: true,
-          description: `Advances from ${customerName}`,
-          createdBy: new mongoose.Types.ObjectId(),
-        },
-      ], { session });
+      account = await LedgerAccount.create(
+        [
+          {
+            accountCode: `CADV${customerId.toString().slice(-6)}`,
+            accountName,
+            accountType: "liability",
+            subType: "current_liability",
+            allowDirectPosting: true,
+            description: `Advances from ${customerName}`,
+            createdBy: new mongoose.Types.ObjectId(),
+          },
+        ],
+        { session }
+      );
       account = account[0];
       console.log(`[Account] Created customer advance account: ${accountName}`);
     }
@@ -775,20 +1091,25 @@ class FinancialService {
       accountName,
       accountType: "liability",
       subType: "current_liability",
-    }).select('accountCode accountName').session(session);
+    })
+      .select("accountCode accountName")
+      .session(session);
 
     if (!account) {
-      account = await LedgerAccount.create([
-        {
-          accountCode: `VEND${vendorId.toString().slice(-6)}`,
-          accountName,
-          accountType: "liability",
-          subType: "current_liability",
-          allowDirectPosting: true,
-          description: `Payables to ${vendorName}`,
-          createdBy: new mongoose.Types.ObjectId(),
-        },
-      ], { session });
+      account = await LedgerAccount.create(
+        [
+          {
+            accountCode: `VEND${vendorId.toString().slice(-6)}`,
+            accountName,
+            accountType: "liability",
+            subType: "current_liability",
+            allowDirectPosting: true,
+            description: `Payables to ${vendorName}`,
+            createdBy: new mongoose.Types.ObjectId(),
+          },
+        ],
+        { session }
+      );
       account = account[0];
       console.log(`[Account] Created vendor account: ${accountName}`);
     }
@@ -806,20 +1127,25 @@ class FinancialService {
       accountName,
       accountType: "asset",
       subType: "current_asset",
-    }).select('accountCode accountName').session(session);
+    })
+      .select("accountCode accountName")
+      .session(session);
 
     if (!account) {
-      account = await LedgerAccount.create([
-        {
-          accountCode: `VADV${vendorId.toString().slice(-6)}`,
-          accountName,
-          accountType: "asset",
-          subType: "current_asset",
-          allowDirectPosting: true,
-          description: `Advances to ${vendorName}`,
-          createdBy: new mongoose.Types.ObjectId(),
-        },
-      ], { session });
+      account = await LedgerAccount.create(
+        [
+          {
+            accountCode: `VADV${vendorId.toString().slice(-6)}`,
+            accountName,
+            accountType: "asset",
+            subType: "current_asset",
+            allowDirectPosting: true,
+            description: `Advances to ${vendorName}`,
+            createdBy: new mongoose.Types.ObjectId(),
+          },
+        ],
+        { session }
+      );
       account = account[0];
       console.log(`[Account] Created vendor advance account: ${accountName}`);
     }
@@ -859,7 +1185,9 @@ class FinancialService {
   static async updateAccountBalances(entries, session) {
     const updatePromises = entries.map(async (entry) => {
       if (!mongoose.Types.ObjectId.isValid(entry.accountId)) return;
-      const account = await LedgerAccount.findById(entry.accountId).select('accountType currentBalance').session(session);
+      const account = await LedgerAccount.findById(entry.accountId)
+        .select("accountType currentBalance")
+        .session(session);
       if (account) {
         const netChange = entry.debitAmount - entry.creditAmount;
         if (["asset", "expense"].includes(account.accountType)) {
@@ -893,20 +1221,25 @@ class FinancialService {
     let account = await LedgerAccount.findOne({
       accountName,
       isActive: true,
-    }).select('accountCode accountName').session(session);
+    })
+      .select("accountCode accountName")
+      .session(session);
 
     if (!account) {
-      account = await LedgerAccount.create([
-        {
-          accountCode: paymentMode === "cash" ? "CASH001" : "BANK001",
-          accountName,
-          accountType: "asset",
-          subType: "current_asset",
-          allowDirectPosting: true,
-          isSystemAccount: true,
-          createdBy: new mongoose.Types.ObjectId(),
-        },
-      ], { session });
+      account = await LedgerAccount.create(
+        [
+          {
+            accountCode: paymentMode === "cash" ? "CASH001" : "BANK001",
+            accountName,
+            accountType: "asset",
+            subType: "current_asset",
+            allowDirectPosting: true,
+            isSystemAccount: true,
+            createdBy: new mongoose.Types.ObjectId(),
+          },
+        ],
+        { session }
+      );
       account = account[0];
       console.log(`[Account] Created system account: ${accountName}`);
     }
@@ -920,10 +1253,21 @@ class FinancialService {
 
   // Helper method to check if account is cash/bank type (for LedgerAccount)
   static isCashBankAccount(account) {
-    const cashBankNames = ["Cash in Hand", "Bank Account", "Petty Cash", "Cash at Bank"];
-    return cashBankNames.some((name) => account.accountName.toLowerCase().includes(name.toLowerCase())) ||
-           (account.accountType === "asset" && account.subType === "current_asset" &&
-            (account.accountCode.startsWith("CASH") || account.accountCode.startsWith("BANK")));
+    const cashBankNames = [
+      "Cash in Hand",
+      "Bank Account",
+      "Petty Cash",
+      "Cash at Bank",
+    ];
+    return (
+      cashBankNames.some((name) =>
+        account.accountName.toLowerCase().includes(name.toLowerCase())
+      ) ||
+      (account.accountType === "asset" &&
+        account.subType === "current_asset" &&
+        (account.accountCode.startsWith("CASH") ||
+          account.accountCode.startsWith("BANK")))
+    );
   }
 
   // Helper method to check if Transactor account is cash/bank type
@@ -931,10 +1275,16 @@ class FinancialService {
     const cashBankPrefixes = ["CAS", "BAN", "PET"];
     const cashBankKeywords = ["cash", "bank", "petty"];
 
-    const hasValidPrefix = cashBankPrefixes.some((prefix) => transactor.accountCode.startsWith(prefix));
-    const hasValidKeyword = cashBankKeywords.some((keyword) => transactor.accountName.toLowerCase().includes(keyword));
+    const hasValidPrefix = cashBankPrefixes.some((prefix) =>
+      transactor.accountCode.startsWith(prefix)
+    );
+    const hasValidKeyword = cashBankKeywords.some((keyword) =>
+      transactor.accountName.toLowerCase().includes(keyword)
+    );
 
-    return transactor.accountType === "asset" && (hasValidPrefix || hasValidKeyword);
+    return (
+      transactor.accountType === "asset" && (hasValidPrefix || hasValidKeyword)
+    );
   }
 
   // Get all vouchers with filters and pagination - Optimized query with lean()
@@ -943,7 +1293,8 @@ class FinancialService {
 
     if (filters.voucherType) query.voucherType = filters.voucherType;
     if (filters.status) query.status = filters.status;
-    if (filters.partyId && mongoose.Types.ObjectId.isValid(filters.partyId)) query.partyId = filters.partyId;
+    if (filters.partyId && mongoose.Types.ObjectId.isValid(filters.partyId))
+      query.partyId = filters.partyId;
     if (filters.approvalStatus) query.approvalStatus = filters.approvalStatus;
 
     // Date filters
@@ -981,6 +1332,8 @@ class FinancialService {
       .limit(limit)
       .populate("createdBy", "name username")
       .populate("partyId", "customerName vendorName name")
+      .populate("expenseCategoryId", "name")
+      .populate("transactorId", "accountCode accountName")
       .populate("linkedInvoices.invoiceId")
       .lean(); // Faster for read-only
 
@@ -988,11 +1341,13 @@ class FinancialService {
 
     const formattedVouchers = vouchers.map((voucher) => ({
       ...voucher,
-      linkedInvoices: voucher.linkedInvoices ? voucher.linkedInvoices.map((inv) => ({
-        invoiceId: inv.invoiceId,
-        amount: inv.allocatedAmount,
-        balance: inv.newBalance,
-      })) : [],
+      linkedInvoices: voucher.linkedInvoices
+        ? voucher.linkedInvoices.map((inv) => ({
+            invoiceId: inv.invoiceId,
+            amount: inv.allocatedAmount,
+            balance: inv.newBalance,
+          }))
+        : [],
     }));
 
     return {
@@ -1015,7 +1370,8 @@ class FinancialService {
     const voucher = await Voucher.findById(id)
       .populate("createdBy", "name username")
       .populate("partyId", "customerName vendorName name email phone")
-      .populate("expenseCategoryId", "categoryName description")
+      .populate("expenseCategoryId", "name ")
+      .populate("transactorId", "accountCode accountName accountType")
       .populate("linkedInvoices.invoiceId")
       .populate("entries.accountId", "accountName accountCode accountType")
       .lean();
@@ -1033,11 +1389,13 @@ class FinancialService {
     return {
       voucher: {
         ...voucher,
-        linkedInvoices: voucher.linkedInvoices ? voucher.linkedInvoices.map((inv) => ({
-          invoiceId: inv.invoiceId,
-          amount: inv.allocatedAmount,
-          balance: inv.newBalance,
-        })) : [],
+        linkedInvoices: voucher.linkedInvoices
+          ? voucher.linkedInvoices.map((inv) => ({
+              invoiceId: inv.invoiceId,
+              amount: inv.allocatedAmount,
+              balance: inv.newBalance,
+            }))
+          : [],
       },
       ledgerEntries,
     };
@@ -1102,7 +1460,11 @@ class FinancialService {
             oldVoucher.toAccountId
           ) {
             await this.reverseContraBalances(oldVoucher, session);
-          } else if (oldVoucher.voucherType === "journal" && oldVoucher.entries && oldVoucher.entries.length >= 2) {
+          } else if (
+            oldVoucher.voucherType === "journal" &&
+            oldVoucher.entries &&
+            oldVoucher.entries.length >= 2
+          ) {
             await this.reverseJournalBalances(oldVoucher, session);
           }
 
@@ -1111,7 +1473,10 @@ class FinancialService {
 
         // Handle attachments: merge old + new
         if (data.attachments && data.attachments.length > 0) {
-          oldVoucher.attachments = [...(oldVoucher.attachments || []), ...data.attachments];
+          oldVoucher.attachments = [
+            ...(oldVoucher.attachments || []),
+            ...data.attachments,
+          ];
         }
 
         if (needReprocess) {
@@ -1119,19 +1484,34 @@ class FinancialService {
           let processedData;
           switch (oldVoucher.voucherType) {
             case "receipt":
-              processedData = await this.processReceiptVoucher(processData, session);
+              processedData = await this.processReceiptVoucher(
+                processData,
+                session
+              );
               break;
             case "payment":
-              processedData = await this.processPaymentVoucher(processData, session);
+              processedData = await this.processPaymentVoucher(
+                processData,
+                session
+              );
               break;
             case "journal":
-              processedData = await this.processJournalVoucher(processData, session);
+              processedData = await this.processJournalVoucher(
+                processData,
+                session
+              );
               break;
             case "contra":
-              processedData = await this.processContraVoucher(processData, session);
+              processedData = await this.processContraVoucher(
+                processData,
+                session
+              );
               break;
             case "expense":
-              processedData = await this.processExpenseVoucher(processData, session);
+              processedData = await this.processExpenseVoucher(
+                processData,
+                session
+              );
               break;
             default:
               throw new AppError("Invalid voucher type", 400);
@@ -1151,11 +1531,13 @@ class FinancialService {
         await session.commitTransaction();
         return {
           ...oldVoucher.toObject(),
-          linkedInvoices: oldVoucher.linkedInvoices ? oldVoucher.linkedInvoices.map((inv) => ({
-            invoiceId: inv.invoiceId,
-            amount: inv.allocatedAmount,
-            balance: inv.newBalance,
-          })) : [],
+          linkedInvoices: oldVoucher.linkedInvoices
+            ? oldVoucher.linkedInvoices.map((inv) => ({
+                invoiceId: inv.invoiceId,
+                amount: inv.allocatedAmount,
+                balance: inv.newBalance,
+              }))
+            : [],
         };
       } catch (error) {
         await session.abortTransaction();
@@ -1176,7 +1558,9 @@ class FinancialService {
       if (!mongoose.Types.ObjectId.isValid(entry.accountId)) {
         return;
       }
-      const account = await Transactor.findById(entry.accountId).select('currentBalance').session(session);
+      const account = await Transactor.findById(entry.accountId)
+        .select("currentBalance")
+        .session(session);
       if (account) {
         const netChange = entry.debitAmount - entry.creditAmount;
         account.currentBalance -= netChange; // Reverse the original effect
@@ -1186,22 +1570,35 @@ class FinancialService {
     });
 
     await Promise.all(reversalPromises);
-    console.log(`[Journal Reversal] Reversed balances for voucher ${voucher.voucherNo}`);
+    console.log(
+      `[Journal Reversal] Reversed balances for voucher ${voucher.voucherNo}`
+    );
   }
 
   // Reverse contra voucher balance changes in Transactor
   static async reverseContraBalances(voucher, session) {
-    if (!voucher.fromAccountId || !voucher.toAccountId || !voucher.totalAmount) {
+    if (
+      !voucher.fromAccountId ||
+      !voucher.toAccountId ||
+      !voucher.totalAmount
+    ) {
       return;
     }
 
-    if (!mongoose.Types.ObjectId.isValid(voucher.fromAccountId) || !mongoose.Types.ObjectId.isValid(voucher.toAccountId)) {
+    if (
+      !mongoose.Types.ObjectId.isValid(voucher.fromAccountId) ||
+      !mongoose.Types.ObjectId.isValid(voucher.toAccountId)
+    ) {
       return; // Invalid IDs, skip
     }
 
     const [fromAccount, toAccount] = await Promise.all([
-      Transactor.findById(voucher.fromAccountId).select('currentBalance').session(session),
-      Transactor.findById(voucher.toAccountId).select('currentBalance').session(session),
+      Transactor.findById(voucher.fromAccountId)
+        .select("currentBalance")
+        .session(session),
+      Transactor.findById(voucher.toAccountId)
+        .select("currentBalance")
+        .session(session),
     ]);
 
     if (fromAccount) {
@@ -1216,7 +1613,9 @@ class FinancialService {
       await toAccount.save({ session });
     }
 
-    console.log(`[Contra Reversal] Reversed ${voucher.totalAmount} between accounts`);
+    console.log(
+      `[Contra Reversal] Reversed ${voucher.totalAmount} between accounts`
+    );
   }
 
   // Approve/Reject voucher - With retry
@@ -1242,7 +1641,10 @@ class FinancialService {
         }
 
         if (voucher.status !== "pending" && voucher.status !== "draft") {
-          throw new AppError("Voucher is not in a state that can be approved/rejected", 400);
+          throw new AppError(
+            "Voucher is not in a state that can be approved/rejected",
+            400
+          );
         }
 
         // Update voucher status
@@ -1252,14 +1654,18 @@ class FinancialService {
         voucher.approvedAt = new Date();
 
         if (comments) {
-          voucher.notes = `${voucher.notes || ""}\nApproval Comments: ${comments}`;
+          voucher.notes = `${
+            voucher.notes || ""
+          }\nApproval Comments: ${comments}`;
         }
 
         await voucher.save({ session });
 
         // If approved and no ledger entries exist, create them
         if (action === "approve") {
-          const existingEntries = await LedgerEntry.findOne({ voucherId: id }).session(session);
+          const existingEntries = await LedgerEntry.findOne({
+            voucherId: id,
+          }).session(session);
           if (!existingEntries) {
             await this.createLedgerEntries(voucher, approvedBy, session);
           }
@@ -1268,11 +1674,13 @@ class FinancialService {
         await session.commitTransaction();
         return {
           ...voucher.toObject(),
-          linkedInvoices: voucher.linkedInvoices ? voucher.linkedInvoices.map((inv) => ({
-            invoiceId: inv.invoiceId,
-            amount: inv.allocatedAmount,
-            balance: inv.newBalance,
-          })) : [],
+          linkedInvoices: voucher.linkedInvoices
+            ? voucher.linkedInvoices.map((inv) => ({
+                invoiceId: inv.invoiceId,
+                amount: inv.allocatedAmount,
+                balance: inv.newBalance,
+              }))
+            : [],
         };
       } catch (error) {
         await session.abortTransaction();
@@ -1323,7 +1731,11 @@ class FinancialService {
             voucher.toAccountId
           ) {
             await this.reverseContraBalances(voucher, session);
-          } else if (voucher.voucherType === "journal" && voucher.entries && voucher.entries.length >= 2) {
+          } else if (
+            voucher.voucherType === "journal" &&
+            voucher.entries &&
+            voucher.entries.length >= 2
+          ) {
             await this.reverseJournalBalances(voucher, session);
           }
         }
@@ -1361,7 +1773,9 @@ class FinancialService {
       await LedgerEntry.create([reversalEntry], { session });
 
       // Only update LedgerAccount balances, not Transactor
-      const account = await LedgerAccount.findById(entry.accountId).select('accountType currentBalance').session(session);
+      const account = await LedgerAccount.findById(entry.accountId)
+        .select("accountType currentBalance")
+        .session(session);
       if (account) {
         const originalNetChange = entry.debitAmount - entry.creditAmount;
         if (["asset", "expense"].includes(account.accountType)) {
@@ -1388,14 +1802,21 @@ class FinancialService {
 
     const reversalPromises = voucher.linkedInvoices.map(async (linked) => {
       if (!mongoose.Types.ObjectId.isValid(linked.invoiceId)) return;
-      const invoice = await Transaction.findById(linked.invoiceId).session(session);
+      const invoice = await Transaction.findById(linked.invoiceId).session(
+        session
+      );
       if (invoice) {
         invoice.paidAmount -= linked.allocatedAmount;
         invoice.outstandingAmount += linked.allocatedAmount;
         if (invoice.paidAmount < 0) invoice.paidAmount = 0;
-        if (invoice.outstandingAmount > invoice.totalAmount) invoice.outstandingAmount = invoice.totalAmount;
-        invoice.status = invoice.outstandingAmount === invoice.totalAmount ? "unpaid" :
-                         invoice.outstandingAmount === 0 ? "paid" : "partial";
+        if (invoice.outstandingAmount > invoice.totalAmount)
+          invoice.outstandingAmount = invoice.totalAmount;
+        invoice.status =
+          invoice.outstandingAmount === invoice.totalAmount
+            ? "unpaid"
+            : invoice.outstandingAmount === 0
+            ? "paid"
+            : "partial";
         await invoice.save({ session });
       }
     });
@@ -1415,7 +1836,12 @@ class FinancialService {
       case "expense_summary":
         return this.getExpenseSummary(dateFrom, dateTo);
       case "party_statement":
-        return this.getPartyStatement(filters.partyId, filters.partyType, dateFrom, dateTo);
+        return this.getPartyStatement(
+          filters.partyId,
+          filters.partyType,
+          dateFrom,
+          dateTo
+        );
       default:
         throw new AppError("Invalid report type", 400);
     }
@@ -1465,7 +1891,10 @@ class FinancialService {
 
     const summary = {
       totalDebits: trialBalance.reduce((sum, acc) => sum + acc.totalDebits, 0),
-      totalCredits: trialBalance.reduce((sum, acc) => sum + acc.totalCredits, 0),
+      totalCredits: trialBalance.reduce(
+        (sum, acc) => sum + acc.totalCredits,
+        0
+      ),
     };
 
     return { trialBalance, summary };
@@ -1473,7 +1902,10 @@ class FinancialService {
 
   // Cash Flow Report - Early match
   static async getCashFlowReport(dateFrom, dateTo) {
-    const matchConditions = { voucherType: { $in: ["receipt", "payment", "contra"] }, status: "approved" };
+    const matchConditions = {
+      voucherType: { $in: ["receipt", "payment", "contra"] },
+      status: "approved",
+    };
     if (dateFrom || dateTo) {
       matchConditions.date = {};
       if (dateFrom) matchConditions.date.$gte = new Date(dateFrom);
@@ -1491,9 +1923,12 @@ class FinancialService {
       },
     ]);
 
-    const receipts = cashFlow.find((cf) => cf._id === "receipt")?.totalAmount || 0;
-    const payments = cashFlow.find((cf) => cf._id === "payment")?.totalAmount || 0;
-    const transfers = cashFlow.find((cf) => cf._id === "contra")?.totalAmount || 0;
+    const receipts =
+      cashFlow.find((cf) => cf._id === "receipt")?.totalAmount || 0;
+    const payments =
+      cashFlow.find((cf) => cf._id === "payment")?.totalAmount || 0;
+    const transfers =
+      cashFlow.find((cf) => cf._id === "contra")?.totalAmount || 0;
 
     return {
       cashFlow,
@@ -1519,7 +1954,7 @@ class FinancialService {
       { $match: matchConditions },
       {
         $lookup: {
-          from: "expensecategories",
+          from: "expensetypes",
           localField: "expenseCategoryId",
           foreignField: "_id",
           as: "category",
@@ -1529,7 +1964,9 @@ class FinancialService {
       {
         $group: {
           _id: "$expenseCategoryId",
-          categoryName: { $first: { $arrayElemAt: ["$category.categoryName", 0] } },
+          categoryName: {
+            $first: { $arrayElemAt: ["$category.categoryName", 0] },
+          },
           totalAmount: { $sum: "$totalAmount" },
           count: { $sum: 1 },
           avgAmount: { $avg: "$totalAmount" },
@@ -1538,7 +1975,10 @@ class FinancialService {
       { $sort: { totalAmount: -1 } },
     ]);
 
-    const totalExpenses = expenseSummary.reduce((sum, exp) => sum + exp.totalAmount, 0);
+    const totalExpenses = expenseSummary.reduce(
+      (sum, exp) => sum + exp.totalAmount,
+      0
+    );
 
     return { expenseSummary, totalExpenses };
   }
@@ -1546,7 +1986,10 @@ class FinancialService {
   // Party Statement (Customer/Vendor) - With lean()
   static async getPartyStatement(partyId, partyType, dateFrom, dateTo) {
     if (!partyId || !partyType || !mongoose.Types.ObjectId.isValid(partyId)) {
-      throw new AppError("Valid Party ID and type are required for statement", 400);
+      throw new AppError(
+        "Valid Party ID and type are required for statement",
+        400
+      );
     }
 
     const matchConditions = {
@@ -1577,11 +2020,13 @@ class FinancialService {
       }
       return {
         ...voucher,
-        linkedInvoices: voucher.linkedInvoices ? voucher.linkedInvoices.map((inv) => ({
-          invoiceId: inv.invoiceId,
-          amount: inv.allocatedAmount,
-          balance: inv.newBalance,
-        })) : [],
+        linkedInvoices: voucher.linkedInvoices
+          ? voucher.linkedInvoices.map((inv) => ({
+              invoiceId: inv.invoiceId,
+              amount: inv.allocatedAmount,
+              balance: inv.newBalance,
+            }))
+          : [],
         runningBalance,
       };
     });
@@ -1616,7 +2061,9 @@ class FinancialService {
       },
     ]);
 
-    const pendingApprovals = await Voucher.countDocuments({ status: "pending" });
+    const pendingApprovals = await Voucher.countDocuments({
+      status: "pending",
+    });
 
     const recentTransactions = await Voucher.find()
       .sort({ createdAt: -1 })
@@ -1631,11 +2078,13 @@ class FinancialService {
       pendingApprovals,
       recentTransactions: recentTransactions.map((voucher) => ({
         ...voucher,
-        linkedInvoices: voucher.linkedInvoices ? voucher.linkedInvoices.map((inv) => ({
-          invoiceId: inv.invoiceId,
-          amount: inv.allocatedAmount,
-          balance: inv.newBalance,
-        })) : [],
+        linkedInvoices: voucher.linkedInvoices
+          ? voucher.linkedInvoices.map((inv) => ({
+              invoiceId: inv.invoiceId,
+              amount: inv.allocatedAmount,
+              balance: inv.newBalance,
+            }))
+          : [],
       })),
     };
   }

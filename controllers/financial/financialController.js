@@ -23,6 +23,7 @@ exports.createVoucher = catchAsync(async (req, res) => {
     ];
   }
 
+  // console.log(bodyData);
   const voucher = await FinancialService.createVoucher(bodyData, createdBy);
 
   res.status(201).json({

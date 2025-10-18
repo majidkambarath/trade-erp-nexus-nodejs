@@ -83,14 +83,24 @@ const voucherSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "Transactor",
   },
+  
+  transactorId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "Transactor",
+  required: function() { return this.voucherType === "expense"; },
+},
+
+expenseTypeName: { type: String, trim: true },
+transactorName: { type: String, trim: true },
   expenseCategoryId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "ExpenseCategory",
+    ref: " ExpenseType",
   },
   expenseType: { type: String, trim: true },
   submittedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Admin",
+    default: null,
   },
   approvalStatus: {
     type: String,
@@ -259,62 +269,6 @@ ledgerAccountSchema.index({ isActive: 1, allowDirectPosting: 1 }); // For Financ
 
 const LedgerAccount = mongoose.model("LedgerAccount", ledgerAccountSchema);
 
-// Expense Category Schema
-const expenseCategorySchema = new mongoose.Schema({
-  categoryName: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-  },
-  categoryCode: {
-    type: String,
-    required: true,
-    unique: true,
-    trim: true,
-  },
-  description: { type: String, trim: true },
-  parentCategoryId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "ExpenseCategory",
-  },
-  level: { type: Number, default: 0, min: 0 },
-  isActive: { type: Boolean, default: true },
-  monthlyBudget: { type: Number, default: 0, min: 0 },
-  yearlyBudget: { type: Number, default: 0, min: 0 },
-  currentSpent: { type: Number, default: 0, min: 0 },
-  requiresApproval: { type: Boolean, default: true },
-  approvalLimit: { type: Number, default: 0, min: 0 },
-  defaultAccountId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "LedgerAccount",
-  },
-  createdBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Admin",
-    required: true,
-  },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
-});
-
-// Pre-save middleware
-expenseCategorySchema.pre("save", function (next) {
-  this.updatedAt = Date.now();
-  next();
-});
-
-// Pre-update middleware
-expenseCategorySchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
-  this.set({ updatedAt: Date.now() });
-  next();
-});
-
-// Indexes (removed duplicate categoryName and categoryCode indexes)
-expenseCategorySchema.index({ isActive: 1 }); // For FinancialService.processExpenseVoucher
-expenseCategorySchema.index({ parentCategoryId: 1 }); // For hierarchical queries
-
-const ExpenseCategory = mongoose.model("ExpenseCategory", expenseCategorySchema);
 
 // Ledger Entry Schema
 const ledgerEntrySchema = new mongoose.Schema({
@@ -414,6 +368,5 @@ const LedgerEntry = mongoose.model("LedgerEntry", ledgerEntrySchema);
 module.exports = {
   Voucher,
   LedgerAccount,
-  ExpenseCategory,
   LedgerEntry,
 };
