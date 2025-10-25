@@ -64,7 +64,10 @@ exports.deleteTransaction = catchAsync(async (req, res) => {
 exports.processTransaction = catchAsync(async (req, res) => {
   const { action } = req.body;
   if (!["approve", "reject", "cancel"].includes(action))
-    throw new AppError("Invalid action. Use 'approve', 'reject', or 'cancel'", 400);
+    throw new AppError(
+      "Invalid action. Use 'approve', 'reject', or 'cancel'",
+      400
+    );
 
   const transaction = await TransactionService.processTransaction(
     req.params.id,
@@ -91,13 +94,11 @@ exports.getTransactionStats = catchAsync(async (req, res) => {
 // Get pending transactions
 exports.getPendingTransactions = catchAsync(async (req, res) => {
   const transactions = await TransactionService.getPendingTransactions();
-  res
-    .status(200)
-    .json({
-      status: "success",
-      results: transactions.length,
-      data: { transactions },
-    });
+  res.status(200).json({
+    status: "success",
+    results: transactions.length,
+    data: { transactions },
+  });
 });
 
 // Duplicate transaction
@@ -112,8 +113,14 @@ exports.duplicateTransaction = catchAsync(async (req, res) => {
 // Bulk process transactions
 exports.bulkProcessTransactions = catchAsync(async (req, res) => {
   const { transactionIds, action } = req.body;
-  if (!transactionIds?.length || !["approve", "reject", "cancel"].includes(action))
-    throw new AppError("Transaction IDs array and valid action are required", 400);
+  if (
+    !transactionIds?.length ||
+    !["approve", "reject", "cancel"].includes(action)
+  )
+    throw new AppError(
+      "Transaction IDs array and valid action are required",
+      400
+    );
 
   const results = await TransactionService.bulkProcessTransactions(
     transactionIds,

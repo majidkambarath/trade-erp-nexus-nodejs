@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const vendorSchema = new mongoose.Schema({
   vendorId: { type: String, required: true, trim: true },
   vendorName: { type: String, required: true, trim: true },
+  trnNO: { type: String, default: null },
   contactPerson: { type: String, required: true, trim: true },
   email: { type: String, match: /\S+@\S+\.\S+/, sparse: true, trim: true },
   phone: { type: String, sparse: true, trim: true },

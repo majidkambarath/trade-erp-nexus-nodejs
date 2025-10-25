@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const Transaction = require("../../models/modules/transactionModel");
+const StockPurchaseLog = require("../../models/modules/StockPurchaseLog"); // Import StockPurchaseLog model
 const InventoryMovement = require("../../models/modules/inventoryMovementModel");
 const StockService = require("../stock/stockService");
 const AppError = require("../../utils/AppError");
@@ -15,13 +16,16 @@ function generateTransactionNo(type) {
 
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const sequence = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0");
-  return `${prefix}-${dateStr}-${sequence}`;
+  return `${prefix}${sequence}`;
 }
 
 function calculateItems(items, code) {
   return items.map((item) => {
-    const lineValue = item.qty * item.price;
-   const lineTotal =  (lineValue + (lineValue * item.taxPercent ) / 100).toFixed(2)
+    const lineValue = item.qty * item.price; // Use rate for unit price
+    const lineTotal = (
+      lineValue +
+      (lineValue * (item.vatPercent || 0)) / 100
+    ).toFixed(2);
     return { ...item, itemCode: code, lineTotal: +lineTotal };
   });
 }
@@ -48,7 +52,17 @@ class TransactionService {
   // Create Transaction
   static createTransaction = withTransactionSession(
     async (data, createdBy, session) => {
-      const { type, partyId, partyType, items, ...rest } = data;
+      const {
+        type,
+        partyId,
+        partyType,
+        items,
+        date,
+        deliveryDate,
+        terms,
+        notes,
+        priority,
+      } = data;
 
       if (!type || !partyId || !partyType)
         throw new AppError("Missing required fields", 400);
@@ -67,7 +81,7 @@ class TransactionService {
         }
       }
 
-      const processedItems = calculateItems(items,code);  
+      const processedItems = calculateItems(items, code);
       const totalAmount = processedItems.reduce(
         (sum, i) => sum + i.lineTotal,
         0
@@ -83,13 +97,43 @@ class TransactionService {
         totalAmount,
         status: "DRAFT",
         createdBy,
-        ...rest,
+        date: date || new Date(),
+        deliveryDate: deliveryDate || new Date(),
+        terms: terms || "",
+        notes: notes || "",
+        priority: priority || "Medium",
       };
 
-    console.log(transactionData)
       const [newTransaction] = await Transaction.create([transactionData], {
         session,
       });
+
+      // Create StockPurchaseLog for purchase orders
+      if (type === "purchase_order") {
+        const purchaseLogData = {
+          transactionNo: newTransaction.transactionNo,
+          type: "purchase_order",
+          partyId,
+          partyType: "Vendor",
+          partyTypeRef: "Vendor",
+          date: transactionData.date,
+          deliveryDate: transactionData.deliveryDate,
+          items: processedItems.map((item) => ({
+            itemId: item.itemId,
+            description: item.description,
+            qty: item.qty,
+            rate: item.rate,
+            vatPercent: item.vatPercent || 0,
+            price: item.lineTotal,
+            expiryDate: item.expiryDate ? new Date(item.expiryDate) : undefined,
+          })),
+          terms: transactionData.terms || "",
+          notes: transactionData.notes || "",
+          priority: transactionData.priority || "Medium",
+        };
+
+        await StockPurchaseLog.create([purchaseLogData], { session });
+      }
 
       return newTransaction;
     }
@@ -104,8 +148,36 @@ class TransactionService {
         throw new AppError("Cannot edit processed transactions", 400);
 
       if (data.items) {
-        data.items = calculateItems(data.items);
+        // Recalculate items with updated data
+        data.items = calculateItems(data.items, transaction.items[0]?.itemCode);
         data.totalAmount = data.items.reduce((sum, i) => sum + i.lineTotal, 0);
+      }
+
+      // Update StockPurchaseLog for purchase orders
+      if (transaction.type === "purchase_order" && data.items) {
+        const purchaseLog = await StockPurchaseLog.findOne({
+          transactionNo: transaction.transactionNo,
+        }).session(session);
+        if (!purchaseLog) {
+          throw new AppError("Purchase log not found", 404);
+        }
+
+        purchaseLog.items = data.items.map((item) => ({
+          itemId: item.itemId,
+          description: item.description,
+          qty: item.qty,
+          rate: item.rate,
+          vatPercent: item.vatPercent || 0,
+          price: item.lineTotal,
+          expiryDate: item.expiryDate ? new Date(item.expiryDate) : undefined,
+        }));
+        purchaseLog.totalAmount = data.totalAmount;
+        purchaseLog.terms = data.terms || purchaseLog.terms;
+        purchaseLog.notes = data.notes || purchaseLog.notes;
+        purchaseLog.priority = data.priority || purchaseLog.priority;
+        purchaseLog.updatedAt = new Date();
+
+        await purchaseLog.save({ session });
       }
 
       Object.assign(transaction, data, { updatedAt: new Date() });
@@ -124,6 +196,14 @@ class TransactionService {
         await this.reverseTransactionStock(id, transaction, createdBy, session);
       }
 
+      // Delete StockPurchaseLog for purchase orders
+      if (transaction.type === "purchase_order") {
+        await StockPurchaseLog.deleteOne(
+          { transactionNo: transaction.transactionNo },
+          { session }
+        );
+      }
+
       await Transaction.findByIdAndDelete(id).session(session);
     }
   );
@@ -136,8 +216,35 @@ class TransactionService {
 
       this.validateAction(transaction.type, action, transaction.status);
 
-      if (action === "approve") {
+      if (action === "approve" && transaction.type === "purchase_order") {
+        // Update StockPurchaseLog status
+        const purchaseLog = await StockPurchaseLog.findOne({
+          transactionNo: transaction.transactionNo,
+        }).session(session);
+        if (!purchaseLog) {
+          throw new AppError("Purchase log not found", 404);
+        }
+        purchaseLog.status = "APPROVED"; // Requires status field in schema
+        await purchaseLog.save({ session });
+
+        // Process stock updates
         await this.processTransactionStock(id, transaction, createdBy, session);
+      } else if (action === "reject" && transaction.type === "purchase_order") {
+        const purchaseLog = await StockPurchaseLog.findOne({
+          transactionNo: transaction.transactionNo,
+        }).session(session);
+        if (purchaseLog) {
+          purchaseLog.status = "REJECTED"; // Requires status field in schema
+          await purchaseLog.save({ session });
+        }
+      } else if (action === "cancel" && transaction.type === "purchase_order") {
+        const purchaseLog = await StockPurchaseLog.findOne({
+          transactionNo: transaction.transactionNo,
+        }).session(session);
+        if (purchaseLog) {
+          purchaseLog.status = "CANCELLED"; // Requires status field in schema
+          await purchaseLog.save({ session });
+        }
       }
 
       this.updateTransactionStatus(transaction, action);
@@ -242,7 +349,7 @@ class TransactionService {
     };
   }
 
-  // ---------- Stock Handling ----------
+  // Process Transaction Stock
   static async processTransactionStock(
     transactionId,
     transaction,
@@ -254,8 +361,6 @@ class TransactionService {
 
     for (const item of items) {
       const stock = await StockService.getStockByItemId(item.itemId);
-      console.log("object");
-      console.log(stock);
       const quantityChange = this.getQuantityChange(type, item.qty);
       const newStock = stock.currentStock + quantityChange;
       if (quantityChange < 0 && newStock < 0) {
@@ -263,11 +368,9 @@ class TransactionService {
       }
 
       let newPurchasePrice = stock.purchasePrice;
-      let price = item.rate / item.qty;
+      let price = item.rate; // Use rate as unit price
       if (type === "purchase_order") {
-        // Calculate weighted average price for purchase orders
         const currentValue = stock.purchasePrice * stock.currentStock;
-
         const newValue = price * item.qty;
         const totalQuantity = stock.currentStock + item.qty;
         newPurchasePrice =
@@ -276,7 +379,6 @@ class TransactionService {
             : stock.purchasePrice;
       }
 
-      // Update stock with new quantity and purchase price
       await stock.constructor.findByIdAndUpdate(
         stock._id,
         {
@@ -286,10 +388,7 @@ class TransactionService {
         },
         { session }
       );
-      console.log("+++++++");
-      console.log(price);
-      console.log(item);
-      console.log("----------------");
+
       const movement = await this.createInventoryMovement(
         {
           stockId: stock.itemId,
@@ -300,7 +399,7 @@ class TransactionService {
           referenceType: "Transaction",
           referenceId: transactionId,
           referenceNumber: transactionNo,
-          unitCost: price, // Use transaction item price
+          unitCost: price,
           totalValue: Math.abs(quantityChange) * price,
           notes: `${this.getEventType(type)} - ${item.description}`,
           createdBy,
@@ -314,7 +413,7 @@ class TransactionService {
         itemId: item.itemId,
         previousStock: stock.currentStock,
         newStock,
-        newPurchasePrice, // Include new purchase price in response
+        newPurchasePrice,
         movement,
       });
     }
@@ -322,6 +421,7 @@ class TransactionService {
     return stockUpdates;
   }
 
+  // Reverse Transaction Stock
   static async reverseTransactionStock(
     transactionId,
     transaction,
@@ -339,8 +439,6 @@ class TransactionService {
       const reversalQuantity = -movement.quantity;
       const newStock = stock.currentStock + reversalQuantity;
 
-      // Note: Not updating purchasePrice on reversal to avoid complexity
-      // If needed, implement logic to recalculate purchasePrice based on historical data
       await stock.constructor.findByIdAndUpdate(
         stock._id,
         { currentStock: newStock, updatedAt: new Date() },
@@ -373,14 +471,26 @@ class TransactionService {
         { session }
       );
     }
+
+    // Update StockPurchaseLog status for reversal
+    if (transaction.type === "purchase_order") {
+      const purchaseLog = await StockPurchaseLog.findOne({
+        transactionNo: transaction.transactionNo,
+      }).session(session);
+      if (purchaseLog) {
+        purchaseLog.status = "REVERSED"; // Requires status field in schema
+        await purchaseLog.save({ session });
+      }
+    }
   }
 
+  // Create Inventory Movement
   static async createInventoryMovement(movementData, session) {
     const movement = new InventoryMovement(movementData);
     return movement.save({ session });
   }
 
-  // ---------- Status & Validation ----------
+  // Status & Validation
   static getQuantityChange(type, qty) {
     return (
       {
@@ -403,7 +513,6 @@ class TransactionService {
 
   static validateAction(type, action, status) {
     const validActions = ["approve", "reject", "cancel"];
-
     if (!validActions.includes(action))
       throw new AppError(`Invalid action '${action}'`, 400);
     if (this.isProcessed(status))

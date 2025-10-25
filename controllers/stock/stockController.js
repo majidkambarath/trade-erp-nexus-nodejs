@@ -26,6 +26,20 @@ exports.getAllStock = catchAsync(async (req, res) => {
   });
 });
 
+exports.getPurchaseLogsByItemId = catchAsync(async (req, res) => {
+  const { id } = req.params;
+console.log(id)
+  const purchaseLogs = await StockService.getPurchaseLogsByItemId(id);
+
+  res.status(200).json({
+    status: "success",
+    results: purchaseLogs.length,
+    data: {
+      purchaseLogs,
+    },
+  });
+});
+
 exports.getStockById = catchAsync(async (req, res) => {
   const stock = await StockService.getStockById(req.params.id);
 

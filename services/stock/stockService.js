@@ -1,6 +1,7 @@
 const Stock = require("../../models/modules/stockModel");
 const Category = require("../../models/modules/categoryModel");
 const Vendor = require("../../models/modules/vendorModel");
+const StockPurchaseLog = require("../../models/modules/StockPurchaseLog"); // Import StockPurchaseLog model
 const InventoryMovement = require("../../models/modules/inventoryMovementModel");
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
@@ -26,10 +27,14 @@ class StockService {
         salesPrice,
         currentStock,
         status,
+        origin,
+        brand,
       } = data;
 
       // Validate category exists
-      const categoryExists = await Category.findById(categoryId).session(session);
+      const categoryExists = await Category.findById(categoryId).session(
+        session
+      );
       if (!categoryExists) {
         throw new AppError("Category not found", 404);
       }
@@ -41,12 +46,18 @@ class StockService {
       }
 
       // Generate itemId if not provided
-      const newItemId =
-        itemId ||
-        `ITM${new Date().toISOString().slice(0, 4).replace(/-/g, "")}-${
-          Math.floor(Math.random() * 1000) + 100
-        }`;
+      function generateItemId(itemName, itemId = null) {
+        const prefix = itemName
+          ? itemName.trim().substring(0, 3).toUpperCase()
+          : "ITM"; // fallback if name missing
 
+        const randomNum = Math.floor(1000 + Math.random() * 9000); // 4-digit random number
+
+        const newItemId = itemId || `${prefix}${randomNum}`;
+        return newItemId;
+      }
+
+      const newItemId = generateItemId(itemName);
       // Check if SKU already exists
       const existingSku = await Stock.findOne({ sku }).session(session);
       if (existingSku) {
@@ -63,7 +74,7 @@ class StockService {
             category: categoryId,
             vendorId,
             unitOfMeasure,
-            barcodeQrCode,
+            barcodeQrCode: sku,
             reorderLevel: Number(reorderLevel) || 0,
             batchNumber,
             expiryDate: expiryDate ? new Date(expiryDate) : undefined,
@@ -71,6 +82,8 @@ class StockService {
             salesPrice: Number(salesPrice) || 0,
             currentStock: Number(currentStock) || 0,
             status,
+            origin,
+            brand,
           },
         ],
         { session }
@@ -95,6 +108,8 @@ class StockService {
             createdBy,
             batchNumber,
             expiryDate,
+            origin,
+            brand,
           },
           session
         );
@@ -133,7 +148,9 @@ class StockService {
 
       // Validate category if provided
       if (data.category) {
-        const categoryExists = await Category.findById(data.category).session(session);
+        const categoryExists = await Category.findById(data.category).session(
+          session
+        );
         if (!categoryExists) {
           throw new AppError("Category not found", 404);
         }
@@ -141,7 +158,9 @@ class StockService {
 
       // Validate vendor if provided
       if (data.vendorId) {
-        const vendorExists = await Vendor.findById(data.vendorId).session(session);
+        const vendorExists = await Vendor.findById(data.vendorId).session(
+          session
+        );
         if (!vendorExists) {
           throw new AppError("Vendor not found", 404);
         }
@@ -226,7 +245,9 @@ class StockService {
       const stockUpdates = [];
 
       for (const item of items) {
-        const stock = await Stock.findOne({ itemId: item.itemId }).session(session);
+        const stock = await Stock.findOne({ itemId: item.itemId }).session(
+          session
+        );
         if (!stock) {
           throw new AppError(`Stock item ${item.itemId} not found`, 404);
         }
@@ -247,7 +268,10 @@ class StockService {
           const currentValue = stock.purchasePrice * stock.currentStock;
           const newValue = item.price * item.qty;
           const totalQuantity = stock.currentStock + item.qty;
-          newPurchasePrice = totalQuantity > 0 ? (currentValue + newValue) / totalQuantity : stock.purchasePrice;
+          newPurchasePrice =
+            totalQuantity > 0
+              ? (currentValue + newValue) / totalQuantity
+              : stock.purchasePrice;
         }
 
         await Stock.findByIdAndUpdate(
@@ -299,6 +323,62 @@ class StockService {
     }
   }
 
+ static async getPurchaseLogsByItemId(itemId) {
+  try {
+    // Convert itemId to ObjectId
+    const stockId = new mongoose.Types.ObjectId(itemId);
+
+    // Find the stock document to confirm it exists
+    const stock = await Stock.findOne({ _id: stockId });
+    if (!stock) {
+      throw new AppError("Stock item not found", 404);
+    }
+
+    // Find purchase logs where items.itemId matches the stock._id
+    const purchaseLogs = await StockPurchaseLog.find({
+      "items.itemId": stockId,
+    })
+      .populate({
+        path: "partyId",
+        select: "vendorName", // Select only vendorName
+      })
+      .lean();
+
+    console.log("Raw purchase logs:", purchaseLogs);
+
+    // Format the response to include only relevant item details
+    const formattedLogs = purchaseLogs.map((log) => ({
+      transactionNo: log.transactionNo,
+      type: log.type,
+      party: log.partyId ? log.partyId.vendorName : "N/A", // Use vendorName
+      date: log.date,
+      deliveryDate: log.deliveryDate,
+      items: log.items
+        .filter((item) => item.itemId.toString() === stockId.toString())
+        .map((item) => ({
+          itemId: item.itemId,
+          description: item.description,
+          qty: item.qty,
+          rate: item.rate,
+          vatPercent: item.vatPercent,
+          price: item.price,
+          expiryDate: item.expiryDate,
+        })),
+      terms: log.terms,
+      notes: log.notes,
+      priority: log.priority,
+      createdAt: log.createdAt,
+      updatedAt: log.updatedAt,
+    }));
+
+    return formattedLogs;
+  } catch (error) {
+    throw new AppError(
+      error.message || "Error fetching purchase logs",
+      error.statusCode || 500
+    );
+  }
+}
   static async reverseTransactionStock(
     transactionId,
     transactionData,
@@ -316,7 +396,9 @@ class StockService {
       }).session(session);
 
       for (const movement of existingMovements) {
-        const stock = await Stock.findOne({ itemId: movement.stockId }).session(session);
+        const stock = await Stock.findOne({ itemId: movement.stockId }).session(
+          session
+        );
         if (!stock) continue;
 
         const reversalQuantity = -movement.quantity;
@@ -510,19 +592,19 @@ class StockService {
   static async getStockById(id) {
     const stock = await Stock.findById(id)
       .populate("category")
-      .populate("vendorId");
+      .populate("vendorId")
+      .populate("unitOfMeasure");
     if (!stock) throw new AppError("Stock item not found", 404);
     return stock;
   }
 
   static async getStockByItemId(itemId) {
-    
     const stock = await Stock.findOne({
       _id: itemId,
     })
       .populate("category")
       .populate("vendorId");
-      console.log(stock)
+    console.log(stock);
     if (!stock) throw new AppError("Stock item not found", 404);
     return stock;
   }
@@ -539,12 +621,12 @@ class StockService {
         stockId: stock.itemId,
       }).session(session);
 
-      if (movements.length > 0) {
-        throw new AppError(
-          "Cannot delete stock item with existing inventory movements",
-          400
-        );
-      }
+      // if (movements.length > 0) {
+      //   throw new AppError(
+      //     "Cannot delete stock item with existing inventory movements",
+      //     400
+      //   );
+      // }
 
       await Stock.findByIdAndDelete(id).session(session);
 

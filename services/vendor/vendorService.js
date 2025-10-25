@@ -84,6 +84,7 @@ exports.createVendor = async (data) => {
     address,
     paymentTerms,
     status,
+    trnNO,
   } = data;
 
   // Validate paymentTerms early to avoid sequence allocation
@@ -132,6 +133,7 @@ exports.createVendor = async (data) => {
           address,
           paymentTerms: paymentTerms || "30 days", // Use default if not provided
           status,
+          trnNO,
         },
       ],
       { session }

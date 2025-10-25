@@ -22,5 +22,5 @@ router.get("/stock/item/:itemId", StockController.getStockByItemId);
 router.put("/stock/:id", StockController.updateStock);
 router.patch("/stock/:id/quantity", StockController.updateStockQuantity);
 router.delete("/stock/:id", StockController.deleteStock);
-
+router.get("/stock/:id/purchase-logs", StockController.getPurchaseLogsByItemId);
 module.exports = router;

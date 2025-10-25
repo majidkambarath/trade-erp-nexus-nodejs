@@ -15,12 +15,10 @@ exports.getAllVendors = catchAsync(async (req, res) => {
   });
   res.json({ success: true, data: vendors });
 });
-
 exports.getVendorById = catchAsync(async (req, res) => {
   const vendor = await VendorService.getVendorById(req.params.id);
   res.json({ success: true, data: vendor });
 });
-
 exports.updateVendor = catchAsync(async (req, res) => {
   const vendor = await VendorService.updateVendor(req.params.id, req.body);
   res.json({ success: true, data: vendor });
