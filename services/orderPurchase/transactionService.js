@@ -21,12 +21,15 @@ function generateTransactionNo(type) {
 
 function calculateItems(items, code) {
   return items.map((item) => {
-    const lineValue = item.qty * item.price; // Use rate for unit price
-    const lineTotal = (
-      lineValue +
-      (lineValue * (item.vatPercent || 0)) / 100
-    ).toFixed(2);
-    return { ...item, itemCode: code, lineTotal: +lineTotal };
+    const lineValue = item.qty * item.price; // Use price as unit price
+    const vatAmount = (lineValue * (item.vatPercent || 0)) / 100; // Calculate VAT amount
+    const lineTotal = (lineValue + vatAmount).toFixed(2); // Total including VAT
+    return {
+      ...item,
+      itemCode: code,
+      vatAmount: +vatAmount.toFixed(2), // Store calculated vatAmount
+      lineTotal: +lineTotal, // Convert to number
+    };
   });
 }
 
@@ -56,6 +59,7 @@ class TransactionService {
         type,
         partyId,
         partyType,
+        vendorReference,
         items,
         date,
         deliveryDate,
@@ -93,8 +97,9 @@ class TransactionService {
         partyId,
         partyType: partyType === "vendor" ? "Vendor" : "Customer",
         partyTypeRef: partyType === "vendor" ? "Vendor" : "Customer",
-        items: processedItems,
+        items:processedItems,
         totalAmount,
+        vendorReference,
         status: "DRAFT",
         createdBy,
         date: date || new Date(),
@@ -125,7 +130,7 @@ class TransactionService {
             rate: item.rate,
             vatPercent: item.vatPercent || 0,
             price: item.lineTotal,
-            expiryDate: item.expiryDate ? new Date(item.expiryDate) : undefined,
+            // expiryDate: item.expiryDate ? new Date(item.expiryDate) : undefined,
           })),
           terms: transactionData.terms || "",
           notes: transactionData.notes || "",
@@ -169,7 +174,7 @@ class TransactionService {
           rate: item.rate,
           vatPercent: item.vatPercent || 0,
           price: item.lineTotal,
-          expiryDate: item.expiryDate ? new Date(item.expiryDate) : undefined,
+          // expiryDate: item.expiryDate ? new Date(item.expiryDate) : undefined,
         }));
         purchaseLog.totalAmount = data.totalAmount;
         purchaseLog.terms = data.terms || purchaseLog.terms;
@@ -328,6 +333,7 @@ class TransactionService {
       .skip(skip)
       .limit(limit)
       .populate({ path: "partyId", select: "customerName vendorName" })
+      .populate({path:"items.itemId"})
       .lean();
 
     const transactionsWithPartyName = transactions.map((t) => ({

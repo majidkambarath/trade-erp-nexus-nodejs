@@ -66,10 +66,10 @@ const stockPurchaseLogSchema = new mongoose.Schema({
         required: [true, "Price is required"],
         min: [0, "Price cannot be negative"],
       },
-      expiryDate: {
-        type: Date,
-        sparse: true,
-      },
+      // expiryDate: {
+      //   type: Date,
+      //   sparse: true,
+      // },
     },
   ],
   terms: {

@@ -1,13 +1,17 @@
 const mongoose = require("mongoose");
 
 const itemSchema = new mongoose.Schema({
-  itemId: { type: String, required: true, trim: true },
-    itemCode: { type: String, default:"" },
+  itemId: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: true,
+    refPath: "Stock",
+  },
+  itemCode: { type: String, default: "" },
   description: { type: String, required: true, trim: true },
   qty: { type: Number, required: true, min: 0 },
   rate: { type: Number, required: true, min: 0 },
-  taxPercent: { type: Number, default: 5, min: 0 },
-  taxAmount: { type: Number, default: 0, min: 0 },
+  vatPercent: { type: Number, default: 5, min: 0 },
+  vatAmount: { type: Number, default: 0, min: 0 },
   lineTotal: { type: Number, required: true, min: 0 },
   reason: { type: String, trim: true },
 });
@@ -33,6 +37,10 @@ const transactionSchema = new mongoose.Schema({
     type: String,
     enum: ["Customer", "Vendor"],
     required: true,
+  },
+  vendorReference: {
+    type: String,
+    default: null,
   },
   date: { type: Date, default: Date.now },
   deliveryDate: { type: Date },
@@ -67,9 +75,16 @@ const transactionSchema = new mongoose.Schema({
 transactionSchema.pre("save", function (next) {
   this.updatedAt = Date.now();
   if (!this.totalAmount) {
-    this.totalAmount = this.items.reduce((sum, item) => sum + item.lineTotal, 0);
+    this.totalAmount = this.items.reduce(
+      (sum, item) => sum + item.lineTotal,
+      0
+    );
   }
-  if (this.isNew || this.isModified("totalAmount") || this.isModified("paidAmount")) {
+  if (
+    this.isNew ||
+    this.isModified("totalAmount") ||
+    this.isModified("paidAmount")
+  ) {
     this.outstandingAmount = this.totalAmount - this.paidAmount;
   }
   // Remove automatic status changes based on payment
