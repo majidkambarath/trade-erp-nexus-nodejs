@@ -20,12 +20,13 @@ const sendPaginated = (res, result) => {
 
 // Create new transaction
 exports.createTransaction = catchAsync(async (req, res) => {
-  console.log(req.body)
+   
   const transaction = await TransactionService.createTransaction(
     req.body,
     resolveCreatedBy(req)
   );
   res.status(201).json({ status: "success", data: transaction });
+ 
 });
 
 // Get all transactions
