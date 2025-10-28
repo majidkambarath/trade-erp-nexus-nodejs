@@ -20,7 +20,6 @@ const sendPaginated = (res, result) => {
 
 // Create new transaction
 exports.createTransaction = catchAsync(async (req, res) => {
-   
   const transaction = await TransactionService.createTransaction(
     req.body,
     resolveCreatedBy(req)
@@ -50,7 +49,8 @@ exports.updateTransaction = catchAsync(async (req, res) => {
     req.body,
     resolveCreatedBy(req)
   );
-  res.status(200).json({ status: "success", data: { transaction } });
+  console.log(transaction)
+  res.status(200).json({ status: "success", data:  transaction  });
 });
 
 // Delete transaction

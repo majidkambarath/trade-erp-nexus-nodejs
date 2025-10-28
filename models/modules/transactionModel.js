@@ -10,7 +10,8 @@ const itemSchema = new mongoose.Schema({
   description: { type: String, required: true, trim: true },
   qty: { type: Number, required: true, min: 0 },
   rate: { type: Number, required: true, min: 0 },
-  vatPercent: { type: Number, default: 5, min: 0 },
+  rate: { type: Number, required: true, min: 0 },
+  package: { type: Number, default: 0 },
   vatAmount: { type: Number, default: 0, min: 0 },
   lineTotal: { type: Number, required: true, min: 0 },
   reason: { type: String, trim: true },
@@ -30,12 +31,12 @@ const transactionSchema = new mongoose.Schema({
   },
   partyType: {
     type: String,
-    enum: ["Customer", "Vendor"],
+    // enum: ["Customer", "Vendor"],
     required: true,
   },
   partyTypeRef: {
     type: String,
-    enum: ["Customer", "Vendor"],
+    // enum: ["Customer", "Vendor"],
     required: true,
   },
   vendorReference: {

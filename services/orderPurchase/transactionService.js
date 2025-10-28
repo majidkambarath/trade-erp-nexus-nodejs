@@ -24,9 +24,11 @@ function calculateItems(items, code) {
     const lineValue = item.qty * item.price; // Use price as unit price
     const vatAmount = (lineValue * (item.vatPercent || 0)) / 100; // Calculate VAT amount
     const lineTotal = (lineValue + vatAmount).toFixed(2); // Total including VAT
+    const package = item.package;
     return {
       ...item,
       itemCode: code,
+      package,
       vatAmount: +vatAmount.toFixed(2), // Store calculated vatAmount
       lineTotal: +lineTotal, // Convert to number
     };
@@ -260,230 +262,246 @@ class TransactionService {
   );
 
   // Get all Transactions
-static async getAllTransactions(filters) {
-  try {
-    const query = {};
+  static async getAllTransactions(filters) {
+    try {
+      const query = {};
 
-    // Filter by transaction type
-    if (filters.type) {
-      query.type = Array.isArray(filters.type) ? { $in: filters.type } : filters.type;
-    }
-
-    // Filter by status
-    if (filters.status) {
-      query.status = filters.status;
-    }
-
-    // Filter by partyId
-    if (filters.partyId) {
-      if (!mongoose.Types.ObjectId.isValid(filters.partyId)) {
-        throw new Error("Invalid partyId");
+      // ──────── FILTERS ────────
+      if (filters.type) {
+        query.type = Array.isArray(filters.type)
+          ? { $in: filters.type }
+          : filters.type;
       }
-      query.partyId = new mongoose.Types.ObjectId(filters.partyId);
-    }
+      if (filters.status) query.status = filters.status;
+      if (filters.partyId) {
+        if (!mongoose.Types.ObjectId.isValid(filters.partyId))
+          throw new Error("Invalid partyId");
+        query.partyId = new mongoose.Types.ObjectId(filters.partyId);
+      }
+      if (filters.partyType) query.partyType = filters.partyType;
 
-    // Filter by partyType
-    if (filters.partyType) {
-      query.partyType = filters.partyType;
-    }
+      if (filters.search) {
+        const r = new RegExp(filters.search, "i");
+        query.$or = [
+          { transactionNo: r },
+          { notes: r },
+          { createdBy: r },
+          { "items.description": r },
+        ];
+      }
 
-    // Search filter
-    if (filters.search) {
-      query.$or = [
-        { transactionNo: new RegExp(filters.search, "i") },
-        { notes: new RegExp(filters.search, "i") },
-        { createdBy: new RegExp(filters.search, "i") },
-        { "items.description": new RegExp(filters.search, "i") },
-      ];
-    }
+      // ──────── DATE FILTER ────────
+      if (filters.dateFilter) {
+        const today = new Date();
+        const types = Array.isArray(filters.type)
+          ? filters.type
+          : [filters.type].filter(Boolean);
+        const field = types.some((t) =>
+          ["purchase_return", "sales_return"].includes(t)
+        )
+          ? "returnDate"
+          : "date";
 
-    // Date filter
-    if (filters.dateFilter) {
-      const today = new Date();
-      const types = Array.isArray(filters.type) ? filters.type : [filters.type].filter(Boolean);
-      const field = types.some((t) => ["purchase_return", "sales_return"].includes(t))
-        ? "returnDate"
-        : "date";
-
-      switch (filters.dateFilter) {
-        case "TODAY":
-          query[field] = {
-            $gte: new Date(today.setHours(0, 0, 0, 0)),
-            $lte: new Date(today.setHours(23, 59, 59, 999)),
-          };
-          break;
-        case "WEEK":
-          query[field] = { $gte: new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000) };
-          break;
-        case "MONTH":
-          query[field] = { $gte: new Date(today.getFullYear(), today.getMonth(), 1) };
-          break;
-        case "CUSTOM":
-          if (filters.startDate && filters.endDate) {
+        switch (filters.dateFilter) {
+          case "TODAY":
+            query[field] = {
+              $gte: new Date(today.setHours(0, 0, 0, 0)),
+              $lte: new Date(today.setHours(23, 59, 59, 999)),
+            };
+            break;
+          case "WEEK":
+            query[field] = {
+              $gte: new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000),
+            };
+            break;
+          case "MONTH":
+            query[field] = {
+              $gte: new Date(today.getFullYear(), today.getMonth(), 1),
+            };
+            break;
+          case "CUSTOM":
+            if (!filters.startDate || !filters.endDate)
+              throw new Error("startDate and endDate required for CUSTOM");
             query[field] = {
               $gte: new Date(filters.startDate),
               $lte: new Date(filters.endDate),
             };
-          } else {
-            throw new Error("startDate and endDate are required for CUSTOM date filter");
-          }
-          break;
-        default:
-          throw new Error("Invalid date filter");
+            break;
+          default:
+            throw new Error("Invalid date filter");
+        }
       }
-    }
 
-    // Pagination
-    const page = parseInt(filters.page) || 1;
-    const limit = parseInt(filters.limit) || 20;
-    const skip = (page - 1) * limit;
+      // ──────── PAGINATION ────────
+      const page = Math.max(1, parseInt(filters.page) || 1);
+      const limit = Math.min(200, Math.max(1, parseInt(filters.limit) || 20));
+      const skip = (page - 1) * limit;
 
-    // Aggregation pipeline
-    const pipeline = [
-      // Match stage for filtering
-      { $match: query },
+      // ──────── AGGREGATION PIPELINE ────────
+      const pipeline = [
+        { $match: query },
 
-      // Lookup for partyId (Customer or Vendor)
-      {
-        $lookup: {
-          from: "customers",
-          localField: "partyId",
-          foreignField: "_id",
-          as: "customerData",
+        // ---- 1. Lookup Customer ----
+        {
+          $lookup: {
+            from: "customers",
+            localField: "partyId",
+            foreignField: "_id",
+            as: "customerData",
+          },
         },
-      },
-      {
-        $lookup: {
-          from: "vendors",
-          localField: "partyId",
-          foreignField: "_id",
-          as: "vendorData",
-        },
-      },
 
-      // Lookup for items.itemId (Stock) with nested lookup for unitOfMeasure
-      {
-        $unwind: {
-          path: "$items",
-          preserveNullAndEmptyArrays: true,
+        // ---- 2. Lookup Vendor ----
+        {
+          $lookup: {
+            from: "vendors",
+            localField: "partyId",
+            foreignField: "_id",
+            as: "vendorData",
+          },
         },
-      },
-      {
-        $lookup: {
-          from: "stocks",
-          let: { itemId: "$items.itemId" },
-          pipeline: [
-            { $match: { $expr: { $eq: ["$_id", "$$itemId"] } } },
-            // Nested lookup for unitOfMeasure
-            {
-              $lookup: {
-                from: "uoms", // Collection name for UOM
-                localField: "unitOfMeasure",
-                foreignField: "_id",
-                as: "unitOfMeasureDetails",
+
+        // ---- 3. Build a single `party` object (full doc) ----
+        {
+          $set: {
+            party: {
+              $cond: {
+                if: { $eq: ["$partyType", "Customer"] },
+                then: { $arrayElemAt: ["$customerData", 0] },
+                else: { $arrayElemAt: ["$vendorData", 0] },
               },
-            },
-            {
-              $set: {
-                unitOfMeasureDetails: { $arrayElemAt: ["$unitOfMeasureDetails", 0] },
-              },
-            },
-          ],
-          as: "items.stockDetails",
-        },
-      },
-      {
-        $set: {
-          "items.stockDetails": { $arrayElemAt: ["$items.stockDetails", 0] },
-        },
-      },
-      {
-        $group: {
-          _id: "$_id",
-          transactionNo: { $first: "$transactionNo" },
-          type: { $first: "$type" },
-          partyId: { $first: "$partyId" },
-          partyType: { $first: "$partyType" },
-          partyTypeRef: { $first: "$partyTypeRef" },
-          vendorReference: { $first: "$vendorReference" },
-          date: { $first: "$date" },
-          deliveryDate: { $first: "$deliveryDate" },
-          returnDate: { $first: "$returnDate" },
-          expectedDispatch: { $first: "$expectedDispatch" },
-          status: { $first: "$status" },
-          totalAmount: { $first: "$totalAmount" },
-          paidAmount: { $first: "$paidAmount" },
-          outstandingAmount: { $first: "$outstandingAmount" },
-          items: { $push: "$items" },
-          terms: { $first: "$terms" },
-          notes: { $first: "$notes" },
-          quoteRef: { $first: "$quoteRef" },
-          linkedRef: { $first: "$linkedRef" },
-          creditNoteIssued: { $first: "$creditNoteIssued" },
-          createdBy: { $first: "$createdBy" },
-          createdAt: { $first: "$createdAt" },
-          updatedAt: { $first: "$updatedAt" },
-          priority: { $first: "$priority" },
-          grnGenerated: { $first: "$grnGenerated" },
-          invoiceGenerated: { $first: "$invoiceGenerated" },
-          customerData: { $first: "$customerData" },
-          vendorData: { $first: "$vendorData" },
-        },
-      },
-
-      // Add partyName field
-      {
-        $set: {
-          partyName: {
-            $cond: {
-              if: { $eq: ["$partyType", "Customer"] },
-              then: { $arrayElemAt: ["$customerData.customerName", 0] },
-              else: { $arrayElemAt: ["$vendorData.vendorName", 0] },
             },
           },
         },
-      },
 
-      // Clean up unnecessary fields
-      {
-        $unset: ["customerData", "vendorData"],
-      },
+        // ---- 4. Build `partyName` (exactly as you had) ----
+        {
+          $set: {
+            partyName: {
+              $cond: {
+                if: { $eq: ["$partyType", "Customer"] },
+                then: { $arrayElemAt: ["$customerData.customerName", 0] },
+                else: { $arrayElemAt: ["$vendorData.vendorName", 0] },
+              },
+            },
+          },
+        },
 
-      // Sort, skip, and limit
-      { $sort: { createdAt: -1 } },
-      { $skip: skip },
-      { $limit: limit },
-    ];
+        // ──────── NO $unset – keep everything ────────
 
-    // Execute aggregation
-    const transactions = await Transaction.aggregate(pipeline);
+        // ---- 5. Unwind items for stock lookup ----
+        {
+          $unwind: { path: "$items", preserveNullAndEmptyArrays: true },
+        },
 
-    // Get total count for pagination
-    const total = await Transaction.countDocuments(query);
+        // ---- 6. Lookup Stock + nested UOM ----
+        {
+          $lookup: {
+            from: "stocks",
+            let: { itemId: "$items.itemId" },
+            pipeline: [
+              { $match: { $expr: { $eq: ["$_id", "$$itemId"] } } },
+              {
+                $lookup: {
+                  from: "uoms",
+                  localField: "unitOfMeasure",
+                  foreignField: "_id",
+                  as: "unitOfMeasureDetails",
+                },
+              },
+              {
+                $set: {
+                  unitOfMeasureDetails: {
+                    $arrayElemAt: ["$unitOfMeasureDetails", 0],
+                  },
+                },
+              },
+            ],
+            as: "items.stockDetails",
+          },
+        },
+        {
+          $set: {
+            "items.stockDetails": { $arrayElemAt: ["$items.stockDetails", 0] },
+          },
+        },
 
-    // Map transactions to ensure consistent structure
-    const transactionsWithDetails = transactions.map((t) => ({
-      ...t,
-      partyName: t.partyName || "Unknown Party",
-      items: t.items.map((item) => ({
-        ...item,
-        stockDetails: item.stockDetails || null, // Include full stock details with unitOfMeasureDetails
-      })),
-    }));
+        // ---- 7. Group back the document ----
+        {
+          $group: {
+            _id: "$_id",
+            transactionNo: { $first: "$transactionNo" },
+            type: { $first: "$type" },
+            partyId: { $first: "$partyId" },
+            partyType: { $first: "$partyType" },
+            partyTypeRef: { $first: "$partyTypeRef" },
+            vendorReference: { $first: "$vendorReference" },
+            date: { $first: "$date" },
+            deliveryDate: { $first: "$deliveryDate" },
+            returnDate: { $first: "$returnDate" },
+            expectedDispatch: { $first: "$expectedDispatch" },
+            status: { $first: "$status" },
+            totalAmount: { $first: "$totalAmount" },
+            paidAmount: { $first: "$paidAmount" },
+            outstandingAmount: { $first: "$outstandingAmount" },
+            items: { $push: "$items" },
+            terms: { $first: "$terms" },
+            notes: { $first: "$notes" },
+            quoteRef: { $first: "$quoteRef" },
+            linkedRef: { $first: "$linkedRef" },
+            creditNoteIssued: { $first: "$creditNoteIssued" },
+            createdBy: { $first: "$createdBy" },
+            createdAt: { $first: "$createdAt" },
+            updatedAt: { $first: "$updatedAt" },
+            priority: { $first: "$priority" },
+            grnGenerated: { $first: "$grnGenerated" },
+            invoiceGenerated: { $first: "$invoiceGenerated" },
 
-    return {
-      transactions: transactionsWithDetails,
-      pagination: {
-        current: page,
-        pages: Math.ceil(total / limit),
-        total,
-        limit,
-      },
-    };
-  } catch (error) {
-    throw new Error(`Failed to fetch transactions: ${error.message}`);
+            // keep the raw lookup arrays
+            customerData: { $first: "$customerData" },
+            vendorData: { $first: "$vendorData" },
+
+            // our new fields
+            party: { $first: "$party" },
+            partyName: { $first: "$partyName" },
+          },
+        },
+
+        // ---- 8. Sort / paginate ----
+        { $sort: { createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+      ];
+
+      const transactions = await Transaction.aggregate(pipeline);
+      const total = await Transaction.countDocuments(query);
+
+      // ---- Final shape (optional safety) ----
+      const result = transactions.map((t) => ({
+        ...t,
+        partyName: t.partyName || "Unknown Party",
+        party: t.party || null,
+        customerData: t.customerData?.length ? t.customerData[0] : null,
+        vendorData: t.vendorData?.length ? t.vendorData[0] : null,
+        items: t.items.map((i) => ({
+          ...i,
+          stockDetails: i.stockDetails || null,
+        })),
+      }));
+
+      return {
+        transactions: result,
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit),
+          total,
+          limit,
+        },
+      };
+    } catch (error) {
+      throw new Error(`Failed to fetch transactions: ${error.message}`);
+    }
   }
-}
 
   // Process Transaction Stock
   static async processTransactionStock(
