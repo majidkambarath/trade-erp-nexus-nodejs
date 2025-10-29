@@ -4,6 +4,7 @@ const StockPurchaseLog = require("../../models/modules/StockPurchaseLog"); // Im
 const InventoryMovement = require("../../models/modules/inventoryMovementModel");
 const StockService = require("../stock/stockService");
 const AppError = require("../../utils/AppError");
+const VATReport = require("../../models/modules/financial/VATReport"); // Import the new VATReport model
 
 // ---------- Helpers ----------
 function generateTransactionNo(type) {
@@ -223,19 +224,25 @@ class TransactionService {
 
       this.validateAction(transaction.type, action, transaction.status);
 
-      if (action === "approve" && transaction.type === "purchase_order") {
-        // Update StockPurchaseLog status
-        const purchaseLog = await StockPurchaseLog.findOne({
-          transactionNo: transaction.transactionNo,
-        }).session(session);
-        if (!purchaseLog) {
-          throw new AppError("Purchase log not found", 404);
-        }
-        purchaseLog.status = "APPROVED"; // Requires status field in schema
-        await purchaseLog.save({ session });
-
-        // Process stock updates
+      if (action === "approve") {
+        // Process stock updates for all types
         await this.processTransactionStock(id, transaction, createdBy, session);
+
+        // Handle purchase_order specific logic
+        if (transaction.type === "purchase_order") {
+          // Update StockPurchaseLog status
+          const purchaseLog = await StockPurchaseLog.findOne({
+            transactionNo: transaction.transactionNo,
+          }).session(session);
+          if (!purchaseLog) {
+            throw new AppError("Purchase log not found", 404);
+          }
+          purchaseLog.status = "APPROVED"; // Requires status field in schema
+          await purchaseLog.save({ session });
+        }
+
+        // Create VAT report items for approved transactions with VAT
+        await this.createVATReportItems(transaction, createdBy, session);
       } else if (action === "reject" && transaction.type === "purchase_order") {
         const purchaseLog = await StockPurchaseLog.findOne({
           transactionNo: transaction.transactionNo,
@@ -260,6 +267,84 @@ class TransactionService {
       return transaction;
     }
   );
+
+  // Helper to create VAT report items for approved transactions
+  static async createVATReportItems(transaction, createdBy, session) {
+    const { type, _id: transactionId, transactionNo, partyId, partyType, date, items } = transaction;
+
+    // Determine if it's output (sales) or input (purchase) VAT
+    const isOutputVAT = ["sales_order", "purchase_return"].includes(type);
+    const isInputVAT = ["purchase_order", "sales_return"].includes(type);
+    if (!isOutputVAT && !isInputVAT) return; // No VAT handling for other types
+
+    // Fetch party name (assume Customer/Vendor models have name fields)
+    let partyName = "Unknown";
+    if (partyType === "Customer") {
+      const customer = await mongoose.model("Customer").findById(partyId).session(session);
+      partyName = customer?.customerName || partyName;
+    } else if (partyType === "Vendor") {
+      const vendor = await mongoose.model("Vendor").findById(partyId).session(session);
+      partyName = vendor?.vendorName || partyName;
+    }
+
+    // Filter items with VAT > 0 and prepare VAT items
+    const vatItems = items
+      .filter(item => item.vatAmount > 0)
+      .map(item => ({
+        transactionId,
+        transactionNo,
+        itemId: item.itemId,
+        itemCode: item.itemCode,
+        description: item.description,
+        qty: item.qty,
+        rate: item.rate || item.price, // Fallback to price if rate missing
+        lineTotal: item.lineTotal,
+        vatAmount: item.vatAmount,
+        vatRate: item.vatPercent || 0,
+        partyId,
+        partyName,
+        partyType,
+        date,
+      }));
+
+    if (vatItems.length === 0) return;
+
+    // For simplicity, we'll create or update a temporary "open" VAT report for the transaction's month.
+    // This avoids complex period management here; a separate report generation job can aggregate/finalize.
+    const periodStart = new Date(date.getFullYear(), date.getMonth(), 1);
+    const periodEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    let vatReport = await VATReport.findOne({
+      periodStart,
+      periodEnd,
+      status: "DRAFT", // Assume we use a draft report per period
+    }).session(session);
+
+    if (!vatReport) {
+      vatReport = new VATReport({
+        periodStart,
+        periodEnd,
+        generatedBy: createdBy,
+        totalVATOutput: 0,
+        totalVATInput: 0,
+        netVATPayable: 0,
+        items: [],
+      });
+    }
+
+    // Add new items and update totals
+    vatReport.items.push(...vatItems);
+    vatItems.forEach(vi => {
+      if (isOutputVAT) {
+        vatReport.totalVATOutput += vi.vatAmount;
+      } else if (isInputVAT) {
+        vatReport.totalVATInput += vi.vatAmount;
+      }
+    });
+    vatReport.netVATPayable = vatReport.totalVATOutput - vatReport.totalVATInput;
+
+    await vatReport.save({ session });
+  }
 
   // Get all Transactions
   static async getAllTransactions(filters) {
