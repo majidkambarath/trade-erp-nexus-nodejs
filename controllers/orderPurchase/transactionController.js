@@ -44,6 +44,7 @@ exports.getTransactionById = catchAsync(async (req, res) => {
 
 // Update transaction
 exports.updateTransaction = catchAsync(async (req, res) => {
+  console.log(req.body)
   const transaction = await TransactionService.updateTransaction(
     req.params.id,
     req.body,

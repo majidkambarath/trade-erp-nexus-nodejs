@@ -1,27 +1,45 @@
-const ExpenseType = require("../../models/modules/financial/expenseTypeModel");
+const ExpenseCategory = require("../../models/modules/financial/expenseTypeModel");
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
 
-class ExpenseTypeService {
-  static async createExpenseType(data, createdBy) {
+class ExpenseCategoryService {
+  /* --------------------------------------------------------------
+     CREATE – Main or Sub-Category
+     -------------------------------------------------------------- */
+  static async create(data, createdBy) {
     const session = await mongoose.startSession();
     session.startTransaction();
-
     try {
-      const { name } = data;
+      const { name, parentCategoryId } = data;
+      if (!name?.trim()) throw new AppError("Category name is required", 400);
 
-      // Check if expense type name already exists
-      const existingExpenseType = await ExpenseType.findOne({ name }).session(
-        session
+      const trimmedName = name.trim();
+      const parent = parentCategoryId ?? null;
+
+      // ---- Uniqueness (handled by index, but we give a nice message) ----
+      const existing = await ExpenseCategory.findOne(
+        {
+          name: trimmedName,
+          parentCategory: parent,
+        },
+        null,
+        { session, collation: { locale: "en", strength: 2 } }
       );
-      if (existingExpenseType) {
-        throw new AppError("Expense type name already exists", 400);
+
+      if (existing) {
+        throw new AppError(
+          parent
+            ? `Sub-category "${trimmedName}" already exists under this parent.`
+            : `Main category "${trimmedName}" already exists.`,
+          400
+        );
       }
 
-      const expenseType = await ExpenseType.create(
+      const [category] = await ExpenseCategory.create(
         [
           {
-            name,
+            name: trimmedName,
+            parentCategory: parent,
             createdBy,
           },
         ],
@@ -29,103 +47,189 @@ class ExpenseTypeService {
       );
 
       await session.commitTransaction();
-      return expenseType[0];
-    } catch (error) {
+      return category;
+    } catch (err) {
       await session.abortTransaction();
-      throw error;
+      throw err;
     } finally {
       session.endSession();
     }
   }
 
-  static async getAllExpenseTypes(filters) {
-    const query = {};
-    const page = Number(filters.page) || 1;
-    const limit = Number(filters.limit) || 10;
+  /* --------------------------------------------------------------
+     GET ALL – Hierarchical Tree (paginated)
+     -------------------------------------------------------------- */
+  static async getAll(filters = {}) {
+    const { page = 1, limit = 10, search } = filters;
     const skip = (page - 1) * limit;
 
-    // Search functionality
-    if (filters.search) {
-      query.name = new RegExp(filters.search, "i");
-    }
+    const match = {};
+    if (search) match.name = new RegExp(search.trim(), "i");
 
-    const expenseTypes = await ExpenseType.find(query)
-      .skip(skip)
-      .limit(limit)
-      .sort({ createdAt: -1 });
+    const [result] = await ExpenseCategory.aggregate([
+      { $match: match },
+      { $sort: { createdAt: -1 } },
 
-    const totalExpenseTypes = await ExpenseType.countDocuments(query);
-    const totalPages = Math.ceil(totalExpenseTypes / limit);
+      // Only root (main) categories for the tree
+      { $match: { parentCategory: null } },
 
-    return { expenseTypes, totalPages };
+      {
+        $facet: {
+          data: [
+            { $skip: skip },
+            { $limit: Number(limit) },
+
+            // Populate sub-categories in one shot
+            {
+              $lookup: {
+                from: "expensecategories", // <-- matches collection name
+                localField: "_id",
+                foreignField: "parentCategory",
+                as: "subCategories",
+              },
+            },
+
+            {
+              $project: {
+                _id: 1,
+                name: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                createdBy: 1,
+                updatedBy: 1,
+                subCategories: {
+                  _id: 1,
+                  name: 1,
+                  createdAt: 1,
+                  updatedAt: 1,
+                },
+              },
+            },
+          ],
+          meta: [{ $count: "total" }],
+        },
+      },
+    ]);
+
+    const total = result.meta[0]?.total || 0;
+    return {
+      categories: result.data,
+      pagination: {
+        page: Number(page),
+        limit: Number(limit),
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 
-  static async getExpenseTypeById(id) {
-    const expenseType = await ExpenseType.findById(id);
-    if (!expenseType) throw new AppError("Expense type not found", 404);
-    return expenseType;
+  /* --------------------------------------------------------------
+     GET BY ID (with sub-categories)
+     -------------------------------------------------------------- */
+  static async getById(id) {
+    const cat = await ExpenseCategory.findById(id)
+      .populate("subCategories", "name createdAt")
+      .lean();
+
+    if (!cat) throw new AppError("Category not found", 404);
+    return cat;
   }
 
-  static async updateExpenseType(id, data, createdBy) {
+  /* --------------------------------------------------------------
+     UPDATE
+     -------------------------------------------------------------- */
+  static async update(id, data, updatedBy) {
     const session = await mongoose.startSession();
     session.startTransaction();
-
     try {
-      const expenseType = await ExpenseType.findById(id).session(session);
-      if (!expenseType) {
-        throw new AppError("Expense type not found", 404);
-      }
+      const cat = await ExpenseCategory.findById(id).session(session);
+      if (!cat) throw new AppError("Category not found", 404);
 
-      // Check if new name already exists
-      if (data.name && data.name !== expenseType.name) {
-        const existingExpenseType = await ExpenseType.findOne({
-          name: data.name,
-          _id: { $ne: id },
-        }).session(session);
-        if (existingExpenseType) {
-          throw new AppError("Expense type name already exists", 400);
+      const { name, parentCategoryId } = data;
+      const newName = name?.trim();
+      const newParent =
+        parentCategoryId !== undefined ? (parentCategoryId || null) : cat.parentCategory;
+
+      // ---- Name change → uniqueness check (exclude self) ----
+      if (newName && newName !== cat.name) {
+        const conflict = await ExpenseCategory.findOne(
+          {
+            name: newName,
+            parentCategory: newParent,
+            _id: { $ne: id },
+          },
+          null,
+          { session, collation: { locale: "en", strength: 2 } }
+        );
+
+        if (conflict) {
+          throw new AppError(
+            newParent
+              ? `Sub-category "${newName}" already exists under this parent.`
+              : `Main category "${newName}" already exists.`,
+            400
+          );
         }
       }
 
-      const updatedExpenseType = await ExpenseType.findByIdAndUpdate(
-        id,
-        { ...data, updatedBy: createdBy },
-        {
-          new: true,
-          runValidators: true,
-          session,
-        }
-      );
+      const updateObj = { updatedBy };
+      if (newName) updateObj.name = newName;
+      if (parentCategoryId !== undefined) updateObj.parentCategory = newParent;
+
+      const updated = await ExpenseCategory.findByIdAndUpdate(id, updateObj, {
+        new: true,
+        runValidators: true,
+        session,
+      });
 
       await session.commitTransaction();
-      return updatedExpenseType;
-    } catch (error) {
+      return updated;
+    } catch (err) {
       await session.abortTransaction();
-      throw error;
+      throw err;
     } finally {
       session.endSession();
     }
   }
 
-  static async deleteExpenseType(id) {
+  /* --------------------------------------------------------------
+     DELETE – cascade + voucher check
+     -------------------------------------------------------------- */
+  static async delete(id) {
     const session = await mongoose.startSession();
     session.startTransaction();
-
     try {
-      const expenseType = await ExpenseType.findById(id).session(session);
-      if (!expenseType) {
-        throw new AppError("Expense type not found", 404);
+      const cat = await ExpenseCategory.findById(id).session(session);
+      if (!cat) throw new AppError("Category not found", 404);
+
+      // ---- Check if any voucher references this category ----
+      const Voucher = mongoose.model("Voucher");
+      const used = await Voucher.countDocuments(
+        {
+          $or: [
+            { expenseCategoryId: id },
+            { mainExpenseCategoryId: id },
+          ],
+        },
+        { session }
+      );
+
+      if (used > 0) {
+        throw new AppError(`Cannot delete – ${used} voucher(s) use this category.`, 400);
       }
 
-      await ExpenseType.findByIdAndDelete(id).session(session);
+      // Delete sub-categories first
+      await ExpenseCategory.deleteMany({ parentCategory: id }).session(session);
+      await ExpenseCategory.findByIdAndDelete(id).session(session);
+
       await session.commitTransaction();
-    } catch (error) {
+    } catch (err) {
       await session.abortTransaction();
-      throw error;
+      throw err;
     } finally {
       session.endSession();
     }
   }
 }
 
-module.exports = ExpenseTypeService;
+module.exports = ExpenseCategoryService;

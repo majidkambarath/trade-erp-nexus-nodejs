@@ -2,56 +2,79 @@ const ExpenseTypeService = require("../../services/financial/expenseTypeService"
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
 
-exports.createExpenseType = catchAsync(async (req, res) => {
+exports.createCategory = catchAsync(async (req, res) => {
   const createdBy = req.user?.id || req.body.createdBy || "system";
-  const expenseType = await ExpenseTypeService.createExpenseType(req.body, createdBy);
+console.log(req.body)
+  const { name, parentCategoryId } = req.body;
+  if (!name?.trim()) {
+    throw new AppError("Category name is required", 400);
+  }
+
+  const category = await ExpenseTypeService.create(
+    { name: name.trim(), parentCategoryId },
+    createdBy
+  );
 
   res.status(201).json({
     status: "success",
-    data: {
-      expenseType,
-    },
+    data: { category },
   });
 });
 
-exports.getAllExpenseTypes = catchAsync(async (req, res) => {
-  const { expenseTypes, totalPages } = await ExpenseTypeService.getAllExpenseTypes(req.query);
+/**
+ * GET ALL – Hierarchical tree
+ */
+exports.getAllCategories = catchAsync(async (req, res) => {
+  const result = await ExpenseTypeService.getAll(req.query);
 
   res.status(200).json({
     status: "success",
-    results: expenseTypes.length,
-    totalPages,
-    data: {
-      expenseTypes,
-    },
+    results: result.categories.length,
+    pagination: result.pagination,
+    data:  result.categories ,
   });
 });
 
-exports.getExpenseTypeById = catchAsync(async (req, res) => {
-  const expenseType = await ExpenseTypeService.getExpenseTypeById(req.params.id);
+/**
+ * GET BY ID
+ */
+exports.getCategoryById = catchAsync(async (req, res) => {
+  const category = await ExpenseTypeService.getById(req.params.id);
 
   res.status(200).json({
     status: "success",
-    data: {
-      expenseType,
-    },
+    data: { category },
   });
 });
 
-exports.updateExpenseType = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || req.body.createdBy || "system";
-  const expenseType = await ExpenseTypeService.updateExpenseType(req.params.id, req.body, createdBy);
+/**
+ * UPDATE
+ */
+exports.updateCategory = catchAsync(async (req, res) => {
+  const updatedBy = req.user?.id || req.body.updatedBy || "system";
+
+  const { name, parentCategoryId } = req.body;
+  if (name !== undefined && !name?.trim()) {
+    throw new AppError("Category name cannot be empty", 400);
+  }
+
+  const category = await ExpenseTypeService.update(
+    req.params.id,
+    { name: name?.trim(), parentCategoryId },
+    updatedBy
+  );
 
   res.status(200).json({
     status: "success",
-    data: {
-      expenseType,
-    },
+    data: { category },
   });
 });
 
-exports.deleteExpenseType = catchAsync(async (req, res) => {
-  await ExpenseTypeService.deleteExpenseType(req.params.id);
+/**
+ * DELETE
+ */
+exports.deleteCategory = catchAsync(async (req, res) => {
+  await ExpenseTypeService.delete(req.params.id);
 
   res.status(204).json({
     status: "success",

@@ -1,6 +1,12 @@
 const express = require("express");
 const { authenticateToken } = require("../../middleware/authMiddleware");
-const ExpenseTypeController = require("../../controllers/financial/expenseTypeController");
+const {
+  createCategory,
+  deleteCategory,
+  getAllCategories,
+  getCategoryById,
+  updateCategory,
+} = require("../../controllers/financial/expenseTypeController");
 
 const router = express.Router();
 
@@ -8,10 +14,10 @@ const router = express.Router();
 router.use(authenticateToken);
 
 // Expense Type CRUD routes
-router.post("/expense-types", ExpenseTypeController.createExpenseType);
-router.get("/expense-types", ExpenseTypeController.getAllExpenseTypes);
-router.get("/expense-types/:id", ExpenseTypeController.getExpenseTypeById);
-router.put("/expense-types/:id", ExpenseTypeController.updateExpenseType);
-router.delete("/expense-types/:id", ExpenseTypeController.deleteExpenseType);
+router.post("/categories", createCategory);
+router.get("/categories", getAllCategories);
+router.get("/categories/:id", getCategoryById);
+router.put("/categories/:id", updateCategory);
+router.delete("/categories/:id", deleteCategory);
 
 module.exports = router;
