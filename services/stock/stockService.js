@@ -266,7 +266,7 @@ class StockService {
         if (type === "purchase_order") {
           // Calculate weighted average price
           const currentValue = stock.purchasePrice * stock.currentStock;
-          const newValue = item.price * item.qty;
+          const newValue = item.rate; //item.price * item.qty
           const totalQuantity = stock.currentStock + item.qty;
           newPurchasePrice =
             totalQuantity > 0
