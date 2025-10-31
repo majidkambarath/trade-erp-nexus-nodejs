@@ -94,6 +94,7 @@ exports.createVendor = async (data) => {
     "45 days",
     "Net 60",
     "60 days",
+    "COD"
   ];
   if (paymentTerms && !validPaymentTerms.includes(paymentTerms)) {
     throw new AppError(
@@ -179,6 +180,7 @@ exports.updateVendor = async (id, data) => {
     "45 days",
     "Net 60",
     "60 days",
+    "COD",
   ];
   if (data.paymentTerms && !validPaymentTerms.includes(data.paymentTerms)) {
     throw new AppError(

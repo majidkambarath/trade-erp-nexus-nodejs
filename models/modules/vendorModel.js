@@ -10,7 +10,7 @@ const vendorSchema = new mongoose.Schema({
   address: { type: String, required: true, trim: true },
   paymentTerms: {
     type: String,
-    enum: ["30 days", "Net 30", "45 days", "Net 60", "60 days"],
+    enum: ["30 days", "Net 30", "45 days", "Net 60", "60 days","COD"],
     default: "30 days",
   },
   status: {
