@@ -12,7 +12,9 @@ const stockSchema = new mongoose.Schema({
   vendorId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Vendor",
-    required: [true, "Vendor is required"],
+    required: false,
+    default:null,
+    set: v => (v === "" ? null : v),
   },
   unitOfMeasure: { type: mongoose.Schema.Types.ObjectId, ref: "UOM" },
   barcodeQrCode: { type: String },

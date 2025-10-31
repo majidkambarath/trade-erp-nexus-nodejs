@@ -40,10 +40,10 @@ class StockService {
       }
 
       // Validate vendor exists
-      const vendorExists = await Vendor.findById(vendorId).session(session);
-      if (!vendorExists) {
-        throw new AppError("Vendor not found", 404);
-      }
+      // const vendorExists = await Vendor.findById(vendorId).session(session);
+      // if (!vendorExists) {
+      //   throw new AppError("Vendor not found", 404);
+      // }
 
       // Generate itemId if not provided
       function generateItemId(itemName, itemId = null) {
