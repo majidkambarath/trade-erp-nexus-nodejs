@@ -822,7 +822,8 @@ class FinancialService {
   static async processExpenseVoucher(data, session) {
     const {
       date = new Date(),
-      expenseTypeId,
+      mainExpenseCategoryId,
+      expenseCategoryId,
       transactorId,
       totalAmount,
       description,
@@ -836,7 +837,11 @@ class FinancialService {
     } = data;
 
     // Validate required fields
-    if (!expenseTypeId || !mongoose.Types.ObjectId.isValid(expenseTypeId)) {
+    if (!mainExpenseCategoryId || !mongoose.Types.ObjectId.isValid(mainExpenseCategoryId)) {
+      throw new AppError("Valid Expense type ID is required", 400);
+    }
+      // Validate required fields
+    if (!expenseCategoryId || !mongoose.Types.ObjectId.isValid(expenseCategoryId)) {
       throw new AppError("Valid Expense type ID is required", 400);
     }
 
@@ -883,8 +888,8 @@ class FinancialService {
 
     // Parallel fetch: expense type and transactor (payment source)
     const [expenseType, transactor] = await Promise.all([
-      ExpenseType.findById(expenseTypeId)
-        .select("name categoryId")
+      ExpenseType.findById(mainExpenseCategoryId )
+        .select("name")
         .session(session),
       Transactor.findById(transactorId)
         .select(
@@ -991,7 +996,7 @@ class FinancialService {
 
     return {
       date,
-      expenseTypeId,
+      mainExpenseCategoryId,
       expenseTypeName: expenseType.name,
       transactorId,
       transactorName: transactor.accountName,

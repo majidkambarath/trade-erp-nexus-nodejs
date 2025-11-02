@@ -7,7 +7,7 @@ const LedgerService = require("../../services/financial/ledgerService");
 // Create any type of voucher (receipt, payment, journal, contra, expense)
 exports.createVoucher = catchAsync(async (req, res) => {
   const createdBy = req.admin?.id || req.body.createdBy || "system";
-  // console.log(req.body)
+  console.log(req.body)
   // // Parse payload if coming from multipart/form-data
   const bodyData = req.body.data ? JSON.parse(req.body.data) : req.body;
   // Handle uploaded file
