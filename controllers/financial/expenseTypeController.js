@@ -4,7 +4,7 @@ const AppError = require("../../utils/AppError");
 
 exports.createCategory = catchAsync(async (req, res) => {
   const createdBy = req.user?.id || req.body.createdBy || "system";
-console.log(req.body)
+// console.log(req.body)
   const { name, parentCategoryId } = req.body;
   if (!name?.trim()) {
     throw new AppError("Category name is required", 400);

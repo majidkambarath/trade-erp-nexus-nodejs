@@ -20,10 +20,12 @@ const sendPaginated = (res, result) => {
 
 // Create new transaction
 exports.createTransaction = catchAsync(async (req, res) => {
+   console.log("Received data for CREATE (req.body):", JSON.stringify(req.body, null, 2));
   const transaction = await TransactionService.createTransaction(
     req.body,
     resolveCreatedBy(req)
   );
+  console.log("Created transaction:", JSON.stringify(transaction, null, 2));
   res.status(201).json({ status: "success", data: transaction });
  
 });
@@ -44,6 +46,7 @@ exports.getTransactionById = catchAsync(async (req, res) => {
 
 // Update transaction
 exports.updateTransaction = catchAsync(async (req, res) => {
+
   console.log(req.body)
   const transaction = await TransactionService.updateTransaction(
     req.params.id,

@@ -6,7 +6,7 @@ const { extractFileInfo } = require("../../middleware/upload");
 exports.createAccountVoucher = catchAsync(async (req, res) => {
   const createdBy = req.admin?.id || req.body.createdBy || "system";
   const bodyData = req.body.data ? JSON.parse(req.body.data) : req.body;
-  console.log(bodyData);
+  // console.log(bodyData);
 
   if (bodyData.invoiceBalances && Array.isArray(bodyData.invoiceBalances)) {
     bodyData.invoiceIds = bodyData.invoiceBalances.map((inv) => inv.invoiceId);

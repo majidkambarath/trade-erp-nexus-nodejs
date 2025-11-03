@@ -57,96 +57,122 @@ function withTransactionSession(fn) {
 class TransactionService {
   // Create Transaction
   static createTransaction = withTransactionSession(
-    async (data, createdBy, session) => {
-      const {
-        type,
-        partyId,
-        partyType,
-        vendorReference,
-        items,
-        date,
-        deliveryDate,
-        terms,
-        notes,
-        priority,
-      } = data;
+  async (data, createdBy, session) => {
+    const {
+      transactionNo,  // ADD: Destructure incoming transactionNo
+      type,
+      partyId,
+      partyType,
+      vendorReference,
+      items,
+      date,
+      deliveryDate,
+      terms,
+      notes,
+      priority,
+      status,  // ADD: Destructure incoming status
+      totalAmount,  // ADD: Destructure incoming totalAmount
+    } = data;
 
-      if (!type || !partyId || !partyType)
-        throw new AppError("Missing required fields", 400);
-      if (!items?.length) throw new AppError("Items are required", 400);
+    if (!type || !partyId || !partyType)
+      throw new AppError("Missing required fields", 400);
+    if (!items?.length) throw new AppError("Items are required", 400);
 
-      // Validate stock for sales orders & purchase returns
-      let code;
-      for (const item of items) {
-        const stock = await StockService.getStockByItemId(item.itemId);
-        code = stock.itemId;
-        if (
-          (type === "sales_order" || type === "purchase_return") &&
-          stock.currentStock < item.qty
-        ) {
-          throw new AppError(`Insufficient stock for ${item.description}`, 400);
-        }
+    console.log("Service: Incoming transactionNo:", transactionNo);  // TEMP LOG: Track incoming
+
+    // FIX: Conditionally set transactionNo - use incoming if provided, else auto-generate
+    let finalTransactionNo = transactionNo?.trim();
+    if (!finalTransactionNo) {
+      finalTransactionNo = generateTransactionNo(type);
+      console.log("Service: Auto-generated transactionNo:", finalTransactionNo);  // TEMP LOG
+    } else {
+      console.log("Service: Using incoming transactionNo:", finalTransactionNo);  // TEMP LOG
+      // Validate uniqueness (prevent duplicates)
+      const existing = await Transaction.findOne({ transactionNo: finalTransactionNo }).session(session);
+      if (existing) {
+        throw new AppError(`Transaction number ${finalTransactionNo} already exists`, 400);
       }
+    }
 
-      const processedItems = calculateItems(items, code);
-      const totalAmount = processedItems.reduce(
-        (sum, i) => sum + i.lineTotal,
-        0
-      );
+    // Validate stock for sales orders & purchase returns
+    let code;
+    for (const item of items) {
+      const stock = await StockService.getStockByItemId(item.itemId);
+      code = stock.itemId;
+      if (
+        (type === "sales_order" || type === "purchase_return") &&
+        stock.currentStock < item.qty
+      ) {
+        throw new AppError(`Insufficient stock for ${item.description}`, 400);
+      }
+    }
 
-      const transactionData = {
-        transactionNo: generateTransactionNo(type),
-        type,
+    const processedItems = calculateItems(items, code);
+    const calculatedTotal = processedItems.reduce(
+      (sum, i) => sum + i.lineTotal,
+      0
+    );
+
+    // FIX: Use incoming totalAmount if provided, else calculated (adjust if you always want calculated)
+    const finalTotalAmount = totalAmount !== undefined ? totalAmount : calculatedTotal;
+    console.log("Service: Final totalAmount (incoming/calculated):", finalTotalAmount);  // TEMP LOG
+
+    const transactionData = {
+      transactionNo: finalTransactionNo,  // USE: The conditional/final value
+      type,
+      partyId,
+      partyType: partyType === "Vendor" ? "Vendor" : "Customer",
+      partyTypeRef: partyType === "Vendor" ? "Vendor" : "Customer",
+      items: processedItems,
+      totalAmount: finalTotalAmount,  // USE: Final total
+      vendorReference,
+      status: status || "DRAFT",  // USE: Incoming or default
+      createdBy,
+      date: new Date(date || new Date()),  // FIX: Ensure Date object (handles string input)
+      deliveryDate: new Date(deliveryDate || new Date()),  // FIX: Ensure Date object
+      terms: terms || "",
+      notes: notes || "",
+      priority: priority || "Medium",
+    };
+
+    console.log("Service: Final transactionData before save:", JSON.stringify(transactionData, null, 2));  // TEMP LOG
+
+    const [newTransaction] = await Transaction.create([transactionData], {
+      session,
+    });
+
+    // Create StockPurchaseLog for purchase orders (unchanged, but use finalTransactionNo)
+    if (type === "purchase_order") {
+      const purchaseLogData = {
+        transactionNo: newTransaction.transactionNo,  // Will now match incoming if provided
+        type: "purchase_order",
         partyId,
-        partyType: partyType === "Vendor" ? "Vendor" : "Customer",
-        partyTypeRef: partyType === "Vendor" ? "Vendor" : "Customer",
-        items: processedItems,
-        totalAmount,
-        vendorReference,
-        status: "DRAFT",
-        createdBy,
-        date: date || new Date(),
-        deliveryDate: deliveryDate || new Date(),
-        terms: terms || "",
-        notes: notes || "",
-        priority: priority || "Medium",
+        partyType: "Vendor",
+        partyTypeRef: "Vendor",
+        date: transactionData.date,
+        deliveryDate: transactionData.deliveryDate,
+        items: processedItems.map((item) => ({
+          itemId: item.itemId,
+          description: item.description,
+          qty: item.qty,
+          rate: item.rate,
+          vatPercent: item.vatPercent || 0,
+          price: item.lineTotal,
+          // expiryDate: item.expiryDate ? new Date(item.expiryDate) : undefined,
+        })),
+        terms: transactionData.terms || "",
+        notes: transactionData.notes || "",
+        priority: transactionData.priority || "Medium",
       };
 
-      const [newTransaction] = await Transaction.create([transactionData], {
-        session,
-      });
-
-      // Create StockPurchaseLog for purchase orders
-      if (type === "purchase_order") {
-        const purchaseLogData = {
-          transactionNo: newTransaction.transactionNo,
-          type: "purchase_order",
-          partyId,
-          partyType: "Vendor",
-          partyTypeRef: "Vendor",
-          date: transactionData.date,
-          deliveryDate: transactionData.deliveryDate,
-          items: processedItems.map((item) => ({
-            itemId: item.itemId,
-            description: item.description,
-            qty: item.qty,
-            rate: item.rate,
-            vatPercent: item.vatPercent || 0,
-            price: item.lineTotal,
-            // expiryDate: item.expiryDate ? new Date(item.expiryDate) : undefined,
-          })),
-          terms: transactionData.terms || "",
-          notes: transactionData.notes || "",
-          priority: transactionData.priority || "Medium",
-        };
-
-        await StockPurchaseLog.create([purchaseLogData], { session });
-      }
-
-      return newTransaction;
+      await StockPurchaseLog.create([purchaseLogData], { session });
     }
-  );
 
+    console.log("Service: Created transaction:", JSON.stringify(newTransaction, null, 2));  // TEMP LOG
+
+    return newTransaction;
+  }
+);
   // Update Transaction
   static updateTransaction = withTransactionSession(
     async (id, data, createdBy, session) => {
@@ -220,6 +246,7 @@ class TransactionService {
   static processTransaction = withTransactionSession(
     async (id, action, createdBy, session) => {
       const transaction = await Transaction.findById(id).session(session);
+      
       if (!transaction) throw new AppError("Transaction not found", 404);
 
       this.validateAction(transaction.type, action, transaction.status);
