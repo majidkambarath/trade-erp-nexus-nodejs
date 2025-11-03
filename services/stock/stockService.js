@@ -40,10 +40,10 @@ class StockService {
       }
 
       // Validate vendor exists
-      const vendorExists = await Vendor.findById(vendorId).session(session);
-      if (!vendorExists) {
-        throw new AppError("Vendor not found", 404);
-      }
+      // const vendorExists = await Vendor.findById(vendorId).session(session);
+      // if (!vendorExists) {
+      //   throw new AppError("Vendor not found", 404);
+      // }
 
       // Generate itemId if not provided
       function generateItemId(itemName, itemId = null) {
@@ -266,7 +266,7 @@ class StockService {
         if (type === "purchase_order") {
           // Calculate weighted average price
           const currentValue = stock.purchasePrice * stock.currentStock;
-          const newValue = item.price * item.qty;
+          const newValue = item.rate; //item.price * item.qty
           const totalQuantity = stock.currentStock + item.qty;
           newPurchasePrice =
             totalQuantity > 0
