@@ -837,11 +837,17 @@ class FinancialService {
     } = data;
 
     // Validate required fields
-    if (!mainExpenseCategoryId || !mongoose.Types.ObjectId.isValid(mainExpenseCategoryId)) {
+    if (
+      !mainExpenseCategoryId ||
+      !mongoose.Types.ObjectId.isValid(mainExpenseCategoryId)
+    ) {
       throw new AppError("Valid Expense type ID is required", 400);
     }
-      // Validate required fields
-    if (!expenseCategoryId || !mongoose.Types.ObjectId.isValid(expenseCategoryId)) {
+    // Validate required fields
+    if (
+      !expenseCategoryId ||
+      !mongoose.Types.ObjectId.isValid(expenseCategoryId)
+    ) {
       throw new AppError("Valid Expense type ID is required", 400);
     }
 
@@ -888,7 +894,7 @@ class FinancialService {
 
     // Parallel fetch: expense type and transactor (payment source)
     const [expenseType, transactor] = await Promise.all([
-      ExpenseType.findById(mainExpenseCategoryId )
+      ExpenseType.findById(mainExpenseCategoryId)
         .select("name")
         .session(session),
       Transactor.findById(transactorId)
@@ -997,6 +1003,7 @@ class FinancialService {
     return {
       date,
       mainExpenseCategoryId,
+      expenseCategoryId,
       expenseTypeName: expenseType.name,
       transactorId,
       transactorName: transactor.accountName,
@@ -1375,7 +1382,15 @@ class FinancialService {
     const voucher = await Voucher.findById(id)
       .populate("createdBy", "name username")
       .populate("partyId", "customerName vendorName name email phone")
-      .populate("expenseCategoryId", "name ")
+      .populate({
+        path: "expenseCategoryId",
+        select: "name parentCategory isMainCategory createdBy",
+        populate: {
+          path: "parentCategory",
+          select: "name isMainCategory",
+          model: "ExpenseCategory", // Explicit model ref (recommended)
+        },
+      })
       .populate("transactorId", "accountCode accountName accountType")
       .populate("linkedInvoices.invoiceId")
       .populate("entries.accountId", "accountName accountCode accountType")

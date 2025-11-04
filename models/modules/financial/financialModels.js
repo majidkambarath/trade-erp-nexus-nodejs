@@ -83,18 +83,20 @@ const voucherSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "Transactor",
   },
-  
-  transactorId: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: "Transactor",
-  required: function() { return this.voucherType === "expense"; },
-},
 
-expenseTypeName: { type: String, trim: true },
-transactorName: { type: String, trim: true },
+  transactorId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Transactor",
+    required: function () {
+      return this.voucherType === "expense";
+    },
+  },
+
+  expenseTypeName: { type: String, trim: true },
+  transactorName: { type: String, trim: true },
   expenseCategoryId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: " ExpenseType",
+    ref: "ExpenseCategory",
   },
   expenseType: { type: String, trim: true },
   submittedBy: {
@@ -168,13 +170,22 @@ voucherSchema.pre("save", function (next) {
   const date = new Date(this.date);
   this.month = date.getMonth() + 1;
   this.year = date.getFullYear();
-  const fyStart = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
+  const fyStart =
+    date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
   this.financialYear = `${fyStart}-${fyStart + 1}`;
   if (this.voucherType === "journal") {
-    const totalDebits = this.entries.reduce((sum, entry) => sum + entry.debitAmount, 0);
-    const totalCredits = this.entries.reduce((sum, entry) => sum + entry.creditAmount, 0);
+    const totalDebits = this.entries.reduce(
+      (sum, entry) => sum + entry.debitAmount,
+      0
+    );
+    const totalCredits = this.entries.reduce(
+      (sum, entry) => sum + entry.creditAmount,
+      0
+    );
     if (Math.abs(totalDebits - totalCredits) > 0.01) {
-      return next(new Error("Debits and credits must be equal for journal vouchers"));
+      return next(
+        new Error("Debits and credits must be equal for journal vouchers")
+      );
     }
   }
   next();
@@ -269,7 +280,6 @@ ledgerAccountSchema.index({ isActive: 1, allowDirectPosting: 1 }); // For Financ
 
 const LedgerAccount = mongoose.model("LedgerAccount", ledgerAccountSchema);
 
-
 // Ledger Entry Schema
 const ledgerEntrySchema = new mongoose.Schema({
   voucherId: {
@@ -352,7 +362,8 @@ ledgerEntrySchema.pre("save", function (next) {
   const date = new Date(this.date);
   this.month = date.getMonth() + 1;
   this.year = date.getFullYear();
-  const fyStart = date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
+  const fyStart =
+    date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
   this.financialYear = `${fyStart}-${fyStart + 1}`;
   next();
 });
