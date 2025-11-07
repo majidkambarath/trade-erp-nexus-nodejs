@@ -8,7 +8,7 @@ const LedgerService = require("../../services/financial/ledgerService");
 exports.createVoucher = catchAsync(async (req, res) => {
   const createdBy = req.admin?.id || req.body.createdBy || "system";
   console.log(req.body)
-  // // Parse payload if coming from multipart/form-data
+  // Parse payload if coming from multipart/form-data
   const bodyData = req.body.data ? JSON.parse(req.body.data) : req.body;
   // Handle uploaded file
   const fileInfo = extractFileInfo(req.file);
