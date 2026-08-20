@@ -1,5 +1,8 @@
-// Load environment variables first
-require("dotenv").config();
+// Load environment variables first. When this script is executed from the `utils` folder
+// the default cwd is `utils/`, so dotenv won't find the `.env` file at the project root.
+// Explicitly point to the root .env using path.resolve().
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "..", ".env") });
 
 const mongoose = require("mongoose");
 const Admin = require("../models/core/adminModel");
@@ -29,17 +32,23 @@ mongoose
 
 async function setupAdmin() {
   try {
-    // Check if super admin already exists
-    const existingAdmin = await Admin.findOne({ role: "superadmin" });
+    const existingAdmin = await Admin.findOne({ email: "admin@test.com" }).select("+password");
     if (existingAdmin) {
-      console.log("ℹ️ Super admin already exists");
+      existingAdmin.name = "Super Admin";
+      existingAdmin.password = "12312312";
+      existingAdmin.type = "super_admin";
+      existingAdmin.status = "active";
+      existingAdmin.isActive = true;
+      await existingAdmin.save();
+      console.log("ℹ️ Admin account already exists and was updated");
     } else {
-      // Create default superadmin
       const newAdmin = new Admin({
         name: "Super Admin",
-        email: "admin@example.com",
-        password: "admin123", // make sure to hash in model or update later
-        role: "superadmin",
+        email: "admin@test.com",
+        password: "12312312",
+        type: "super_admin",
+        status: "active",
+        isActive: true,
       });
 
       await newAdmin.save();
