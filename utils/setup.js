@@ -15,49 +15,59 @@ if (!process.env.MONGO_URI) {
 
 const MONGO_URI = process.env.MONGO_URI;
 
+// Seeded super admins. The password is hashed by the Admin pre-save hook, so it is passed
+// in plain text here. Every run is idempotent: an existing account is brought back to this
+// definition rather than duplicated.
+const SEED_ADMINS = [
+  { name: "Super Admin", email: "admin@test.com", password: "12312312" },
+  { name: "Super Admin", email: "admin@test.uae", password: "12312312" },
+];
+
 // Connect to MongoDB
 mongoose
-  .connect(MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
+  .connect(MONGO_URI)
   .then(() => {
     console.log("✅ MongoDB connected successfully");
-    return setupAdmin(); // call your logic after connection
+    return setupAdmins();
   })
   .catch((err) => {
     console.error("❌ MongoDB connection error:", err.message);
     process.exit(1);
   });
 
-async function setupAdmin() {
+async function upsertAdmin({ name, email, password }) {
+  const existing = await Admin.findOne({ email }).select("+password");
+  if (existing) {
+    existing.name = name;
+    existing.password = password;
+    existing.type = "super_admin";
+    existing.status = "active";
+    existing.isActive = true;
+    await existing.save();
+    console.log(`ℹ️ ${email}: already exists, updated`);
+    return;
+  }
+
+  await new Admin({
+    name,
+    email,
+    password,
+    type: "super_admin",
+    status: "active",
+    isActive: true,
+  }).save();
+  console.log(`✅ ${email}: super admin created`);
+}
+
+async function setupAdmins() {
   try {
-    const existingAdmin = await Admin.findOne({ email: "admin@test.com" }).select("+password");
-    if (existingAdmin) {
-      existingAdmin.name = "Super Admin";
-      existingAdmin.password = "12312312";
-      existingAdmin.type = "super_admin";
-      existingAdmin.status = "active";
-      existingAdmin.isActive = true;
-      await existingAdmin.save();
-      console.log("ℹ️ Admin account already exists and was updated");
-    } else {
-      const newAdmin = new Admin({
-        name: "Super Admin",
-        email: "admin@test.com",
-        password: "12312312",
-        type: "super_admin",
-        status: "active",
-        isActive: true,
-      });
-
-      await newAdmin.save();
-      console.log("✅ Super admin created successfully");
+    for (const admin of SEED_ADMINS) {
+      await upsertAdmin(admin);
     }
-
-    mongoose.disconnect(); // Close DB connection after setup
   } catch (error) {
     console.error("❌ Error during admin setup:", error.message);
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    await mongoose.disconnect();
   }
 }

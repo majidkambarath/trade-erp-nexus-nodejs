@@ -58,6 +58,16 @@ app.use(cors(corsOptions));
 // Connect to MongoDB
 mongodb();
 
+// Health check endpoint. Declared before the route mounts: adminRouter is mounted at
+// "/api/v1" and its "GET /:id" would otherwise swallow "/health" and demand a token.
+app.get("/api/v1/health", (req, res) => {
+  res.json({
+    success: true,
+    message: "Server is running successfully",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Routes
 app.use("/api/v1", adminRouter);
 app.use("/api/v1/vendors", vendorRouter);
@@ -74,14 +84,6 @@ app.use("/api/v1/account-v2", transactorRouter);
 app.use("/api/v1/expense", expenseTypeRouter);
 app.use("/api/v1/reports", reportsRoutesr);
 app.use("/api/v1/ledger", ledgerRoutesr);
-// Health check endpoint
-app.get("/api/v1/health", (req, res) => {
-  res.json({
-    success: true,
-    message: "Server is running successfully",
-    timestamp: new Date().toISOString(),
-  });
-});
 
 // Global error handling middleware
 app.use(errorHandler);

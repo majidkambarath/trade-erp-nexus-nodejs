@@ -613,7 +613,9 @@ const logAmount = balanceEffect;
       if (filters.partyType) query.partyType = filters.partyType;
 
       if (filters.search) {
-        const r = new RegExp(filters.search, "i");
+        // Escape user input: an unescaped "(" throws, and crafted patterns can backtrack badly.
+        const escaped = filters.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const r = new RegExp(escaped, "i");
         query.$or = [
           { transactionNo: r },
           { notes: r },
@@ -670,8 +672,14 @@ const logAmount = balanceEffect;
       const skip = (page - 1) * limit;
 
       // ──────── AGGREGATION PIPELINE ────────
+      // Paginate first, then join. Previously every matching transaction was joined
+      // (customers, vendors, per-line stock + UOM) and only then sorted and sliced,
+      // so each page cost grew with the total row count.
       const pipeline = [
         { $match: query },
+        { $sort: { createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
 
         // ---- 1. Lookup Customer ---- (unchanged)
         {
@@ -825,10 +833,9 @@ const logAmount = balanceEffect;
           },
         },
 
-        // ---- 8. Sort / paginate ---- (unchanged)
+        // ---- 8. Restore order: $group does not preserve input order,
+        // and this sorts only the page (<= limit docs), not the whole table.
         { $sort: { createdAt: -1 } },
-        { $skip: skip },
-        { $limit: limit },
       ];
 
       const transactions = await Transaction.aggregate(pipeline);

@@ -6,7 +6,7 @@ const customerSchema = new mongoose.Schema({
   contactPerson: { type: String, required: true, trim: true },
   email: { type: String, match: /\S+@\S+\.\S+/, sparse: true, trim: true },
   phone: { type: String, sparse: true, trim: true },
-  trnNumber: { type: String, trim: true, default: null, sparse: true },
+  trnNumber: { type: String, trim: true, default: null },
   salesPerson: { type: String, trim: true, default: null, sparse: true },
   billingAddress: { type: String, default: null, trim: true },
   shippingAddress: { type: String, default: null, trim: true },

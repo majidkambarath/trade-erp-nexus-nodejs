@@ -113,5 +113,9 @@ transactionSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
 transactionSchema.index({ partyId: 1, partyType: 1 });
 transactionSchema.index({ status: 1 });
 transactionSchema.index({ date: -1 });
+// List query: filter by type, sort by createdAt. Without this the sort
+// falls back to an in-memory sort of every matching document.
+transactionSchema.index({ type: 1, createdAt: -1 });
+transactionSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model("Transaction", transactionSchema);
