@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Customer = require("../../models/modules/customerModel");
 const AppError = require("../../utils/AppError");
 const Sequence = require("../../models/modules/sequenceModel");
+const PartyAccounts = require("../financial/partyAccounts");
 
 // Helper to get the next sequence number without saving it
 const getNextSequenceNumber = async (year, type, session) => {
@@ -115,7 +116,7 @@ const normalizedTrn = trnNumber
       ? salesPerson.toString().trim().replace(/\s+/g, "")
       : null;
 
-    const customer = await Customer.create(
+    const [customer] = await Customer.create(
       [
         {
           customerId: newCustomerId,
@@ -133,10 +134,11 @@ const normalizedTrn = trnNumber
         },
       ],
       { session }
-    )[0];
+    );
 
     await commitSequenceNumber(currentYear, "customer", sequenceNumber, session);
     await session.commitTransaction();
+    await PartyAccounts.onPartyCreated("Customer", customer); // its ledger account appears in the chart
     return customer;
   } catch (error) {
     await session.abortTransaction();
@@ -214,6 +216,7 @@ if (data.trnNumber !== undefined) {
       : null;
   }
 
+  const before = data.customerName !== undefined ? await Customer.findById(id).select("customerName").lean() : null;
   const customer = await Customer.findByIdAndUpdate(
     id,
     { ...data, updatedAt: Date.now() },
@@ -224,6 +227,9 @@ if (data.trnNumber !== undefined) {
     throw new AppError("Customer not found", 404);
   }
 
+  if (before && before.customerName !== customer.customerName) {
+    await PartyAccounts.onPartyRenamed("Customer", before.customerName, customer.customerName);
+  }
   return customer;
 };
 
@@ -239,6 +245,7 @@ exports.deleteCustomer = async (id) => {
 
     await releaseSequenceNumber(customer.customerId, session);
     await session.commitTransaction();
+    await PartyAccounts.onPartyDeleted("Customer", customer.customerName);
     return customer;
   } catch (error) {
     await session.abortTransaction();

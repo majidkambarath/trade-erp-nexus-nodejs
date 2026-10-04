@@ -20,6 +20,10 @@ const transactorRouter = require("./routes/financial/transactorRoutes");
 const expenseTypeRouter = require("./routes/financial/expenseType");
 const reportsRoutesr= require("./routes/reports/vatReportRoutes")
 const ledgerRoutesr= require("./routes/ledgerRoutes")
+const accountingSetupRouter = require("./routes/financial/accountingSetupRoutes");
+const bankingRouter = require("./routes/banking/bankingRoutes");
+const batchRouter = require("./routes/stock/batchRoutes");
+const einvoiceRouter = require("./routes/einvoice/einvoiceRoutes");
 dotenv.config();
 
 const app = express();
@@ -27,7 +31,8 @@ const port = process.env.PORT || 4444;
 
 // Middleware
 app.use(express.static("public"));
-app.use(express.json({ limit: "50mb" }));
+// rawBody is kept so signed webhooks (e-invoice inbound) can be verified byte for byte.
+app.use(express.json({ limit: "50mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // CORS configuration
@@ -55,8 +60,11 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Connect to MongoDB
-mongodb();
+// Connect to MongoDB, then repair data older versions wrote (idempotent, so safe on every start)
+mongodb()
+  .then(() => require("./utils/migrations").runMigrations())
+  .then((done) => { if (Object.values(done).some(Boolean)) console.log("[migrations]", done); })
+  .catch((err) => console.error("[migrations] failed:", err.message));
 
 // Health check endpoint. Declared before the route mounts: adminRouter is mounted at
 // "/api/v1" and its "GET /:id" would otherwise swallow "/health" and demand a token.
@@ -69,6 +77,11 @@ app.get("/api/v1/health", (req, res) => {
 });
 
 // Routes
+// Two-segment path, so adminRouter's bare GET /:id cannot capture it; mounted first anyway.
+app.use("/api/v1/accounting", accountingSetupRouter);
+app.use("/api/v1/banking", bankingRouter); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/einvoice", einvoiceRouter);
+app.use("/api/v1/batches", batchRouter); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1", adminRouter);
 app.use("/api/v1/vendors", vendorRouter);
 app.use("/api/v1/customers", customerRouter);
@@ -100,3 +113,10 @@ app.listen(port, () => {
   console.log("Server running !!!!!");
   console.log(`http://localhost:${port}`);
 });
+
+// e-Invoicing: once a minute, retry deliveries that failed and poll the ones in flight. A no-op
+// for a company that has not enabled e-invoicing.
+const EInvoiceService = require("./services/einvoice/einvoiceService");
+setInterval(() => {
+  EInvoiceService.processDue().catch((err) => console.error("[einvoice] background pass failed:", err.message));
+}, 60000).unref();

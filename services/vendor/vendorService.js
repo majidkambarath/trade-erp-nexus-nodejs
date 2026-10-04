@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Vendor = require("../../models/modules/vendorModel");
 const AppError = require("../../utils/AppError");
 const Sequence = require("../../models/modules/sequenceModel");
+const PartyAccounts = require("../financial/partyAccounts");
 
 // Helper to get the next sequence number without saving it
 const getNextSequenceNumber = async (year, type, session) => {
@@ -123,7 +124,7 @@ exports.createVendor = async (data) => {
       ? contactPerson.toString().trim().replace(/\s+/g, "")
       : null;
 
-    const vendor = await Vendor.create(
+    const [vendor] = await Vendor.create(
       [
         {
           vendorId: newVendorId,
@@ -138,10 +139,11 @@ exports.createVendor = async (data) => {
         },
       ],
       { session }
-    )[0];
+    );
 
     await commitSequenceNumber(currentYear, "vendor", sequenceNumber, session);
     await session.commitTransaction();
+    await PartyAccounts.onPartyCreated("Vendor", vendor); // its ledger account appears in the chart
     return vendor;
   } catch (error) {
     await session.abortTransaction();
@@ -189,11 +191,15 @@ exports.updateVendor = async (id, data) => {
     );
   }
 
+  const before = data.vendorName !== undefined ? await Vendor.findById(id).select("vendorName").lean() : null;
   const vendor = await Vendor.findByIdAndUpdate(id, data, {
     new: true,
     runValidators: true,
   });
   if (!vendor) throw new AppError("Vendor not found", 404);
+  if (before && before.vendorName !== vendor.vendorName) {
+    await PartyAccounts.onPartyRenamed("Vendor", before.vendorName, vendor.vendorName);
+  }
   return vendor;
 };
 
@@ -207,6 +213,7 @@ exports.deleteVendor = async (id) => {
 
     await releaseSequenceNumber(vendor.vendorId, session);
     await session.commitTransaction();
+    await PartyAccounts.onPartyDeleted("Vendor", vendor.vendorName);
   } catch (error) {
     await session.abortTransaction();
     throw error;

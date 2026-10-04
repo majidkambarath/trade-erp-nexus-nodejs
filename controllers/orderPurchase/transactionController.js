@@ -1,10 +1,11 @@
 const TransactionService = require("../../services/orderPurchase/transactionService");
+const CreditControlService = require("../../services/financial/creditControlService");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
 
 // Helper to resolve createdBy consistently
 const resolveCreatedBy = (req) =>
-  req.user?.id || req.body.createdBy || "system";
+  req.admin?.id || req.user?.id || req.body?.createdBy || "system";
 
 // Helper to send paginated results
 const sendPaginated = (res, result) => {
@@ -77,7 +78,9 @@ exports.processTransaction = catchAsync(async (req, res) => {
   const transaction = await TransactionService.processTransaction(
     req.params.id,
     action,
-    resolveCreatedBy(req)
+    resolveCreatedBy(req),
+    // Each risk warning has its own acknowledgement field, so one cannot acknowledge another.
+    { acknowledged: req.body?.[CreditControlService.ACK_FIELD] === true, req }
   );
   res.status(200).json({ status: "success", data: { transaction } });
 });

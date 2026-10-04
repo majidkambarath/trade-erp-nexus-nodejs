@@ -4,6 +4,18 @@ const StockPurchaseLog = require("../../models/modules/StockPurchaseLog"); // Im
 const InventoryMovement = require("../../models/modules/inventoryMovementModel");
 const StockService = require("../stock/stockService");
 const AppError = require("../../utils/AppError");
+const Stock = require("../../models/modules/stockModel");
+const NumberSeriesService = require("../core/numberSeriesService");
+const FiscalYearService = require("../core/fiscalYearService");
+const costing = require("../../utils/inventoryCosting");
+const { priceLine, priceCharge, priceDocument } = require("../../utils/pricing");
+const TaxCodeService = require("../financial/taxCodeService");
+const PostingService = require("../financial/postingService");
+const RecostService = require("../stock/recostService");
+const { EInvoiceSubmission } = require("../../models/modules/einvoiceModels");
+const ReturnService = require("./returnService");
+const BatchService = require("../stock/batchService");
+const CreditControlService = require("../financial/creditControlService");
 const VATReport = require("../../models/modules/financial/VATReport"); // Import the new VATReport model
 const fs = require("fs");
 const path = require("path");
@@ -31,28 +43,27 @@ function logInbound(tag, payload) {
 }
 
 // ---------- Helpers ----------
-function generateTransactionNo(type) {
-  const prefix = {
-    purchase_order: "PO",
-    sales_order: "SO",
-    purchase_return: "PR",
-    sales_return: "SR",
-  }[type];
-
-  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const sequence = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0");
-  return `${prefix}${sequence}`;
+// Approving, rejecting or cancelling is what moves stock, books the ledger and runs credit control, so
+// it only happens through processTransaction. Saving a document with one of these as its status would
+// leave an "approved" document with none of those effects, so it is refused.
+const PROCESS_ONLY_STATUSES = ["APPROVED", "REJECTED", "CANCELLED"];
+function assertStatusNotForced(status) {
+  if (PROCESS_ONLY_STATUSES.includes(status)) {
+    throw new AppError(
+      `A document cannot be saved as ${status}. Save it, then approve, reject or cancel it.`,
+      400,
+      "STATUS_REQUIRES_PROCESS"
+    );
+  }
 }
+
+// Document numbers come from NumberSeriesService (atomic counter per series and fiscal year).
+// The previous random 3-digit generator collided against the unique transactionNo index.
 
 function calculateItems(items) {
   return items.map((item) => {
-    // Use whichever unit price is present (price or rate), fallbacks to 0
-    const unitPrice = Number(item.price ?? item.rate ?? 0);
-    const qty = Number(item.qty ?? 0);
-    const lineValue = qty * unitPrice;
-    const vatPct = Number(item.vatPercent ?? 0);
-    const vatAmount = (lineValue * vatPct) / 100;
-    const lineTotal = +(lineValue + vatAmount).toFixed(2);
+    // Round each money column, then sum (utils/pricing.js): a discount reduces the taxable base.
+    const priced = priceLine(item);
 
     // Derive itemCode robustly from provided fields (backend may send different shapes)
     const itemCode =
@@ -63,19 +74,40 @@ function calculateItems(items) {
         (item.stockDetails.itemCode || item.stockDetails.sku)) ||
       (item.itemId ? String(item.itemId) : "");
 
-    // Ensure grandTotal is present to match frontend contract
-    const grandTotal =
-      item.grandTotal != null ? Number(item.grandTotal) : lineTotal;
-
     return {
       ...item,
       itemCode,
       package: item.package ?? 0,
-      vatAmount: +vatAmount.toFixed(2),
-      lineTotal,
-      grandTotal,
+      grossAmount: priced.gross,
+      discountAmount: priced.discount,
+      taxableAmount: priced.taxable,
+      vatAmount: priced.vat,
+      lineTotal: priced.lineTotal,
+      grandTotal: priced.lineTotal,
     };
   });
+}
+
+// Prices a whole document on the server: lines, header charges, header discount, round-off.
+// Returns what to store. A client-supplied total only survives as a small explicit round-off;
+// anything further from the computed total is ignored.
+async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date }, session) {
+  const withTax = await TaxCodeService.applyToItems(items, date, { session });
+  const processedItems = calculateItems(withTax);
+  const pricedCharges = (charges || [])
+    .filter((c) => Number(c.amount) > 0)
+    .map((c) => {
+      const p = priceCharge(c);
+      return { code: c.code, description: c.description, amount: p.net, vatPercent: p.vatPercent, vatAmount: p.vat };
+    });
+  const pricing = priceDocument(
+    processedItems.map((i) => ({
+      gross: i.grossAmount, discount: i.discountAmount, taxable: i.taxableAmount, vat: i.vatAmount,
+    })),
+    pricedCharges.map((c) => ({ net: c.amount, vat: c.vatAmount })),
+    { headerDiscount: discount, incomingTotal }
+  );
+  return { processedItems, charges: pricedCharges, pricing, totalAmount: pricing.grandTotal };
 }
 
 function withTransactionSession(fn) {
@@ -97,6 +129,16 @@ function withTransactionSession(fn) {
 
 // ---------- Service ----------
 class TransactionService {
+  // One document exactly as stored (the controller exposed this route but the method did not
+  // exist, so GET /transactions/:id always failed). Editing reads it so nothing the list view
+  // leaves out - discounts, tax codes, batches, charges - is lost on save.
+  static async getTransactionById(id) {
+    if (!mongoose.isValidObjectId(id)) throw new AppError("Invalid transaction id", 400);
+    const transaction = await Transaction.findById(id).lean();
+    if (!transaction) throw new AppError("Transaction not found", 404);
+    return transaction;
+  }
+
   // Create Transaction
   static createTransaction = withTransactionSession(
     async (data, createdBy, session) => {
@@ -126,6 +168,9 @@ class TransactionService {
 
       if (!type || !partyId || !partyType)
         throw new AppError("Missing required fields", 400);
+      assertStatusNotForced(status);
+
+      await FiscalYearService.assertPostingAllowed(date || new Date(), { session });
       if (!items?.length) throw new AppError("Items are required", 400);
 
       console.log("Service: Incoming transactionNo:", transactionNo); // TEMP LOG: Track incoming
@@ -133,7 +178,11 @@ class TransactionService {
       // FIX: Conditionally set transactionNo - use incoming if provided, else auto-generate
       let finalTransactionNo = transactionNo?.trim();
       if (!finalTransactionNo) {
-        finalTransactionNo = generateTransactionNo(type);
+        finalTransactionNo = await NumberSeriesService.allocate(
+          NumberSeriesService.forTransactionType(type),
+          date || new Date(),
+          { session }
+        );
         console.log(
           "Service: Auto-generated transactionNo:",
           finalTransactionNo
@@ -164,15 +213,20 @@ class TransactionService {
         // Do not block order creation due to stock levels
       }
 
-      const processedItems = calculateItems(items);
-      const calculatedTotal = processedItems.reduce(
-        (sum, i) => sum + i.lineTotal,
-        0
+      const built = await buildPricing(
+        { items, charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date() },
+        session
       );
-
-      // FIX: Use incoming totalAmount if provided, else calculated (adjust if you always want calculated)
-      const finalTotalAmount =
-        totalAmount !== undefined ? totalAmount : calculatedTotal;
+      // Returns: validated against the original (quantities and value), then the line links are kept.
+      const checked = await ReturnService.validate(
+        { type, partyId, returnOf: data.returnOf, items: built.processedItems, date: date || new Date() },
+        { session }
+      );
+      const processedItems = checked.items;
+      const finalTotalAmount = built.totalAmount;
+      const returnOf = checked.original
+        ? { transactionId: checked.original._id, transactionNo: checked.original.transactionNo }
+        : undefined;
       console.log(
         "Service: Final totalAmount (incoming/calculated):",
         finalTotalAmount
@@ -185,7 +239,11 @@ class TransactionService {
         partyType: partyType === "Vendor" ? "Vendor" : "Customer",
         partyTypeRef: partyType === "Vendor" ? "Vendor" : "Customer",
         items: processedItems,
-        totalAmount: finalTotalAmount, // USE: Final total
+        totalAmount: finalTotalAmount, // computed on the server
+        charges: built.charges,
+        pricing: built.pricing,
+        returnOf,
+        attachments: data.attachments || [],
         vendorReference,
         status: status || "DRAFT", // USE: Incoming or default
         createdBy,
@@ -255,11 +313,33 @@ class TransactionService {
       if (!transaction) throw new AppError("Transaction not found", 404);
       if (this.isProcessed(transaction.status))
         throw new AppError("Cannot edit processed transactions", 400);
+      assertStatusNotForced(data.status);
 
-      if (data.items) {
-        // Recalculate items with updated data
-        data.items = calculateItems(data.items);
-        data.totalAmount = data.items.reduce((sum, i) => sum + i.lineTotal, 0);
+      if (data.items || data.charges || data.discount !== undefined) {
+        const built = await buildPricing(
+          {
+            items: data.items || transaction.items.map((i) => i.toObject()),
+            charges: data.charges ?? transaction.charges,
+            discount: data.discount ?? transaction.discount,
+            incomingTotal: data.totalAmount,
+            date: data.date || transaction.date,
+          },
+          session
+        );
+        const checked = await ReturnService.validate(
+          {
+            type: transaction.type,
+            partyId: transaction.partyId,
+            returnOf: transaction.returnOf?.transactionId ? transaction.returnOf : data.returnOf,
+            items: built.processedItems,
+            date: data.date || transaction.date,
+          },
+          { session, excludeId: transaction._id }
+        );
+        data.items = checked.items;
+        data.charges = built.charges;
+        data.pricing = built.pricing;
+        data.totalAmount = built.totalAmount;
       }
 
       // Update StockPurchaseLog for purchase orders
@@ -303,8 +383,24 @@ class TransactionService {
 
       const wasApproved = transaction.status === "APPROVED";
 
+      // An invoice that has gone out as an e-invoice is a legal record: it is corrected with a
+      // credit note, never deleted. (A failed attempt never left the building, so it does not count.)
+      const sent = await EInvoiceSubmission.exists({
+        sourceId: transaction._id, status: { $in: ["QUEUED", "SUBMITTED", "ACKNOWLEDGED", "REPORTED", "REJECTED"] },
+      }).session(session);
+      if (sent) {
+        throw new AppError(
+          `${transaction.transactionNo} has been sent as an e-invoice and cannot be deleted. Issue a credit note instead.`,
+          409,
+          "EINVOICE_SENT"
+        );
+      }
+
       if (wasApproved) {
+        await FiscalYearService.assertPostingAllowed(transaction.date, { session });
         await this.reverseTransactionStock(id, transaction, createdBy, session);
+        await PostingService.reverseTransaction(transaction, { session });
+        await RecostService.recostAfterChange(transaction, { session });
         await this.reversePartyBalanceAndLog(transaction, createdBy, session); // REVERSE financials
       }
 
@@ -320,18 +416,31 @@ class TransactionService {
   );
 
   // Process Transaction (approve/reject/cancel)
+  // processTransaction(id, action, createdBy[, options]) - options: { acknowledged, req }.
+  // withTransactionSession appends the session as the LAST argument.
   static processTransaction = withTransactionSession(
-    async (id, action, createdBy, session) => {
+    async (id, action, createdBy, ...rest) => {
+      const session = rest[rest.length - 1];
+      const options = rest.length > 1 ? rest[0] || {} : {};
       const transaction = await Transaction.findById(id).session(session);
       if (!transaction) throw new AppError("Transaction not found", 404);
 
       this.validateAction(transaction.type, action, transaction.status);
+      await FiscalYearService.assertPostingAllowed(transaction.date, { session });
 
       // Store old status for reversal detection
       const wasApproved = transaction.status === "APPROVED";
 
       if (action === "approve") {
-        await this.processTransactionStock(id, transaction, createdBy, session);
+        // Credit limit / overdue check (sales only; off unless the company turns it on).
+        await CreditControlService.assertSaleAllowed(transaction, {
+          session, acknowledged: options.acknowledged === true, req: options.req,
+        });
+        const stockUpdates = await this.processTransactionStock(id, transaction, createdBy, session);
+        // Accounting entries (receivable/payable, revenue or inventory, VAT, cost of goods sold).
+        // A no-op until the company has mapped its accounts and switched ledger posting on.
+        await PostingService.postTransaction(transaction, { stockUpdates, createdBy, session });
+        await RecostService.recostAfterChange(transaction, { session });
         await this.createVATReportItems(transaction, createdBy, session);
 
         // NEW: Update party cash balance + create Debit/Credit Log
@@ -362,6 +471,7 @@ class TransactionService {
 
       if (action === "cancel") {
         if (wasApproved) {
+          await PostingService.reverseTransaction(transaction, { session });
           await this.reverseTransactionStock(
             id,
             transaction,
@@ -451,11 +561,13 @@ const logAmount = balanceEffect;
     const Model = mongoose.model(isVendor ? "Vendor" : "Customer");
     const LogModel = isVendor ? DebitLog : CreditLog;
 
+    // Exact inverse of updatePartyBalanceAndLog's balanceEffect. The sales side used to repeat
+    // the forward sign, so deleting an approved sale doubled its effect instead of undoing it.
     const reverseEffect = {
       purchase_order: -totalAmount,
       purchase_return: totalAmount,
-      sales_order: -totalAmount,
-      sales_return: totalAmount,
+      sales_order: totalAmount,
+      sales_return: -totalAmount,
     }[type];
 
     if (reverseEffect === undefined) return;
@@ -543,6 +655,17 @@ const logAmount = balanceEffect;
         partyType,
         date,
       }));
+
+    // VAT charged on header charges (freight, handling) is VAT too: it is in the ledger, so it belongs here.
+    for (const c of transaction.charges || []) {
+      if (!(c.vatAmount > 0)) continue;
+      vatItems.push({
+        transactionId, transactionNo, itemCode: c.code || "CHARGE",
+        description: c.description || "Charge", qty: 1, rate: c.amount,
+        lineTotal: Math.round((c.amount + c.vatAmount) * 100) / 100,
+        vatAmount: c.vatAmount, vatRate: c.vatPercent || 0, partyId, partyName, partyType, date,
+      });
+    }
 
     if (vatItems.length === 0) return;
 
@@ -869,6 +992,12 @@ const logAmount = balanceEffect;
   }
 
   // Process Transaction Stock
+  // Moves stock AND cost for each line. Direction comes from the document type; the cost basis
+  // is a separate axis (utils/inventoryCosting.js):
+  //   purchase_order  -> in,  cost = documented purchase cost (VAT-exclusive line value)
+  //   purchase_return -> out, cost = documented purchase cost of the returned goods
+  //   sales_order     -> out, cost = quantity x average cost (COGS); selling price never enters
+  //   sales_return    -> in,  cost = current average (original-sale link is a later phase)
   static async processTransactionStock(
     transactionId,
     transaction,
@@ -876,34 +1005,52 @@ const logAmount = balanceEffect;
     session
   ) {
     const { type, items, transactionNo } = transaction;
+    const costBasis = costing.COST_BASIS_BY_TYPE[type];
+    if (!costBasis) throw new AppError(`Cannot move stock for ${type}`, 400);
     const stockUpdates = [];
 
     for (const item of items) {
-      const stock = await StockService.getStockByItemId(item.itemId);
-      const quantityChange = this.getQuantityChange(type, item.qty);
-      const newStock = stock.currentStock + quantityChange;
-      // Allow approval even if sales order drives stock negative
-      // Previously: if (quantityChange < 0 && newStock < 0) throw error
-      // We now skip this blocking validation for sales orders
+      // Read inside the session so two lines for the same item see each other's effect.
+      // Order lines carry the stock document's _id (Transaction.items.itemId refs "Stock").
+      const stock = await Stock.findById(item.itemId).session(session);
+      if (!stock) throw new AppError(`Stock item ${item.itemId} not found`, 404);
 
-      let newPurchasePrice = stock.purchasePrice;
-      // let price = item.rate; // Use rate as unit price
-      let unitPrice = item.rate ? item.rate / (item.qty || 1) : 0; // FIXED: Compute unit from rate/qty
-      if (type === "purchase_order") {
-        const currentValue = stock.purchasePrice * stock.currentStock;
-        const newValue = item.rate || 0;
-        const totalQuantity = stock.currentStock + item.qty;
-        newPurchasePrice =
-          totalQuantity > 0
-            ? (currentValue + newValue) / totalQuantity
-            : stock.purchasePrice;
+      const qty = Number(item.qty) || 0;
+      const quantityChange = this.getQuantityChange(type, qty);
+
+      // Seed the cost pool; costValue is null until the item first moves under this scheme.
+      const pool = {
+        quantity: stock.currentStock,
+        costValue:
+          stock.costValue ?? costing.roundValue(stock.currentStock * (stock.purchasePrice || 0)),
+        avgRate: costing.roundRate(stock.purchasePrice || 0),
+      };
+
+      // VAT-exclusive value of the line. lineTotal is VAT-inclusive (calculateItems), so this is
+      // correct whichever of price / rate the form filled in.
+      const documentedCost = costing.roundValue(
+        (Number(item.lineTotal) || 0) - (Number(item.vatAmount) || 0)
+      );
+      // A return linked to its original restores stock at what the goods cost when sold.
+      let cogsRate;
+      if (type === "sales_return" && transaction.returnOf?.transactionId) {
+        const sold = await InventoryMovement.find({
+          referenceId: transaction.returnOf.transactionId,
+          stockId: stock.itemId,
+          costBasis: "sale",
+          isReversed: false,
+        }).session(session);
+        const soldQty = sold.reduce((t, m) => t + Math.abs(m.quantity), 0);
+        if (soldQty > 0) cogsRate = sold.reduce((t, m) => t + (m.totalValue || 0), 0) / soldQty;
       }
+      const result = costing.applyMovement(pool, costBasis, { qty, cost: documentedCost, cogsRate });
 
-      await stock.constructor.findByIdAndUpdate(
+      await Stock.findByIdAndUpdate(
         stock._id,
         {
-          currentStock: newStock,
-          purchasePrice: +newPurchasePrice.toFixed(2),
+          currentStock: result.pool.quantity,
+          purchasePrice: result.pool.avgRate,
+          costValue: result.pool.costValue,
           updatedAt: new Date(),
         },
         { session }
@@ -914,13 +1061,20 @@ const logAmount = balanceEffect;
           stockId: stock.itemId,
           quantity: quantityChange,
           previousStock: stock.currentStock,
-          newStock,
+          newStock: result.pool.quantity,
           eventType: this.getEventType(type),
           referenceType: "Transaction",
           referenceId: transactionId,
           referenceNumber: transactionNo,
-          unitCost: unitPrice,
-          totalValue: Math.abs(quantityChange) * unitPrice,
+          date: transaction.date || new Date(), // document date: costing replays in this order
+          unitCost: result.rate,
+          totalValue: result.cost,
+          costBasis,
+          rateBefore: pool.avgRate,
+          rateAfter: result.pool.avgRate,
+          costPoolAfter: result.pool.costValue,
+          poolQtyAfter: result.pool.quantity,
+          cogsAmount: costBasis === "sale" ? result.cost : null,
           notes: `${this.getEventType(type)} - ${item.description}`,
           createdBy,
           batchNumber: stock.batchNumber,
@@ -929,11 +1083,53 @@ const logAmount = balanceEffect;
         session
       );
 
+      // Batches (quantity + expiry per receipt). Sales take first-expiry-first-out.
+      const lineIndex = items.indexOf(item);
+      if (type === "purchase_order") {
+        await BatchService.receive(transaction, item, qty, result.rate, { session, index: lineIndex });
+      } else if (type === "sales_order") {
+        const Customer = mongoose.model("Customer");
+        const customer = await Customer.findById(transaction.partyId).select("minShelfLifeDays").session(session).lean();
+        const taken = await BatchService.allocate(
+          { stockId: stock._id, qty, orderDate: transaction.date, minShelfLifeDays: customer?.minShelfLifeDays || 0 },
+          { session }
+        );
+        item.allocations = taken.allocations; // saved with the document, so a reversal can put it back
+      } else if (type === "sales_return") {
+        const origItem = transaction.returnOf?.transactionId
+          ? (await Transaction.findById(transaction.returnOf.transactionId).select("items").session(session).lean())
+              ?.items.find((l) => String(l._id) === String(item.returnOfLineId))
+          : null;
+        if (origItem?.allocations?.length) {
+          // back into the batches it was sold from, up to the returned quantity
+          let left = qty;
+          const back = [];
+          for (const a of origItem.allocations) {
+            if (left <= 0) break;
+            const q = Math.min(a.qty, left);
+            back.push({ batchId: a.batchId, qty: q });
+            left -= q;
+          }
+          await BatchService.restore(back, { session });
+          item.allocations = back.map((b) => ({ batchId: b.batchId, qty: b.qty }));
+          if (left > 0) await BatchService.receiveReturn(transaction, item, left, { session, index: lineIndex });
+        } else {
+          await BatchService.receiveReturn(transaction, item, qty, { session, index: lineIndex });
+        }
+      } else if (type === "purchase_return") {
+        const taken = await BatchService.allocate(
+          { stockId: stock._id, qty, orderDate: transaction.date, onlyFromTransactionId: transaction.returnOf?.transactionId || undefined },
+          { session }
+        );
+        item.allocations = taken.allocations;
+      }
+
       stockUpdates.push({
         itemId: item.itemId,
         previousStock: stock.currentStock,
-        newStock,
-        newPurchasePrice,
+        newStock: result.pool.quantity,
+        newPurchasePrice: result.pool.avgRate,
+        cost: result.cost,
         movement,
       });
     }
@@ -948,6 +1144,20 @@ const logAmount = balanceEffect;
     createdBy,
     session
   ) {
+    // Batches first: a purchase whose goods were partly sold cannot be un-received (409).
+    if (transaction.type === "purchase_order") {
+      await BatchService.removeReceipt(transaction._id, { session });
+    } else if (["sales_order", "purchase_return"].includes(transaction.type)) {
+      for (const it of transaction.items) await BatchService.restore(it.allocations, { session });
+    } else if (transaction.type === "sales_return") {
+      for (const it of transaction.items) {
+        // only the part that went back into an original batch is taken out again
+        const A = (it.allocations || []).map((a) => ({ batchId: a.batchId, qty: -a.qty }));
+        await BatchService.restore(A, { session });
+      }
+      await BatchService.removeReceipt(transaction._id, { session });
+    }
+
     const existingMovements = await InventoryMovement.find({
       referenceId: transactionId,
       referenceType: "Transaction",
@@ -955,13 +1165,27 @@ const logAmount = balanceEffect;
     }).session(session);
 
     for (const movement of existingMovements) {
-      const stock = await StockService.getStockByItemId(movement.stockId);
+      const stock = await Stock.findOne({ itemId: movement.stockId }).session(session);
+      if (!stock) throw new AppError(`Stock item ${movement.stockId} not found`, 404);
       const reversalQuantity = -movement.quantity;
       const newStock = stock.currentStock + reversalQuantity;
 
-      await stock.constructor.findByIdAndUpdate(
+      // Undo the cost effect too. totalValue is the cost that moved with the stock: an inbound
+      // movement added it to the pool, an outbound one took it out.
+      const costDelta = movement.quantity > 0 ? -(movement.totalValue || 0) : (movement.totalValue || 0);
+      const priorCostValue =
+        stock.costValue ?? costing.roundValue(stock.currentStock * (stock.purchasePrice || 0));
+      const newCostValue = costing.roundValue(priorCostValue + costDelta);
+      const newAvg = costing.recalcAvg(newStock, newCostValue, costing.roundRate(stock.purchasePrice || 0));
+
+      await Stock.findByIdAndUpdate(
         stock._id,
-        { currentStock: newStock, updatedAt: new Date() },
+        {
+          currentStock: newStock,
+          costValue: newCostValue,
+          purchasePrice: newAvg,
+          updatedAt: new Date(),
+        },
         { session }
       );
 
@@ -976,7 +1200,12 @@ const logAmount = balanceEffect;
           referenceId: transactionId,
           referenceNumber: `REV-${transaction.transactionNo}`,
           unitCost: movement.unitCost,
-          totalValue: Math.abs(reversalQuantity) * movement.unitCost,
+          totalValue: movement.totalValue,
+          costBasis: movement.costBasis,
+          rateBefore: stock.purchasePrice,
+          rateAfter: newAvg,
+          costPoolAfter: newCostValue,
+          poolQtyAfter: newStock,
           notes: `Reversal of ${movement.notes}`,
           createdBy,
           batchNumber: movement.batchNumber,

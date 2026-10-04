@@ -9,27 +9,21 @@ const Vendor = require("../../models/modules/vendorModel");
 const Transaction = require("../../models/modules/transactionModel");
 const Transactor = require("../../models/modules/financial/transactorModel");
 const AppError = require("../../utils/AppError");
+const NumberSeriesService = require("../core/numberSeriesService");
+const FiscalYearService = require("../core/fiscalYearService");
+const { naturalBalance, categoryOf } = require("../../utils/accounting");
 const mongoose = require("mongoose");
+const { ensurePartyAccount } = require("./partyAccounts");
+const LedgerVoucherService = require("./ledgerVoucherService");
 const DebitLog = require("../../models/modules/DebitLog"); // ADD THIS
 const CreditLog = require("../../models/modules/CreditLog"); // ADD THIS
 
 class FinancialService {
   // Generate voucher number based on type
-  static generateVoucherNo(type) {
-    const prefixes = {
-      receipt: "RV",
-      payment: "PV",
-      journal: "JV",
-      contra: "CV",
-      expense: "EV",
-    };
-
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const sequence = String(Math.floor(Math.random() * 999) + 1).padStart(
-      3,
-      "0"
-    );
-    return `${prefixes[type]}-${dateStr}-${sequence}`;
+  // Voucher numbers come from NumberSeriesService (one atomic counter per series and fiscal
+  // year). The previous generator used a random 3-digit suffix and collided.
+  static async generateVoucherNo(type, date, session) {
+    return NumberSeriesService.allocate(NumberSeriesService.forVoucherType(type), date, { session });
   }
 
   // Helper: Centralized cash balance adjustment (for Customer/Vendor)
@@ -96,7 +90,9 @@ class FinancialService {
           throw new AppError("Voucher type is required", 400);
         }
 
-        const voucherNo = this.generateVoucherNo(voucherType);
+        const postingDate = voucherData.date || new Date();
+        await FiscalYearService.assertPostingAllowed(postingDate, { session });
+        const voucherNo = await this.generateVoucherNo(voucherType, postingDate, session);
         console.log(
           `[Transaction] Started for voucher ${voucherNo} with session ${session.id}`
         );
@@ -117,26 +113,31 @@ class FinancialService {
             );
             break;
           case "journal":
-            processedData = await this.processJournalVoucher(
-              voucherData,
-              session
-            );
+            // rows on the chart of accounts, or the older two-account form
+            processedData = Array.isArray(voucherData.lines)
+              ? await LedgerVoucherService.processJournal(voucherData, session)
+              : await this.processJournalVoucher(voucherData, session);
             break;
           case "contra":
-            processedData = await this.processContraVoucher(
-              voucherData,
-              session
-            );
+            processedData = voucherData.ledgerBased
+              ? await LedgerVoucherService.processContra(voucherData, session)
+              : await this.processContraVoucher(voucherData, session);
             break;
           case "expense":
-            processedData = await this.processExpenseVoucher(
-              voucherData,
-              session
-            );
+            processedData = voucherData.ledgerBased
+              ? await LedgerVoucherService.processExpense(voucherData, session, { PaymentModeService: require("../banking/paymentModeService") })
+              : await this.processExpenseVoucher(voucherData, session);
+            break;
+          case "debit_note":
+          case "credit_note":
+            processedData = await this.processNoteWithBalance(voucherData, session, voucherType);
             break;
           default:
             throw new AppError("Invalid voucher type", 400);
         }
+
+        const { _cheque, _vatPercent, ...storable } = processedData;
+        processedData = storable;
 
         const voucherDoc = {
           voucherNo,
@@ -148,6 +149,9 @@ class FinancialService {
 
         const voucher = await Voucher.create([voucherDoc], { session });
         const newVoucher = voucher[0];
+
+        // A cheque is recorded in the cheque register; it waits there until it clears.
+        if (_cheque) await this.registerCheque(newVoucher, _cheque, voucherType === "receipt" ? "receipt" : "payment", createdBy, session);
 
         // Create ledger entries only if approved
         if (newVoucher.status === "approved") {
@@ -200,35 +204,12 @@ class FinancialService {
       throw new AppError("Customer not found", 404);
     }
 
-    // Validate payment mode
-    if (!["cash", "bank", "cheque", "online"].includes(paymentMode)) {
-      throw new AppError("Invalid payment mode", 400);
-    }
-
-    // Validate payment details based on payment mode
-    if (
-      paymentMode === "cheque" &&
-      (!paymentDetails.chequeDetails ||
-        !paymentDetails.chequeDetails.chequeNumber)
-    ) {
-      throw new AppError("Cheque details required for cheque payment", 400);
-    }
-    if (
-      paymentMode === "online" &&
-      (!paymentDetails.onlineDetails ||
-        !paymentDetails.onlineDetails.transactionId)
-    ) {
-      throw new AppError(
-        "Online transaction details required for online payment",
-        400
-      );
-    }
-    if (
-      paymentMode === "bank" &&
-      (!paymentDetails.bankDetails || !paymentDetails.bankDetails.accountNumber)
-    ) {
-      throw new AppError("Bank details required for bank payment", 400);
-    }
+    // Validate the payment mode and work out where the money goes (cash or bank account, the
+    // cheques account until a cheque clears, a card's settlement account less its fee...)
+    const money = await require("../banking/paymentModeService").resolve({
+      direction: "receipt", mode: paymentMode, details: paymentDetails, amount: totalAmount, date,
+      description: `Receipt from ${customer.customerName}`, session,
+    });
 
     // Validate and allocate linked invoices (parallel fetch for optimization)
     let validatedInvoices = [];
@@ -269,12 +250,9 @@ class FinancialService {
 
         invoice.paidAmount += allocated;
         invoice.outstandingAmount = expectedNew;
-        invoice.status =
-          expectedNew === 0
-            ? "paid"
-            : invoice.paidAmount > 0
-            ? "partial"
-            : "unpaid";
+        // Whether it is paid is paidAmount / outstandingAmount. The document's status stays
+        // APPROVED: overwriting it made a part-paid invoice disappear from ageing, returns, credit
+        // control and deletion, which all look for APPROVED documents.
         await invoice.save({ session });
 
         return {
@@ -307,27 +285,15 @@ class FinancialService {
     );
 
     // Create entries for double-entry accounting (parallel fetch)
-    const [cashBankAccount, customerAccount] = await Promise.all([
-      this.getCashBankAccount(paymentMode, session),
+    const customerAccount =
       totalAllocated > 0
-        ? this.getOrCreateCustomerAccount(
-            customerId,
-            customer.customerName,
-            session
-          )
-        : null,
-    ]);
+        ? await this.getOrCreateCustomerAccount(customerId, customer.customerName, session)
+        : null;
 
     const entries = [];
 
-    // Debit: Cash/Bank Account
-    entries.push({
-      accountId: cashBankAccount._id,
-      accountName: cashBankAccount.accountName,
-      debitAmount: totalAmount,
-      creditAmount: 0,
-      description: `Receipt from ${customer.customerName}`,
-    });
+    // Debit: where the money went (cash / bank / cheques in hand / card settlement, and any card fee)
+    entries.push(...money.legs);
 
     // Credit: Customer Receivable Account (for allocated part)
     if (totalAllocated > 0 && customerAccount) {
@@ -362,8 +328,9 @@ class FinancialService {
       partyType: "Customer",
       partyName: customer.customerName,
       linkedInvoices: validatedInvoices,
-      paymentMode,
-      paymentDetails,
+      paymentMode: money.mode,
+      paymentDetails: money.details,
+      _cheque: money.cheque,
       totalAmount,
       onAccountAmount,
       narration,
@@ -403,33 +370,11 @@ class FinancialService {
       throw new AppError("Vendor not found", 404);
     }
 
-    // Validate payment mode and details (same as receipt)
-    if (!["cash", "bank", "cheque", "online"].includes(paymentMode)) {
-      throw new AppError("Invalid payment mode", 400);
-    }
-    if (
-      paymentMode === "cheque" &&
-      (!paymentDetails.chequeDetails ||
-        !paymentDetails.chequeDetails.chequeNumber)
-    ) {
-      throw new AppError("Cheque details required for cheque payment", 400);
-    }
-    if (
-      paymentMode === "online" &&
-      (!paymentDetails.onlineDetails ||
-        !paymentDetails.onlineDetails.transactionId)
-    ) {
-      throw new AppError(
-        "Online transaction details required for online payment",
-        400
-      );
-    }
-    if (
-      paymentMode === "bank" &&
-      (!paymentDetails.bankDetails || !paymentDetails.bankDetails.accountNumber)
-    ) {
-      throw new AppError("Bank details required for bank payment", 400);
-    }
+    // Validate the payment mode and work out where the money comes from
+    const money = await require("../banking/paymentModeService").resolve({
+      direction: "payment", mode: paymentMode, details: paymentDetails, amount: totalAmount, date,
+      description: `Payment to ${vendor.vendorName}`, session,
+    });
 
     // Validate and allocate linked invoices (parallel)
     let validatedInvoices = [];
@@ -470,12 +415,9 @@ class FinancialService {
 
         invoice.paidAmount += allocated;
         invoice.outstandingAmount = expectedNew;
-        invoice.status =
-          expectedNew === 0
-            ? "paid"
-            : invoice.paidAmount > 0
-            ? "partial"
-            : "unpaid";
+        // Whether it is paid is paidAmount / outstandingAmount. The document's status stays
+        // APPROVED: overwriting it made a part-paid invoice disappear from ageing, returns, credit
+        // control and deletion, which all look for APPROVED documents.
         await invoice.save({ session });
 
         return {
@@ -508,23 +450,15 @@ class FinancialService {
     );
 
     // Create entries (parallel fetch)
-    const [cashBankAccount, vendorAccount] = await Promise.all([
-      this.getCashBankAccount(paymentMode, session),
+    const vendorAccount =
       totalAllocated > 0
-        ? this.getOrCreateVendorAccount(vendorId, vendor.vendorName, session)
-        : null,
-    ]);
+        ? await this.getOrCreateVendorAccount(vendorId, vendor.vendorName, session)
+        : null;
 
     const entries = [];
 
-    // Credit: Cash/Bank Account (outflow)
-    entries.push({
-      accountId: cashBankAccount._id,
-      accountName: cashBankAccount.accountName,
-      debitAmount: 0,
-      creditAmount: totalAmount,
-      description: `Payment to ${vendor.vendorName}`,
-    });
+    // Credit: where the money came from (cash / bank / cheques issued / card)
+    entries.push(...money.legs);
 
     // Debit: Vendor Payable Account (for allocated part)
     if (totalAllocated > 0 && vendorAccount) {
@@ -559,14 +493,56 @@ class FinancialService {
       partyType: "Vendor",
       partyName: vendor.vendorName,
       linkedInvoices: validatedInvoices,
-      paymentMode,
-      paymentDetails,
+      paymentMode: money.mode,
+      paymentDetails: money.details,
+      _cheque: money.cheque,
       totalAmount,
       onAccountAmount,
       narration,
       entries,
       status: "approved",
     };
+  }
+
+  // Records the cheque behind a receipt or payment voucher and links it to the voucher.
+  static async registerCheque(voucher, cheque, direction, createdBy, session) {
+    const ChequeService = require("../banking/chequeService");
+    const row = await ChequeService.register({ voucher, cheque, direction, createdBy, session, req: {} });
+    voucher.paymentDetails = { ...(voucher.paymentDetails?.toObject?.() || voucher.paymentDetails || {}), chequeId: row._id };
+    await voucher.save({ session });
+    return row;
+  }
+
+  // Debit and credit notes. One that lowers what the party owes and is not set against an invoice
+  // is money on account, like an unallocated receipt, so the party's balance moves with it.
+  static async processNoteWithBalance(data, session, voucherType) {
+    const processed = await LedgerVoucherService.processNote(data, session, { voucherType });
+    const reduces = (processed.partyType === "Customer" && voucherType === "credit_note") || (processed.partyType === "Vendor" && voucherType === "debit_note");
+    if (reduces && !processed.linkedInvoices.length) {
+      processed.onAccountAmount = processed.totalAmount;
+      await this.adjustPartyCashBalance(processed.partyId, processed.partyType, processed.totalAmount, session, "add");
+    }
+    return processed;
+  }
+
+  // Everything a posted voucher did, undone: ledger entries, invoice settlements, party logs and the
+  // on-account balance. Used by delete, and by a cheque that bounces.
+  static async reverseVoucherEffects(voucher, session) {
+    await this.reverseLedgerEntries(voucher._id, session);
+    await this.reverseAllocations(voucher, session);
+    const LogModel = voucher.partyType === "Vendor" ? DebitLog : CreditLog;
+    await LogModel.deleteMany({ ref: voucher.voucherNo }, { session });
+    if (voucher.partyType && voucher.onAccountAmount > 0) {
+      await this.adjustPartyCashBalance(voucher.partyId, voucher.partyType, voucher.onAccountAmount, session, "subtract");
+    }
+    // The older transactor-based contra and journal vouchers also moved balances on those accounts.
+    if (!voucher.ledgerBased) {
+      if (voucher.voucherType === "contra" && voucher.fromAccountId && voucher.toAccountId) {
+        await this.reverseContraBalances(voucher, session);
+      } else if (voucher.voucherType === "journal" && voucher.entries && voucher.entries.length >= 2) {
+        await this.reverseJournalBalances(voucher, session);
+      }
+    }
   }
 
   // Process Journal Voucher - Updated to handle debitAccount and creditAccount from Transactor
@@ -1022,150 +998,22 @@ class FinancialService {
 
   // Helper: Get or create customer receivable account (asset) - Parallel if needed, but single here
   static async getOrCreateCustomerAccount(customerId, customerName, session) {
-    if (!mongoose.Types.ObjectId.isValid(customerId)) {
-      throw new AppError("Invalid customer ID", 400);
-    }
-    const accountName = `Customer - ${customerName}`;
-    let account = await LedgerAccount.findOne({
-      accountName,
-      accountType: "asset",
-      subType: "current_asset",
-    })
-      .select("accountCode accountName")
-      .session(session);
-
-    if (!account) {
-      account = await LedgerAccount.create(
-        [
-          {
-            accountCode: `CUST${customerId.toString().slice(-6)}`,
-            accountName,
-            accountType: "asset",
-            subType: "current_asset",
-            allowDirectPosting: true,
-            description: `Receivables from ${customerName}`,
-            createdBy: new mongoose.Types.ObjectId(),
-          },
-        ],
-        { session }
-      );
-      account = account[0];
-      console.log(`[Account] Created customer account: ${accountName}`);
-    }
-
-    return account;
+    return ensurePartyAccount("customer", customerId, customerName, { session: session });
   }
 
   // Helper: Get or create customer advance account (liability)
-  static async getOrCreateCustomerAdvanceAccount(
-    customerId,
-    customerName,
-    session
-  ) {
-    if (!mongoose.Types.ObjectId.isValid(customerId)) {
-      throw new AppError("Invalid customer ID", 400);
-    }
-    const accountName = `Customer Advance - ${customerName}`;
-    let account = await LedgerAccount.findOne({
-      accountName,
-      accountType: "liability",
-      subType: "current_liability",
-    })
-      .select("accountCode accountName")
-      .session(session);
-
-    if (!account) {
-      account = await LedgerAccount.create(
-        [
-          {
-            accountCode: `CADV${customerId.toString().slice(-6)}`,
-            accountName,
-            accountType: "liability",
-            subType: "current_liability",
-            allowDirectPosting: true,
-            description: `Advances from ${customerName}`,
-            createdBy: new mongoose.Types.ObjectId(),
-          },
-        ],
-        { session }
-      );
-      account = account[0];
-      console.log(`[Account] Created customer advance account: ${accountName}`);
-    }
-
-    return account;
+  static async getOrCreateCustomerAdvanceAccount(customerId, customerName, session) {
+    return ensurePartyAccount("customerAdvance", customerId, customerName, { session: session });
   }
 
   // Helper: Get or create vendor payable account (liability)
   static async getOrCreateVendorAccount(vendorId, vendorName, session) {
-    if (!mongoose.Types.ObjectId.isValid(vendorId)) {
-      throw new AppError("Invalid vendor ID", 400);
-    }
-    const accountName = `Vendor - ${vendorName}`;
-    let account = await LedgerAccount.findOne({
-      accountName,
-      accountType: "liability",
-      subType: "current_liability",
-    })
-      .select("accountCode accountName")
-      .session(session);
-
-    if (!account) {
-      account = await LedgerAccount.create(
-        [
-          {
-            accountCode: `VEND${vendorId.toString().slice(-6)}`,
-            accountName,
-            accountType: "liability",
-            subType: "current_liability",
-            allowDirectPosting: true,
-            description: `Payables to ${vendorName}`,
-            createdBy: new mongoose.Types.ObjectId(),
-          },
-        ],
-        { session }
-      );
-      account = account[0];
-      console.log(`[Account] Created vendor account: ${accountName}`);
-    }
-
-    return account;
+    return ensurePartyAccount("vendor", vendorId, vendorName, { session: session });
   }
 
   // Helper: Get or create vendor advance account (asset)
   static async getOrCreateVendorAdvanceAccount(vendorId, vendorName, session) {
-    if (!mongoose.Types.ObjectId.isValid(vendorId)) {
-      throw new AppError("Invalid vendor ID", 400);
-    }
-    const accountName = `Advance to Vendor - ${vendorName}`;
-    let account = await LedgerAccount.findOne({
-      accountName,
-      accountType: "asset",
-      subType: "current_asset",
-    })
-      .select("accountCode accountName")
-      .session(session);
-
-    if (!account) {
-      account = await LedgerAccount.create(
-        [
-          {
-            accountCode: `VADV${vendorId.toString().slice(-6)}`,
-            accountName,
-            accountType: "asset",
-            subType: "current_asset",
-            allowDirectPosting: true,
-            description: `Advances to ${vendorName}`,
-            createdBy: new mongoose.Types.ObjectId(),
-          },
-        ],
-        { session }
-      );
-      account = account[0];
-      console.log(`[Account] Created vendor advance account: ${accountName}`);
-    }
-
-    return account;
+    return ensurePartyAccount("vendorAdvance", vendorId, vendorName, { session: session });
   }
 
   // Create ledger entries for double-entry accounting - Batched insert
@@ -1191,7 +1039,7 @@ class FinancialService {
     await LedgerEntry.insertMany(ledgerEntries, { session });
 
     // Update account balances - Skip for Transactor accounts (handled in processJournalVoucher and processContraVoucher)
-    if (voucher.voucherType !== "contra" && voucher.voucherType !== "journal") {
+    if (voucher.ledgerBased || (voucher.voucherType !== "contra" && voucher.voucherType !== "journal")) {
       await this.updateAccountBalances(voucher.entries, session);
     }
   }
@@ -1364,6 +1212,7 @@ class FinancialService {
 
     if (filters.voucherType) query.voucherType = filters.voucherType;
     if (filters.status) query.status = filters.status;
+    if (filters.paymentMode) query.paymentMode = filters.paymentMode === "transfer" ? { $in: ["transfer", "online"] } : filters.paymentMode;
     if (filters.partyId && mongoose.Types.ObjectId.isValid(filters.partyId))
       query.partyId = filters.partyId;
     if (filters.approvalStatus) query.approvalStatus = filters.approvalStatus;
@@ -1377,13 +1226,14 @@ class FinancialService {
       }
       if (filters.dateTo) {
         const toDate = new Date(filters.dateTo);
-        if (!isNaN(toDate)) query.date.$lte = toDate;
+        // a date with no time means the whole of that day
+        if (!isNaN(toDate)) query.date.$lte = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.dateTo)) ? new Date(toDate.getTime() + 86400000 - 1) : toDate;
       }
     }
 
     // Search functionality
     if (filters.search) {
-      const regex = new RegExp(filters.search, "i");
+      const regex = new RegExp(String(filters.search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"); // typed text, not a pattern
       query.$or = [
         { voucherNo: regex },
         { narration: regex },
@@ -1498,6 +1348,12 @@ class FinancialService {
           throw new AppError("Voucher not found", 404);
         }
 
+        // Period lock: nothing may change inside a closed fiscal year.
+        await FiscalYearService.assertPostingAllowed(oldVoucher.date, { session });
+
+        if (["bounced", "cancelled"].includes(oldVoucher.status)) {
+          throw new AppError(`A ${oldVoucher.status} voucher cannot be edited`, 400, "VOUCHER_VOIDED");
+        }
         if (oldVoucher.status === "approved" && !data.forceUpdate) {
           throw new AppError("Cannot update approved voucher", 400);
         }
@@ -1513,11 +1369,23 @@ class FinancialService {
           data.paymentDetails ||
           data.fromAccount ||
           data.toAccount ||
+          data.lines ||
+          data.amount ||
+          data.expenseAccountId ||
+          data.referenceInvoiceId ||
           data.voucherType === "receipt" ||
           data.voucherType === "payment" ||
           data.voucherType === "contra" ||
-          data.voucherType === "journal"
+          data.voucherType === "journal" ||
+          data.voucherType === "expense" ||
+          data.voucherType === "debit_note" ||
+          data.voucherType === "credit_note"
         ) {
+          // a cheque that has cleared cannot be edited away; one that has not is withdrawn and
+          // recorded again below
+          if (oldVoucher.paymentMode === "cheque") {
+            await require("../banking/chequeService").onVoucherRemoved(oldVoucher, { session, req: {}, adminId: updatedBy, forEdit: true });
+          }
           await this.reverseLedgerEntries(id, session);
           await this.reverseAllocations(oldVoucher, session);
 
@@ -1533,18 +1401,20 @@ class FinancialService {
           }
 
           // Reverse Transactor balance changes for contra or journal vouchers
-          if (
-            oldVoucher.voucherType === "contra" &&
-            oldVoucher.fromAccountId &&
-            oldVoucher.toAccountId
-          ) {
-            await this.reverseContraBalances(oldVoucher, session);
-          } else if (
-            oldVoucher.voucherType === "journal" &&
-            oldVoucher.entries &&
-            oldVoucher.entries.length >= 2
-          ) {
-            await this.reverseJournalBalances(oldVoucher, session);
+          if (!oldVoucher.ledgerBased) {
+            if (
+              oldVoucher.voucherType === "contra" &&
+              oldVoucher.fromAccountId &&
+              oldVoucher.toAccountId
+            ) {
+              await this.reverseContraBalances(oldVoucher, session);
+            } else if (
+              oldVoucher.voucherType === "journal" &&
+              oldVoucher.entries &&
+              oldVoucher.entries.length >= 2
+            ) {
+              await this.reverseJournalBalances(oldVoucher, session);
+            }
           }
 
           needReprocess = true;
@@ -1558,43 +1428,54 @@ class FinancialService {
           ];
         }
 
+        let updatedCheque = null;
         if (needReprocess) {
           const processData = { ...oldVoucher.toObject(), ...data };
           let processedData;
+          // a ledger-based voucher is stored as ledger entries / note lines; hand them back to the
+          // processors in the shape they take
+          if (oldVoucher.ledgerBased) {
+            if (!processData.lines) {
+              processData.lines =
+                oldVoucher.voucherType === "journal"
+                  ? oldVoucher.entries.map((e) => ({ accountId: e.accountId, debit: e.debitAmount, credit: e.creditAmount, narration: e.description }))
+                  : (oldVoucher.noteLines || []).map((l) => ({ accountId: l.accountId, description: l.description, amount: l.amount, taxCodeId: l.taxCodeId }));
+            }
+            if (oldVoucher.voucherType === "expense" && data.amount === undefined) processData.amount = oldVoucher.subtotal;
+            if (oldVoucher.voucherType === "expense" && data.vendorId === undefined && oldVoucher.partyId) processData.vendorId = oldVoucher.partyId;
+          }
           switch (oldVoucher.voucherType) {
             case "receipt":
-              processedData = await this.processReceiptVoucher(
-                processData,
-                session
-              );
+              processedData = await this.processReceiptVoucher(processData, session);
               break;
             case "payment":
-              processedData = await this.processPaymentVoucher(
-                processData,
-                session
-              );
+              processedData = await this.processPaymentVoucher(processData, session);
               break;
             case "journal":
-              processedData = await this.processJournalVoucher(
-                processData,
-                session
-              );
+              processedData = oldVoucher.ledgerBased
+                ? await LedgerVoucherService.processJournal(processData, session)
+                : await this.processJournalVoucher(processData, session);
               break;
             case "contra":
-              processedData = await this.processContraVoucher(
-                processData,
-                session
-              );
+              processedData = oldVoucher.ledgerBased
+                ? await LedgerVoucherService.processContra(processData, session)
+                : await this.processContraVoucher(processData, session);
               break;
             case "expense":
-              processedData = await this.processExpenseVoucher(
-                processData,
-                session
-              );
+              processedData = oldVoucher.ledgerBased
+                ? await LedgerVoucherService.processExpense(processData, session, { PaymentModeService: require("../banking/paymentModeService") })
+                : await this.processExpenseVoucher(processData, session);
+              break;
+            case "debit_note":
+            case "credit_note":
+              processedData = await this.processNoteWithBalance(processData, session, oldVoucher.voucherType);
               break;
             default:
               throw new AppError("Invalid voucher type", 400);
           }
+          const { _cheque, _vatPercent, ...storable } = processedData;
+          processedData = storable;
+          updatedCheque = _cheque;
           Object.assign(oldVoucher, processedData);
         } else {
           Object.assign(oldVoucher, data);
@@ -1605,6 +1486,9 @@ class FinancialService {
 
         if (needReprocess && oldVoucher.status === "approved") {
           await this.createLedgerEntries(oldVoucher, updatedBy, session);
+        }
+        if (updatedCheque) {
+          await this.registerCheque(oldVoucher, updatedCheque, oldVoucher.voucherType === "receipt" ? "receipt" : "payment", updatedBy, session);
         }
 
         await session.commitTransaction();
@@ -1715,6 +1599,9 @@ class FinancialService {
           throw new AppError("Voucher not found", 404);
         }
 
+        // Period lock: nothing may change inside a closed fiscal year.
+        await FiscalYearService.assertPostingAllowed(voucher.date, { session });
+
         if (!["approve", "reject"].includes(action)) {
           throw new AppError("Invalid action. Use approve or reject", 400);
         }
@@ -1789,38 +1676,16 @@ class FinancialService {
           throw new AppError("Voucher not found", 404);
         }
 
-        if (voucher.status === "approved") {
-          await this.reverseLedgerEntries(id, session);
-          await this.reverseAllocations(voucher, session);
-          // ADD: Reverse DebitLog/CreditLog entries
-          const LogModel =
-            voucher.partyType === "Vendor" ? DebitLog : CreditLog;
-          await LogModel.deleteMany({ ref: voucher.voucherNo }, { session });
-          // Reverse cashBalance adjustment
-          if (voucher.partyType && voucher.onAccountAmount > 0) {
-            await this.adjustPartyCashBalance(
-              voucher.partyId,
-              voucher.partyType,
-              voucher.onAccountAmount,
-              session,
-              "subtract"
-            );
-          }
+        // Period lock: nothing may change inside a closed fiscal year.
+        await FiscalYearService.assertPostingAllowed(voucher.date, { session });
 
-          // Reverse Transactor balance changes for contra or journal vouchers
-          if (
-            voucher.voucherType === "contra" &&
-            voucher.fromAccountId &&
-            voucher.toAccountId
-          ) {
-            await this.reverseContraBalances(voucher, session);
-          } else if (
-            voucher.voucherType === "journal" &&
-            voucher.entries &&
-            voucher.entries.length >= 2
-          ) {
-            await this.reverseJournalBalances(voucher, session);
-          }
+        // A cheque that has not cleared is withdrawn with its voucher (a cleared one is reversed
+        // with it, the ledger entries of the clearing included).
+        if (voucher.paymentMode === "cheque") {
+          await require("../banking/chequeService").onVoucherRemoved(voucher, { session, req: {}, adminId: deletedBy, forEdit: false });
+        }
+        if (voucher.status === "approved") {
+          await this.reverseVoucherEffects(voucher, session);
         }
 
         // Mark as cancelled instead of hard delete
@@ -1894,12 +1759,6 @@ class FinancialService {
         if (invoice.paidAmount < 0) invoice.paidAmount = 0;
         if (invoice.outstandingAmount > invoice.totalAmount)
           invoice.outstandingAmount = invoice.totalAmount;
-        invoice.status =
-          invoice.outstandingAmount === invoice.totalAmount
-            ? "unpaid"
-            : invoice.outstandingAmount === 0
-            ? "paid"
-            : "partial";
         await invoice.save({ session });
       }
     });
@@ -1914,6 +1773,10 @@ class FinancialService {
     switch (reportType) {
       case "trial_balance":
         return this.getTrialBalance(dateFrom, dateTo);
+      case "profit_loss":
+        return this.getProfitAndLoss(dateFrom, dateTo);
+      case "balance_sheet":
+        return this.getBalanceSheet(dateTo);
       case "cash_flow":
         return this.getCashFlowReport(dateFrom, dateTo);
       case "expense_summary":
@@ -1931,23 +1794,35 @@ class FinancialService {
   }
 
   // Trial Balance Report - Early match in aggregate
+  // Trial Balance: per account, opening (before dateFrom) and period movement, closing balance
+  // in its natural sign, and the closing position on the debit or credit side.
+  //
+  // LedgerEntry rows exist only for approved vouchers (createLedgerEntries is called on
+  // approval), and the entry has no `status` field - the previous `{status:"approved"}` match
+  // therefore matched nothing and the report was always empty.
   static async getTrialBalance(dateFrom, dateTo) {
-    const matchConditions = { status: "approved" }; // Only approved
-    if (dateFrom || dateTo) {
-      matchConditions.date = {};
-      if (dateFrom) matchConditions.date.$gte = new Date(dateFrom);
-      if (dateTo) matchConditions.date.$lte = new Date(dateTo);
-    }
+    const from = dateFrom ? new Date(dateFrom) : null;
+    const to = dateTo ? new Date(dateTo) : null;
 
-    const trialBalance = await LedgerEntry.aggregate([
-      { $match: matchConditions },
+    const match = { isReversed: { $ne: true } };
+    if (to) match.date = { $lte: to };
+
+    const inPeriod = (field) =>
+      from ? { $cond: [{ $gte: ["$date", from] }, field, 0] } : field;
+    const beforePeriod = (field) =>
+      from ? { $cond: [{ $lt: ["$date", from] }, field, 0] } : 0;
+
+    const rows = await LedgerEntry.aggregate([
+      { $match: match },
       {
         $group: {
           _id: "$accountId",
           accountName: { $first: "$accountName" },
           accountCode: { $first: "$accountCode" },
-          totalDebits: { $sum: "$debitAmount" },
-          totalCredits: { $sum: "$creditAmount" },
+          openingDebit: { $sum: beforePeriod("$debitAmount") },
+          openingCredit: { $sum: beforePeriod("$creditAmount") },
+          periodDebit: { $sum: inPeriod("$debitAmount") },
+          periodCredit: { $sum: inPeriod("$creditAmount") },
         },
       },
       {
@@ -1955,32 +1830,102 @@ class FinancialService {
           from: "ledgeraccounts",
           localField: "_id",
           foreignField: "_id",
-          as: "accountInfo",
-          pipeline: [{ $project: { accountType: 1 } }], // Optimize lookup
+          as: "acc",
+          pipeline: [{ $project: { accountType: 1, groupId: 1 } }],
         },
       },
       {
-        $project: {
-          accountName: 1,
-          accountCode: 1,
-          accountType: { $arrayElemAt: ["$accountInfo.accountType", 0] },
-          totalDebits: 1,
-          totalCredits: 1,
-          balance: { $subtract: ["$totalDebits", "$totalCredits"] },
+        $lookup: {
+          from: "accountgroups",
+          localField: "acc.groupId",
+          foreignField: "_id",
+          as: "grp",
+          pipeline: [{ $project: { category: 1, name: 1 } }],
         },
       },
-      { $sort: { accountCode: 1 } },
+      { $sort: { accountCode: 1, accountName: 1 } },
     ]);
 
+    const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const trialBalance = rows.map((row) => {
+      const accountType = row.acc?.[0]?.accountType;
+      // The account's group category wins; fall back to its legacy accountType.
+      const category = row.grp?.[0]?.category || categoryOf(accountType);
+      const net = r2(row.openingDebit + row.periodDebit - (row.openingCredit + row.periodCredit));
+      return {
+        _id: row._id,
+        accountName: row.accountName,
+        accountCode: row.accountCode,
+        accountType,
+        category,
+        groupName: row.grp?.[0]?.name || null,
+        openingBalance: r2(naturalBalance(category, row.openingDebit, row.openingCredit)),
+        totalDebits: r2(row.periodDebit),
+        totalCredits: r2(row.periodCredit),
+        // Natural balance: liabilities, equity and income read positive on the credit side.
+        balance: r2(
+          naturalBalance(category, row.openingDebit + row.periodDebit, row.openingCredit + row.periodCredit)
+        ),
+        closingDebit: net > 0 ? net : 0,
+        closingCredit: net < 0 ? -net : 0,
+      };
+    });
+
+    const sum = (key) => r2(trialBalance.reduce((t, a) => t + a[key], 0));
     const summary = {
-      totalDebits: trialBalance.reduce((sum, acc) => sum + acc.totalDebits, 0),
-      totalCredits: trialBalance.reduce(
-        (sum, acc) => sum + acc.totalCredits,
-        0
-      ),
+      totalDebits: sum("totalDebits"),
+      totalCredits: sum("totalCredits"),
+      closingDebit: sum("closingDebit"),
+      closingCredit: sum("closingCredit"),
     };
+    summary.isBalanced = Math.abs(summary.closingDebit - summary.closingCredit) < 0.01;
 
     return { trialBalance, summary };
+  }
+
+  // Profit & Loss for a period: income less expenses, from the same ledger as the Trial Balance.
+  // Amounts are the period's movement in each account's natural sign.
+  static async getProfitAndLoss(dateFrom, dateTo) {
+    const { trialBalance } = await this.getTrialBalance(dateFrom, dateTo);
+    const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const lines = (category) =>
+      trialBalance
+        .filter((a) => a.category === category)
+        .map((a) => ({
+          _id: a._id, accountCode: a.accountCode, accountName: a.accountName, groupName: a.groupName,
+          amount: r2(naturalBalance(category, a.totalDebits, a.totalCredits)),
+        }))
+        .filter((a) => Math.abs(a.amount) >= 0.005);
+    const income = lines("INCOME");
+    const expenses = lines("EXPENSE");
+    const totalIncome = r2(income.reduce((t, a) => t + a.amount, 0));
+    const totalExpenses = r2(expenses.reduce((t, a) => t + a.amount, 0));
+    return { dateFrom: dateFrom || null, dateTo: dateTo || null, income, expenses, totalIncome, totalExpenses, netProfit: r2(totalIncome - totalExpenses) };
+  }
+
+  // Balance Sheet as at a date. Profit earned to that date is shown inside equity (no year-end
+  // closing entries exist), so assets = liabilities + equity holds without them.
+  static async getBalanceSheet(asOf) {
+    const { trialBalance } = await this.getTrialBalance(undefined, asOf);
+    const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const lines = (category) =>
+      trialBalance
+        .filter((a) => a.category === category)
+        .map((a) => ({ _id: a._id, accountCode: a.accountCode, accountName: a.accountName, groupName: a.groupName, amount: r2(a.balance) }))
+        .filter((a) => Math.abs(a.amount) >= 0.005);
+    const sum = (arr) => r2(arr.reduce((t, a) => t + a.amount, 0));
+    const assets = lines("ASSET");
+    const liabilities = lines("LIABILITY");
+    const equity = lines("EQUITY");
+    const earned = r2(sum(lines("INCOME")) - sum(lines("EXPENSE")));
+    const totalAssets = sum(assets);
+    const totalLiabilities = sum(liabilities);
+    const totalEquity = r2(sum(equity) + earned);
+    return {
+      asOf: asOf || null, assets, liabilities, equity, profitToDate: earned,
+      totalAssets, totalLiabilities, totalEquity, totalLiabilitiesAndEquity: r2(totalLiabilities + totalEquity),
+      isBalanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
+    };
   }
 
   // Cash Flow Report - Early match
@@ -2037,18 +1982,18 @@ class FinancialService {
       { $match: matchConditions },
       {
         $lookup: {
-          from: "expensetypes",
+          from: "expensecategories",
           localField: "expenseCategoryId",
           foreignField: "_id",
           as: "category",
-          pipeline: [{ $project: { categoryName: 1 } }],
+          pipeline: [{ $project: { name: 1 } }],
         },
       },
       {
         $group: {
           _id: "$expenseCategoryId",
           categoryName: {
-            $first: { $arrayElemAt: ["$category.categoryName", 0] },
+            $first: { $arrayElemAt: ["$category.name", 0] },
           },
           totalAmount: { $sum: "$totalAmount" },
           count: { $sum: 1 },

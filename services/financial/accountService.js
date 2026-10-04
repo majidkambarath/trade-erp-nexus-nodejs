@@ -1,9 +1,12 @@
 const { Voucher, LedgerAccount, LedgerEntry } = require("../../models/modules/financial/financialModels");
+const NumberSeriesService = require("../core/numberSeriesService");
+const FiscalYearService = require("../core/fiscalYearService");
 const Customer = require("../../models/modules/customerModel");
 const Vendor = require("../../models/modules/vendorModel");
 const Transaction = require("../../models/modules/transactionModel");
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
+const { ensurePartyAccount } = require("./partyAccounts");
 
 class AccountService {
   static STATUS_RULES = {
@@ -21,17 +24,19 @@ class AccountService {
     CANCELLED: "cancelled",
   };
 
-  static generateVoucherNo(type) {
-    const prefixes = { purchase: "PURV", sale: "SALV", receipt: "RECV", payment: "PAYV", journal: "JRNL", contra: "CNTR", expense: "EXPV" };
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const sequence = String(Math.floor(Math.random() * 999) + 1).padStart(3, "0");
-    return `${prefixes[type] || "VOU"}-${dateStr}-${sequence}`;
+  // Atomic numbering from NumberSeriesService. The old generator used a random 3-digit suffix and
+  // collided. Account vouchers share the voucher series (RV/PV/JV...); purchase and sale
+  // vouchers have no series of their own and fall back to payment / receipt.
+  static async generateVoucherNo(type, date, session) {
+    const alias = { purchase: "payment", sale: "receipt" }[type] || type;
+    return NumberSeriesService.allocate(NumberSeriesService.forVoucherType(alias), date, { session });
   }
 
   static async createAccountVoucher(data, createdBy) {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
+      await FiscalYearService.assertPostingAllowed(data.date || new Date(), { session });
       const {
         voucherType,
         date = new Date(),
@@ -139,7 +144,7 @@ class AccountService {
 
       // Step 5: Create new voucher document
       const voucherDoc = {
-        voucherNo: this.generateVoucherNo(voucherType),
+        voucherNo: await this.generateVoucherNo(voucherType, date, session),
         voucherType,
         date,
         partyId,
@@ -486,7 +491,7 @@ class AccountService {
 
   static async getDefaultCashAccount(session) {
     let account = await LedgerAccount.findOne({
-      $or: [{ accountCode: "CASH001" }, { accountName: "Cash" }],
+      $or: [{ accountCode: "CASH001" }, { accountName: "Cash" }, { accountName: "Cash in Hand" }],
       isActive: true
     }).session(session);
 
@@ -512,59 +517,11 @@ class AccountService {
   }
 
   static async getOrCreateVendorAccount(vendorId, vendorName, session) {
-    const accountName = `Vendor - ${vendorName}`;
-    const accountCode = `VEND${vendorId.toString().slice(-6)}`;
-    let account = await LedgerAccount.findOne({
-      $or: [{ accountCode }, { accountName, accountType: "liability" }]
-    }).session(session);
-
-    if (!account) {
-      try {
-        [account] = await LedgerAccount.create([{
-          accountCode,
-          accountName,
-          accountType: "liability",
-          subType: "current_liability",
-          allowDirectPosting: true,
-          description: `Payables to ${vendorName}`,
-          createdBy: new mongoose.Types.ObjectId(),
-        }], { session });
-      } catch (error) {
-        if (error.code === 11000) {
-          account = await LedgerAccount.findOne({ $or: [{ accountCode }, { accountName }] }).session(session);
-          if (!account) throw error;
-        } else throw error;
-      }
-    }
-    return account;
+    return ensurePartyAccount("vendor", vendorId, vendorName, { session: session });
   }
 
   static async getOrCreateCustomerAccount(customerId, customerName, session) {
-    const accountName = `Customer - ${customerName}`;
-    const accountCode = `CUST${customerId.toString().slice(-6)}`;
-    let account = await LedgerAccount.findOne({
-      $or: [{ accountCode }, { accountName, accountType: "asset" }]
-    }).session(session);
-
-    if (!account) {
-      try {
-        [account] = await LedgerAccount.create([{
-          accountCode,
-          accountName,
-          accountType: "asset",
-          subType: "current_asset",
-          allowDirectPosting: true,
-          description: `Receivables from ${customerName}`,
-          createdBy: new mongoose.Types.ObjectId(),
-        }], { session });
-      } catch (error) {
-        if (error.code === 11000) {
-          account = await LedgerAccount.findOne({ $or: [{ accountCode }, { accountName }] }).session(session);
-          if (!account) throw error;
-        } else throw error;
-      }
-    }
-    return account;
+    return ensurePartyAccount("customer", customerId, customerName, { session: session });
   }
 
   static async createLedgerEntries(voucher, createdBy, session) {

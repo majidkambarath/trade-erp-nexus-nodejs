@@ -20,6 +20,21 @@ const itemSchema = new mongoose.Schema({
   brand: { type: String, default: null },
   origin: { type: String, default: null },
   reason: { type: String, trim: true },
+  // Pricing: computed on the server (utils/pricing.js). discountAmount is the amount actually
+  // taken off, whether the client sent a percentage or a fixed amount.
+  discountPercent: { type: Number, default: 0, min: 0, max: 100 },
+  discountAmount: { type: Number, default: 0, min: 0 },
+  grossAmount: { type: Number, default: 0, min: 0 },
+  taxableAmount: { type: Number, default: 0, min: 0 },
+  taxCodeId: { type: mongoose.Schema.Types.ObjectId, ref: "TaxCode", default: null },
+  taxKind: { type: String, default: null }, // snapshot of the tax code's kind at posting
+  // Batch / expiry for perishables (a batch belongs to a receipt, not to the product).
+  batchNumber: { type: String, trim: true, default: null },
+  expiryDate: { type: Date, default: null },
+  // Returns: the line of the original document this line returns.
+  returnOfLineId: { type: mongoose.Schema.Types.ObjectId, default: null },
+  // Batches a dispatch was allocated from (first-expiry-first-out).
+  allocations: [{ batchId: mongoose.Schema.Types.ObjectId, batchNumber: String, qty: Number, expiryDate: Date, _id: false }],
 });
 
 const transactionSchema = new mongoose.Schema({
@@ -64,6 +79,45 @@ const transactionSchema = new mongoose.Schema({
   paidAmount: { type: Number, default: 0, min: 0 },
   outstandingAmount: { type: Number, default: 0, min: 0 },
   items: [itemSchema],
+  // Header charges (freight, handling, ...): each has its own tax and posts to its own account.
+  charges: [
+    {
+      code: { type: String, trim: true },
+      description: { type: String, trim: true },
+      amount: { type: Number, required: true, min: 0 },
+      vatPercent: { type: Number, default: 0, min: 0 },
+      vatAmount: { type: Number, default: 0, min: 0 },
+      _id: false,
+    },
+  ],
+  // Server-computed totals (see utils/pricing.js). totalAmount === pricing.grandTotal.
+  pricing: {
+    gross: Number,
+    lineDiscount: Number,
+    net: Number,
+    lineVat: Number,
+    chargesNet: Number,
+    chargesVat: Number,
+    headerDiscount: Number,
+    roundOff: Number,
+    grandTotal: Number,
+  },
+  // Returns reference the document they return; quantities are validated against it.
+  returnOf: {
+    transactionId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction", default: null },
+    transactionNo: { type: String, default: null },
+  },
+  attachments: [
+    {
+      attachmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Attachment" },
+      fileName: { type: String, trim: true },
+      url: { type: String, trim: true },
+      fileType: { type: String, trim: true },
+      fileSize: { type: Number, min: 0 },
+      uploadedBy: { type: String },
+      uploadedAt: { type: Date, default: Date.now },
+    },
+  ],
   // Optional per-line discount support if frontend sends it
   // Keeping header-level discount authoritative unless specified otherwise
   terms: { type: String, trim: true },
@@ -111,6 +165,7 @@ transactionSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
 
 // Indexes
 transactionSchema.index({ partyId: 1, partyType: 1 });
+transactionSchema.index({ "returnOf.transactionId": 1 }, { sparse: true });
 transactionSchema.index({ status: 1 });
 transactionSchema.index({ date: -1 });
 // List query: filter by type, sort by createdAt. Without this the sort

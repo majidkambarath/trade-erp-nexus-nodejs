@@ -56,12 +56,30 @@ const voucherSchema = new mongoose.Schema({
     },
   ],
   onAccountAmount: { type: Number, default: 0, min: 0 },
+  // cash | bank | transfer | cheque | card. "online" is the old name for transfer and is still
+  // accepted on old vouchers. See services/banking/paymentModeService.js.
   paymentMode: {
     type: String,
-    enum: ["cash", "bank", "cheque", "online", null],
+    enum: ["cash", "bank", "transfer", "cheque", "card", "online", null],
     default: null,
   },
   paymentDetails: {
+    // The ledger account the money moved through (cash account, bank account, settlement account...)
+    accountId: { type: mongoose.Schema.Types.ObjectId, ref: "LedgerAccount" },
+    accountName: { type: String, trim: true },
+    reference: { type: String, trim: true }, // bank slip / transfer reference
+    referenceDate: { type: Date },
+    drawnOnBankId: { type: mongoose.Schema.Types.ObjectId, ref: "BankMaster" },
+    drawnOnBankName: { type: String, trim: true },
+    chequeId: { type: mongoose.Schema.Types.ObjectId, ref: "Cheque" },
+    isPDC: { type: Boolean },
+    cardId: { type: mongoose.Schema.Types.ObjectId, ref: "CardMaster" },
+    cardLabel: { type: String, trim: true },
+    cardTypeName: { type: String, trim: true },
+    cardLast4: { type: String, trim: true },
+    approvalCode: { type: String, trim: true },
+    cardFee: { type: Number, min: 0 },
+    // older vouchers keep these
     bankDetails: {
       accountNumber: { type: String, trim: true },
       accountName: { type: String, trim: true },
@@ -88,9 +106,36 @@ const voucherSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "Transactor",
     required: function () {
-      return this.voucherType === "expense";
+      return this.voucherType === "expense" && !this.ledgerBased;
     },
   },
+
+  // True for vouchers posted straight to the chart of accounts (ledger accounts). Older journal,
+  // contra and expense vouchers were posted to "transactor" accounts and keep working as they were.
+  ledgerBased: { type: Boolean, default: false },
+  description: { type: String, trim: true },
+  // expense vouchers on the chart: which expense account, the VAT, who was paid
+  expenseAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "LedgerAccount" },
+  expenseAccountName: { type: String, trim: true },
+  taxCodeId: { type: mongoose.Schema.Types.ObjectId, ref: "TaxCode" },
+  subtotal: { type: Number, min: 0 },
+  vatTotal: { type: Number, min: 0 },
+  // debit / credit notes
+  noteLines: [
+    {
+      accountId: { type: mongoose.Schema.Types.ObjectId, ref: "LedgerAccount" },
+      accountName: { type: String, trim: true },
+      accountCode: { type: String, trim: true },
+      description: { type: String, trim: true },
+      amount: { type: Number, min: 0 },
+      taxCodeId: { type: mongoose.Schema.Types.ObjectId, ref: "TaxCode" },
+      vatPercent: { type: Number, min: 0, default: 0 },
+      vatAmount: { type: Number, min: 0, default: 0 },
+      _id: false,
+    },
+  ],
+  referenceInvoiceId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction" },
+  referenceInvoiceNo: { type: String, trim: true },
 
   expenseTypeName: { type: String, trim: true },
   transactorName: { type: String, trim: true },
@@ -170,9 +215,8 @@ voucherSchema.pre("save", function (next) {
   const date = new Date(this.date);
   this.month = date.getMonth() + 1;
   this.year = date.getFullYear();
-  const fyStart =
-    date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
-  this.financialYear = `${fyStart}-${fyStart + 1}`;
+  // January to December, the year the document falls in (it was April to March, an Indian year)
+  this.financialYear = String(date.getFullYear());
   if (this.voucherType === "journal") {
     const totalDebits = this.entries.reduce(
       (sum, entry) => sum + entry.debitAmount,
@@ -245,13 +289,46 @@ const ledgerAccountSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "LedgerAccount",
   },
+  // Account group (carries the category that decides how the balance is read). Optional so
+  // existing accounts keep working; accountType above stays as a denormalised copy of
+  // group.category.
+  groupId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "AccountGroup",
+    default: null,
+  },
   level: { type: Number, default: 0, min: 0 },
   isActive: { type: Boolean, default: true },
+  // For accounts in the Bank group: which bank, and the account's identifiers. The bank master
+  // holds the institution; this holds the account.
+  bank: {
+    bankId: { type: mongoose.Schema.Types.ObjectId, ref: "BankMaster", default: null },
+    branchCode: { type: String, trim: true, default: "" },
+    accountNumber: { type: String, trim: true, default: "" },
+    iban: { type: String, trim: true, uppercase: true, default: "" },
+    accountHolder: { type: String, trim: true, default: "" },
+  },
+  // openingBalance is an unsigned amount; openingSide says whether it is a debit or a credit,
+  // so a credit opening balance (e.g. a liability) is representable.
   openingBalance: { type: Number, default: 0, min: 0 },
+  openingSide: { type: String, enum: ["debit", "credit"], default: null },
   currentBalance: { type: Number, default: 0 },
   description: { type: String, trim: true },
   allowDirectPosting: { type: Boolean, default: true },
   isSystemAccount: { type: Boolean, default: false },
+  // Supporting documents (trade licence, bank letter, statements...). See attachmentService.
+  documents: [
+    {
+      attachmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Attachment" },
+      fileName: String,
+      url: String,
+      fileType: String,
+      fileSize: Number,
+      label: String,
+      uploadedAt: { type: Date, default: Date.now },
+      _id: false,
+    },
+  ],
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Admin",
@@ -277,6 +354,7 @@ ledgerAccountSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
 ledgerAccountSchema.index({ accountName: 1, isActive: 1 }); // For FinancialService.getCashBankAccount
 ledgerAccountSchema.index({ accountType: 1, subType: 1 }); // For FinancialService.getOrCreateCustomerAccount
 ledgerAccountSchema.index({ isActive: 1, allowDirectPosting: 1 }); // For FinancialService.processJournalVoucher
+ledgerAccountSchema.index({ groupId: 1, accountCode: 1 });
 
 const LedgerAccount = mongoose.model("LedgerAccount", ledgerAccountSchema);
 
@@ -362,9 +440,7 @@ ledgerEntrySchema.pre("save", function (next) {
   const date = new Date(this.date);
   this.month = date.getMonth() + 1;
   this.year = date.getFullYear();
-  const fyStart =
-    date.getMonth() >= 3 ? date.getFullYear() : date.getFullYear() - 1;
-  this.financialYear = `${fyStart}-${fyStart + 1}`;
+  this.financialYear = String(date.getFullYear()); // January to December
   next();
 });
 

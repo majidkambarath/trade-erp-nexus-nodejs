@@ -4,6 +4,7 @@ const vendorSchema = new mongoose.Schema({
   vendorId: { type: String, required: true, trim: true },
   vendorName: { type: String, required: true, trim: true },
   trnNO: { type: String, default: null },
+  participantId: { type: String, trim: true, default: null }, // Peppol id, matches inbound e-invoices
   contactPerson: { type: String, required: true, trim: true },
   email: { type: String, match: /\S+@\S+\.\S+/, sparse: true, trim: true },
   phone: { type: String, sparse: true, trim: true },
@@ -19,7 +20,7 @@ const vendorSchema = new mongoose.Schema({
     default: "Compliant",
   },
   enrollDate: { type: Date, default: Date.now },
-  cashBalance: { type: Number, default: 0, min: 0 }, // Used in FinancialService.adjustPartyCashBalance
+  cashBalance: { type: Number, default: 0 }, // signed: order postings move it below zero // Used in FinancialService.adjustPartyCashBalance
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

@@ -26,6 +26,10 @@ const stockSchema = new mongoose.Schema({
   purchasePrice: { type: Number, default: 0 },
   salesPrice: { type: Number, default: 0 },
   currentStock: { type: Number, default: 0 },
+  // Total cost of the units on hand. purchasePrice is the weighted-average unit cost
+  // (costValue / currentStock). null = not yet established: seeded from
+  // currentStock x purchasePrice the first time the item moves.
+  costValue: { type: Number, default: null },
   status: {
     type: String,
     enum: ["Active", "Inactive"],

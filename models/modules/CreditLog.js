@@ -8,7 +8,7 @@ const creditLogSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ["sales_order", "sales_return", "payment_made", "adjustment"],
+    enum: ["sales_order", "sales_return", "payment_made", "adjustment", "sales_order_reversed", "sales_return_reversed"],
     required: true,
   },
   date: { type: Date, default: Date.now },
@@ -19,7 +19,7 @@ const creditLogSchema = new mongoose.Schema({
   ref: { type: String },
   status: {
     type: String,
-    enum: ["UNPAID", "PARTIAL", "PAID"],
+    enum: ["UNPAID", "PARTIAL", "PAID", "REVERSED"],
     default: "UNPAID",
   },
   createdBy: { type: String, required: true },

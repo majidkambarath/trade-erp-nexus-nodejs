@@ -92,6 +92,21 @@ const inventoryMovementSchema = new mongoose.Schema({
     type: Date
   }, // Track expiry for specific movements
   
+  // Cost audit trail: every movement records the average cost before and after, and the pool
+  // it left behind, so it can be audited without replaying the ledger.
+  costBasis: {
+    type: String,
+    enum: ["purchase", "purchaseReturn", "sale", "salesReturn", "opening", "adjustment", null],
+    default: null
+  },
+  rateBefore: { type: Number, default: null },
+  rateAfter: { type: Number, default: null },
+  costPoolAfter: { type: Number, default: null },
+  poolQtyAfter: { type: Number, default: null },
+  // Cost of goods sold for a sales dispatch (quantity x average cost); null for other events.
+  cogsAmount: { type: Number, default: null },
+  companyId: { type: String, default: null },
+  branchId: { type: String, default: null },
   isReversed: {
     type: Boolean,
     default: false
@@ -109,6 +124,7 @@ const inventoryMovementSchema = new mongoose.Schema({
 inventoryMovementSchema.index({ stockId: 1, date: -1 });
 inventoryMovementSchema.index({ referenceId: 1, referenceType: 1 });
 inventoryMovementSchema.index({ eventType: 1, date: -1 });
+inventoryMovementSchema.index({ companyId: 1, branchId: 1, stockId: 1, date: 1, _id: 1 });
 
 // Virtual for movement direction
 inventoryMovementSchema.virtual('movementType').get(function() {

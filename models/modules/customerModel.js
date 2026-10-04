@@ -7,10 +7,18 @@ const customerSchema = new mongoose.Schema({
   email: { type: String, match: /\S+@\S+\.\S+/, sparse: true, trim: true },
   phone: { type: String, sparse: true, trim: true },
   trnNumber: { type: String, trim: true, default: null },
+  // Needed to issue an e-invoice to a VAT-registered buyer (PINT AE / Peppol).
+  eInvoice: {
+    participantId: { type: String, trim: true, default: null }, // "0235:100123456700003"
+    city: { type: String, trim: true, default: null },
+    countryCode: { type: String, trim: true, uppercase: true, default: "AE" },
+  },
   salesPerson: { type: String, trim: true, default: null, sparse: true },
   billingAddress: { type: String, default: null, trim: true },
   shippingAddress: { type: String, default: null, trim: true },
   creditLimit: { type: Number, default: 0, min: 0 },
+  // Goods dispatched to this customer must have at least this many days of shelf life left.
+  minShelfLifeDays: { type: Number, default: 0, min: 0 },
   paymentTerms: {
     type: String,
     enum: ["Net 30", "Net 45", "Net 60", "Cash on Delivery", "Prepaid"],
@@ -25,7 +33,7 @@ const customerSchema = new mongoose.Schema({
   totalOrders: { type: Number, default: 0, min: 0 },
   totalSpent: { type: Number, default: 0, min: 0 },
   lastOrder: { type: Date },
-  cashBalance: { type: Number, default: 0, min: 0 }, // Used in FinancialService.adjustPartyCashBalance
+  cashBalance: { type: Number, default: 0 }, // signed: order postings move it below zero // Used in FinancialService.adjustPartyCashBalance
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });

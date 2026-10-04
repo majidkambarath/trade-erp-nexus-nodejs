@@ -59,4 +59,9 @@ const errorHandler = (err, req, res, next) => {
   });
 };
 
+// The auth middleware builds its 401 / 403 errors with createAppError, which this module is
+// supposed to provide. It was never exported, so every denied permission threw a TypeError and
+// reached the client as a 500. The handler stays the default export, as before.
+const AppError = require("./AppError");
 module.exports = errorHandler;
+module.exports.createAppError = (message, statusCode, code, details) => new AppError(message, statusCode, code, details);
