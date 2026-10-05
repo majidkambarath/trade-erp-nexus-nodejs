@@ -93,7 +93,7 @@ class StatementService {
       purchase_order: "Purchase invoice", purchase_return: "Purchase return",
     };
     const [docs, vouchers] = await Promise.all([
-      Transaction.find({ partyId, type: { $in: types }, status: "APPROVED" }).select("transactionNo type date totalAmount").lean(),
+      Transaction.find({ partyId, type: { $in: types }, status: "APPROVED" }).select("transactionNo type date totalAmount isOpening docno").lean(),
       Voucher.find({ partyId, partyType, status: "approved", voucherType: { $in: ["receipt", "payment"] } })
         .select("voucherNo voucherType date totalAmount narration paymentMode").lean(),
     ]);
@@ -103,7 +103,8 @@ class StatementService {
       const increases = d.type === "sales_order" || d.type === "purchase_order";
       const amount = round2(d.totalAmount);
       rows.push({
-        _id: d._id, date: d.date, voucherNo: d.transactionNo, voucherType: d.type, narration: LABEL[d.type],
+        _id: d._id, date: d.date, voucherNo: d.transactionNo, voucherType: d.type,
+        narration: d.isOpening ? `Opening ${d.type === "sales_order" ? "sales" : "purchase"} invoice${d.docno ? " " + d.docno : ""}` : LABEL[d.type],
         debit: isVendor ? (increases ? 0 : amount) : (increases ? amount : 0),
         credit: isVendor ? (increases ? amount : 0) : (increases ? 0 : amount),
       });

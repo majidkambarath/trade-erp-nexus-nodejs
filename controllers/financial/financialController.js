@@ -159,6 +159,8 @@ exports.processVoucherApproval = catchAsync(async (req, res) => {
 
 // Get financial reports
 exports.getFinancialReports = catchAsync(async (req, res) => {
+  // the statements read the ledger: make sure earlier approved documents have reached it
+  await require("../../services/financial/defaultChartService").onOpenThrottled(req);
   const report = await FinancialService.getFinancialReports(req.query);
 
   res.status(200).json({

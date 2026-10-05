@@ -119,6 +119,19 @@ test("a ready invoice is sent, stored as sent, and moves to reported on successi
   assert.equal((await svc.EI.refresh(submission._id)).status, "REPORTED");
 });
 
+test("overlapping refreshes (the background poll and a user's click) record each step once", { skip }, async () => {
+  const c = await svc.Customer.create(customerData("Overlap Co"));
+  const t = await sell(c);
+  const { submission } = await svc.EI.submit(t._id);
+  await Promise.all([1, 2, 3, 4, 5].map(() => svc.EI.refresh(submission._id)));
+  for (let i = 0; i < 3; i++) await svc.EI.refresh(submission._id); // settle if the overlap stopped short
+  const done = await svc.EI.refresh(submission._id);
+  assert.equal(done.status, "REPORTED");
+  const seen = done.history.map((h) => h.status);
+  assert.deepEqual(seen, ["QUEUED", "SUBMITTED", "ACKNOWLEDGED", "REPORTED"], "no step is written twice");
+  assert.ok(done.acknowledgedAt && done.reportedAt);
+});
+
 test("sending the same invoice twice - even at once - creates one submission", { skip }, async () => {
   const c = await svc.Customer.create(customerData("Twice"));
   const t = await sell(c);

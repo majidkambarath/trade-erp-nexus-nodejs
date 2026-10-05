@@ -112,8 +112,9 @@ class ChartOfAccountsService {
       }
     }
 
+    const roles = AccountConfigService.resolveGroupRoles(settings?.accountConfiguration, groups);
     const node = (g) => ({
-      _id: g._id, name: g.name, prefix: g.prefix, category: g.category, isActive: g.isActive,
+      _id: g._id, name: g.name, prefix: g.prefix, category: g.category, isActive: g.isActive, role: roles.get(String(g._id)) || "other",
       parentGroup: g.parentGroup, accounts: byGroup.get(String(g._id)) || [], children: [], total: 0, net: 0,
     });
     const nodes = new Map(groups.map((g) => [String(g._id), node(g)]));
@@ -221,6 +222,38 @@ class ChartOfAccountsService {
     ];
     await LedgerEntry.insertMany(docs, { session });
     await FinancialService.updateAccountBalances(docs, session);
+  }
+
+  // An account created while ledger posting was off keeps its opening balance only as a stored figure.
+  // Once posting is on it gets its dated entry too, so the Trial Balance and statements agree with the
+  // chart. Safe to run again: an account that already has its opening entry is left alone.
+  static async postStoredOpenings({ adminId } = {}) {
+    const result = { posted: 0, failed: [] };
+    if (!(await AccountConfigService.isPostingEnabled())) return result;
+    const stored = await LedgerAccount.find({ openingBalance: { $gt: 0 }, openingSide: { $in: ["debit", "credit"] } }).select("_id").lean();
+    for (const { _id } of stored) {
+      if (await LedgerEntry.exists({ voucherType: "opening", voucherId: _id })) continue;
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          const account = await LedgerAccount.findById(_id).session(session);
+          const { openingBalance: opening, openingSide: side } = account;
+          const date = account.createdAt || new Date();
+          await FiscalYearService.assertPostingAllowed(date, { session });
+          // the stored figure was the whole balance so far; posting the entry adds it again
+          const storedNet = naturalBalance(account.accountType.toUpperCase(), side === "debit" ? opening : 0, side === "credit" ? opening : 0);
+          account.currentBalance = round2((account.currentBalance || 0) - storedNet);
+          await account.save({ session });
+          await this.postOpening(account, { opening, side, date, adminId, session });
+        });
+        result.posted += 1;
+      } catch (err) {
+        result.failed.push({ accountCode: _id.toString(), reason: err.message });
+      } finally {
+        await session.endSession();
+      }
+    }
+    return result;
   }
 
   static async updateAccount(id, data, req) {

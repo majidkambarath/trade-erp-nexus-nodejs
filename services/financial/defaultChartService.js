@@ -6,6 +6,7 @@ const AccountGroupService = require("./accountGroupService");
 const AccountConfigService = require("./accountConfigService");
 const TaxCodeService = require("./taxCodeService");
 const PostingService = require("./postingService");
+const AuditService = require("../core/auditService");
 const { backfillPartyAccounts } = require("./partyAccounts");
 const { GROUPS, ACCOUNTS, GROUP_FOR_KEY } = require("../../utils/defaultChart");
 const { getTenant } = require("../../utils/tenant");
@@ -105,10 +106,21 @@ class DefaultChartService {
   // onOpen, but not more than once a minute per server process: it is a safety net, not something to
   // pay for on every request.
   static async onOpenThrottled(req) {
-    const now = Date.now();
-    if (now - (this._lastOpen || 0) < 60_000) return null;
-    this._lastOpen = now;
-    return this.onOpen(req);
+    // A page that fires several requests at once must not let the later ones read before the first
+    // has finished: callers that arrive while a run is in flight wait for that same run.
+    if (this._opening) return this._opening;
+    if (Date.now() - (this._lastOpen || 0) < 60_000) return null;
+    // The minute only starts once the company's posting choice is settled: a run before the chart
+    // exists (the one at server start on a new database) must not hold off the first real open.
+    this._opening = this.onOpen(req)
+      .then((out) => {
+        if (out.settled) this._lastOpen = Date.now();
+        return out;
+      })
+      .finally(() => {
+        this._opening = null;
+      });
+    return this._opening;
   }
 
   // Run whenever the chart is opened. A company's customers and vendors each get their ledger
@@ -116,7 +128,7 @@ class DefaultChartService {
   // chosen otherwise has ledger posting switched on once every account is mapped, with the
   // documents approved so far posted. Returns what it did, for the caller to report.
   static async onOpen(req) {
-    const out = { partyAccounts: 0, postingEnabled: false, catchUp: null };
+    const out = { partyAccounts: 0, postingEnabled: false, catchUp: null, settled: false };
     out.partyAccounts = await backfillPartyAccounts();
 
     const { companyId } = getTenant(req);
@@ -135,7 +147,17 @@ class DefaultChartService {
       }
     }
     // only when posting has just been switched on: earlier documents get their entries once
-    if (out.postingEnabled) out.catchUp = await PostingService.catchUp();
+    if (out.postingEnabled) {
+      out.catchUp = await PostingService.catchUp();
+      // switched on by the system, not by a person: the audit log says so
+      const done = out.catchUp;
+      await AuditService.log({
+        req, action: "LEDGER_POSTING_ENABLED", entity: "CompanySettings",
+        summary: `Switched on automatically once every posting account was mapped; ${done.posted} earlier document(s) and ${done.openingsPosted || 0} opening balance(s) posted${done.failed.length ? `, ${done.failed.length} could not be` : ""}`,
+      });
+    }
+    // settled: the company has a posting choice (on, or deliberately off), so there is nothing left to wait for
+    out.settled = Boolean(out.postingEnabled || (settings && (settings.ledgerPostingEnabled || settings.ledgerPostingTouched)));
     return out;
   }
 

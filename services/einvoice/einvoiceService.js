@@ -135,6 +135,7 @@ class EInvoiceService {
     const tx = await Transaction.findById(transactionId).lean();
     if (!tx) throw new AppError("Document not found", 404);
     if (!ELIGIBLE.includes(tx.type)) throw new AppError("Only sales invoices and sales returns (credit notes) are e-invoiced", 422, "NOT_ELIGIBLE");
+    if (tx.isOpening) throw new AppError("An opening balance invoice was issued before go-live and is not e-invoiced", 422, "NOT_ELIGIBLE");
     if (tx.status !== "APPROVED") throw new AppError("Only an approved document can be sent", 422, "NOT_APPROVED");
 
     const [customer, cs, settings] = await Promise.all([
@@ -267,21 +268,40 @@ class EInvoiceService {
     if (!["SUBMITTED", "ACKNOWLEDGED"].includes(sub.status)) return sub;
     const settings = await this.loadSettings(sub.companyId);
     const provider = PROVIDERS[settings.provider];
-    sub.pollCount += 1;
+    let r;
+    sub.pollCount += 1; // the provider sees this poll counted; the stored count goes up through the update below
     try {
-      const r = await provider.getStatus(sub);
-      sub.taxStatus = r.taxStatus ?? sub.taxStatus;
-      const path = { ACKNOWLEDGED: ["ACKNOWLEDGED"], REPORTED: ["ACKNOWLEDGED", "REPORTED"], REJECTED: ["REJECTED"] }[r.status] || [];
-      for (const step of path) {
-        if (sub.status === step) continue;
-        if (ei.canTransition(sub.status, step)) this.transition(sub, step, r.note);
-      }
-      if (r.status === "REJECTED") sub.lastError = r.note || "Rejected by the access point";
+      r = await provider.getStatus(sub);
     } catch (err) {
-      sub.lastError = err.message; // a failed poll never changes the invoice's state
+      // a failed poll never changes the invoice's state
+      await EInvoiceSubmission.updateOne({ _id: sub._id }, { $set: { lastError: err.message }, $inc: { pollCount: 1 } });
+      return EInvoiceSubmission.findById(sub._id);
     }
-    await sub.save();
-    return sub;
+
+    // Walk the allowed steps from the status we read, then apply them in ONE update that only matches
+    // while the invoice is still in that status. The background poll and a user's Refresh can overlap;
+    // the loser matches nothing, so each step is recorded in the history exactly once.
+    const wanted = { ACKNOWLEDGED: ["ACKNOWLEDGED"], REPORTED: ["ACKNOWLEDGED", "REPORTED"], REJECTED: ["REJECTED"] }[r.status] || [];
+    const steps = [];
+    let at = sub.status;
+    for (const step of wanted) {
+      if (at === step || !ei.canTransition(at, step)) continue;
+      steps.push(step);
+      at = step;
+    }
+    const now = new Date();
+    const $set = {};
+    if (r.taxStatus) $set.taxStatus = r.taxStatus;
+    if (r.status === "REJECTED") $set.lastError = r.note || "Rejected by the access point";
+    if (steps.length) {
+      $set.status = at;
+      if (steps.includes("ACKNOWLEDGED")) $set.acknowledgedAt = now;
+      if (steps.includes("REPORTED")) $set.reportedAt = now;
+    }
+    const update = { $set, $inc: { pollCount: 1 } };
+    if (steps.length) update.$push = { history: { $each: steps.map((status) => ({ status, at: now, note: r.note })) } };
+    const moved = await EInvoiceSubmission.findOneAndUpdate({ _id: sub._id, status: sub.status }, update, { new: true });
+    return moved || EInvoiceSubmission.findById(sub._id); // someone else moved it first: report where it is now
   }
 
   // Background pass: retry failed deliveries whose time has come, and poll in-flight invoices.
@@ -307,7 +327,7 @@ class EInvoiceService {
   static async documents(req, { page = 1, limit = 25, status, search } = {}) {
     const { companyId } = getTenant(req);
     const lim = Math.min(Math.max(Number(limit) || 25, 1), 100);
-    const filter = { type: { $in: ELIGIBLE }, status: "APPROVED" };
+    const filter = { type: { $in: ELIGIBLE }, status: "APPROVED", isOpening: { $ne: true } };
     if (search) filter.transactionNo = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     const docs = await Transaction.find(filter)
       .select("transactionNo type date partyId totalAmount returnOf")

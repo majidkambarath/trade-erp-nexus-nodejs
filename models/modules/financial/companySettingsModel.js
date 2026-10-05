@@ -50,11 +50,20 @@ const companySettingsSchema = new mongoose.Schema(
       email: { type: String, trim: true },
       phone: { type: String, trim: true },
     },
+    // Go-live (conversion) date: every opening balance is dated this day. openingBalancesPostedAt is
+    // when something was last posted (services/financial/openingBalanceService.js).
+    openingBalanceDate: { type: Date, default: null },
+    openingBalancesPostedAt: { type: Date, default: null },
     // First month of the fiscal year, 1-12. Default January.
     fiscalYearStartMonth: { type: Number, default: 1, min: 1, max: 12 },
     amountDecimal: { type: Number, default: 2, min: 0, max: 6 },
     quantityDecimal: { type: Number, default: 3, min: 0, max: 6 },
     rateDecimal: { type: Number, default: 5, min: 0, max: 8 },
+    // The currency the ledger is kept in (the Currency master's isBase row), and how far, in percent,
+    // a rate typed on a foreign-currency voucher may be from the master rate before a reason is
+    // required (services/financial/currencyService.js).
+    baseCurrency: { type: String, default: "AED", uppercase: true, trim: true },
+    fxTolerancePercent: { type: Number, default: 5, min: 0, max: 100 },
   },
   { timestamps: true }
 );

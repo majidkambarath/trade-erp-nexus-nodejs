@@ -8,6 +8,7 @@ const { getTenant } = require("../../utils/tenant");
 // Basis for movements that predate the cost audit fields.
 const BASIS_BY_EVENT = {
   PURCHASE_RECEIVE: "purchase",
+  OPENING_STOCK: "purchase", // go-live stock keeps the cost it was entered at
   PURCHASE_RETURN: "purchaseReturn",
   SALES_DISPATCH: "sale",
   SALES_RETURN: "salesReturn",

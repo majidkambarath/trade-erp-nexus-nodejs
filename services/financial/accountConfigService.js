@@ -127,6 +127,53 @@ class AccountConfigService {
     return entry.targetGroup;
   }
 
+  // What kind of account a group holds, from the posting map: the group a key points at, and every
+  // group under it. The account form uses it (a bank group asks for bank details, a receivable group
+  // for customer details...). The nearest mapped ancestor wins; a group under none of them is "other".
+  static GROUP_ROLE_KEYS = {
+    cash: "cash-account-group",
+    bank: "bank-account-group",
+    receivable: "account-receivable-group",
+    payable: "account-payable-group",
+    creditCard: "credit-card-group",
+  };
+
+  // Pure: `configuration` is CompanySettings.accountConfiguration, `groups` are { _id, parentGroup }.
+  // Returns Map(String groupId -> role).
+  static resolveGroupRoles(configuration, groups) {
+    const roots = new Map();
+    for (const [role, key] of Object.entries(this.GROUP_ROLE_KEYS)) {
+      const entry = (configuration || []).find((c) => c.configKey === key && c.isActive !== false && c.targetGroup);
+      if (entry) roots.set(String(entry.targetGroup), role);
+    }
+    const parentOf = new Map(groups.map((g) => [String(g._id), g.parentGroup ? String(g.parentGroup) : null]));
+    const roles = new Map();
+    for (const g of groups) {
+      let role = "other";
+      const seen = new Set();
+      for (let id = String(g._id); id && !seen.has(id); id = parentOf.get(id)) {
+        seen.add(id);
+        if (roots.has(id)) { role = roots.get(id); break; }
+      }
+      roles.set(String(g._id), role);
+    }
+    return roles;
+  }
+
+  static async groupRoles({ companyId, session } = {}) {
+    const company = companyId || getTenant().companyId;
+    const sq = CompanySettings.findOne({ companyId: company }).select("accountConfiguration").lean();
+    const gq = AccountGroup.find({ companyId: company }).select("_id parentGroup").lean();
+    const [settings, groups] = await Promise.all([session ? sq.session(session) : sq, session ? gq.session(session) : gq]);
+    return this.resolveGroupRoles(settings?.accountConfiguration, groups);
+  }
+
+  // cash | bank | receivable | payable | creditCard | other
+  static async roleOfGroup(groupId, opts = {}) {
+    if (!groupId) return "other";
+    return (await this.groupRoles(opts)).get(String(groupId)) || "other";
+  }
+
   static async getSettings(req) {
     const { companyId } = getTenant(req);
     await this.ensureSettings(companyId);

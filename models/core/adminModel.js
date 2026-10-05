@@ -137,6 +137,12 @@ const adminSchema = new mongoose.Schema(
           trim: true,
           maxLength: [50, "IBAN number cannot exceed 50 characters"]
         },
+        swiftCode: {
+          type: String,
+          trim: true,
+          uppercase: true,
+          maxLength: [11, "SWIFT / BIC code cannot exceed 11 characters"]
+        },
         currency: {
           type: String,
           trim: true,

@@ -165,3 +165,49 @@ test("the account pickers get a flat list of postable accounts with their group 
   const after = await svc.Chart.listPostable({});
   assert.ok(!after.some((a) => a.accountName === "Petty Cash" || a.accountName === "Vehicles"));
 });
+
+test("requests that arrive together wait for the same readiness run, so none reads before posting is on", { skip }, async () => {
+  await svc.CompanySettings.updateMany({}, { ledgerPostingEnabled: false, ledgerPostingTouched: false });
+  svc.DefaultChart._lastOpen = 0;
+  svc.DefaultChart._opening = null;
+  const [first, second] = await Promise.all([svc.DefaultChart.onOpenThrottled({}), svc.DefaultChart.onOpenThrottled({})]);
+  assert.strictEqual(first, second, "the second caller received the first run's result");
+  assert.equal(first.postingEnabled, true);
+  assert.equal(await svc.Config.isPostingEnabled(), true, "posting was already on when the second caller was released");
+  assert.equal(await svc.DefaultChart.onOpenThrottled({}), null, "after that it is throttled for a minute");
+});
+
+test("an opening balance entered while posting was off reaches the ledger once posting is on, exactly once", { skip }, async () => {
+  const group = await svc.AccountGroup.findOne({ name: "Bank" });
+  await svc.CompanySettings.updateMany({}, { ledgerPostingEnabled: false, ledgerPostingTouched: true });
+  const acc = await svc.Chart.createAccount({ accountName: "Late Bank", groupId: group._id, openingBalance: 5000, openingSide: "debit" }, {}, null);
+  assert.equal(await svc.LedgerEntry.countDocuments({ voucherType: "opening", voucherId: acc._id }), 0, "while posting is off it is only stored");
+  assert.equal((await svc.LedgerAccount.findById(acc._id)).currentBalance, 5000);
+
+  await svc.CompanySettings.updateMany({}, { ledgerPostingEnabled: true });
+  const first = await svc.Posting.catchUp({});
+  assert.equal(first.openingsPosted, 1);
+  assert.equal(await svc.LedgerEntry.countDocuments({ voucherType: "opening", voucherId: acc._id }), 2, "the account leg and the Opening Balance Equity leg");
+  const after = await svc.LedgerAccount.findById(acc._id);
+  assert.equal(after.currentBalance, 5000, "the stored figure is replaced by the entry, not added to it");
+  const bal = (await svc.Chart.balances()).get(String(acc._id));
+  assert.equal(bal.debit - bal.credit, 5000);
+
+  const again = await svc.Posting.catchUp({});
+  assert.equal(again.openingsPosted, 0, "running it again posts nothing more");
+  assert.equal(await svc.LedgerEntry.countDocuments({ voucherType: "opening", voucherId: acc._id }), 2);
+});
+
+test("a run before the company has a chart does not hold off the first real open", { skip }, async () => {
+  await svc.CompanySettings.deleteMany({});
+  svc.DefaultChart._lastOpen = 0;
+  svc.DefaultChart._opening = null;
+  const early = await svc.DefaultChart.onOpenThrottled({});
+  assert.equal(early.settled, false, "no settings yet: nothing decided");
+  assert.equal(svc.DefaultChart._lastOpen, 0, "so no minute has started");
+  await svc.seed({ log: () => {} });
+  await svc.CompanySettings.updateMany({}, { ledgerPostingEnabled: false, ledgerPostingTouched: false });
+  const real = await svc.DefaultChart.onOpenThrottled({});
+  assert.ok(real, "the next open is not throttled");
+  assert.equal(real.postingEnabled, true);
+});

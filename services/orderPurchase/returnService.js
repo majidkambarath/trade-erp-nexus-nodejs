@@ -8,6 +8,17 @@ const DEAD_STATUSES = ["REJECTED", "CANCELLED"];
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const EPS = 1e-6;
 
+// An invoice carried over from the old books has no lines, so there is nothing on it to return.
+function assertReturnable(original) {
+  if (original.isOpening) {
+    throw new AppError(
+      `${original.transactionNo} is an opening balance and has no lines to return. Record a credit or debit note instead.`,
+      422,
+      "OPENING_NOT_RETURNABLE"
+    );
+  }
+}
+
 // A return references the document it returns and may not exceed it. Returned quantities are
 // DERIVED from the live returns each time rather than incremented, so deleting or rejecting a
 // return frees its quantity automatically.
@@ -37,6 +48,7 @@ class ReturnService {
     const q = Transaction.findById(originalId);
     const original = await (session ? q.session(session) : q).lean();
     if (!original) throw new AppError("Original document not found", 404);
+    assertReturnable(original);
     const returned = await this.returnedByLine(original._id, { excludeId, session });
     return {
       transactionId: original._id,
@@ -73,6 +85,7 @@ class ReturnService {
     const q = Transaction.findById(returnOf.transactionId);
     const original = await (session ? q.session(session) : q);
     if (!original) throw new AppError("Original document not found", 404, "ORIGINAL_NOT_FOUND");
+    assertReturnable(original);
     if (original.type !== ORIGINAL_TYPE[type]) {
       throw new AppError(`A ${type.replace("_", " ")} must be against a ${ORIGINAL_TYPE[type].replace("_", " ")}`, 400, "WRONG_ORIGINAL_TYPE");
     }

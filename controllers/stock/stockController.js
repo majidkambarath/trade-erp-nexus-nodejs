@@ -3,7 +3,7 @@ const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
 
 exports.createStock = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || req.body.createdBy || "system";
+  const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
   const stock = await StockService.createStock(req.body, createdBy);
 
   res.status(201).json({
@@ -86,7 +86,7 @@ exports.getStockByItemId = catchAsync(async (req, res) => {
 });
 
 exports.updateStock = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || req.body.createdBy || "system";
+  const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
   const stock = await StockService.updateStock(req.params.id, req.body, createdBy);
 
   res.status(200).json({
@@ -119,7 +119,7 @@ exports.getStockStats = catchAsync(async (req, res) => {
 
 exports.updateStockQuantity = catchAsync(async (req, res) => {
   const { quantity, reason } = req.body;
-  const createdBy = req.user?.id || req.body.createdBy || "system";
+  const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
   const { id } = req.params;
 
   if (quantity === undefined) {
@@ -206,7 +206,7 @@ exports.getStockValuation = catchAsync(async (req, res) => {
 
 exports.bulkUpdateStock = catchAsync(async (req, res) => {
   const { updates } = req.body;
-  const createdBy = req.user?.id || req.body.createdBy || "system";
+  const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
 
   if (!Array.isArray(updates)) {
     throw new AppError("Updates must be an array", 400);
@@ -248,7 +248,7 @@ exports.bulkUpdateStock = catchAsync(async (req, res) => {
 
 exports.stockAdjustment = catchAsync(async (req, res) => {
   const { itemId, adjustmentQuantity, reason } = req.body;
-  const createdBy = req.user?.id || req.body.createdBy || "system";
+  const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
 
   if (!itemId || adjustmentQuantity === undefined) {
     throw new AppError("Item ID and adjustment quantity are required", 400);
@@ -283,7 +283,7 @@ exports.stockAdjustment = catchAsync(async (req, res) => {
 
 exports.importStock = catchAsync(async (req, res) => {
   const { stockData } = req.body;
-  const createdBy = req.user?.id || req.body.createdBy || "system";
+  const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
 
   if (!Array.isArray(stockData)) {
     throw new AppError("Stock data must be an array", 400);

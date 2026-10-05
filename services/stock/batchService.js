@@ -40,27 +40,39 @@ class BatchService {
     return { takes, unallocated: left > EPS ? round3(left) : 0 };
   }
 
-  static async receive(transaction, item, qty, unitCost, { session, index = 0 } = {}) {
+  // The batch document a receipt creates. `transaction` is the receiving document (an approved
+  // purchase, or an opening-stock voucher): its id, number and date are all that is read.
+  static batchDoc(transaction, item, qty, unitCost, index = 0) {
     const { companyId } = getTenant();
     const batchNumber =
       (item.batchNumber && String(item.batchNumber).trim()) || `${transaction.transactionNo}-${index + 1}`;
-    const [batch] = await StockBatch.create(
-      [{
-        companyId,
-        stockId: item.itemId,
-        itemCode: item.itemCode,
-        batchNumber,
-        expiryDate: item.expiryDate ? new Date(item.expiryDate) : null,
-        receivedQty: qty,
-        qtyOnHand: qty,
-        unitCost: unitCost || 0,
-        sourceTransactionId: transaction._id,
-        sourceTransactionNo: transaction.transactionNo,
-        receivedAt: transaction.date || new Date(),
-      }],
+    return {
+      companyId,
+      stockId: item.itemId,
+      itemCode: item.itemCode,
+      batchNumber,
+      expiryDate: item.expiryDate ? new Date(item.expiryDate) : null,
+      receivedQty: qty,
+      qtyOnHand: qty,
+      unitCost: unitCost || 0,
+      sourceTransactionId: transaction._id,
+      sourceTransactionNo: transaction.transactionNo,
+      receivedAt: transaction.date || new Date(),
+    };
+  }
+
+  static async receive(transaction, item, qty, unitCost, { session, index = 0 } = {}) {
+    const [batch] = await StockBatch.create([this.batchDoc(transaction, item, qty, unitCost, index)], { session });
+    return batch;
+  }
+
+  // Many receipts of one document in a single round trip: lines = [{ item, qty, unitCost, index }].
+  static async receiveMany(transaction, lines, { session } = {}) {
+    if (!lines.length) return [];
+    return StockBatch.insertMany(
+      lines.map((l) => this.batchDoc(transaction, l.item, l.qty, l.unitCost, l.index)),
       { session }
     );
-    return batch;
   }
 
   // Take `qty` first-expiry-first-out. Each decrement is guarded (qtyOnHand >= take), so two

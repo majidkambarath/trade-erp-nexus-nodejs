@@ -23,6 +23,7 @@ const ledgerRoutesr= require("./routes/ledgerRoutes")
 const accountingSetupRouter = require("./routes/financial/accountingSetupRoutes");
 const bankingRouter = require("./routes/banking/bankingRoutes");
 const batchRouter = require("./routes/stock/batchRoutes");
+const vatReturnRouter = require("./routes/reports/vatReturnRoutes");
 const einvoiceRouter = require("./routes/einvoice/einvoiceRoutes");
 dotenv.config();
 
@@ -64,7 +65,12 @@ app.use(cors(corsOptions));
 mongodb()
   .then(() => require("./utils/migrations").runMigrations())
   .then((done) => { if (Object.values(done).some(Boolean)) console.log("[migrations]", done); })
-  .catch((err) => console.error("[migrations] failed:", err.message));
+  .catch((err) => console.error("[migrations] failed:", err.message))
+  // a company that never chose otherwise has ledger posting on, and every customer / vendor its
+  // account, from the first start (not only once somebody opens the chart of accounts)
+  .then(() => require("./services/financial/defaultChartService").onOpen({}))
+  .then((done) => { if (done?.postingEnabled || done?.partyAccounts) console.log("[ledger]", done); })
+  .catch((err) => console.error("[ledger] start-up check failed:", err.message));
 
 // Health check endpoint. Declared before the route mounts: adminRouter is mounted at
 // "/api/v1" and its "GET /:id" would otherwise swallow "/health" and demand a token.
@@ -79,9 +85,18 @@ app.get("/api/v1/health", (req, res) => {
 // Routes
 // Two-segment path, so adminRouter's bare GET /:id cannot capture it; mounted first anyway.
 app.use("/api/v1/accounting", accountingSetupRouter);
+app.use("/api/v1/accounting", require("./routes/financial/partyAccountRoutes"));
 app.use("/api/v1/banking", bankingRouter); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/einvoice", einvoiceRouter);
 app.use("/api/v1/batches", batchRouter); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/vat-return", vatReturnRouter); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/stock-reports", require("./routes/reports/stockReportRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/ifrs", require("./routes/reports/ifrsRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/dashboard-summary", require("./routes/reports/dashboardRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/opening-balances", require("./routes/financial/openingBalanceRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/document-types", require("./routes/masters/documentTypeRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/document-expiry", require("./routes/masters/documentExpiryRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/currencies", require("./routes/financial/currencyRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1", adminRouter);
 app.use("/api/v1/vendors", vendorRouter);
 app.use("/api/v1/customers", customerRouter);

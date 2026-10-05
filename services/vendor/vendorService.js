@@ -3,6 +3,9 @@ const Vendor = require("../../models/modules/vendorModel");
 const AppError = require("../../utils/AppError");
 const Sequence = require("../../models/modules/sequenceModel");
 const PartyAccounts = require("../financial/partyAccounts");
+const PartyMaster = require("../masters/partyMasterService");
+
+const tidyName = (v) => (v ? v.toString().trim().replace(/\s+/g, " ") : null); // "Omar  Ali" -> "Omar Ali"
 
 // Helper to get the next sequence number without saving it
 const getNextSequenceNumber = async (year, type, session) => {
@@ -76,33 +79,21 @@ const releaseSequenceNumber = async (vendorId, session) => {
   }
 };
 
-exports.createVendor = async (data) => {
+// `groupId` files the vendor's ledger account in that group instead of the posting-map one (the
+// account form creates a vendor straight into a chosen Payables group).
+exports.createVendor = async (data, { groupId } = {}) => {
   const {
     vendorName,
     contactPerson,
     email,
     phone,
     address,
-    paymentTerms,
     status,
-    trnNO,
+    participantId,
   } = data;
 
-  // Validate paymentTerms early to avoid sequence allocation
-  const validPaymentTerms = [
-    "30 days",
-    "Net 30",
-    "45 days",
-    "Net 60",
-    "60 days",
-    "COD"
-  ];
-  if (paymentTerms && !validPaymentTerms.includes(paymentTerms)) {
-    throw new AppError(
-      `Invalid paymentTerms. Must be one of: ${validPaymentTerms.join(", ")}`,
-      400
-    );
-  }
+  // Validate terms, VAT/TRN, contacts, bank accounts and documents early to avoid sequence allocation
+  const master = await PartyMaster.prepare("vendor", data);
 
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -117,12 +108,13 @@ exports.createVendor = async (data) => {
     const formattedNumber = sequenceNumber.toString().padStart(3, "0"); // Ensure 3 digits
     const newVendorId = `VEND${currentYear}${formattedNumber}`;
 
-    const trimmedPhone = phone
-      ? phone.toString().trim().replace(/\s+/g, "")
+    // master carries vat / trnNO / paymentTerms / credit / contacts / bankAccounts / documents,
+    // and the primary contact's name, email and phone when those were left blank
+    const phoneText = phone || master.phone;
+    const trimmedPhone = phoneText
+      ? phoneText.toString().trim().replace(/\s+/g, "")
       : null;
-    const trimmedContactPerson = contactPerson
-      ? contactPerson.toString().trim().replace(/\s+/g, "")
-      : null;
+    const trimmedContactPerson = tidyName(contactPerson || master.contactPerson);
 
     const [vendor] = await Vendor.create(
       [
@@ -130,12 +122,19 @@ exports.createVendor = async (data) => {
           vendorId: newVendorId,
           vendorName,
           contactPerson: trimmedContactPerson,
-          email,
+          email: email || master.email,
           phone: trimmedPhone,
+          website: master.website,
           address,
-          paymentTerms: paymentTerms || "30 days", // Use default if not provided
           status,
-          trnNO,
+          participantId: participantId ? String(participantId).trim() : undefined, // Peppol id (the model has always had it)
+          vat: master.vat,
+          trnNO: master.trnNO,
+          paymentTerms: master.paymentTerms, // 30 days when not provided
+          credit: master.credit,
+          contacts: master.contacts,
+          bankAccounts: master.bankAccounts,
+          documents: master.documents,
         },
       ],
       { session }
@@ -143,7 +142,8 @@ exports.createVendor = async (data) => {
 
     await commitSequenceNumber(currentYear, "vendor", sequenceNumber, session);
     await session.commitTransaction();
-    await PartyAccounts.onPartyCreated("Vendor", vendor); // its ledger account appears in the chart
+    await PartyMaster.finish("vendor", vendor, master);
+    await PartyAccounts.onPartyCreated("Vendor", vendor, { groupId, strict: Boolean(groupId) }); // its ledger account appears in the chart
     return vendor;
   } catch (error) {
     await session.abortTransaction();
@@ -176,27 +176,22 @@ exports.getVendorById = async (id) => {
 };
 
 exports.updateVendor = async (id, data) => {
-  const validPaymentTerms = [
-    "30 days",
-    "Net 30",
-    "45 days",
-    "Net 60",
-    "60 days",
-    "COD",
-  ];
-  if (data.paymentTerms && !validPaymentTerms.includes(data.paymentTerms)) {
-    throw new AppError(
-      `Invalid paymentTerms. Must be one of: ${validPaymentTerms.join(", ")}`,
-      400
-    );
-  }
+  const existing = mongoose.isValidObjectId(id) ? await Vendor.findById(id).lean() : null;
+  if (!existing) throw new AppError("Vendor not found", 404);
+  // VAT/TRN, terms, contacts, bank accounts and documents: checked and merged in with the legacy
+  // fields kept in step (trnNO, paymentTerms)
+  const master = await PartyMaster.prepare("vendor", data, { existing });
+  delete data.vat;
+  delete data.credit;
+  Object.assign(data, master);
 
-  const before = data.vendorName !== undefined ? await Vendor.findById(id).select("vendorName").lean() : null;
+  const before = data.vendorName !== undefined ? { vendorName: existing.vendorName } : null;
   const vendor = await Vendor.findByIdAndUpdate(id, data, {
     new: true,
     runValidators: true,
   });
   if (!vendor) throw new AppError("Vendor not found", 404);
+  await PartyMaster.finish("vendor", vendor, master);
   if (before && before.vendorName !== vendor.vendorName) {
     await PartyAccounts.onPartyRenamed("Vendor", before.vendorName, vendor.vendorName);
   }
@@ -214,6 +209,7 @@ exports.deleteVendor = async (id) => {
     await releaseSequenceNumber(vendor.vendorId, session);
     await session.commitTransaction();
     await PartyAccounts.onPartyDeleted("Vendor", vendor.vendorName);
+    await PartyMaster.discardFiles("vendor", vendor._id).catch((err) => console.error("[party-files] could not remove the vendor's files:", err.message));
   } catch (error) {
     await session.abortTransaction();
     throw error;

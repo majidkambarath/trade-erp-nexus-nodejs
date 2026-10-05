@@ -14,6 +14,11 @@ const voucherLineSchema = new mongoose.Schema({
   description: { type: String, trim: true },
   taxPercent: { type: Number, default: 0, min: 0, max: 100 },
   taxAmount: { type: Number, default: 0, min: 0 },
+  // Foreign-currency receipts / payments: the money-side legs carry the currency, the rate and
+  // their share of the foreign amount. The debit / credit amounts stay in the base currency.
+  currency: { type: String, trim: true, uppercase: true },
+  exchangeRate: { type: Number, min: 0 },
+  amountForeign: { type: Number, min: 0 },
 });
 
 // Voucher Schema
@@ -204,6 +209,16 @@ const voucherSchema = new mongoose.Schema({
   },
   referenceId: { type: mongoose.Schema.Types.ObjectId },
   referenceNo: { type: String, trim: true },
+  // Foreign currency (receipts and payments; services/financial/fxVoucherService.js). totalAmount and
+  // everything posted stay in the base currency; these record how it was converted. An AED voucher has
+  // currency "AED", exchangeRate 1 and no foreignAmount (older vouchers have none of these).
+  currency: { type: String, trim: true, uppercase: true },
+  exchangeRate: { type: Number, min: 0 },
+  foreignAmount: { type: Number, min: 0 },
+  rateDate: { type: Date }, // the day of the master rate it was taken from
+  rateSource: { type: String, trim: true }, // manual | cbuae | import (as the master), or "voucher" when typed on it
+  rateOverridden: { type: Boolean }, // typed rate further from the master than the allowed tolerance
+  rateOverrideReason: { type: String, trim: true, maxlength: 250 },
   financialYear: { type: String, trim: true },
   month: { type: Number, min: 1, max: 12 },
   year: { type: Number },
@@ -247,6 +262,8 @@ voucherSchema.index({ partyId: 1, partyType: 1, status: 1 }); // For FinancialSe
 voucherSchema.index({ status: 1, approvalStatus: 1 }); // For FinancialService.getAllVouchers
 voucherSchema.index({ financialYear: 1, month: 1 }); // For FinancialService.getFinancialReports
 voucherSchema.index({ createdBy: 1, createdAt: -1 }); // For FinancialService.getDashboardStats
+// the currency register and "is this currency used?"; only foreign-currency vouchers are indexed
+voucherSchema.index({ currency: 1, voucherType: 1, date: -1 }, { partialFilterExpression: { foreignAmount: { $exists: true } } });
 
 const Voucher = mongoose.model("Voucher", voucherSchema);
 
@@ -422,6 +439,11 @@ const ledgerEntrySchema = new mongoose.Schema({
   month: { type: Number, min: 1, max: 12 },
   year: { type: Number },
   runningBalance: { type: Number, default: 0 },
+  // Money-side legs of a foreign-currency voucher: the amounts above are base currency (AED);
+  // these say what foreign amount at what rate they stand for. Absent on every other entry.
+  currency: { type: String, trim: true, uppercase: true },
+  exchangeRate: { type: Number, min: 0 },
+  amountForeign: { type: Number, min: 0 },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Admin",

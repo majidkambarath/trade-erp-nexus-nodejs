@@ -15,6 +15,7 @@ const { naturalBalance, categoryOf } = require("../../utils/accounting");
 const mongoose = require("mongoose");
 const { ensurePartyAccount } = require("./partyAccounts");
 const LedgerVoucherService = require("./ledgerVoucherService");
+const FxVoucherService = require("./fxVoucherService");
 const DebitLog = require("../../models/modules/DebitLog"); // ADD THIS
 const CreditLog = require("../../models/modules/CreditLog"); // ADD THIS
 
@@ -89,6 +90,9 @@ class FinancialService {
         if (!voucherType) {
           throw new AppError("Voucher type is required", 400);
         }
+        // only receipts and payments can be made in a foreign currency; anything else would post the
+        // foreign figure as if it were AED
+        if (!["receipt", "payment"].includes(voucherType)) await FxVoucherService.assertBaseCurrencyOnly(voucherData, { session });
 
         const postingDate = voucherData.date || new Date();
         await FiscalYearService.assertPostingAllowed(postingDate, { session });
@@ -180,7 +184,6 @@ class FinancialService {
       customerName,
       linkedInvoices = [],
       paymentMode,
-      totalAmount,
       narration,
       paymentDetails = {
         bankDetails: null,
@@ -203,6 +206,12 @@ class FinancialService {
     if (!customer) {
       throw new AppError("Customer not found", 404);
     }
+
+    // A foreign-currency receipt is converted to AED here, once; everything below (the payment
+    // mode, allocation to invoices, the amount kept on account, the ledger) works in that AED
+    // amount. Settling foreign-currency INVOICES (exchange gain/loss) is phase 2.
+    const fx = await FxVoucherService.resolve(data, { session });
+    const totalAmount = fx.totalAmount;
 
     // Validate the payment mode and work out where the money goes (cash or bank account, the
     // cheques account until a cheque clears, a card's settlement account less its fee...)
@@ -293,7 +302,7 @@ class FinancialService {
     const entries = [];
 
     // Debit: where the money went (cash / bank / cheques in hand / card settlement, and any card fee)
-    entries.push(...money.legs);
+    entries.push(...FxVoucherService.stampLegs(money.legs, fx));
 
     // Credit: Customer Receivable Account (for allocated part)
     if (totalAllocated > 0 && customerAccount) {
@@ -331,6 +340,7 @@ class FinancialService {
       paymentMode: money.mode,
       paymentDetails: money.details,
       _cheque: money.cheque,
+      ...fx.fields,
       totalAmount,
       onAccountAmount,
       narration,
@@ -346,7 +356,6 @@ class FinancialService {
       vendorId,
       linkedInvoices = [],
       paymentMode,
-      totalAmount,
       narration,
       paymentDetails = {
         bankDetails: null,
@@ -369,6 +378,10 @@ class FinancialService {
     if (!vendor) {
       throw new AppError("Vendor not found", 404);
     }
+
+    // A foreign-currency payment is converted to AED here, once; see processReceiptVoucher.
+    const fx = await FxVoucherService.resolve(data, { session });
+    const totalAmount = fx.totalAmount;
 
     // Validate the payment mode and work out where the money comes from
     const money = await require("../banking/paymentModeService").resolve({
@@ -458,7 +471,7 @@ class FinancialService {
     const entries = [];
 
     // Credit: where the money came from (cash / bank / cheques issued / card)
-    entries.push(...money.legs);
+    entries.push(...FxVoucherService.stampLegs(money.legs, fx));
 
     // Debit: Vendor Payable Account (for allocated part)
     if (totalAllocated > 0 && vendorAccount) {
@@ -496,6 +509,7 @@ class FinancialService {
       paymentMode: money.mode,
       paymentDetails: money.details,
       _cheque: money.cheque,
+      ...fx.fields,
       totalAmount,
       onAccountAmount,
       narration,
@@ -1033,6 +1047,10 @@ class FinancialService {
       narration: entry.description || voucher.narration,
       partyId: voucher.partyId,
       partyType: voucher.partyType,
+      // money-side legs of a foreign-currency voucher (AED amounts above; see fxVoucherService.js)
+      currency: entry.currency,
+      exchangeRate: entry.exchangeRate,
+      amountForeign: entry.amountForeign,
       createdBy,
     }));
 
@@ -1357,10 +1375,15 @@ class FinancialService {
         if (oldVoucher.status === "approved" && !data.forceUpdate) {
           throw new AppError("Cannot update approved voucher", 400);
         }
+        if (!["receipt", "payment"].includes(oldVoucher.voucherType)) await FxVoucherService.assertBaseCurrencyOnly(data, { session });
 
         let needReprocess = false;
         if (
           data.totalAmount ||
+          data.foreignAmount ||
+          data.currency ||
+          data.exchangeRate ||
+          (data.date && oldVoucher.foreignAmount > 0) || // a foreign voucher's rate follows its day
           data.entries ||
           data.debitAccount ||
           data.creditAccount ||
@@ -1431,6 +1454,8 @@ class FinancialService {
         let updatedCheque = null;
         if (needReprocess) {
           const processData = { ...oldVoucher.toObject(), ...data };
+          // a foreign-currency receipt / payment keeps its rate unless the rate, currency or day changes
+          FxVoucherService.prepareEdit(oldVoucher, data, processData);
           let processedData;
           // a ledger-based voucher is stored as ledger entries / note lines; hand them back to the
           // processors in the shape they take

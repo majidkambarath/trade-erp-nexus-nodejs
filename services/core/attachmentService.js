@@ -25,7 +25,9 @@ const TYPES = {
   ".txt": { mime: "text/plain", text: true },
 };
 
-const OWNER_MODELS = { transaction: "Transaction", voucher: "Voucher", account: "LedgerAccount" };
+const OWNER_MODELS = { transaction: "Transaction", voucher: "Voucher", account: "LedgerAccount", customer: "Customer", vendor: "Vendor" };
+// A customer's or vendor's files are its KYC documents: the file hangs off a row of `documents`.
+const PARTY_OWNERS = ["customer", "vendor"];
 
 const safeName = (n) =>
   path.basename(String(n || "file")).replace(/[^\w.\- ()]/g, "_").slice(0, 200) || "file";
@@ -101,7 +103,7 @@ class AttachmentService {
   // Attach a stored file to a document (pushes a reference onto the owner's attachments array).
   static async link(id, { ownerType, ownerId, label }, req) {
     const modelName = OWNER_MODELS[ownerType];
-    if (!modelName) throw new AppError("ownerType must be transaction, voucher or account", 400);
+    if (!modelName) throw new AppError("ownerType must be transaction, voucher, account, customer or vendor", 400);
     if (!mongoose.isValidObjectId(ownerId)) throw new AppError("Invalid ownerId", 400);
     const a = await this.get(id, req);
     if (a.ownerId) throw new AppError("Attachment is already linked", 409, "ALREADY_LINKED");
@@ -118,7 +120,15 @@ class AttachmentService {
         : ownerType === "account"
         ? { documents: { ...ref, label: label || a.label, uploadedAt: new Date() } }
         : { attachments: { ...ref, uploadedBy: a.uploadedBy, uploadedAt: new Date() } };
-    await Owner.updateOne({ _id: ownerId }, { $push: push });
+    if (PARTY_OWNERS.includes(ownerType)) {
+      // a document row that already names this file (the party form saves them together) is left as it is
+      await Owner.updateOne(
+        { _id: ownerId, "documents.attachmentId": { $ne: a._id } },
+        { $push: { documents: { attachmentId: a._id, typeName: label || a.label || "", fileName: ref.fileName, isVerified: false } } }
+      );
+    } else {
+      await Owner.updateOne({ _id: ownerId }, { $push: push });
+    }
 
     a.ownerType = ownerType;
     a.ownerId = ownerId;
@@ -137,10 +147,57 @@ class AttachmentService {
           : a.ownerType === "account"
           ? { documents: { attachmentId: a._id } }
           : { attachments: { attachmentId: a._id } };
-      await Owner.updateOne({ _id: a.ownerId }, { $pull: pull });
+      if (PARTY_OWNERS.includes(a.ownerType)) {
+        // the document row stays (number, dates); only its file goes
+        await Owner.updateOne(
+          { _id: a.ownerId },
+          { $set: { "documents.$[d].attachmentId": null, "documents.$[d].fileName": "" } },
+          { arrayFilters: [{ "d.attachmentId": a._id }] }
+        );
+      } else {
+        await Owner.updateOne({ _id: a.ownerId }, { $pull: pull });
+      }
     }
     await fs.promises.rm(this.filePath(a), { force: true });
     await a.deleteOne();
+  }
+
+  // The party form uploads a file first (unlinked) and names it in a document row; saving the party
+  // then claims it. `documents` is the party's saved rows. Files already linked to this party that no
+  // row names any more are deleted; a file linked to something else is refused.
+  static async syncPartyFiles(ownerType, ownerId, documents = [], req) {
+    if (!PARTY_OWNERS.includes(ownerType)) throw new AppError("ownerType must be customer or vendor", 400);
+    const { companyId } = getTenant(req);
+    const wanted = new Set(documents.map((d) => d.attachmentId && String(d.attachmentId)).filter(Boolean));
+    const files = await Attachment.find({ companyId, $or: [{ _id: { $in: [...wanted] } }, { ownerType, ownerId }] });
+    for (const a of files) {
+      const named = wanted.has(String(a._id));
+      if (named && !a.ownerId) {
+        a.ownerType = ownerType;
+        a.ownerId = ownerId;
+        await a.save();
+      } else if (named && (a.ownerType !== ownerType || String(a.ownerId) !== String(ownerId))) {
+        throw new AppError("A document file belongs to another record", 409, "ATTACHMENT_IN_USE");
+      } else if (!named && a.ownerType === ownerType && String(a.ownerId) === String(ownerId)) {
+        await fs.promises.rm(this.filePath(a), { force: true });
+        await a.deleteOne();
+      }
+    }
+  }
+
+  // Before saving a party: every file its document rows name must exist and be free, or already its own.
+  static async assertPartyFiles(ownerType, ownerId, documents = [], req) {
+    const { companyId } = getTenant(req);
+    const ids = [...new Set(documents.map((d) => d.attachmentId && String(d.attachmentId)).filter(Boolean))];
+    if (!ids.length) return;
+    if (ids.some((id) => !mongoose.isValidObjectId(id))) throw new AppError("Invalid attachment id", 400, "ATTACHMENT_NOT_FOUND");
+    const found = await Attachment.find({ companyId, _id: { $in: ids } }).select("ownerType ownerId").lean();
+    if (found.length !== ids.length) throw new AppError("A document file could not be found. Upload it again.", 404, "ATTACHMENT_NOT_FOUND");
+    for (const a of found) {
+      if (a.ownerId && (a.ownerType !== ownerType || String(a.ownerId) !== String(ownerId))) {
+        throw new AppError("A document file belongs to another record", 409, "ATTACHMENT_IN_USE");
+      }
+    }
   }
 
   static async listFor(ownerType, ownerId, req) {

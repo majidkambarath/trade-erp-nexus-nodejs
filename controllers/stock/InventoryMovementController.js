@@ -6,7 +6,7 @@ const AppError = require("../../utils/AppError");
 class InventoryMovementController {
   // Create a new inventory movement
   static createMovement = catchAsync(async (req, res) => {
-    const createdBy = req.user?.id || req.body.createdBy || "system";
+    const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
     const {
       stockId,
       quantity,
@@ -31,26 +31,23 @@ class InventoryMovementController {
       throw new AppError("Stock quantity cannot be negative", 400);
     }
 
-    const movement = await StockService.createInventoryMovement({
-      stockId,
-      quantity: Number(quantity),
-      previousStock,
-      newStock,
-      eventType,
-      referenceType: eventType === "INITIAL_STOCK" ? "Initial" : "Adjustment",
-      referenceId: stock._id,
-      referenceNumber,
-      unitCost: Number(unitCost) || stock.purchasePrice,
-      totalValue: Math.abs(Number(quantity)) * (Number(unitCost) || stock.purchasePrice),
-      notes,
+    // One stock event: the quantity, its cost, the batch, the movement row and (when posting is on)
+    // the ledger entry are written together, so the movement is recorded exactly once.
+    const updated = await StockService.updateStock(
+      stock._id,
+      { currentStock: newStock },
       createdBy,
-      batchNumber,
-      expiryDate: expiryDate ? new Date(expiryDate) : undefined,
-      location,
-    });
-
-    // Update stock quantity
-    await StockService.updateStock(stock._id, { currentStock: newStock }, createdBy);
+      {
+        eventType,
+        referenceNumber,
+        unitCost: Number(unitCost) || undefined,
+        notes,
+        batchNumber,
+        expiryDate,
+        location,
+      }
+    );
+    const { movement } = updated.$locals.adjustment;
 
     res.status(201).json({
       status: "success",

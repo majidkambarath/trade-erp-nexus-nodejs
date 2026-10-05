@@ -122,6 +122,12 @@ const validateCreateAdmin = [
     .trim()
     .isLength({ max: 50 })
     .withMessage('IBAN number cannot exceed 50 characters'),
+
+  body('companyInfo.bankDetails.swiftCode')
+    .optional()
+    .trim()
+    .isLength({ max: 11 })
+    .withMessage('SWIFT / BIC code cannot exceed 11 characters'),
   
   body('companyInfo.bankDetails.currency')
     .optional()
@@ -241,6 +247,12 @@ const validateUpdateAdmin = [
     .trim()
     .isLength({ max: 50 })
     .withMessage('IBAN number cannot exceed 50 characters'),
+
+  body('companyInfo.bankDetails.swiftCode')
+    .optional()
+    .trim()
+    .isLength({ max: 11 })
+    .withMessage('SWIFT / BIC code cannot exceed 11 characters'),
   
   body('companyInfo.bankDetails.currency')
     .optional()
@@ -356,6 +368,12 @@ const validateProfileUpdate = [
     .trim()
     .isLength({ max: 50 })
     .withMessage('IBAN number cannot exceed 50 characters'),
+
+  body('companyInfo.bankDetails.swiftCode')
+    .optional()
+    .trim()
+    .isLength({ max: 11 })
+    .withMessage('SWIFT / BIC code cannot exceed 11 characters'),
   
   body('companyInfo.bankDetails.currency')
     .optional()

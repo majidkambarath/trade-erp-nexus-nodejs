@@ -42,7 +42,7 @@ class AgeingService {
     if (partyId) match.partyId = new mongoose.Types.ObjectId(partyId);
 
     const q = Transaction.find(match)
-      .select("transactionNo date partyId totalAmount paidAmount outstandingAmount")
+      .select("transactionNo date dueDate isOpening partyId totalAmount paidAmount outstandingAmount")
       .populate({ path: "partyId", model: partyModel, select: `${nameField} paymentTerms` })
       .sort({ date: 1 })
       .lean();
@@ -50,11 +50,13 @@ class AgeingService {
 
     return docs.map((d) => {
       const days = termDays(d.partyId?.paymentTerms);
-      const dueDate = new Date(new Date(d.date).getTime() + days * DAY);
+      // an opening invoice entered with its own due date keeps it; every other document is due by the party's terms
+      const dueDate = d.dueDate ? new Date(d.dueDate) : new Date(new Date(d.date).getTime() + days * DAY);
       const pastDue = Math.floor((asOfDate - dueDate) / DAY);
       return {
         transactionId: d._id,
         transactionNo: d.transactionNo,
+        isOpening: Boolean(d.isOpening),
         partyId: d.partyId?._id,
         partyName: d.partyId?.[nameField] || "(deleted)",
         paymentTerms: d.partyId?.paymentTerms || null,

@@ -7,7 +7,7 @@
     "start": "nodemon server.js",
     "seed": "node utils/setup.js",
     "seed:accounting": "node utils/seedAccounting.js",
-    "test": "node --test \"utils/__tests__/*.test.js\" \"services/__tests__/*.test.js\""
+    "test": "node --test --test-concurrency=3 \"utils/__tests__/*.test.js\" \"services/__tests__/*.test.js\""
   },
   "keywords": [],
   "author": "",

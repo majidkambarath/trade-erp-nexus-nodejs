@@ -35,6 +35,8 @@ class ChequeService {
         companyId, direction, voucherId: voucher._id, voucherNo: voucher.voucherNo, voucherDate: voucher.date,
         partyType: voucher.partyType, partyId: voucher.partyId, partyName: voucher.partyName,
         chequeNo: cheque.chequeNo, chequeDate: cheque.chequeDate, amount: voucher.totalAmount,
+        // a foreign-currency cheque: `amount` stays the AED value; this is what it was written for
+        ...(voucher.foreignAmount > 0 ? { currency: voucher.currency, foreignAmount: voucher.foreignAmount, exchangeRate: voucher.exchangeRate } : {}),
         drawnOnBankId: cheque.drawnOnBankId, drawnOnBankName: cheque.drawnOnBankName,
         bankAccountId: cheque.bankAccountId, isPDC: cheque.isPDC,
         history: [{ status: "pending", by: createdBy ? String(createdBy) : null, note: cheque.isPDC ? "Post-dated cheque recorded" : "Cheque recorded" }],
@@ -109,6 +111,9 @@ class ChequeService {
           voucherId: cheque.voucherId, voucherNo: cheque.voucherNo, voucherType: "cheque_clearance", date: on,
           narration: `Cheque ${cheque.chequeNo} cleared`, partyId: cheque.partyId, partyType: cheque.partyType,
           referenceType: "cheque", referenceId: cheque._id, referenceNo: cheque.chequeNo, createdBy: asAdmin(adminId),
+          // a foreign-currency cheque clears at the AED value it was received at (the bank's own
+          // rate on the day, and the exchange difference it causes, is phase 2)
+          ...(cheque.foreignAmount > 0 ? { currency: cheque.currency, exchangeRate: cheque.exchangeRate, amountForeign: cheque.foreignAmount } : {}),
         };
         const toBank = cheque.direction === "receipt";
         const docs = [

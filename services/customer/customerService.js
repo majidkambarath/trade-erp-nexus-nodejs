@@ -3,6 +3,24 @@ const Customer = require("../../models/modules/customerModel");
 const AppError = require("../../utils/AppError");
 const Sequence = require("../../models/modules/sequenceModel");
 const PartyAccounts = require("../financial/partyAccounts");
+const PartyMaster = require("../masters/partyMasterService");
+
+// Customer-only fields the model has always had; the create path used to drop them.
+const cleanEInvoice = (v) =>
+  v && typeof v === "object"
+    ? {
+        participantId: v.participantId ? String(v.participantId).trim() : null,
+        city: v.city ? String(v.city).trim() : null,
+        countryCode: String(v.countryCode || "AE").trim().toUpperCase(),
+      }
+    : undefined;
+const cleanShelfLife = (v) => {
+  if (v === undefined || v === null || v === "") return undefined;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0) throw new AppError("minShelfLifeDays must be a whole number of days, 0 or more", 400, "INVALID_SHELF_LIFE");
+  return n;
+};
+const tidyName = (v) => (v ? v.toString().trim().replace(/\s+/g, " ") : null); // "Sara  Khan" -> "Sara Khan"
 
 // Helper to get the next sequence number without saving it
 const getNextSequenceNumber = async (year, type, session) => {
@@ -65,7 +83,9 @@ const releaseSequenceNumber = async (customerId, session) => {
   }
 };
 
-exports.createCustomer = async (data) => {
+// `groupId` files the customer's ledger account in that group instead of the posting-map one (the
+// account form creates a customer straight into a chosen Receivables group).
+exports.createCustomer = async (data, { groupId } = {}) => {
   const {
     customerName,
     contactPerson,
@@ -74,31 +94,15 @@ exports.createCustomer = async (data) => {
     billingAddress,
     shippingAddress,
     creditLimit,
-    paymentTerms,
     status,
-    trnNumber,
     salesPerson, // <- ADDED
+    eInvoice,
+    minShelfLifeDays,
   } = data;
 
-  // Validate paymentTerms early to avoid sequence allocation
-  const validPaymentTerms = ["Net 30", "Net 45", "Net 60", "Cash on Delivery", "Prepaid"];
-  if (paymentTerms && !validPaymentTerms.includes(paymentTerms)) {
-    throw new AppError(
-      `Invalid paymentTerms. Must be one of: ${validPaymentTerms.join(", ")}`,
-      400
-    );
-  }
-const normalizedTrn = trnNumber
-    ? trnNumber.toString().trim().replace(/\s+/g, "")
-    : null;
-
-  if (normalizedTrn) {
-    // if you want stricter TRN format validation, do it here (e.g., regex)
-    const existingByTrn = await Customer.findOne({ trnNumber: normalizedTrn });
-    if (existingByTrn) {
-      throw new AppError("TRN already in use by another customer", 400);
-    }
-  }
+  // Validate terms, VAT/TRN, contacts, bank accounts and documents early to avoid sequence allocation
+  const master = await PartyMaster.prepare("customer", data);
+  const shelfLife = cleanShelfLife(minShelfLifeDays);
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -108,13 +112,12 @@ const normalizedTrn = trnNumber
     const formattedNumber = sequenceNumber.toString().padStart(3, "0"); // Ensure 3 digits
     const newCustomerId = `CUST${currentYear}${formattedNumber}`;
 
-    const trimmedPhone = phone ? phone.toString().trim().replace(/\s+/g, "") : null;
-    const trimmedContactPerson = contactPerson
-      ? contactPerson.toString().trim().replace(/\s+/g, "")
-      : null;
-        const trimmedSalesPerson = salesPerson
-      ? salesPerson.toString().trim().replace(/\s+/g, "")
-      : null;
+    // master carries vat / trnNumber / paymentTerms / credit / contacts / bankAccounts / documents,
+    // and the primary contact's name, email and phone when those were left blank
+    const phoneText = phone || master.phone;
+    const trimmedPhone = phoneText ? phoneText.toString().trim().replace(/\s+/g, "") : null;
+    const trimmedContactPerson = tidyName(contactPerson || master.contactPerson);
+    const trimmedSalesPerson = tidyName(salesPerson);
 
     const [customer] = await Customer.create(
       [
@@ -122,15 +125,23 @@ const normalizedTrn = trnNumber
           customerId: newCustomerId,
           customerName,
           contactPerson: trimmedContactPerson,
-          email,
+          email: email || master.email,
           phone: trimmedPhone,
+          website: master.website,
           billingAddress,
           shippingAddress,
           creditLimit: Number(creditLimit) || 0,
-          paymentTerms: paymentTerms || "Net 30", // Use default if not provided
-          trnNumber: normalizedTrn, // <-- save normalized TRN
           salesPerson: trimmedSalesPerson, // <-- ADDED
           status,
+          eInvoice: cleanEInvoice(eInvoice),
+          minShelfLifeDays: shelfLife,
+          vat: master.vat,
+          trnNumber: master.trnNumber,
+          paymentTerms: master.paymentTerms, // Net 30 when not provided
+          credit: master.credit,
+          contacts: master.contacts,
+          bankAccounts: master.bankAccounts,
+          documents: master.documents,
         },
       ],
       { session }
@@ -138,7 +149,8 @@ const normalizedTrn = trnNumber
 
     await commitSequenceNumber(currentYear, "customer", sequenceNumber, session);
     await session.commitTransaction();
-    await PartyAccounts.onPartyCreated("Customer", customer); // its ledger account appears in the chart
+    await PartyMaster.finish("customer", customer, master);
+    await PartyAccounts.onPartyCreated("Customer", customer, { groupId, strict: Boolean(groupId) }); // its ledger account appears in the chart
     return customer;
   } catch (error) {
     await session.abortTransaction();
@@ -188,35 +200,22 @@ exports.getCustomerByCustomerId = async (customerId) => {
   return customer;
 };
  exports.updateCustomer = async (id, data) => {
-  const validPaymentTerms = ["Net 30", "Net 45", "Net 60", "Cash on Delivery", "Prepaid"];
-  if (data.paymentTerms && !validPaymentTerms.includes(data.paymentTerms)) {
-    throw new AppError(
-      `Invalid paymentTerms. Must be one of: ${validPaymentTerms.join(", ")}`,
-      400
-    );
+  const existing = mongoose.isValidObjectId(id) ? await Customer.findById(id).lean() : null;
+  if (!existing) {
+    throw new AppError("Customer not found", 404);
   }
-if (data.trnNumber !== undefined) {
-    const normalizedTrn = data.trnNumber
-      ? data.trnNumber.toString().trim().replace(/\s+/g, "")
-      : null;
-
-    if (normalizedTrn) {
-      const existing = await Customer.findOne({ trnNumber: normalizedTrn, _id: { $ne: id } });
-      if (existing) {
-        throw new AppError("TRN already in use by another customer", 400);
-      }
-    }
-
-    data.trnNumber = normalizedTrn;
-  }
-    // Normalize salesPerson if present in payload
+  // VAT/TRN, terms, contacts, bank accounts and documents: checked and merged in with the legacy
+  // fields kept in step (trnNumber, paymentTerms)
+  const master = await PartyMaster.prepare("customer", data, { existing });
+  delete data.vat;
+  delete data.credit;
+  Object.assign(data, master);
+  // Normalize salesPerson if present in payload
   if (data.salesPerson !== undefined) {
-    data.salesPerson = data.salesPerson
-      ? data.salesPerson.toString().trim().replace(/\s+/g, "")
-      : null;
+    data.salesPerson = tidyName(data.salesPerson);
   }
 
-  const before = data.customerName !== undefined ? await Customer.findById(id).select("customerName").lean() : null;
+  const before = data.customerName !== undefined ? { customerName: existing.customerName } : null;
   const customer = await Customer.findByIdAndUpdate(
     id,
     { ...data, updatedAt: Date.now() },
@@ -227,6 +226,7 @@ if (data.trnNumber !== undefined) {
     throw new AppError("Customer not found", 404);
   }
 
+  await PartyMaster.finish("customer", customer, master);
   if (before && before.customerName !== customer.customerName) {
     await PartyAccounts.onPartyRenamed("Customer", before.customerName, customer.customerName);
   }
@@ -246,6 +246,7 @@ exports.deleteCustomer = async (id) => {
     await releaseSequenceNumber(customer.customerId, session);
     await session.commitTransaction();
     await PartyAccounts.onPartyDeleted("Customer", customer.customerName);
+    await PartyMaster.discardFiles("customer", customer._id).catch((err) => console.error("[party-files] could not remove the customer's files:", err.message));
     return customer;
   } catch (error) {
     await session.abortTransaction();

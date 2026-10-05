@@ -2,6 +2,7 @@ const express = require("express");
 const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
 const c = require("../../controllers/financial/accountingSetupController");
 const chart = require("../../controllers/financial/chartController");
+const ledgerReports = require("../../controllers/reports/ledgerReportsController");
 const multer = require("multer");
 const AppError = require("../../utils/AppError");
 const AttachmentService = require("../../services/core/attachmentService");
@@ -50,6 +51,15 @@ router.get("/settings", chart.getSettings);
 router.put("/settings", canChange, chart.updateSettings);
 router.get("/reports/ageing", chart.getAgeing);
 router.get("/reports/statement", chart.getStatement);
+
+// ledger reports (read from the general ledger)
+router.get("/reports/general-ledger", ledgerReports.generalLedger);
+router.get("/reports/profit-loss", ledgerReports.profitAndLoss);
+router.get("/reports/day-book", ledgerReports.dayBook);
+router.get("/reports/voucher/:id", ledgerReports.voucherImpact);
+router.get("/reports/cash-book", ledgerReports.cashBook);
+router.get("/reports/cash-flow", ledgerReports.cashFlow);
+router.get("/reports/party-balances", ledgerReports.partyBalances);
 router.get("/returnable/:id", chart.getReturnable);
 router.get("/audit-log", chart.getAuditLog);
 

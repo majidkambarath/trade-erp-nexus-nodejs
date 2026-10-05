@@ -52,7 +52,7 @@ class InboundService {
       return { note: "No vendor matches this supplier's TRN or participant id - add the vendor, then re-check." };
     }
     // The purchase order it bills: referenced by number, else a single open one for the same amount.
-    const open = await Transaction.find({ type: "purchase_order", status: "APPROVED", partyId: vendor._id })
+    const open = await Transaction.find({ type: "purchase_order", status: "APPROVED", isOpening: { $ne: true }, partyId: vendor._id })
       .select("transactionNo totalAmount outstandingAmount vendorReference").lean();
     const byRef = open.find((o) => [doc.invoiceRef, doc.documentId].filter(Boolean).some((r) => r === o.transactionNo || r === o.vendorReference));
     const byAmount = open.filter((o) => Math.abs(o.totalAmount - doc.totals.payable) <= 0.01);

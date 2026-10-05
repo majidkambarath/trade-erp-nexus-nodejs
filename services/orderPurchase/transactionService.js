@@ -16,7 +16,6 @@ const { EInvoiceSubmission } = require("../../models/modules/einvoiceModels");
 const ReturnService = require("./returnService");
 const BatchService = require("../stock/batchService");
 const CreditControlService = require("../financial/creditControlService");
-const VATReport = require("../../models/modules/financial/VATReport"); // Import the new VATReport model
 const fs = require("fs");
 const path = require("path");
 const DebitLog = require("../../models/modules/DebitLog");
@@ -381,6 +380,14 @@ class TransactionService {
       const transaction = await Transaction.findById(id).session(session);
       if (!transaction) throw new AppError("Transaction not found", 404);
 
+      if (transaction.isOpening) {
+        throw new AppError(
+          `${transaction.transactionNo} is an opening balance. Remove it from Opening balances (it is posted against Opening Balance Equity, not as a sale or purchase).`,
+          409,
+          "OPENING_DOCUMENT"
+        );
+      }
+
       const wasApproved = transaction.status === "APPROVED";
 
       // An invoice that has gone out as an e-invoice is a legal record: it is corrected with a
@@ -441,7 +448,6 @@ class TransactionService {
         // A no-op until the company has mapped its accounts and switched ledger posting on.
         await PostingService.postTransaction(transaction, { stockUpdates, createdBy, session });
         await RecostService.recostAfterChange(transaction, { session });
-        await this.createVATReportItems(transaction, createdBy, session);
 
         // NEW: Update party cash balance + create Debit/Credit Log
         await this.updatePartyBalanceAndLog(transaction, createdBy, session);
@@ -601,118 +607,6 @@ const logAmount = balanceEffect;
       ],
       { session }
     );
-  }
-
-  // Helper to create VAT report items for approved transactions
-  static async createVATReportItems(transaction, createdBy, session) {
-    const {
-      type,
-      _id: transactionId,
-      transactionNo,
-      partyId,
-      partyType,
-      date,
-      items,
-    } = transaction;
-
-    // Determine if it's output (sales) or input (purchase) VAT
-    const isOutputVAT = ["sales_order", "purchase_return"].includes(type);
-    const isInputVAT = ["purchase_order", "sales_return"].includes(type);
-    if (!isOutputVAT && !isInputVAT) return; // No VAT handling for other types
-
-    // Fetch party name (assume Customer/Vendor models have name fields)
-    let partyName = "Unknown";
-    if (partyType === "Customer") {
-      const customer = await mongoose
-        .model("Customer")
-        .findById(partyId)
-        .session(session);
-      partyName = customer?.customerName || partyName;
-    } else if (partyType === "Vendor") {
-      const vendor = await mongoose
-        .model("Vendor")
-        .findById(partyId)
-        .session(session);
-      partyName = vendor?.vendorName || partyName;
-    }
-
-    // Filter items with VAT > 0 and prepare VAT items
-    const vatItems = items
-      .filter((item) => item.vatAmount > 0)
-      .map((item) => ({
-        transactionId,
-        transactionNo,
-        itemId: item.itemId,
-        itemCode: item.itemCode,
-        description: item.description,
-        qty: item.qty,
-        rate: item.rate || item.price, // Fallback to price if rate missing
-        lineTotal: item.lineTotal,
-        vatAmount: item.vatAmount,
-        vatRate: item.vatPercent || 0,
-        partyId,
-        partyName,
-        partyType,
-        date,
-      }));
-
-    // VAT charged on header charges (freight, handling) is VAT too: it is in the ledger, so it belongs here.
-    for (const c of transaction.charges || []) {
-      if (!(c.vatAmount > 0)) continue;
-      vatItems.push({
-        transactionId, transactionNo, itemCode: c.code || "CHARGE",
-        description: c.description || "Charge", qty: 1, rate: c.amount,
-        lineTotal: Math.round((c.amount + c.vatAmount) * 100) / 100,
-        vatAmount: c.vatAmount, vatRate: c.vatPercent || 0, partyId, partyName, partyType, date,
-      });
-    }
-
-    if (vatItems.length === 0) return;
-
-    // For simplicity, we'll create or update a temporary "open" VAT report for the transaction's month.
-    // This avoids complex period management here; a separate report generation job can aggregate/finalize.
-    const periodStart = new Date(date.getFullYear(), date.getMonth(), 1);
-    const periodEnd = new Date(
-      date.getFullYear(),
-      date.getMonth() + 1,
-      0,
-      23,
-      59,
-      59,
-      999
-    );
-
-    let vatReport = await VATReport.findOne({
-      periodStart,
-      periodEnd,
-      status: "DRAFT", // Assume we use a draft report per period
-    }).session(session);
-
-    if (!vatReport) {
-      vatReport = new VATReport({
-        periodStart,
-        periodEnd,
-        generatedBy: createdBy,
-        totalVATOutput: 0,
-        totalVATInput: 0,
-        netVATPayable: 0,
-        items: [],
-      });
-    }
-
-    // Add new items and update totals
-    vatReport.items.push(...vatItems);
-    vatItems.forEach((vi) => {
-      if (isOutputVAT) {
-        vatReport.totalVATOutput += vi.vatAmount;
-      } else if (isInputVAT) {
-        vatReport.totalVATInput += vi.vatAmount;
-      }
-    });
-    vatReport.netVATPayable =
-      vatReport.totalVATOutput - vatReport.totalVATInput;
-
-    await vatReport.save({ session });
   }
 
   // Get all Transactions
@@ -945,6 +839,9 @@ const logAmount = balanceEffect;
             priority: { $first: "$priority" },
             grnGenerated: { $first: "$grnGenerated" },
             invoiceGenerated: { $first: "$invoiceGenerated" },
+            // opening balance invoices (no lines) are told apart in the lists
+            isOpening: { $first: "$isOpening" },
+            dueDate: { $first: "$dueDate" },
 
             // keep the raw lookup arrays
             customerData: { $first: "$customerData" },
@@ -971,7 +868,9 @@ const logAmount = balanceEffect;
         party: t.party || null,
         customerData: t.customerData?.length ? t.customerData[0] : null,
         vendorData: t.vendorData?.length ? t.vendorData[0] : null,
-        items: t.items.map((i) => ({
+        // a document with no lines (an opening balance invoice) comes out of the join as one empty
+        // placeholder; it is not a line
+        items: t.items.filter((i) => i && i.itemId).map((i) => ({
           ...i,
           stockDetails: i.stockDetails || null,
         })),
@@ -1004,6 +903,7 @@ const logAmount = balanceEffect;
     createdBy,
     session
   ) {
+    if (transaction.isOpening) return []; // no lines, no stock: its balance came in through Opening balances
     const { type, items, transactionNo } = transaction;
     const costBasis = costing.COST_BASIS_BY_TYPE[type];
     if (!costBasis) throw new AppError(`Cannot move stock for ${type}`, 400);
@@ -1144,6 +1044,7 @@ const logAmount = balanceEffect;
     createdBy,
     session
   ) {
+    if (transaction.isOpening) return; // nothing was received or issued
     // Batches first: a purchase whose goods were partly sold cannot be un-received (409).
     if (transaction.type === "purchase_order") {
       await BatchService.removeReceipt(transaction._id, { session });

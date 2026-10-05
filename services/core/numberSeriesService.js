@@ -17,6 +17,12 @@ const SERIES = {
   DN: { prefix: "DN", numberLength: 4, label: "Debit note" },
   CN: { prefix: "CN", numberLength: 4, label: "Credit note" },
   WO: { prefix: "WO", numberLength: 4, label: "Stock write-off" },
+  SA: { prefix: "SA", numberLength: 4, label: "Stock adjustment" },
+  // Opening balances (go-live): account balances, customer / vendor invoices carried over, stock.
+  OBV: { prefix: "OBV", numberLength: 4, label: "Opening balance voucher" },
+  OSI: { prefix: "OSI", numberLength: 4, label: "Opening sales invoice" },
+  OPI: { prefix: "OPI", numberLength: 4, label: "Opening purchase invoice" },
+  OST: { prefix: "OST", numberLength: 4, label: "Opening stock voucher" },
 };
 
 const SERIES_BY_TRANSACTION_TYPE = {
@@ -59,6 +65,23 @@ class NumberSeriesService {
     );
 
     return `${doc.prefix}-${fiscalYear}-${String(doc.next).padStart(doc.numberLength, "0")}`;
+  }
+
+  // `count` consecutive numbers from ONE atomic $inc: a bulk document such as a batch of opening
+  // invoices, which would otherwise pay one round trip per number inside the transaction.
+  static async allocateMany(series, count, date = new Date(), { session, req } = {}) {
+    const def = SERIES[series];
+    if (!def) throw new AppError(`Unknown number series: ${series}`, 500, "UNKNOWN_SERIES");
+    if (!(count >= 1)) return [];
+
+    const { companyId, branchId } = getTenant(req);
+    const fiscalYear = await FiscalYearService.keyForDate(date, { session, companyId });
+    const doc = await NumberSeries.findOneAndUpdate(
+      { companyId, branchId, series, fiscalYear },
+      { $inc: { next: count }, $setOnInsert: { prefix: def.prefix, numberLength: def.numberLength } },
+      { upsert: true, new: true, session }
+    );
+    return Array.from({ length: count }, (_, i) => `${doc.prefix}-${fiscalYear}-${String(doc.next - count + 1 + i).padStart(doc.numberLength, "0")}`);
   }
 
   static forTransactionType(type) {

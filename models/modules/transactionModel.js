@@ -68,6 +68,13 @@ const transactionSchema = new mongoose.Schema({
     default: null,
   },
   date: { type: Date, default: Date.now },
+  // When the party has to pay. Only opening invoices carry one (entered from the old books);
+  // ordinary documents are due by the party's payment terms.
+  dueDate: { type: Date, default: null },
+  // An invoice carried over from the old books (services/financial/openingBalanceService.js): it has
+  // no lines, no stock, no VAT and no e-invoice, is not returnable, and is posted against Opening
+  // Balance Equity. Every consumer of approved documents that must ignore these checks this flag.
+  isOpening: { type: Boolean, default: false },
   deliveryDate: { type: Date },
   returnDate: { type: Date },
   expectedDispatch: { type: Date },
@@ -168,6 +175,7 @@ transactionSchema.index({ partyId: 1, partyType: 1 });
 transactionSchema.index({ "returnOf.transactionId": 1 }, { sparse: true });
 transactionSchema.index({ status: 1 });
 transactionSchema.index({ date: -1 });
+transactionSchema.index({ isOpening: 1, type: 1, partyId: 1 });
 // List query: filter by type, sort by createdAt. Without this the sort
 // falls back to an in-memory sort of every matching document.
 transactionSchema.index({ type: 1, createdAt: -1 });

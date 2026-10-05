@@ -256,8 +256,11 @@ test("purchase: server computes the totals, approval books stock, batch and ledg
   assert.equal(row("Freight on Purchases").balance, 20);
   assert.equal(row("Input VAT").balance, 46);
   // the VAT return agrees with the ledger: freight VAT is in it too
-  const vr = await M.VATReport.findOne({}).lean();
-  assert.equal(vr.totalVATInput, 46);
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  const vat = await call("GET", `/vat-return/return?from=${day(-2)}&to=${day(2)}`);
+  assert.equal(vat.status, 200, JSON.stringify(vat.data));
+  assert.equal(vat.body.totals.recoverableVat, 46);
+  assert.equal(await M.VATReport.countDocuments({}), 0, "the old VAT report table is no longer written");
   assert.equal(row("Vendor - Mill").balance, 966);
 
   // editing reads the document exactly as stored

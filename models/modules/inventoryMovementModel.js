@@ -26,6 +26,7 @@ const inventoryMovementSchema = new mongoose.Schema({
     type: String,
     enum: [
       "INITIAL_STOCK",      // Initial stock entry
+      "OPENING_STOCK",      // Go-live stock quantity and cost (Opening balances)
       "STOCK_ADJUSTMENT",   // Manual stock adjustment
       "PURCHASE_RECEIVE",   // Purchase order received (GRN)
       "SALES_DISPATCH",     // Sales order dispatched

@@ -5,6 +5,7 @@ const StockPurchaseLog = require("../../models/modules/StockPurchaseLog"); // Im
 const InventoryMovement = require("../../models/modules/inventoryMovementModel");
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
+const StockAdjustmentService = require("./stockAdjustmentService");
 
 class StockService {
   static async createStock(data, createdBy) {
@@ -125,7 +126,7 @@ class StockService {
     }
   }
 
-  static async updateStock(id, data, createdBy) {
+  static async updateStock(id, data, createdBy, options = {}) {
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -195,34 +196,21 @@ class StockService {
         session,
       });
 
-      // Create inventory movement if stock quantity changed
+      // A changed quantity is a stock event: costed, batched, written to the movement ledger and,
+      // when posting is on, booked against Inventory / Stock adjustment.
+      let adjustment = null;
       if (newQuantity !== oldQuantity) {
-        const quantityChange = newQuantity - oldQuantity;
-        await this.createInventoryMovement(
-          {
-            stockId: currentStock.itemId,
-            quantity: quantityChange,
-            previousStock: oldQuantity,
-            newStock: newQuantity,
-            eventType: "STOCK_ADJUSTMENT",
-            referenceType: "Adjustment",
-            referenceId: updatedStock._id,
-            referenceNumber: `ADJ-${Date.now()}`,
-            unitCost: updatedStock.purchasePrice,
-            totalValue: Math.abs(quantityChange) * updatedStock.purchasePrice,
-            notes: `Manual stock adjustment: ${
-              quantityChange > 0 ? "Added" : "Removed"
-            } ${Math.abs(quantityChange)} units`,
-            createdBy,
-            batchNumber: currentStock.batchNumber,
-            expiryDate: currentStock.expiryDate,
-          },
-          session
+        adjustment = await StockAdjustmentService.apply(
+          { ...options, stock: currentStock, newQuantity, unitCost: options.unitCost ?? data.purchasePrice, createdBy },
+          { session }
         );
       }
 
       await session.commitTransaction();
-      return updatedStock;
+      // the adjustment moved the cost pool after the edit was written: return what is stored now
+      const result = adjustment ? await Stock.findById(id) : updatedStock;
+      if (adjustment) result.$locals.adjustment = adjustment;
+      return result;
     } catch (error) {
       await session.abortTransaction();
       console.error(`Error updating stock (ID: ${id}):`, error.message);

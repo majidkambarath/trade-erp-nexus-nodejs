@@ -98,7 +98,11 @@ const chequeSchema = new mongoose.Schema(
     partyName: { type: String, trim: true },
     chequeNo: { type: String, required: true, trim: true, maxlength: 40 },
     chequeDate: { type: Date, required: true },
-    amount: { type: Number, required: true, min: 0 },
+    amount: { type: Number, required: true, min: 0 }, // base currency (AED) value
+    // set when the cheque is in a foreign currency: what it is written for, and the rate it was taken at
+    currency: { type: String, trim: true, uppercase: true },
+    foreignAmount: { type: Number, min: 0 },
+    exchangeRate: { type: Number, min: 0 },
     drawnOnBankId: { type: mongoose.Schema.Types.ObjectId, ref: "BankMaster", default: null },
     drawnOnBankName: { type: String, trim: true, default: "" },
     bankAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "LedgerAccount", required: true },

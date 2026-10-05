@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const { LedgerAccount, LedgerEntry } = require("../../models/modules/financial/financialModels");
+const AccountGroup = require("../../models/modules/financial/accountGroupModel");
 const AccountConfigService = require("./accountConfigService");
 const AccountGroupService = require("./accountGroupService");
 const AppError = require("../../utils/AppError");
@@ -31,7 +32,10 @@ async function groupFor(key, session) {
   }
 }
 
-async function ensurePartyAccount(kind, partyId, partyName, { session } = {}) {
+// `groupId` files a NEW account in that group instead of the posting-map one (the account form picks
+// a group, possibly a sub-group of Receivables / Payables). It must be a group of the same category;
+// an account that already exists is found by name and left where it is.
+async function ensurePartyAccount(kind, partyId, partyName, { session, groupId: chosenGroupId } = {}) {
   const k = KINDS[kind];
   if (!k) throw new AppError(`Unknown party account kind ${kind}`, 500);
   if (!mongoose.Types.ObjectId.isValid(partyId)) throw new AppError(`Invalid ${kind.replace("Advance", " advance")} ID`, 400);
@@ -40,7 +44,18 @@ async function ensurePartyAccount(kind, partyId, partyName, { session } = {}) {
 
   let q = LedgerAccount.findOne({ $or: [{ accountName, accountType: k.type }, { accountCode: legacyCode }] });
   let account = await (session ? q.session(session) : q);
-  const groupId = await groupFor(k.groupKey, session);
+  let groupId;
+  if (chosenGroupId) {
+    const gq = AccountGroup.findById(chosenGroupId).select("category").lean();
+    const chosen = await (session ? gq.session(session) : gq);
+    if (!chosen) throw new AppError("Account group not found", 400, "GROUP_REQUIRED");
+    if (chosen.category.toLowerCase() !== k.type) {
+      throw new AppError(`${k.prefix.replace(" - ", "")} accounts belong in a ${k.type} group`, 400, "GROUP_CATEGORY_MISMATCH");
+    }
+    groupId = chosen._id;
+  } else {
+    groupId = await groupFor(k.groupKey, session);
+  }
 
   if (!account) {
     const accountCode = groupId ? await AccountGroupService.generateNextAccountCode(groupId, { session }) : legacyCode;
@@ -113,11 +128,14 @@ async function backfillPartyAccounts() {
 // (or by the backfill when the chart is opened).
 const kindOf = (partyType) => (partyType === "Vendor" ? "vendor" : "customer");
 
-async function onPartyCreated(partyType, party) {
+// `groupId` files the account in a chosen group (the account form); `strict` lets the error out
+// instead of logging it, for a caller that cannot go on without the account.
+async function onPartyCreated(partyType, party, { groupId, strict } = {}) {
   try {
     const name = partyType === "Vendor" ? party.vendorName : party.customerName;
-    if (name) await ensurePartyAccount(kindOf(partyType), party._id, name);
+    if (name) await ensurePartyAccount(kindOf(partyType), party._id, name, { groupId });
   } catch (err) {
+    if (strict) throw err;
     console.error(`[party-account] could not create the account for ${partyType}:`, err.message);
   }
 }

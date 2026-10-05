@@ -1,15 +1,22 @@
 const mongoose = require("mongoose");
 const AccountGroup = require("../../models/modules/financial/accountGroupModel");
 const { LedgerAccount } = require("../../models/modules/financial/financialModels");
+const AccountConfigService = require("./accountConfigService");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 class AccountGroupService {
+  // Every group with its `role` (cash | bank | receivable | payable | creditCard | other), worked
+  // out from the posting map and inherited by the groups nested under a mapped one.
   static async list(req) {
     const { companyId } = getTenant(req);
-    return AccountGroup.find({ companyId }).sort({ category: 1, name: 1 }).lean();
+    const [groups, roles] = await Promise.all([
+      AccountGroup.find({ companyId }).sort({ category: 1, name: 1 }).lean(),
+      AccountConfigService.groupRoles({ companyId }),
+    ]);
+    return groups.map((g) => ({ ...g, role: roles.get(String(g._id)) || "other" }));
   }
 
   // Every id in the subtree under `groupId`, itself included. Reports use it for

@@ -40,6 +40,7 @@ class PostingService {
   static async postTransaction(transaction, { stockUpdates = [], createdBy, session } = {}) {
     if (!(await AccountConfigService.isPostingEnabled({ session }))) return null;
     if (!TEMPLATES[transaction.type]) return null;
+    if (transaction.isOpening) return null; // posted by Opening balances, never through the sales / purchase template
 
     const cogs = ["sales_order", "sales_return"].includes(transaction.type)
       ? stockUpdates.reduce((t, u) => t + (Number(u.cost) || 0), 0)
@@ -162,7 +163,9 @@ class PostingService {
     const result = { posted: 0, skipped: 0, failed: [] };
     if (!(await AccountConfigService.isPostingEnabled())) return result;
 
-    const approved = await Transaction.find({ status: "APPROVED", type: { $in: Object.keys(TEMPLATES) } }).sort({ date: 1, createdAt: 1 });
+    // Opening invoices (go-live) are posted against Opening Balance Equity when they are entered; the
+    // sales / purchase templates would book revenue or stock for a document that has neither.
+    const approved = await Transaction.find({ status: "APPROVED", type: { $in: Object.keys(TEMPLATES) }, isOpening: { $ne: true } }).sort({ date: 1, createdAt: 1 });
     for (const tx of approved) {
       if (await LedgerEntry.exists({ voucherId: tx._id })) { result.skipped += 1; continue; }
       const session = await mongoose.startSession();
@@ -180,6 +183,10 @@ class PostingService {
         await session.endSession();
       }
     }
+    // accounts created with an opening balance while posting was off carry it only as a stored figure
+    const openings = await require("./chartOfAccountsService").postStoredOpenings({ adminId: createdBy });
+    result.openingsPosted = openings.posted;
+    result.failed.push(...openings.failed);
     return result;
   }
 
