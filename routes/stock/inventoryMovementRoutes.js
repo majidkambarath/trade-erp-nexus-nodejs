@@ -1,5 +1,5 @@
 const express = require("express");
-const InventoryMovementController = require("../../controllers/stock/inventoryMovementController");
+const InventoryMovementController = require("../../controllers/stock/InventoryMovementController");
 const { authenticateToken } = require("../../middleware/authMiddleware");
 // const validate = require("../middleware/validate");
 // const {

@@ -5,7 +5,7 @@ const {
 } = require("../../validations/uomValidation");
 const validate = require("../../middleware/validate");
 const { authenticateToken } = require("../../middleware/authMiddleware");
-const UOMController = require("../../controllers/unit/UOMController");
+const UOMController = require("../../controllers/unit/uomController");
 
 const router = express.Router();
 

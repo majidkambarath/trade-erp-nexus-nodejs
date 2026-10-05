@@ -1,5 +1,5 @@
 // services/financial/ledgerAccountService.js
-const { LedgerAccount } = require("../../models/financial/financialModels");
+const { LedgerAccount } = require("../../models/modules/financial/financialModels");
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
 
