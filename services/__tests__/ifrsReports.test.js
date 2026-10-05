@@ -125,7 +125,7 @@ test.before(async () => {
   await svc.Config.setPostingEnabled(true);
   // no fiscal year defined: posting is allowed on any day, so the story can sit on fixed dates
   await svc.FiscalYear.deleteMany({});
-  await svc.Config.updateSettings({ profile: { legalName: "NH Foods Trading LLC", trn: "100123456789012" } });
+  await svc.Config.updateSettings({ profile: { legalName: "Harbour Trading Co LLC", trn: "100123456789012" } });
 
   const customer = await svc.Customer.create({ customerId: "C1", customerName: "Al Noor", contactPerson: "x", creditLimit: 0 });
   const vendor = await svc.Vendor.create({ vendorId: "V1", vendorName: "Gulf Mills", contactPerson: "x", address: "y" });
@@ -193,7 +193,7 @@ test("financial position: current and non-current assets, equity with profit, li
   const p = await Ifrs.financialPosition({ asAt: "2025-06-30", from: "2025-06-01" });
   assert.equal(p.title, "Statement of financial position");
   assert.equal(p.currency, "AED");
-  assert.equal(p.entity.name, "NH Foods Trading LLC");
+  assert.equal(p.entity.name, "Harbour Trading Co LLC");
   assert.equal(p.entity.trn, "100123456789012");
   assert.equal(p.compare, "prior-year");
   assert.deepEqual(p.comparative, { asAt: "2024-06-30", from: "2024-06-01" });
@@ -426,10 +426,10 @@ test("cash flows (indirect): operating, investing, financing, and the closing ca
 
 test("notes: policies, entity, and the note tables from the ledger", { skip }, async () => {
   const n = await Ifrs.notes({ asAt: "2025-06-30" });
-  assert.equal(n.entity.name, "NH Foods Trading LLC");
+  assert.equal(n.entity.name, "Harbour Trading Co LLC");
   assert.deepEqual(n.policies.map((p) => p.key), ["entity", "basis", "inventory", "revenue", "vat", "classification"]);
   const text = (key) => n.policies.find((p) => p.key === key).text;
-  assert.match(text("entity"), /NH Foods Trading LLC.*100123456789012/);
+  assert.match(text("entity"), /Harbour Trading Co LLC.*100123456789012/);
   assert.match(text("basis"), /IFRS.*AED/s);
   assert.match(text("inventory"), /weighted average/i);
   assert.match(text("revenue"), /IFRS 15/);

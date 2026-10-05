@@ -50,7 +50,7 @@ const sell = async (customer, qty = 10, extra = {}) => {
   return t;
 };
 const ready = {
-  profile: { legalName: "NH Foods LLC", trn: "100123456700003", addressLine1: "Al Quoz", city: "Dubai", emirate: "Dubai" },
+  profile: { legalName: "Harbour Trading LLC", trn: "100123456700003", addressLine1: "Al Quoz", city: "Dubai", emirate: "Dubai" },
 };
 
 test("setup: stock, tax code, purchase", { skip }, async () => {

@@ -4,7 +4,7 @@ const {
   buildPayload, validatePayload, partyReadiness, payloadHash, canTransition, taxCategoryFor, dubaiDate,
 } = require("../eInvoice");
 
-const seller = { legalName: "NH Foods LLC", trn: "100123456700003", addressLine1: "Al Quoz", city: "Dubai", countryCode: "AE" };
+const seller = { legalName: "Harbour Trading LLC", trn: "100123456700003", addressLine1: "Al Quoz", city: "Dubai", countryCode: "AE" };
 const customer = {
   customerName: "Al Noor Mart", trnNumber: "100999888700003", billingAddress: "Deira",
   eInvoice: { participantId: "0235:100999888700003", city: "Dubai", countryCode: "AE" },

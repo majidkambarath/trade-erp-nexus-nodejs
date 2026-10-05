@@ -212,7 +212,7 @@ test("tax codes and settings through the API", { skip }, async () => {
   assert.equal(dupTax.status, 400);
   assert.equal(dupTax.data.errorCode, "DUPLICATE_FIELD");
 
-  const s = await call("PUT", "/accounting/settings", { body: { profile: { legalName: "NH Foods LLC", trn: "100123456700003", addressLine1: "Al Quoz", city: "Dubai", emirate: "Dubai" } } });
+  const s = await call("PUT", "/accounting/settings", { body: { profile: { legalName: "Harbour Trading LLC", trn: "100123456700003", addressLine1: "Al Quoz", city: "Dubai", emirate: "Dubai" } } });
   assert.equal(s.body.profile.trn, "100123456700003");
   assert.equal((await call("PUT", "/accounting/settings", { body: { profile: { trn: "123" } } })).data.errorCode, "INVALID_TRN");
 });
