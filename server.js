@@ -3,6 +3,7 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const { mongodb } = require("./config/db");
 const errorHandler = require("./utils/errorHandler");
+const AppError = require("./utils/AppError");
 
 // Import routers
 const vendorRouter = require("./routes/vendor/vendorRouter");
@@ -37,20 +38,38 @@ app.use(express.json({ limit: "50mb", verify: (req, _res, buf) => { req.rawBody 
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // CORS configuration
+// Browser origins allowed to call the API with credentials. Deployments add their own through
+// CORS_ORIGINS (comma separated), so a new frontend URL or custom domain needs no code change.
+// Unknown origins are refused: the old version logged "change this in production" and then
+// allowed everyone anyway, which with credentials: true let any site ride a logged-in session.
+const DEFAULT_ALLOWED_ORIGINS = [
+  "http://localhost:5173", // vite dev server
+  "http://localhost:4173", // vite preview
+  "http://localhost:3000",
+  "http://localhost:8080",
+  "https://zarvia.onrender.com", // deployed frontend
+];
+
+// Trailing slashes are stripped so "https://x.com/" in the env var still matches the Origin
+// header, which never carries one.
+const normalizeOrigin = (value) => value.trim().replace(/[/]+$/, "");
+
+const allowedOrigins = [
+  ...DEFAULT_ALLOWED_ORIGINS,
+  ...(process.env.CORS_ORIGINS || "").split(",").map(normalizeOrigin).filter(Boolean),
+];
+
 const corsOptions = {
   origin: function (origin, callback) {
-    const allowedOrigins = [
-      "http://localhost:5173",
-      "http://localhost:3000",
-      "http://localhost:8080",
-    ];
+    // No Origin header: curl, health checks, server-to-server calls and the signed e-invoice
+    // webhooks. A browser always sends one on a cross-site request, so this is not a hole.
+    if (!origin) return callback(null, true);
 
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      // For now allow all origins - change this in production
-      callback(null, true);
-    }
+    if (allowedOrigins.includes(normalizeOrigin(origin))) return callback(null, true);
+
+    callback(
+      new AppError(`Origin ${origin} is not allowed by CORS`, 403, "CORS_ORIGIN_NOT_ALLOWED")
+    );
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "x-secret-key", "Authorization"],
