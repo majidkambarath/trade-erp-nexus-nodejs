@@ -380,6 +380,17 @@ class TransactionService {
       const transaction = await Transaction.findById(id).session(session);
       if (!transaction) throw new AppError("Transaction not found", 404);
 
+      // What the audit log keeps of the document, read before it is gone.
+      const removed = {
+        transactionNo: transaction.transactionNo,
+        type: transaction.type,
+        status: transaction.status,
+        date: transaction.date,
+        partyId: transaction.partyId,
+        totalAmount: transaction.totalAmount,
+        items: transaction.items?.length || 0,
+      };
+
       if (transaction.isOpening) {
         throw new AppError(
           `${transaction.transactionNo} is an opening balance. Remove it from Opening balances (it is posted against Opening Balance Equity, not as a sale or purchase).`,
@@ -419,6 +430,7 @@ class TransactionService {
       }
 
       await Transaction.findByIdAndDelete(id).session(session);
+      return removed;
     }
   );
 

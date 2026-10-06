@@ -15,6 +15,7 @@ router.post(
 );
 router.get("/vouchers", FinancialController.getAllVouchers);
 router.get("/vouchers/:id", FinancialController.getVoucherById);
+router.get("/vouchers/:id/audit", FinancialController.getVoucherAudit);
 router.put(
   "/vouchers/:id",
   uploadSingle("attachedProof"),

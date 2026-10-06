@@ -3,6 +3,8 @@ const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
 const { extractFileInfo } = require("../../middleware/upload");
 const LedgerService = require("../../services/financial/ledgerService");
+const AuditService = require("../../services/core/auditService");
+const VoucherAuditService = require("../../services/financial/voucherAuditService");
 
 // Create any type of voucher (receipt, payment, journal, contra, expense)
 exports.createVoucher = catchAsync(async (req, res) => {
@@ -25,6 +27,14 @@ exports.createVoucher = catchAsync(async (req, res) => {
 
   // console.log(bodyData);
   const voucher = await FinancialService.createVoucher(bodyData, createdBy);
+  await AuditService.log({
+    req,
+    action: "VOUCHER_CREATED",
+    entity: "Voucher",
+    entityId: voucher._id,
+    summary: `${VoucherAuditService.describe(voucher)} saved`,
+    after: { ...VoucherAuditService.snapshot(voucher), effects: await VoucherAuditService.effects(voucher._id) },
+  });
 
   res.status(201).json({
     status: "success",
@@ -56,6 +66,13 @@ exports.getVoucherById = catchAsync(async (req, res) => {
   });
 });
 
+// Everything one voucher did: its ledger entries, the invoices it settled, its cheque and the
+// activity log behind it.
+exports.getVoucherAudit = catchAsync(async (req, res) => {
+  const trail = await VoucherAuditService.trail(req.params.id);
+  res.status(200).json({ status: "success", data: trail });
+});
+
 // Update voucher
 exports.updateVoucher = catchAsync(async (req, res) => {
   const updatedBy = req.admin?.id || req.body.updatedBy || "system";
@@ -76,11 +93,22 @@ exports.updateVoucher = catchAsync(async (req, res) => {
     ];
   }
 
+  // read before the write, so the audit row can show what the edit changed
+  const before = await VoucherAuditService.snapshotOf(req.params.id);
   const voucher = await FinancialService.updateVoucher(
     req.params.id,
     bodyData,
     updatedBy
   );
+  await AuditService.log({
+    req,
+    action: "VOUCHER_UPDATED",
+    entity: "Voucher",
+    entityId: req.params.id,
+    summary: `${VoucherAuditService.describe(voucher)} edited`,
+    before,
+    after: { ...VoucherAuditService.snapshot(voucher), effects: await VoucherAuditService.effects(req.params.id) },
+  });
 
   res.status(200).json({
     status: "success",
@@ -94,6 +122,15 @@ exports.updateVoucher = catchAsync(async (req, res) => {
 exports.deleteVoucher = catchAsync(async (req, res) => {
   const deletedBy = req.admin?.id || "system";
   const result = await FinancialService.deleteVoucher(req.params.id, deletedBy);
+  // The voucher is kept with status cancelled, so the log says so rather than 'removed'.
+  await AuditService.log({
+    req,
+    action: "VOUCHER_DELETED",
+    entity: "Voucher",
+    entityId: req.params.id,
+    summary: `${result.removed.voucherType} voucher ${result.removed.voucherNo} deleted (kept as cancelled)`,
+    before: result.removed,
+  });
 
   res.status(200).json({
     status: "success",
@@ -148,6 +185,14 @@ exports.processVoucherApproval = catchAsync(async (req, res) => {
     approvedBy,
     comments
   );
+  await AuditService.log({
+    req,
+    action: action === "approve" ? "VOUCHER_APPROVED" : "VOUCHER_REJECTED",
+    entity: "Voucher",
+    entityId: req.params.id,
+    summary: `${VoucherAuditService.describe(voucher)} ${action === "approve" ? "approved" : "rejected"}${comments ? `: ${comments}` : ""}`,
+    after: { ...VoucherAuditService.snapshot(voucher), effects: await VoucherAuditService.effects(req.params.id) },
+  });
 
   res.status(200).json({
     status: "success",

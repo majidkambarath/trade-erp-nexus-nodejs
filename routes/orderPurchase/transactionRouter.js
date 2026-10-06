@@ -9,6 +9,7 @@ router.use(authenticateToken);
 router.post("/transactions", TransactionController.createTransaction);
 router.get("/transactions", TransactionController.getAllTransactions);
 router.get("/transactions/:id", TransactionController.getTransactionById);
+router.get("/transactions/:id/audit", TransactionController.getTransactionAudit);
 router.put("/transactions/:id", TransactionController.updateTransaction);
 router.delete("/transactions/:id", TransactionController.deleteTransaction);
 router.patch(

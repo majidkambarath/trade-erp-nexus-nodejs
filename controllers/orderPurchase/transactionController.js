@@ -1,11 +1,34 @@
 const TransactionService = require("../../services/orderPurchase/transactionService");
 const CreditControlService = require("../../services/financial/creditControlService");
+const AuditService = require("../../services/core/auditService");
+const DocumentAuditService = require("../../services/orderPurchase/documentAuditService");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
 
 // Helper to resolve createdBy consistently
 const resolveCreatedBy = (req) =>
   req.admin?.id || req.user?.id || req.body?.createdBy || "system";
+
+// Approval is where a document gets its financial effect, so its audit row carries what that
+// effect was - not merely that someone pressed approve.
+const PROCESS_ACTION = { approve: "APPROVED", reject: "REJECTED", cancel: "CANCELLED" };
+const logProcessed = async (req, transaction, action) => {
+  const effects =
+    action === "reject"
+      ? null
+      : await DocumentAuditService.effects(transaction._id, transaction.partyType);
+  const effect = effects
+    ? ` - ${effects.ledgerEntries} ledger entries, ${effects.stockMovements} stock movements, ${effects.partyLogs} party balance rows`
+    : "";
+  await AuditService.log({
+    req,
+    action: `TRANSACTION_${PROCESS_ACTION[action]}`,
+    entity: "Transaction",
+    entityId: transaction._id,
+    summary: `${DocumentAuditService.describe(transaction)} ${PROCESS_ACTION[action].toLowerCase()}${effect}`,
+    after: { ...DocumentAuditService.snapshot(transaction), effects },
+  });
+};
 
 // Helper to send paginated results
 const sendPaginated = (res, result) => {
@@ -21,14 +44,19 @@ const sendPaginated = (res, result) => {
 
 // Create new transaction
 exports.createTransaction = catchAsync(async (req, res) => {
-   console.log("Received data for CREATE (req.body):", JSON.stringify(req.body, null, 2));
   const transaction = await TransactionService.createTransaction(
     req.body,
     resolveCreatedBy(req)
   );
-  console.log("Created transaction:", JSON.stringify(transaction, null, 2));
+  await AuditService.log({
+    req,
+    action: "TRANSACTION_CREATED",
+    entity: "Transaction",
+    entityId: transaction._id,
+    summary: `${DocumentAuditService.describe(transaction)} saved as ${transaction.status}`,
+    after: DocumentAuditService.snapshot(transaction),
+  });
   res.status(201).json({ status: "success", data: transaction });
- 
 });
 
 // Get all transactions
@@ -46,23 +74,39 @@ exports.getTransactionById = catchAsync(async (req, res) => {
 
 // Update transaction
 exports.updateTransaction = catchAsync(async (req, res) => {
-
-  console.log(req.body)
+  // Read before the write, so the audit row can show what the edit changed.
+  const before = await DocumentAuditService.snapshotOf(req.params.id);
   const transaction = await TransactionService.updateTransaction(
     req.params.id,
     req.body,
     resolveCreatedBy(req)
   );
-  console.log(transaction)
-  res.status(200).json({ status: "success", data:  transaction  });
+  await AuditService.log({
+    req,
+    action: "TRANSACTION_UPDATED",
+    entity: "Transaction",
+    entityId: transaction._id,
+    summary: `${DocumentAuditService.describe(transaction)} edited`,
+    before,
+    after: DocumentAuditService.snapshot(transaction),
+  });
+  res.status(200).json({ status: "success", data: transaction });
 });
 
 // Delete transaction
 exports.deleteTransaction = catchAsync(async (req, res) => {
-  await TransactionService.deleteTransaction(
+  const removed = await TransactionService.deleteTransaction(
     req.params.id,
     resolveCreatedBy(req)
   );
+  await AuditService.log({
+    req,
+    action: "TRANSACTION_DELETED",
+    entity: "Transaction",
+    entityId: req.params.id,
+    summary: `${removed.type.replace(/_/g, " ")} ${removed.transactionNo} deleted`,
+    before: removed,
+  });
   res.status(204).json({ status: "success", data: null });
 });
 
@@ -82,7 +126,15 @@ exports.processTransaction = catchAsync(async (req, res) => {
     // Each risk warning has its own acknowledgement field, so one cannot acknowledge another.
     { acknowledged: req.body?.[CreditControlService.ACK_FIELD] === true, req }
   );
+  await logProcessed(req, transaction, action);
   res.status(200).json({ status: "success", data: { transaction } });
+});
+
+// Everything one document did: ledger entries, stock movements, party balance, settlements,
+// e-invoice and the activity log behind it.
+exports.getTransactionAudit = catchAsync(async (req, res) => {
+  const trail = await DocumentAuditService.trail(req.params.id);
+  res.status(200).json({ status: "success", data: trail });
 });
 
 // Get transaction with inventory movements
@@ -115,6 +167,14 @@ exports.duplicateTransaction = catchAsync(async (req, res) => {
     req.params.id,
     resolveCreatedBy(req)
   );
+  await AuditService.log({
+    req,
+    action: "TRANSACTION_CREATED",
+    entity: "Transaction",
+    entityId: transaction._id,
+    summary: `${DocumentAuditService.describe(transaction)} duplicated from ${req.params.id}`,
+    after: DocumentAuditService.snapshot(transaction),
+  });
   res.status(201).json({ status: "success", data: { transaction } });
 });
 

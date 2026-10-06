@@ -439,3 +439,114 @@ ${logs.slice(-2500)}`);
   }
   assert.ok(!JSON.stringify(log.body).includes("whsec-e2e"), "secrets never reach the log");
 });
+
+test("one document's audit trail: its ledger entries, stock, party balance and who did what", { skip }, async () => {
+  const { status, body } = await call("GET", `/transactions/transactions/${S.po}/audit`);
+  assert.equal(status, 200, JSON.stringify(body));
+
+  assert.equal(body.document.status, "APPROVED");
+  assert.equal(body.party.name, "Mill");
+
+  // the double entry it posted: inventory + input VAT against the vendor, and it balances
+  assert.ok(body.ledger.posted, "the approved purchase posted to the ledger");
+  assert.equal(body.ledger.balanced, true);
+  assert.equal(body.ledger.totals.debit, body.ledger.totals.credit);
+  assert.equal(body.ledger.totals.debit, body.document.totalAmount);
+  assert.ok(body.ledger.entries.some((e) => e.credit === body.document.totalAmount), "the vendor is credited the whole amount");
+  assert.equal(body.ledger.note, null);
+
+  // the stock it moved, with the costing trail
+  assert.equal(body.stock.movements.length, 1);
+  assert.equal(body.stock.movements[0].eventType, "PURCHASE_RECEIVE");
+  assert.equal(body.stock.movements[0].quantity, 100);
+  assert.equal(body.stock.movements[0].previousStock, 0);
+  assert.equal(body.stock.movements[0].newStock, 100);
+
+  // the vendor balance row it wrote
+  assert.equal(body.partyBalance.rows.length, 1);
+  assert.equal(body.partyBalance.rows[0].invNo, body.document.transactionNo);
+
+  // and who did it
+  const actions = body.activity.map((a) => a.action);
+  assert.deepEqual(actions, ["TRANSACTION_CREATED", "TRANSACTION_APPROVED"]);
+  const approved = body.activity.find((a) => a.action === "TRANSACTION_APPROVED");
+  assert.equal(approved.after.effects.ledgerEntries, body.ledger.entries.length);
+  assert.equal(approved.after.effects.stockMovements, 1);
+  assert.ok(approved.username, "the approval is attributed to the person who made it");
+
+  // a draft has nothing posted yet, and says so rather than showing an empty table
+  const draft = await order("purchase_order", S.vendor, "Vendor", [line(1, 10, { taxCodeId: S.std._id })]);
+  const fresh = await call("GET", `/transactions/transactions/${draft.body._id}/audit`);
+  assert.equal(fresh.body.ledger.posted, false);
+  assert.match(fresh.body.ledger.note, /until the document is approved/i);
+  assert.equal(fresh.body.stock.movements.length, 0);
+  assert.deepEqual(fresh.body.activity.map((a) => a.action), ["TRANSACTION_CREATED"]);
+
+  // an edit records what changed
+  await call("PUT", `/transactions/transactions/${draft.body._id}`, { body: { notes: "rush" } });
+  const edited = await call("GET", `/transactions/transactions/${draft.body._id}/audit`);
+  assert.deepEqual(edited.body.activity.map((a) => a.action), ["TRANSACTION_CREATED", "TRANSACTION_UPDATED"]);
+  assert.ok(edited.body.activity[1].before, "an update keeps the before side");
+
+  assert.equal((await call("GET", "/transactions/transactions/000000000000000000000000/audit")).status, 404);
+});
+
+test("one voucher's audit trail: its double entry, what it was set against, and who did what", { skip }, async () => {
+  // a sale to settle, then a cash receipt against it
+  const sale = await order("sales_order", S.customer, "Customer", [line(4, 100, { taxCodeId: S.std._id })]);
+  assert.equal((await processDoc(sale.body._id, "approve")).status, 200);
+  const total = sale.body.totalAmount;
+
+  const made = await call("POST", "/vouchers/vouchers", {
+    body: {
+      voucherType: "receipt", customerId: S.customer, date: "2026-10-05", paymentMode: "cash",
+      totalAmount: total, linkedInvoices: [{ invoiceId: sale.body._id, amount: total, balance: 0 }],
+      narration: "Settled in full",
+    },
+  });
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  const id = made.body._id;
+
+  const { status, body } = await call("GET", `/vouchers/vouchers/${id}/audit`);
+  assert.equal(status, 200, JSON.stringify(body));
+
+  assert.equal(body.voucher.typeLabel, "Receipt");
+  // the voucher's own state, not the separate approval workflow, which defaults to "pending"
+  assert.equal(body.voucher.status, "approved");
+  assert.equal(body.voucher.paymentMode, "cash");
+  assert.equal(body.voucher.totalAmount, total);
+
+  // Dr cash / Cr the customer, and it balances
+  assert.ok(body.ledger.posted, "an approved receipt posts to the ledger");
+  assert.equal(body.ledger.balanced, true);
+  assert.equal(body.ledger.totals.debit, total);
+  assert.equal(body.ledger.note, null);
+
+  // what it was set against
+  assert.equal(body.allocations.length, 1);
+  assert.equal(body.allocations[0].transactionNo, sale.body.transactionNo);
+  assert.equal(body.allocations[0].allocatedAmount, total);
+  assert.equal(body.allocations[0].outstandingNow, 0, "the invoice it settled is now clear");
+  assert.equal(body.onAccount, 0);
+  assert.equal(body.cheque, null);
+
+  // and who did it
+  assert.deepEqual(body.activity.map((a) => a.action), ["VOUCHER_CREATED"]);
+  assert.equal(body.activity[0].after.effects.ledgerEntries, body.ledger.entries.length);
+  assert.ok(body.activity[0].username, "the save is attributed");
+
+  // the sale's own trail now shows the receipt that settled it
+  const doc = await call("GET", `/transactions/transactions/${sale.body._id}/audit`);
+  assert.equal(doc.body.settlements.length, 1);
+  assert.equal(doc.body.settlements[0].voucherNo, body.voucher.voucherNo);
+  assert.equal(doc.body.settlements[0].allocatedAmount, total);
+
+  // deleting it reverses the entries, and both the deletion and the reversal are visible
+  assert.equal((await call("DELETE", `/vouchers/vouchers/${id}`)).status, 200);
+  const after = await call("GET", `/vouchers/vouchers/${id}/audit`);
+  assert.ok(after.body.ledger.isReversed, "the reversing entries are kept and marked");
+  assert.equal(after.body.ledger.reversals.length, after.body.ledger.entries.length);
+  assert.deepEqual(after.body.activity.map((a) => a.action), ["VOUCHER_CREATED", "VOUCHER_DELETED"]);
+
+  assert.equal((await call("GET", "/vouchers/vouchers/000000000000000000000000/audit")).status, 404);
+});

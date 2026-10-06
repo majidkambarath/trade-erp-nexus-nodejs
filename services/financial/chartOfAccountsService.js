@@ -333,7 +333,8 @@ class ChartOfAccountsService {
       running += naturalBalance(cat, e.debitAmount, e.creditAmount);
       net = round2(net + e.debitAmount - e.creditAmount);
       return {
-        _id: e._id, date: e.date, voucherNo: e.voucherNo, voucherType: e.voucherType,
+        // voucherId is the source document: the ledger screen drills into its audit trail
+        _id: e._id, date: e.date, voucherId: e.voucherId, voucherNo: e.voucherNo, voucherType: e.voucherType,
         narration: e.narration, debit: e.debitAmount, credit: e.creditAmount, balance: round2(running), net,
       };
     });

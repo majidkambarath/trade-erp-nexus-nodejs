@@ -7,6 +7,8 @@ function scrub(value, depth = 0) {
   if (value == null || depth > 4) return value ?? null;
   if (Array.isArray(value)) return value.slice(0, 50).map((v) => scrub(v, depth + 1));
   if (value instanceof Date) return value;
+  // A MongoDB id is written as its hex string; left alone it serialises as raw bytes.
+  if (typeof value.toHexString === "function") return value.toHexString();
   if (typeof value === "object") {
     if (typeof value.toObject === "function") value = value.toObject();
     const out = {};

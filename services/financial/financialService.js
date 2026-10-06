@@ -1704,6 +1704,16 @@ class FinancialService {
         // Period lock: nothing may change inside a closed fiscal year.
         await FiscalYearService.assertPostingAllowed(voucher.date, { session });
 
+        // What the audit log keeps of the voucher, read before it is cancelled.
+        const removed = {
+          voucherNo: voucher.voucherNo,
+          voucherType: voucher.voucherType,
+          date: voucher.date,
+          partyId: voucher.partyId,
+          totalAmount: voucher.totalAmount,
+          status: voucher.status,
+        };
+
         // A cheque that has not cleared is withdrawn with its voucher (a cleared one is reversed
         // with it, the ledger entries of the clearing included).
         if (voucher.paymentMode === "cheque") {
@@ -1719,7 +1729,7 @@ class FinancialService {
         await voucher.save({ session });
 
         await session.commitTransaction();
-        return { message: "Voucher cancelled successfully" };
+        return { message: "Voucher cancelled successfully", removed };
       } catch (error) {
         await session.abortTransaction();
         throw error;
