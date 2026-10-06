@@ -20,6 +20,8 @@ const fs = require("fs");
 const path = require("path");
 const DebitLog = require("../../models/modules/DebitLog");
 const CreditLog = require("../../models/modules/CreditLog");
+const { withTransactionSession } = require("../../utils/withTransactionSession");
+const DocumentLinks = require("./deliveryNoteLinks");
 
 function logInbound(tag, payload) {
   try {
@@ -109,25 +111,14 @@ async function buildPricing({ items, charges = [], discount = 0, incomingTotal, 
   return { processedItems, charges: pricedCharges, pricing, totalAmount: pricing.grandTotal };
 }
 
-function withTransactionSession(fn) {
-  return async (...args) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
-    try {
-      const result = await fn(...args, session);
-      await session.commitTransaction();
-      return result;
-    } catch (err) {
-      await session.abortTransaction();
-      throw err;
-    } finally {
-      session.endSession();
-    }
-  };
-}
-
 // ---------- Service ----------
 class TransactionService {
+  // The server-side pricing of a document, for the documents that become one (a quotation, a
+  // delivery note) so an offer and the invoice it turns into are priced by the same code.
+  static buildPricing(args, session) {
+    return buildPricing(args, session);
+  }
+
   // One document exactly as stored (the controller exposed this route but the method did not
   // exist, so GET /transactions/:id always failed). Editing reads it so nothing the list view
   // leaves out - discounts, tax codes, batches, charges - is lost on save.
@@ -255,6 +246,11 @@ class TransactionService {
         docno: docno || null,
         lpono: lpono || null,
         discount: Number(discount ?? 0),
+        // Where a sales order came from: the quotation it converted, or the delivery notes it invoices.
+        // linkedRef is kept for a sales order only - the sales-return form sends the same key for the
+        // invoice being returned, which is read through returnOf instead.
+        quoteRef: data.quoteRef || undefined,
+        linkedRef: type === "sales_order" ? data.linkedRef || undefined : undefined,
       };
 
       console.log(
@@ -430,6 +426,8 @@ class TransactionService {
       }
 
       await Transaction.findByIdAndDelete(id).session(session);
+      // Delivery notes and quotations that pointed at this order are released.
+      await DocumentLinks.onSalesOrderChanged(transaction, { session, deleted: true });
       return removed;
     }
   );
@@ -513,6 +511,9 @@ class TransactionService {
       // Update status
       this.updateTransactionStatus(transaction, action);
       await transaction.save({ session });
+      // Delivery notes against this order learn whether it is now invoiced (approved), or no longer
+      // (rejected, cancelled); a converted quotation is released if its order was rejected or cancelled.
+      await DocumentLinks.onSalesOrderChanged(transaction, { session });
 
       return transaction;
     }

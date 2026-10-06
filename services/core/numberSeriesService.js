@@ -9,6 +9,10 @@ const SERIES = {
   SO: { prefix: "SO", numberLength: 4, label: "Sales order" },
   PR: { prefix: "PR", numberLength: 4, label: "Purchase return" },
   SR: { prefix: "SR", numberLength: 4, label: "Sales return" },
+  // Documents that post nothing: an offer, and the paper that travels with the goods. DLN rather than
+  // DN, which is the debit note.
+  QT: { prefix: "QT", numberLength: 4, label: "Quotation" },
+  DLN: { prefix: "DLN", numberLength: 4, label: "Delivery note" },
   RV: { prefix: "RV", numberLength: 4, label: "Receipt voucher" },
   PV: { prefix: "PV", numberLength: 4, label: "Payment voucher" },
   JV: { prefix: "JV", numberLength: 4, label: "Journal voucher" },

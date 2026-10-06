@@ -118,6 +118,8 @@ app.use("/api/v1/opening-balances", require("./routes/financial/openingBalanceRo
 app.use("/api/v1/document-types", require("./routes/masters/documentTypeRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/document-expiry", require("./routes/masters/documentExpiryRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/currencies", require("./routes/financial/currencyRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/quotations", require("./routes/orderPurchase/quotationRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/delivery-notes", require("./routes/orderPurchase/deliveryNoteRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1", adminRouter);
 app.use("/api/v1/vendors", vendorRouter);
 app.use("/api/v1/customers", customerRouter);
