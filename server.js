@@ -120,6 +120,7 @@ app.use("/api/v1/document-expiry", require("./routes/masters/documentExpiryRoute
 app.use("/api/v1/currencies", require("./routes/financial/currencyRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/quotations", require("./routes/orderPurchase/quotationRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/delivery-notes", require("./routes/orderPurchase/deliveryNoteRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/document-flow", require("./routes/orderPurchase/documentFlowRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1", adminRouter);
 app.use("/api/v1/vendors", vendorRouter);
 app.use("/api/v1/customers", customerRouter);

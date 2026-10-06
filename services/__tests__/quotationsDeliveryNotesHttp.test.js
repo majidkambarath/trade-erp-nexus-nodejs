@@ -239,3 +239,25 @@ test("a delivery note on its own is invoiced over HTTP, and a delete answers 204
   assert.equal((await call("DELETE", `/delivery-notes/${d.body._id}`)).status, 204);
   assert.equal((await call("GET", `/delivery-notes/${d.body._id}`)).status, 404);
 });
+
+test("a customer's documents come back as deals over HTTP, behind a login", { skip }, async () => {
+  const url = `/document-flow/customer/${S.customer._id}`;
+  assert.equal((await call("GET", url, { token: null })).status, 401);
+
+  const r = await call("GET", url);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.success, true);
+  assert.deepEqual(Object.keys(r.body).sort(), ["chains", "customer", "summary", "truncated"]);
+  assert.equal(r.body.customer.customerName, "Cust");
+
+  // the offer written in the first test became this order, which was then delivered against and approved
+  const deal = r.body.chains.find((c) => c.order?._id === S.order._id);
+  assert.ok(deal, "the order's deal is there");
+  assert.equal(deal.stage, "invoiced");
+  assert.equal(deal.quotation.quotationNo, S.q.quotationNo);
+  assert.equal(deal.notes.length, 1);
+  assert.equal(deal.mode, "order_first");
+
+  assert.equal((await call("GET", "/document-flow/customer/not-an-id")).data.errorCode, "CUSTOMER_REQUIRED");
+  assert.equal((await call("GET", `/document-flow/customer/${new mongoose.Types.ObjectId()}`)).status, 404);
+});
