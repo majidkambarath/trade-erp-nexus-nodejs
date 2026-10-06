@@ -16,6 +16,10 @@ const { round2 } = require("../../utils/accounting");
 // accounts, a customer paying by transfer before anyone booked it. The entry is posted through the
 // ordinary voucher code (so the VAT return, the ledger and the audit trail see it like any other),
 // and the voucher and the match are written in ONE transaction: both happen or neither does.
+//
+// In the request body `accountId` is always the BANK account; the account an entry is posted to (an
+// expense account for a fee, an income account for interest, the other side of a journal) is
+// `postToAccountId`, so the two can never be confused.
 
 const tx = async (fn) => {
   const session = await mongoose.startSession();
@@ -92,7 +96,7 @@ class ReconciliationPostingService {
       let data;
       if (kind === "fee") {
         if (!(line.amount < 0)) throw new AppError("A bank charge is money going out; this line is money coming in", 400, "WRONG_DIRECTION");
-        const expenseAccountId = input.accountId || await configured("bank-charges", { session, req });
+        const expenseAccountId = input.postToAccountId || await configured("bank-charges", { session, req });
         // VAT as the bank charged it: the statement shows the gross, so the net is worked back from it
         let code = null;
         if (input.taxCodeId) code = await TaxCode.findOne({ _id: input.taxCodeId, companyId, isActive: true }).session(session).lean();
@@ -108,7 +112,7 @@ class ReconciliationPostingService {
         };
       } else if (kind === "interest") {
         if (!(line.amount > 0)) throw new AppError("Interest is money coming in; this line is money going out", 400, "WRONG_DIRECTION");
-        const incomeId = input.accountId || await configured("bank-interest", { session, req });
+        const incomeId = input.postToAccountId || await configured("bank-interest", { session, req });
         data = {
           voucherType: "journal", date, narration,
           lines: [{ accountId: account._id, debit: gross, narration: `Interest received - ${said}` }, { accountId: incomeId, credit: gross, narration: `Interest received - ${said}` }],
@@ -136,13 +140,13 @@ class ReconciliationPostingService {
           paymentMode: "transfer", paymentDetails: bankDetails,
         };
       } else {
-        if (!input.accountId) throw new AppError("Choose the account to post to", 400, "ACCOUNT_REQUIRED");
+        if (!input.postToAccountId) throw new AppError("Choose the account to post to", 400, "ACCOUNT_REQUIRED");
         const money = line.amount > 0;
         data = {
           voucherType: "journal", date, narration: clip(input.description, 200) || narration,
           lines: [
             { accountId: account._id, ...(money ? { debit: gross } : { credit: gross }), narration },
-            { accountId: input.accountId, ...(money ? { credit: gross } : { debit: gross }), narration },
+            { accountId: input.postToAccountId, ...(money ? { credit: gross } : { debit: gross }), narration },
           ],
         };
       }

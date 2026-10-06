@@ -486,3 +486,59 @@ test("a cheque deposited and returned: two statement lines that cancel are match
   await svc.Rec.unmatch(m._id, {}, {}, admin);
   assert.equal((await svc.BankStatementLine.findById(a._id)).state, "open");
 });
+
+// ------------------------------------------------------------ posting to an account of the person's choice
+test("posting to a chosen account: a direct debit as a journal, a fee to another expense account without VAT", { skip }, async () => {
+  await svc.Rec.importStatement(bank._id, { rows: grid([[0, "DIRECT DEBIT UTILITIES", -40], [0, "SMS ALERT FEE", -5]], closing + 2) }, {}, admin);
+  const utilities = await svc.LedgerAccount.findOne({ accountName: "Utilities" });
+  const rent = await svc.LedgerAccount.findOne({ accountName: "Rent Expense" });
+
+  const dd = await svc.Posting.createFromLine(bank._id, (await lineBy("DIRECT DEBIT"))._id, { kind: "journal", postToAccountId: utilities._id }, {}, admin);
+  assert.deepEqual((await legs(await svc.Voucher.findById(dd.voucher._id))).sort(), ["Recon Bank:Cr40", "Utilities:Dr40"]);
+  await assert.rejects(async () => svc.Posting.createFromLine(bank._id, (await lineBy("SMS ALERT"))._id, { kind: "journal" }, {}, admin), { code: "ACCOUNT_REQUIRED" });
+
+  const sms = await svc.Posting.createFromLine(bank._id, (await lineBy("SMS ALERT"))._id, { kind: "fee", postToAccountId: rent._id, vat: false }, {}, admin);
+  const v = await svc.Voucher.findById(sms.voucher._id);
+  assert.equal(v.vatTotal, 0);
+  assert.deepEqual((await legs(v)).sort(), ["Recon Bank:Cr5", "Rent Expense:Dr5"]);
+});
+
+// ------------------------------------------------------------------------ an MT940 statement
+test("an MT940 statement for the other account: imported, and the transfer's other leg matches itself", { skip }, async () => {
+  const yymmdd = (n) => day(n).slice(2).replace(/-/g, "");
+  const mt940 = [
+    ":20:SAVINGS-1", ":25:AE070331234567890123456", ":28C:00001/001",
+    `:60F:C${yymmdd(-2)}AED0,00`,
+    `:61:${yymmdd(-1)}${day(-1).slice(5).replace("-", "")}C250,00NTRFNONREF//BREF9`,
+    ":86:TRANSFER FROM RECON BANK",
+    `:62F:C${yymmdd(-1)}AED250,00`,
+  ].join("\n");
+
+  const p = await svc.Rec.preview(savings._id, { mt940 }, {});
+  assert.equal(p.format, "mt940");
+  assert.equal(p.counts.total, 1);
+  assert.equal(p.opening, 0);
+  assert.equal(p.closing, 250);
+  assert.equal(p.continuity.ok, true);
+  assert.equal(p.setup.exists, false);
+  assert.equal(p.setup.suggestedStart, day(-1));
+
+  // the account has to be set up first, and the opening has to agree with the books the day before
+  await assert.rejects(() => svc.Rec.importStatement(savings._id, { mt940 }, {}, admin), { code: "SETUP_REQUIRED" });
+  const out = await svc.Rec.importStatement(savings._id, { mt940, fileName: "savings.sta", setup: { startDay: day(-1), statementOpening: 0 } }, {}, admin);
+  assert.equal(out.imported, 1);
+  assert.equal((await svc.Rec.setupStatus(savings._id, {})).difference, 0);
+
+  const w = await svc.Rec.lines(savings._id, { tab: "suggested" }, {});
+  assert.equal(w.rows.length, 1);
+  assert.equal(w.rows[0].suggestion.confidence, "high");
+  assert.equal(w.rows[0].suggestion.entries[0].voucherType, "contra", "the contra posted from the first account is the other leg");
+  const accepted = await svc.Rec.acceptSuggestions(savings._id, {}, {}, admin);
+  assert.equal(accepted.accepted, 1);
+
+  const proof = await svc.Rec.proof(savings._id, { asOf: day(-1), statementBalance: 250 }, {});
+  assert.equal(proof.difference, 0);
+  assert.equal(proof.canFinish, true);
+  const rec = await svc.Rec.finish(savings._id, { asOf: day(-1), statementBalance: 250 }, {}, admin);
+  assert.match(rec.number, /^BRC-\d{4}-\d{4}$/);
+});
