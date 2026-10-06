@@ -27,6 +27,8 @@ const SERIES = {
   OSI: { prefix: "OSI", numberLength: 4, label: "Opening sales invoice" },
   OPI: { prefix: "OPI", numberLength: 4, label: "Opening purchase invoice" },
   OST: { prefix: "OST", numberLength: 4, label: "Opening stock voucher" },
+  // A completed bank reconciliation (a bank account proven against its statement as of a date).
+  BRC: { prefix: "BRC", numberLength: 4, label: "Bank reconciliation" },
 };
 
 const SERIES_BY_TRANSACTION_TYPE = {

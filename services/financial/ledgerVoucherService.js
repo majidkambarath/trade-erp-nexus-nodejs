@@ -120,15 +120,33 @@ class LedgerVoucherService {
   static async processExpense(data, session, { req, PaymentModeService } = {}) {
     const { date = new Date(), expenseAccountId, description, paymentMode = "cash" } = data;
     const net = num(data.amount ?? data.totalAmount);
-    if (!expenseAccountId) throw new AppError("Choose the expense account", 400, "ACCOUNT_REQUIRED");
-    if (!(net > 0)) throw new AppError("Enter the amount", 400, "AMOUNT_REQUIRED");
+    // The VAT as printed on the invoice, when it is not simply net x rate: a bank's tax invoice fixes
+    // the gross, and a rate applied to the net can be a fils out. Within a fils of the rate, it is used.
+    const vatGiven = data.vatAmount === undefined || data.vatAmount === null || data.vatAmount === "" ? null : num(data.vatAmount);
+    // VAT only: tax on an amount that was booked earlier (a card commission booked at the sale), so
+    // there is nothing to debit to an expense account, only the input VAT.
+    const vatOnly = !(net > 0) && vatGiven > 0;
+    if (!vatOnly && !expenseAccountId) throw new AppError("Choose the expense account", 400, "ACCOUNT_REQUIRED");
+    if (!vatOnly && !(net > 0)) throw new AppError("Enter the amount", 400, "AMOUNT_REQUIRED");
     if (!String(description || "").trim()) throw new AppError("Describe the expense", 400, "DESCRIPTION_REQUIRED");
 
-    const accounts = await postableAccounts([expenseAccountId], { session, label: "expense account" });
-    const expense = accounts.get(String(expenseAccountId));
-    if (expense.accountType !== "expense") throw new AppError(`${expense.accountName} is not an expense account`, 400, "NOT_AN_EXPENSE_ACCOUNT");
+    let expense = null;
+    if (!vatOnly) {
+      const accounts = await postableAccounts([expenseAccountId], { session, label: "expense account" });
+      expense = accounts.get(String(expenseAccountId));
+      if (expense.accountType !== "expense") throw new AppError(`${expense.accountName} is not an expense account`, 400, "NOT_AN_EXPENSE_ACCOUNT");
+    }
 
-    const { vatPercent, vatAmount, taxCodeId } = await vatFor(data.taxCodeId, net, date, { session, req });
+    let { vatPercent, vatAmount, taxCodeId } = await vatFor(data.taxCodeId, net, date, { session, req });
+    if (vatGiven !== null) {
+      if (!taxCodeId) throw new AppError("Choose the tax code the VAT is for", 400, "TAX_CODE_REQUIRED");
+      // `vatCoversEarlierAmount`: the VAT also covers an amount booked before (the acquirer's VAT on a
+      // commission whose fee went in at the sale), so it is not net x rate and is taken as given
+      if (!vatOnly && !data.vatCoversEarlierAmount && Math.abs(vatGiven - vatAmount) > 0.02 + 1e-9) {
+        throw new AppError(`VAT on ${net.toFixed(2)} should be about ${vatAmount.toFixed(2)}, not ${vatGiven.toFixed(2)}`, 400, "VAT_MISMATCH");
+      }
+      vatAmount = vatGiven;
+    }
     const total = round2(net + vatAmount);
 
     const money = await PaymentModeService.resolve({
@@ -136,7 +154,7 @@ class LedgerVoucherService {
       description: `Expense - ${description.trim()}`, session, req,
     });
 
-    const entries = [entryFor(expense, { debit: net, description: description.trim() })];
+    const entries = vatOnly ? [] : [entryFor(expense, { debit: net, description: description.trim() })];
     if (vatAmount > 0) {
       const vatId = await AccountConfigService.resolveAccount("vat-purchase", { session });
       const vat = await LedgerAccount.findById(vatId).select("accountCode accountName").session(session || null);
@@ -146,8 +164,8 @@ class LedgerVoucherService {
 
     return {
       date, totalAmount: total, subtotal: net, vatTotal: vatAmount, taxCodeId, description: description.trim(),
-      narration: data.narration || description.trim(), expenseAccountId: expense._id, expenseAccountName: expense.accountName,
-      expenseTypeName: expense.accountName, paymentMode: money.mode, paymentDetails: money.details,
+      narration: data.narration || description.trim(), expenseAccountId: expense?._id, expenseAccountName: expense?.accountName,
+      expenseTypeName: expense?.accountName || "VAT on a charge booked earlier", paymentMode: money.mode, paymentDetails: money.details,
       partyId: data.vendorId || undefined, partyType: data.vendorId ? "Vendor" : null, partyName: data.partyName || undefined,
       entries, status: "approved", ledgerBased: true, _cheque: money.cheque, _vatPercent: vatPercent,
     };

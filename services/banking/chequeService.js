@@ -87,14 +87,13 @@ class ChequeService {
     return cheque;
   }
 
-  // Moves the amount from the post-dated cheques account into the bank account.
-  static async clear(id, { clearedOn, note } = {}, req, adminId) {
+  // Moves the amount from the post-dated cheques account into the bank account. Pass a session as
+  // the fifth argument to clear INSIDE the caller's transaction (matching a bank statement line to
+  // a cheque clears it and records the match together); the caller then does the committing.
+  static async clear(id, { clearedOn, note } = {}, req, adminId, outerSession) {
     const on = clearedOn ? new Date(clearedOn) : new Date();
     if (Number.isNaN(on.getTime())) throw new AppError("Enter a valid clearing date", 400, "INVALID_DATE");
-    const session = await mongoose.startSession();
-    try {
-      let result;
-      await session.withTransaction(async () => {
+    const apply = async (session) => {
         const cheque = await this.get(id, req, session);
         if (cheque.status !== "pending") throw new AppError(`This cheque is already ${cheque.status}`, 409, "CHEQUE_NOT_PENDING");
         if (day(on) < day(cheque.chequeDate)) {
@@ -126,7 +125,14 @@ class ChequeService {
         cheque.clearedOn = on;
         cheque.history.push({ status: "cleared", at: new Date(), by: adminId ? String(adminId) : null, note: note || "" });
         await cheque.save({ session });
-        result = cheque.toObject();
+        return cheque.toObject();
+    };
+    if (outerSession) return apply(outerSession);
+    const session = await mongoose.startSession();
+    try {
+      let result;
+      await session.withTransaction(async () => {
+        result = await apply(session);
       });
       return result;
     } finally {

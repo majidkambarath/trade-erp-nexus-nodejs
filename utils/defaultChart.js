@@ -57,6 +57,7 @@ const ACCOUNTS = [
   ["Freight Recovered", "Other Income", "freight-sales"],
   ["Purchase Discounts Received", "Other Income", "discount-purchase"],
   ["Other Income", "Other Income", null],
+  ["Bank Interest Income", "Other Income", "bank-interest"],
 
   ["Cost of Goods Sold", "Cost of Goods Sold", "cogs"],
   ["Purchase Variance", "Cost of Goods Sold", "purchase-variance"],
@@ -70,7 +71,7 @@ const ACCOUNTS = [
   ["Salaries & Wages", "Operating Expenses", null],
   ["Rent Expense", "Operating Expenses", null],
   ["Utilities", "Operating Expenses", null],
-  ["Bank Charges", "Operating Expenses", null],
+  ["Bank Charges", "Operating Expenses", "bank-charges"],
   ["Card Processing Fees", "Operating Expenses", "card-charges"],
 ];
 

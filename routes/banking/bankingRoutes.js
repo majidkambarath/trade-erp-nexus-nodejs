@@ -9,6 +9,9 @@ router.use(authenticateToken);
 // on a cheque, needs an admin or super admin.
 const canChange = requireRole(["super_admin", "admin"]);
 
+// Bank statement import, matching and reconciliation, and card settlement: /api/v1/banking/reconciliation/*
+router.use("/reconciliation", require("./reconciliationRoutes"));
+
 router.get("/payment-options", c.paymentOptions);
 
 router.get("/banks", c.listBanks);

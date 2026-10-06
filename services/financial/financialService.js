@@ -16,6 +16,7 @@ const mongoose = require("mongoose");
 const { ensurePartyAccount } = require("./partyAccounts");
 const LedgerVoucherService = require("./ledgerVoucherService");
 const FxVoucherService = require("./fxVoucherService");
+const ReconciliationGuard = require("../banking/reconciliationGuard");
 const DebitLog = require("../../models/modules/DebitLog"); // ADD THIS
 const CreditLog = require("../../models/modules/CreditLog"); // ADD THIS
 
@@ -76,13 +77,15 @@ class FinancialService {
     }
   }
 
-  // Create any type of voucher (with retry and optimized session)
-  static async createVoucher(data, createdBy) {
-    return this.withTransactionRetry(async () => {
-      const session = await mongoose.startSession({
+  // Create any type of voucher (with retry and optimized session). Pass a session as the third
+  // argument to post INSIDE the caller's transaction: the voucher then commits or rolls back with
+  // whatever else the caller writes (a bank statement match), and the caller does the committing.
+  static async createVoucher(data, createdBy, outerSession) {
+    const run = async () => {
+      const session = outerSession || (await mongoose.startSession({
         defaultTransactionOptions: { maxTimeMS: 120000 }, // 120s timeout
-      });
-      session.startTransaction();
+      }));
+      if (!outerSession) session.startTransaction();
 
       try {
         const { voucherType, attachments = [], ...voucherData } = data;
@@ -163,17 +166,19 @@ class FinancialService {
           await this.createPaymentLogEntries(newVoucher, session);
         }
 
-        await session.commitTransaction();
+        if (!outerSession) await session.commitTransaction();
         console.log(`[Transaction] Committed for voucher ${voucherNo}`);
         return newVoucher;
       } catch (error) {
-        await session.abortTransaction();
+        if (!outerSession) await session.abortTransaction();
         console.error(`[Transaction] Aborted for voucher: ${error.message}`);
         throw error;
       } finally {
-        session.endSession();
+        if (!outerSession) session.endSession();
       }
-    });
+    };
+    // inside a caller's transaction there is nothing to retry from here: the caller owns it
+    return outerSession ? run() : this.withTransactionRetry(run);
   }
 
   // Process Receipt Voucher (money received from customer) - Optimized with projections and validation
@@ -1741,6 +1746,8 @@ class FinancialService {
 
   // Reverse ledger entries - Optimized with parallel reversals
   static async reverseLedgerEntries(voucherId, session) {
+    // a voucher the bank statement has been matched to is not undone from here (BANK_MATCHED / BANK_RECONCILED)
+    await ReconciliationGuard.assertNotMatched(voucherId, { session });
     const entries = await LedgerEntry.find({ voucherId }).session(session);
 
     const reversalPromises = entries.map(async (entry) => {

@@ -34,6 +34,9 @@ const SEED = [
   k("pdc-receipt", "Cheques in hand (received, not yet cleared)", "ASSET", "account"),
   k("pdc-issue", "Cheques issued (not yet cleared)", "LIABILITY", "account"),
   k("card-charges", "Card processing fees", "EXPENSE", "account"),
+  // bank reconciliation: what the bank charges and pays that the books did not know about
+  k("bank-charges", "Bank charges", "EXPENSE", "account"),
+  k("bank-interest", "Bank interest income", "INCOME", "account"),
   k("stock-adjustment", "Stock adjustment", "EXPENSE", "account"),
   k("inventory-asset", "Inventory (stock on hand)", "ASSET", "account"),
   k("opening-balance-equity", "Opening balance equity", "EQUITY", "account"),
