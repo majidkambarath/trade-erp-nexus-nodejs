@@ -1,4 +1,5 @@
 const express = require("express");
+const cookieParser = require("cookie-parser");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const { mongodb } = require("./config/db");
@@ -36,6 +37,7 @@ app.use(express.static("public"));
 // rawBody is kept so signed webhooks (e-invoice inbound) can be verified byte for byte.
 app.use(express.json({ limit: "50mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+app.use(cookieParser()); // the session cookie (controllers/core/adminController.js)
 
 // CORS configuration
 // Browser origins allowed to call the API with credentials. Deployments add their own through

@@ -550,3 +550,36 @@ test("one voucher's audit trail: its double entry, what it was set against, and 
 
   assert.equal((await call("GET", "/vouchers/vouchers/000000000000000000000000/audit")).status, 404);
 });
+
+test("sessions: sign-in sets an httpOnly cookie, a refresh works from the cookie alone, and logout ends it", { skip }, async () => {
+  const JSON_HEADERS = { "Content-Type": "application/json" };
+  const login = await fetch(`${BASE}/login`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ email: "boss@test.uae", password: "12312312" }) });
+  const signedIn = await login.json();
+  assert.equal(login.status, 200);
+  assert.equal(signedIn.data.tokens.refreshToken, undefined, "the refresh token is never in the response body");
+
+  const setCookie = login.headers.get("set-cookie") || "";
+  assert.match(setCookie, /erp_session=/, "sign-in sets the session cookie");
+  assert.match(setCookie, /HttpOnly/i, "page scripts cannot read the session cookie");
+  assert.match(setCookie, /Path=\/api\/v1/, "the cookie is only sent to the API");
+  const cookie = setCookie.split(";")[0];
+
+  // A refresh needs the cookie alone: no token in the body.
+  const refreshed = await fetch(`${BASE}/refresh-token`, { method: "POST", headers: { ...JSON_HEADERS, Cookie: cookie }, body: "{}" });
+  const renewed = await refreshed.json();
+  assert.equal(refreshed.status, 200);
+  assert.ok(renewed.data.accessToken, "a new access token comes back");
+  assert.ok(renewed.data.admin, "and the admin it belongs to");
+
+  // A refresh token in the body is not accepted: only the cookie is.
+  const bodyOnly = await fetch(`${BASE}/refresh-token`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ refreshToken: cookie.split("=")[1] }) });
+  assert.equal(bodyOnly.status, 401);
+
+  // Logout ends this session: the same cookie no longer refreshes.
+  const out = await fetch(`${BASE}/logout`, { method: "POST", headers: { Cookie: cookie } });
+  assert.equal(out.status, 200);
+  const after = await fetch(`${BASE}/refresh-token`, { method: "POST", headers: { ...JSON_HEADERS, Cookie: cookie }, body: "{}" });
+  const ended = await after.json();
+  assert.equal(after.status, 401);
+  assert.equal(ended.errorCode, "SESSION_REVOKED");
+});

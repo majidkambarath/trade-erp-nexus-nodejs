@@ -1,21 +1,24 @@
 const Admin = require("../../models/core/adminModel");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
+const AuthSession = require("../../models/core/authSessionModel");
 const AppError = require("../../utils/AppError");
 const { deleteFromCloudinary } = require("../../middleware/upload");
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
+// Short access tokens: a stolen one stops working within minutes, and the session cookie renews it.
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "15m";
 const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || "30d";
 
-// Generate JWT tokens
-const generateTokens = (payload) => {
-  const accessToken = jwt.sign(payload, JWT_SECRET, {
+// Generate JWT tokens. Both name the session (`sid`), so ending the session ends both.
+const generateTokens = (payload, sid) => {
+  const accessToken = jwt.sign({ ...payload, sid }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
     issuer: "ERP-system",
     audience: "ERP-admin",
   });
 
-  const refreshToken = jwt.sign({ ...payload, type: "refresh" }, JWT_SECRET, {
+  const refreshToken = jwt.sign({ id: payload.id, sid, type: "refresh" }, JWT_SECRET, {
     expiresIn: JWT_REFRESH_EXPIRES_IN,
     issuer: "ERP-system",
     audience: "ERP-admin",
@@ -41,7 +44,7 @@ const verifyToken = (token) => {
 };
 
 // Admin login
-const loginAdmin = async (email, password, ipAddress = null) => {
+const loginAdmin = async (email, password, ipAddress = null, context = {}) => {
   if (!email || !password)
     throw new AppError(
       "Email and password are required",
@@ -85,11 +88,21 @@ const loginAdmin = async (email, password, ipAddress = null) => {
     name: admin.name,
   };
 
-  const { accessToken, refreshToken } = generateTokens(tokenPayload);
+  // One session per sign-in. The refresh token names it, so logout can end exactly this one.
+  const sid = crypto.randomUUID();
+  const { accessToken, refreshToken } = generateTokens(tokenPayload, sid);
+  const refreshExpiresAt = new Date(jwt.decode(refreshToken).exp * 1000);
+  await AuthSession.create({
+    _id: sid,
+    adminId: admin._id,
+    userAgent: context.userAgent || null,
+    ip: ipAddress,
+    expiresAt: refreshExpiresAt,
+  });
 
   return {
     admin: admin.toJSON(),
-    tokens: { accessToken, refreshToken, expiresIn: JWT_EXPIRES_IN },
+    tokens: { accessToken, refreshToken, refreshExpiresAt, expiresIn: JWT_EXPIRES_IN },
     loginInfo: { lastLogin: admin.lastLogin, ipAddress },
   };
 };
@@ -304,22 +317,26 @@ const deleteAdmin = async (adminId, deletedBy = null) => {
   return { message: 'Admin deleted successfully' };
 };
 
-// Refresh access token
+const SESSION_ENDED = "Your session has ended. Please sign in again.";
+
+// Refresh: the refresh token must name a session that is still open. Logging out, or an admin being
+// deactivated, ends it, so the next refresh fails and the browser shows the sign-in page.
 const refreshAccessToken = async (refreshToken) => {
-  if (!refreshToken)
-    throw new AppError(
-      "Refresh token is required",
-      400,
-      "MISSING_REFRESH_TOKEN"
-    );
+  if (!refreshToken) throw new AppError(SESSION_ENDED, 401, "SESSION_REVOKED");
 
   const decoded = verifyToken(refreshToken);
   if (decoded.type !== "refresh")
     throw new AppError("Invalid token type", 401, "INVALID_TOKEN_TYPE");
 
+  const session = await AuthSession.findById(decoded.sid);
+  if (!session || session.revokedAt || session.expiresAt <= new Date())
+    throw new AppError(SESSION_ENDED, 401, "SESSION_REVOKED");
+
   const admin = await Admin.findById(decoded.id);
   if (!admin || !admin.isActive || admin.status !== "active")
     throw new AppError("Admin not found or inactive", 401, "ADMIN_INACTIVE");
+
+  await AuthSession.updateOne({ _id: session._id }, { lastSeenAt: new Date() });
 
   const tokenPayload = {
     id: admin._id,
@@ -328,13 +345,32 @@ const refreshAccessToken = async (refreshToken) => {
     permissions: admin.permissions,
     name: admin.name,
   };
-  const { accessToken } = generateTokens(tokenPayload);
+  const { accessToken } = generateTokens(tokenPayload, session._id);
 
-  return { accessToken, expiresIn: JWT_EXPIRES_IN };
+  return { accessToken, expiresIn: JWT_EXPIRES_IN, admin: admin.toJSON() };
+};
+
+// Logout: revoke this browser's session. An expired or unsigned token has nothing to revoke.
+const logoutSession = async (refreshToken) => {
+  if (!refreshToken) return;
+  let decoded;
+  try {
+    decoded = jwt.verify(refreshToken, JWT_SECRET, {
+      issuer: "ERP-system",
+      audience: "ERP-admin",
+      ignoreExpiration: true,
+    });
+  } catch {
+    return;
+  }
+  if (decoded?.type === "refresh" && decoded.sid) {
+    await AuthSession.updateOne({ _id: decoded.sid, revokedAt: null }, { revokedAt: new Date() });
+  }
 };
 
 module.exports = {
   loginAdmin,
+  logoutSession,
   createAdmin,
   updateAdmin,
   getAdminById,

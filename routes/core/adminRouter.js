@@ -23,6 +23,8 @@ router.post("/login", validateLogin, adminController.login);
 
 router.post("/refresh-token", adminController.refreshToken);
 
+router.post("/logout", adminController.logout);
+
 // Test route
 router.get("/test", (req, res) => res.json({ message: "Admin router works!" }));
 

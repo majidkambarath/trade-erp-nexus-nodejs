@@ -3,15 +3,37 @@ const adminService = require("../../services/core/adminService");
 const { extractFileInfo } = require("../../middleware/upload");
 
 // Login admin
+// The refresh token lives in an httpOnly cookie, so page scripts never see it. It is scoped to the
+// API path. Across sites (the deployed frontend and API are different hosts) it must be SameSite=None
+// and Secure; same-site use (local development) can stay Lax.
+const SESSION_COOKIE = "erp_session";
+const SESSION_PATH = "/api/v1";
+
+const sessionCookieOptions = (expires) => {
+  const production = process.env.NODE_ENV === "production";
+  const sameSite = process.env.SESSION_COOKIE_SAMESITE || (production ? "none" : "lax");
+  return {
+    httpOnly: true,
+    secure: production || sameSite === "none",
+    sameSite,
+    path: SESSION_PATH,
+    ...(expires ? { expires } : {}),
+  };
+};
+
 exports.login = catchAsync(async (req, res) => {
   const { email, password } = req.body;
   const ipAddress = req.ip;
 
-  const result = await adminService.loginAdmin(email, password, ipAddress);
-  res.status(200).json({ 
-    success: true, 
-    message: "Login successful", 
-    data: result 
+  const result = await adminService.loginAdmin(email, password, ipAddress, {
+    userAgent: req.get("user-agent"),
+  });
+  const { refreshToken, refreshExpiresAt, ...tokens } = result.tokens;
+  res.cookie(SESSION_COOKIE, refreshToken, sessionCookieOptions(refreshExpiresAt));
+  res.status(200).json({
+    success: true,
+    message: "Login successful",
+    data: { ...result, tokens },
   });
 });
 
@@ -231,14 +253,22 @@ exports.getProfile = catchAsync(async (req, res) => {
 });
 
 // Refresh token
+// Renews the access token from the session cookie. The cookie is the only source: a refresh token
+// sent in the body is not accepted, so script code cannot supply one.
 exports.refreshToken = catchAsync(async (req, res) => {
-  const { refreshToken } = req.body;
-  const token = await adminService.refreshAccessToken(refreshToken);
-  res.status(200).json({ 
-    success: true, 
-    message: "Token refreshed", 
-    data: token 
+  const token = await adminService.refreshAccessToken(req.cookies?.[SESSION_COOKIE]);
+  res.status(200).json({
+    success: true,
+    message: "Token refreshed",
+    data: token,
   });
+});
+
+// Ends this browser's session on the server and clears the cookie.
+exports.logout = catchAsync(async (req, res) => {
+  await adminService.logoutSession(req.cookies?.[SESSION_COOKIE]);
+  res.clearCookie(SESSION_COOKIE, sessionCookieOptions());
+  res.status(200).json({ success: true, message: "Signed out" });
 });
 
 // Upload profile image only
