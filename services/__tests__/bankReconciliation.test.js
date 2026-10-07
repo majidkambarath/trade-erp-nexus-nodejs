@@ -251,6 +251,29 @@ test("a match is exact: lines and entries that do not add up are refused with th
 });
 
 // -------------------------------------------------------------------------------------- cards
+test("card settlement: a difference that cannot be commission and VAT is refused, whichever way it goes", { skip }, async () => {
+  const payout = await lineBy("NETWORK INTL");
+  const sales = (await svc.Card.unsettled(bank._id, { lineId: payout._id }, {})).receipts;
+  assert.equal(sales.length, 2);
+  const before = await svc.Voucher.countDocuments({});
+
+  // too few sales ticked: the bank paid 195.70 more than that one sale is worth, and the commission booked is 2.00
+  await assert.rejects(
+    () => svc.Card.settle(bank._id, { lineId: payout._id, receiptEntryIds: [sales[0].entryId], extraCommission: 0, vat: 0 }, {}, admin),
+    (err) => err.code === "PAYMENT_EXCEEDS_SALES" && err.details.difference === -195.7
+  );
+  // too many ticked for a small payment: 294.00 expected, 80.00 paid, and the most commission and VAT could be is 29.40
+  const small = await lineBy("UNKNOWN DEPOSIT");
+  await assert.rejects(
+    () => svc.Card.settle(bank._id, { lineId: small._id, receiptEntryIds: sales.map((r) => r.entryId), extraCommission: 214, vat: 0 }, {}, admin),
+    (err) => err.code === "DIFFERENCE_TOO_LARGE" && err.details.difference === 214
+  );
+  assert.equal(await svc.Voucher.countDocuments({}), before, "nothing was posted");
+  assert.equal((await svc.BankStatementLine.findById(payout._id)).state, "open");
+  assert.deepEqual(svc.Card.limits(29400, 600), { maxKept: 2940, maxReturned: 600 }, "10% of the net, and the commission that was booked");
+  assert.deepEqual(svc.Card.limits(1000, 0), { maxKept: 500, maxReturned: 50 }, "never less than AED 5.00 kept or 50 fils of rounding");
+});
+
 test("card settlement: two sales, one bank credit; the VAT the acquirer took is posted, and the match adds up", { skip }, async () => {
   const line = await lineBy("NETWORK INTL");
   const u = await svc.Card.unsettled(bank._id, { lineId: line._id }, {});

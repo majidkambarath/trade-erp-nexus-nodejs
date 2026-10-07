@@ -75,6 +75,15 @@ function suggestSelection(received, receipts) {
 class CardSettlementService {
   static suggestSelection = suggestSelection;
 
+  // How far a payment can differ from what the books expect and still be commission and VAT:
+  //   kept more than booked  at most 10% of the sales' net (and never less than AED 5.00 allowed)
+  //   paid more than booked  at most the commission that was booked (an acquirer that waived it all),
+  //                          with 50 fils of rounding
+  // All in fils. The dialog (lib/bankReconcile.js settlementCheck) says the same thing before the button.
+  static limits(expectedCents, feesCents) {
+    return { maxKept: Math.max(500, Math.round(expectedCents * 0.1)), maxReturned: Math.max(50, feesCents) };
+  }
+
   static async unsettled(accountId, { lineId, to } = {}, req) {
     const account = await Core.bankAccount(accountId, { req });
     const { companyId } = getTenant(req);
@@ -117,6 +126,22 @@ class CardSettlementService {
 
       const expected = entries.reduce((t, e) => t + cents(e.amount), 0);
       const diff = expected - cents(line.amount); // what the acquirer kept beyond what the books carried
+      // Commission and its VAT are a small part of a sale. A difference outside what they could be is
+      // the wrong sales ticked, or a refund or chargeback netted off the payment, and posting it to
+      // card fees would be wrong either way.
+      const limits = this.limits(expected, entries.reduce((t, e) => t + cents(e.card?.feeBooked || 0), 0));
+      if (diff > limits.maxKept) {
+        throw new AppError(
+          `The books expect ${fromCents(expected).toFixed(2)} from these sales but the bank paid ${line.amount.toFixed(2)}: ${fromCents(diff).toFixed(2)} less. That is more than commission and VAT could be (at most ${fromCents(limits.maxKept).toFixed(2)}). Check you ticked the right sales; refunds and chargebacks taken off a payment are posted as a journal first.`,
+          409, "DIFFERENCE_TOO_LARGE", { difference: fromCents(diff), limit: fromCents(limits.maxKept) }
+        );
+      }
+      if (-diff > limits.maxReturned) {
+        throw new AppError(
+          `The bank paid ${line.amount.toFixed(2)}, which is ${fromCents(-diff).toFixed(2)} more than these sales are worth after commission. Tick the other sales this payment covers.`,
+          409, "PAYMENT_EXCEEDS_SALES", { difference: fromCents(diff), limit: fromCents(limits.maxReturned) }
+        );
+      }
       let adjustment = null;
       if (diff > 0) {
         if (cents(extra) + cents(vatAmount) !== diff) {
