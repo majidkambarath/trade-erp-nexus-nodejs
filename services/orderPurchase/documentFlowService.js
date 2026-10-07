@@ -4,6 +4,7 @@ const Customer = require("../../models/modules/customerModel");
 const Quotation = require("../../models/modules/quotationModel");
 const DeliveryNote = require("../../models/modules/deliveryNoteModel");
 const Transaction = require("../../models/modules/transactionModel");
+const OrderCloseService = require("./orderCloseService");
 const { buildFlow } = require("../../utils/documentFlow");
 const { getTenant } = require("../../utils/tenant");
 
@@ -30,11 +31,14 @@ class DocumentFlowService {
         .select("deliveryNoteNo status date deliveredAt totalAmount invoiceStatus source invoice reference receivedBy items.sourceLineId items.qty items.deliveredQty")
         .sort(newest).limit(LIMIT + 1).lean(),
       Transaction.find({ partyId, type: "sales_order", isOpening: { $ne: true } })
-        .select("transactionNo status date totalAmount quoteRef linkedRef lpono paidAmount outstandingAmount items._id items.qty items.description")
+        .select("transactionNo status date totalAmount quoteRef linkedRef lpono paidAmount outstandingAmount items._id items.qty items.description closedShort.at closedShort.reason closedShort.trimmed closedShort.valueShort closedShort.lines")
         .sort(newest).limit(LIMIT + 1).lean(),
     ]);
     const truncated = [quotations, notes, orders].some((rows) => rows.length > LIMIT);
-    const flow = buildFlow({ quotations: quotations.slice(0, LIMIT), orders: orders.slice(0, LIMIT), notes: notes.slice(0, LIMIT) }, now);
+    // an approved order closed short was invoiced in full: its sales returns say whether that has been put right
+    const closedIds = orders.filter((o) => o.closedShort?.at && o.status === "APPROVED").map((o) => o._id);
+    const returns = await OrderCloseService.returnsFor(closedIds);
+    const flow = buildFlow({ quotations: quotations.slice(0, LIMIT), orders: orders.slice(0, LIMIT), notes: notes.slice(0, LIMIT), returns }, now);
     return { customer, ...flow, truncated };
   }
 }

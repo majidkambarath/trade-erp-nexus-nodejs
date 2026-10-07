@@ -204,7 +204,8 @@ class TransactionService {
       }
 
       const built = await buildPricing(
-        { items, charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date() },
+        // a line id sent with a new document belongs to some other document: every line here gets its own
+        { items: items.map(({ _id, ...line }) => line), charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date() },
         session
       );
       // Returns: validated against the original (quantities and value), then the line links are kept.
@@ -309,6 +310,12 @@ class TransactionService {
       if (this.isProcessed(transaction.status))
         throw new AppError("Cannot edit processed transactions", 400);
       assertStatusNotForced(data.status);
+      // closing an order short is its own action (orderCloseService), never a field of an edit
+      delete data.closedShort;
+
+      // A draft sales order may already have delivery notes against its lines: keep each line's id so they stay
+      // linked, and refuse an edit that would take away goods a note covers.
+      if (transaction.type === "sales_order" && Array.isArray(data.items)) data.items = DocumentLinks.relinkLines(transaction, data.items);
 
       if (data.items || data.charges || data.discount !== undefined) {
         const built = await buildPricing(
@@ -331,6 +338,9 @@ class TransactionService {
           },
           { session, excludeId: transaction._id }
         );
+        await DocumentLinks.assertDeliveriesKept(transaction, checked.items, { session });
+        // changing what is ordered lifts a "closed short" mark: the lines are the order again
+        if (transaction.closedShort?.at && DocumentLinks.linesChanged(transaction, checked.items)) transaction.set("closedShort", undefined);
         data.items = checked.items;
         data.charges = built.charges;
         data.pricing = built.pricing;
@@ -710,6 +720,8 @@ const logAmount = balanceEffect;
         { $sort: { createdAt: -1 } },
         { $skip: skip },
         { $limit: limit },
+        // the copy of a draft order kept for reopening it (orderCloseService) is a whole document: not for a list
+        { $unset: "closedShort.original" },
 
         // ---- 1. Lookup Customer ---- (unchanged)
         {
@@ -855,6 +867,8 @@ const logAmount = balanceEffect;
             // opening balance invoices (no lines) are told apart in the lists
             isOpening: { $first: "$isOpening" },
             dueDate: { $first: "$dueDate" },
+            // a sales order the customer will not take the rest of (without its reopen copy, dropped above)
+            closedShort: { $first: "$closedShort" },
 
             // keep the raw lookup arrays
             customerData: { $first: "$customerData" },

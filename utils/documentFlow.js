@@ -39,6 +39,24 @@ function stageOf({ quotation, order, notes, delivery }, expired) {
   return STAGE.QUOTED;
 }
 
+// An order the customer will not take the rest of (utils/closeShort.js): what fell short and why, and - for an
+// approved order, which was invoiced in full - the sales returns that put the undelivered goods right.
+function closeShortOf(order, returns) {
+  const c = order?.closedShort;
+  if (!c || !c.at) return null;
+  const mine = (returns || [])
+    .filter((r) => id(r.returnOf?.transactionId) === id(order._id))
+    .map((r) => ({ _id: r._id, transactionNo: r.transactionNo, status: r.status, totalAmount: r.totalAmount }));
+  const owed = !c.trimmed && round2(c.valueShort) > 0;
+  return {
+    at: c.at, reason: c.reason || "", trimmed: Boolean(c.trimmed), valueShort: round2(c.valueShort),
+    left: (c.lines || []).map((l) => ({ description: l.description, qty: l.short })),
+    returns: mine,
+    // an invoiced order billed goods that never left: a sales return is what corrects it
+    creditDue: owed && !mine.some((r) => r.status === "APPROVED"),
+  };
+}
+
 // What is left to deliver on an order: the same sums the delivery notes use to stop over-delivery, so the
 // deal and the note can never disagree. Only for goods delivered against the order itself; when the order
 // was raised FROM the notes (goods first) there is no order line to measure against.
@@ -49,6 +67,8 @@ function deliveryOf(order, notes) {
   const remaining = Object.entries(fulfilment(order.items, lines))
     .filter(([, r]) => r.remaining > 0)
     .map(([lineId, r]) => ({ description: names.get(lineId), qty: r.remaining }));
+  // closed short: whatever is left will never be delivered, so the delivery is finished
+  if (order.closedShort?.at) return { started: notes.length > 0, complete: true, remaining: [] };
   return { started: notes.length > 0, complete: remaining.length === 0, remaining };
 }
 
@@ -63,7 +83,7 @@ function worstClock(notes, now) {
   return worst;
 }
 
-function buildFlow({ quotations = [], orders = [], notes = [] }, now = new Date()) {
+function buildFlow({ quotations = [], orders = [], notes = [], returns = [] }, now = new Date()) {
   const liveQuotes = quotations.filter((q) => q.status !== "SUPERSEDED"); // its revision stands for it
   const liveOrders = orders.filter((o) => !DEAD_ORDER.includes(o.status));
   const liveNotes = notes.filter((n) => n.status !== "CANCELLED");
@@ -119,6 +139,7 @@ function buildFlow({ quotations = [], orders = [], notes = [] }, now = new Date(
       order: d.order ? withoutLines(d.order) : null,
       notes: notesSorted.map(withoutLines),
       delivery,
+      closeShort: closeShortOf(d.order, returns),
       amount: round2(d.order?.totalAmount ?? d.quotation?.totalAmount ?? notesSorted.reduce((t, n) => t + (n.totalAmount || 0), 0)),
       date: latest ? new Date(latest) : null,
       // what to chase: the invoice a delivery is waiting for, and an offer about to run out

@@ -63,6 +63,9 @@ async function loadOrder(id, { session } = {}) {
   if (!["DRAFT", "APPROVED"].includes(order.status)) {
     throw fail(`${order.transactionNo} is ${order.status.toLowerCase()}; nothing can be delivered against it`, 409, "ORDER_NOT_DELIVERABLE");
   }
+  if (order.closedShort?.at) {
+    throw fail(`${order.transactionNo} was closed short; nothing more can be delivered against it`, 409, "ORDER_CLOSED_SHORT");
+  }
   return order;
 }
 

@@ -1,6 +1,7 @@
 const express = require("express");
 const { authenticateToken } = require("../../middleware/authMiddleware");
 const TransactionController = require("../../controllers/orderPurchase/transactionController");
+const OrderClose = require("../../controllers/orderPurchase/orderCloseController");
 
 const router = express.Router();
 
@@ -17,5 +18,9 @@ router.patch(
   TransactionController.processTransaction
 );
 
+// a sales order the customer will not take the rest of
+router.get("/transactions/:id/close-short", OrderClose.preview);
+router.post("/transactions/:id/close-short", OrderClose.closeShort);
+router.post("/transactions/:id/reopen-short", OrderClose.reopen);
 
 module.exports = router;

@@ -37,6 +37,32 @@ const itemSchema = new mongoose.Schema({
   allocations: [{ batchId: mongoose.Schema.Types.ObjectId, batchNumber: String, qty: Number, expiryDate: Date, _id: false }],
 });
 
+// A sales order the customer will not take the rest of (utils/closeShort.js). `lines` is what fell short;
+// `trimmed` says a draft's lines were cut down to what was delivered, in which case `original` holds the
+// order as it was so closing can be undone exactly. `original` is a whole copy, so ordinary reads leave it out.
+const closedShortSchema = new mongoose.Schema(
+  {
+    at: Date,
+    by: String,
+    reason: { type: String, trim: true },
+    trimmed: Boolean,
+    valueShort: Number,
+    lines: [
+      {
+        lineId: mongoose.Schema.Types.ObjectId,
+        description: String,
+        ordered: Number,
+        delivered: Number,
+        short: Number,
+        valueShort: Number,
+        _id: false,
+      },
+    ],
+    original: { type: mongoose.Schema.Types.Mixed, select: false },
+  },
+  { _id: false }
+);
+
 const transactionSchema = new mongoose.Schema({
   transactionNo: { type: String, unique: true, required: true, trim: true },
   // Sales invoice specific fields
@@ -132,6 +158,8 @@ const transactionSchema = new mongoose.Schema({
   quoteRef: { type: String, trim: true },
   linkedRef: { type: String, trim: true },
   creditNoteIssued: { type: Boolean, default: false },
+  // A sales order the customer will not take the rest of (utils/closeShort.js).
+  closedShort: { type: closedShortSchema, default: undefined },
   createdBy: { type: String, required: true, trim: true },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

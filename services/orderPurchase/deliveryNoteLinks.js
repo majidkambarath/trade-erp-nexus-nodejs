@@ -1,3 +1,4 @@
+const AppError = require("../../utils/AppError");
 const Quotation = require("../../models/modules/quotationModel");
 const DeliveryNote = require("../../models/modules/deliveryNoteModel");
 const { getTenant } = require("../../utils/tenant");
@@ -57,4 +58,70 @@ async function onSalesOrderChanged(transaction, { session, deleted = false } = {
   await DeliveryNote.updateMany({ companyId, "invoice.id": id }, { $set: { invoiceStatus: state } }, { session });
 }
 
-module.exports = { onSalesOrderChanged, releaseQuotationsFor, invoiceStateOf };
+// What a draft order's lines have already promised to delivery notes: for each line, the quantity on notes
+// that are not cancelled (what the customer took on signed notes, what is on the way on the rest).
+async function committedByLine(orderId, { session } = {}) {
+  const { companyId } = getTenant();
+  const q = DeliveryNote.find({ companyId, "source.kind": "sales_order", "source.id": orderId, status: { $ne: "CANCELLED" } })
+    .select("deliveryNoteNo status items.sourceLineId items.qty items.deliveredQty")
+    .lean();
+  const notes = await (session ? q.session(session) : q);
+  const out = new Map();
+  for (const n of notes) {
+    for (const l of n.items || []) {
+      const qty = Number(n.status === "DELIVERED" ? l.deliveredQty ?? l.qty : l.qty) || 0;
+      if (qty <= 0) continue; // a line the customer took none of promises nothing
+      const key = String(l.sourceLineId);
+      const row = out.get(key) || { qty: 0, notes: [] };
+      row.qty += qty;
+      if (!row.notes.includes(n.deliveryNoteNo)) row.notes.push(n.deliveryNoteNo);
+      out.set(key, row);
+    }
+  }
+  return out;
+}
+
+// Editing a draft order rebuilds its lines from the form, and a line the form did not carry an id for gets a
+// new one - which would cut it loose from every delivery note raised against it. So a line that arrives
+// without an id takes the id of the stored line for the same item that nothing else has claimed.
+function relinkLines(order, items) {
+  const stored = (order.items || []).map((i) => (typeof i.toObject === "function" ? i.toObject() : i));
+  const claimed = new Set(items.filter((i) => i && i._id).map((i) => String(i._id)));
+  return items.map((item) => {
+    if (!item || item._id) return item;
+    const match = stored.find((s) => !claimed.has(String(s._id)) && String(s.itemId) === String(item.itemId));
+    if (!match) return item;
+    claimed.add(String(match._id));
+    return { ...item, _id: match._id };
+  });
+}
+
+// An edit may not take away what delivery notes already rely on: a line they carry goods for must stay, at
+// no less than the quantity they cover.
+async function assertDeliveriesKept(order, items, { session } = {}) {
+  if (order.type !== "sales_order") return;
+  const committed = await committedByLine(order._id, { session });
+  if (!committed.size) return;
+  const byId = new Map(items.filter((i) => i._id).map((i) => [String(i._id), i]));
+  for (const [lineId, row] of committed) {
+    const line = byId.get(lineId);
+    const was = (order.items || []).find((i) => String(i._id) === lineId);
+    const name = was?.description || "A line";
+    if (!line || (was && String(line.itemId) !== String(was.itemId))) {
+      throw new AppError(`${name} is on ${row.notes.join(", ")} and cannot be taken off or changed on the order`, 409, "ORDER_LINE_HAS_DELIVERIES");
+    }
+    if (Number(line.qty) + 1e-9 < row.qty) {
+      throw new AppError(`${name}: ${row.qty} is already on ${row.notes.join(", ")}, so the order cannot go below that`, 409, "ORDER_QTY_BELOW_DELIVERED");
+    }
+  }
+}
+
+// True when the edit changes what is ordered (a line added, removed or at another quantity) - the only kind
+// of edit that lifts a "closed short" mark.
+function linesChanged(order, items) {
+  const stored = new Map((order.items || []).map((i) => [String(i._id), Number(i.qty)]));
+  if (stored.size !== items.length) return true;
+  return items.some((i) => !i._id || stored.get(String(i._id)) !== Number(i.qty));
+}
+
+module.exports = { onSalesOrderChanged, releaseQuotationsFor, invoiceStateOf, relinkLines, assertDeliveriesKept, linesChanged };
