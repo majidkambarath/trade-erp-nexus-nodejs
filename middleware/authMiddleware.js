@@ -1,6 +1,32 @@
 const { verifyToken } = require("../services/core/adminService");
 const { createAppError } = require("../utils/errorHandler");
 const Admin = require("../models/core/adminModel");
+const Organisation = require("../models/core/organisationModel");
+const { permissionsFor } = require("../utils/adminPermissions");
+const { runWithTenant, runUnscoped } = require("../utils/tenantContext");
+
+// Who a token belongs to is decided by the DATABASE, not by what the token says. The account row names its
+// organisation, its role and so its permissions, so a token cannot choose its organisation, and an
+// administrator who is demoted or switched off loses that at once rather than when the token runs out.
+// (The organisation in the token is only checked against the row.)
+async function accountFor(decoded) {
+  const admin = await runUnscoped("authentication: the account row names the organisation the token is checked against", () => Admin.findById(decoded.id));
+  if (!admin || !admin.isActive || admin.status !== "active") return { failure: "ADMIN_INACTIVE", message: "Admin not found or inactive" };
+  if (decoded.companyId && decoded.companyId !== admin.companyId) return { failure: "TOKEN_ORGANISATION_MISMATCH", message: "This token does not belong to this account's organisation" };
+  const organisation = await Organisation.findOne({ code: admin.companyId });
+  if (!organisation) return { failure: "ORGANISATION_NOT_FOUND", message: "This account's organisation could not be found" };
+  return { admin, organisation };
+}
+
+const identityOf = (admin) => ({
+  id: String(admin._id),
+  email: admin.email,
+  type: admin.type,
+  permissions: permissionsFor(admin.type),
+  name: admin.name,
+  companyId: admin.companyId,
+  branchId: admin.branchId,
+});
 
 const authenticateToken = async (req, res, next) => {
   try {
@@ -17,24 +43,15 @@ const authenticateToken = async (req, res, next) => {
 
     const decoded = verifyToken(token);
 
-    const admin = await Admin.findById(decoded.id);
-    if (!admin || !admin.isActive || admin.status !== "active") {
-      return res.status(401).json({
-        success: false,
-        message: "Admin not found or inactive",
-        error: "ADMIN_INACTIVE",
-      });
-    }
+    const { admin, organisation, failure, message } = await accountFor(decoded);
+    if (failure) return res.status(401).json({ success: false, message, error: failure });
 
-    req.admin = {
-      id: decoded.id,
-      email: decoded.email,
-      type: decoded.type,
-      permissions: decoded.permissions,
-      name: decoded.name,
-    };
+    req.admin = identityOf(admin);
+    req.organisation = organisation;
+    req.tenant = { companyId: admin.companyId, branchId: admin.branchId };
 
-    next();
+    // Everything downstream - the route, the services, every query - runs as this organisation.
+    return runWithTenant(req.tenant, next);
   } catch (error) {
     console.error("Authentication error:", error);
     return res.status(401).json({
@@ -53,23 +70,18 @@ const optionalAuth = async (req, res, next) => {
     if (token) {
       try {
         const decoded = verifyToken(token);
-        const admin = await Admin.findById(decoded.id);
-
-        if (admin && admin.isActive && admin.status === "active") {
-          req.admin = {
-            id: decoded.id,
-            email: decoded.email,
-            type: decoded.type,
-            permissions: decoded.permissions,
-            name: decoded.name,
-          };
+        const { admin, organisation, failure } = await accountFor(decoded);
+        if (!failure) {
+          req.admin = identityOf(admin);
+          req.organisation = organisation;
+          req.tenant = { companyId: admin.companyId, branchId: admin.branchId };
         }
       } catch (tokenError) {
         // Ignore token errors here
         console.warn("Optional auth token error:", tokenError.message);
       }
     }
-    next();
+    return req.tenant ? runWithTenant(req.tenant, next) : next();
   } catch (error) {
     next(error);
   }

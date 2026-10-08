@@ -13,14 +13,14 @@ const withLegacy = async (value, fn) => {
 };
 const tick = (ms) => new Promise((r) => setTimeout(r, ms));
 
-test("with no scope and the legacy default on, the single default organisation is used", async () => {
-  await withLegacy(undefined, () => {
+test("with no scope and the legacy default switched on, the single default organisation is used", async () => {
+  await withLegacy("1", () => {
     assert.deepEqual(getTenant(), { companyId: "default", branchId: "main" });
     assert.deepEqual(ctx.tenantForQuery(), ctx.DEFAULT_TENANT);
   });
 });
 
-test("with the legacy default off, no scope is an error and never a default", async () => {
+test("with the legacy default off (as it is unless asked for), no scope is an error and never a default", async () => {
   await withLegacy("0", () => {
     assert.throws(() => getTenant(), { code: "NO_TENANT_SCOPE" });
     assert.throws(() => ctx.tenantForQuery(), { code: "NO_TENANT_SCOPE" });

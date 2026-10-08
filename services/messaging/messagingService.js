@@ -13,6 +13,7 @@ const Transaction = require("../../models/modules/transactionModel");
 const { DocumentSend, MessagingSettings, ShareLink } = require("../../models/modules/messagingModels");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
+const { runWithTenant, runUnscoped } = require("../../utils/tenantContext");
 const { ProviderError } = require("../../utils/providerError");
 const { renderDocumentEmail, DOC_LABEL, fmtDay, fmtMoney } = require("../../utils/emailTemplates");
 const { toWaNumber, waMeUrl } = require("../../utils/phone");
@@ -333,27 +334,39 @@ class MessagingService {
   // an interrupted send what it is, and wipe any message that has been held too long.
   static async processDue(now = new Date()) {
     const due = { status: "FAILED", retryable: true, nextRetryAt: { $lte: now } };
-    for (const companyId of await DocumentSend.distinct("companyId", due)) {
-      const settings = await Settings.load(companyId, { withSecrets: true });
-      if (!settings.enabled) continue; // switched off: leave them for when it is switched on
-      let apiKey;
-      try {
-        apiKey = Settings.keyOf(settings);
-      } catch (err) {
-        console.error("[messaging] cannot retry, the key is unreadable:", err.message);
-        continue;
-      }
-      for (const { _id } of await DocumentSend.find({ companyId, ...due }).select("_id").limit(25).lean()) {
-        // claimed by a status-matched update, so a hand retry and this pass cannot both send it
-        const row = await DocumentSend.findOneAndUpdate({ _id, status: "FAILED", nextRetryAt: { $lte: now } }, { $set: { status: "QUEUED", nextRetryAt: null } }, { new: true }).select("+pending");
-        if (!row) continue;
+    // Listing which organisations have something to retry is the one cross-organisation read; each one's
+    // work then runs inside its own scope.
+    const owing = await runUnscoped("background job: lists the organisations that have sends waiting to be retried", () => DocumentSend.distinct("companyId", due));
+    for (const companyId of owing) {
+      await runWithTenant({ companyId }, async () => {
+        const settings = await Settings.load(companyId, { withSecrets: true });
+        if (!settings.enabled) return; // switched off: leave them for when it is switched on
+        let apiKey;
         try {
-          await this.attempt(row, settings, apiKey);
+          apiKey = Settings.keyOf(settings);
         } catch (err) {
-          console.error("[messaging] retry failed:", err.message);
+          console.error("[messaging] cannot retry, the key is unreadable:", err.message);
+          return;
         }
-      }
+        for (const { _id } of await DocumentSend.find({ companyId, ...due }).select("_id").limit(25).lean()) {
+          // claimed by a status-matched update, so a hand retry and this pass cannot both send it
+          const row = await DocumentSend.findOneAndUpdate({ _id, status: "FAILED", nextRetryAt: { $lte: now } }, { $set: { status: "QUEUED", nextRetryAt: null } }, { new: true }).select("+pending");
+          if (!row) continue;
+          try {
+            await this.attempt(row, settings, apiKey);
+          } catch (err) {
+            console.error("[messaging] retry failed:", err.message);
+          }
+        }
+      });
     }
+
+    // The two sweeps below look across every organisation by design: they repair rows, they never read one
+    // organisation's content out to another.
+    await runUnscoped("background job: sweeps interrupted and stale held messages across all organisations", () => this.sweep(now));
+  }
+
+  static async sweep(now) {
 
     // QUEUED and untouched for ten minutes: the process died between calling the provider and writing
     // the answer. The one case where we genuinely do not know, and the log says so.

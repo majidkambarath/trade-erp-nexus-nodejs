@@ -12,8 +12,15 @@ const FiscalYearService = require("../services/core/fiscalYearService");
 const AccountConfigService = require("../services/financial/accountConfigService");
 const DefaultChartService = require("../services/financial/defaultChartService");
 const { getTenant } = require("./tenant");
+const { DEFAULT_TENANT, runWithTenant } = require("./tenantContext");
 
-async function seedAccounting({ log = console.log } = {}) {
+// Seeds one organisation's accounting foundation (the original one unless told otherwise), inside that
+// organisation's scope: there is no request here to say whose data this is.
+async function seedAccounting({ log = console.log, companyId: forCompany } = {}) {
+  return runWithTenant({ companyId: forCompany || DEFAULT_TENANT.companyId, branchId: DEFAULT_TENANT.branchId }, () => seedInScope({ log }));
+}
+
+async function seedInScope({ log }) {
   const { companyId } = getTenant();
 
   const made = await DefaultChartService.provision();

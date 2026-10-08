@@ -3,6 +3,8 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const AuthSession = require("../../models/core/authSessionModel");
 const AppError = require("../../utils/AppError");
+const Organisation = require("../../models/core/organisationModel");
+const { runWithTenant, runUnscoped } = require("../../utils/tenantContext");
 const { permissionsFor, mayManage, withoutSystemFields } = require("../../utils/adminPermissions");
 const { deleteFromCloudinary } = require("../../middleware/upload");
 
@@ -53,14 +55,29 @@ const loginAdmin = async (email, password, ipAddress = null, context = {}) => {
       "MISSING_CREDENTIALS"
     );
 
-  const admin = await Admin.findOne({
-    email: email.toLowerCase(),
-    isActive: true,
-  }).select("+password +loginAttempts +lockUntil");
+  // The one moment no organisation is known: a person types an email, and the account row says which
+  // organisation they belong to. Everything after this runs as that organisation.
+  const admin = await runUnscoped("sign-in: the account is found by its email, before any organisation is known", () =>
+    Admin.findOne({ email: email.toLowerCase(), isActive: true }).select("+password +loginAttempts +lockUntil")
+  );
 
   if (!admin)
     throw new AppError("Invalid email or password", 401, "INVALID_CREDENTIALS");
 
+  await assertOrganisationOpen(admin.companyId);
+  return runWithTenant({ companyId: admin.companyId, branchId: admin.branchId }, () => finishLogin(admin, password, ipAddress, context));
+};
+
+// An account whose organisation is gone must not sign in. (A subscription that has expired or been
+// suspended is refused here too, once that is enforced.)
+const assertOrganisationOpen = async (companyId) => {
+  const organisation = await Organisation.findOne({ code: companyId });
+  if (!organisation) throw new AppError("This account's organisation could not be found. Please contact support.", 403, "ORGANISATION_NOT_FOUND");
+  return organisation;
+};
+
+// Password check, lock-out, token and session: all as the account's own organisation.
+const finishLogin = async (admin, password, ipAddress, context) => {
   if (admin.isLocked) {
     const lockTime = Math.ceil((admin.lockUntil - Date.now()) / (1000 * 60));
     throw new AppError(
@@ -87,6 +104,8 @@ const loginAdmin = async (email, password, ipAddress = null, context = {}) => {
     type: admin.type,
     permissions: permissionsFor(admin.type), // derived: what an old row once stored is ignored
     name: admin.name,
+    companyId: admin.companyId,
+    branchId: admin.branchId,
   };
 
   // One session per sign-in. The refresh token names it, so logout can end exactly this one.
@@ -355,15 +374,19 @@ const refreshAccessToken = async (refreshToken) => {
   if (decoded.type !== "refresh")
     throw new AppError("Invalid token type", 401, "INVALID_TOKEN_TYPE");
 
-  const session = await AuthSession.findById(decoded.sid);
-  if (!session || session.revokedAt || session.expiresAt <= new Date())
+  // The session id is a random secret that names its own organisation, so it is found with none in scope.
+  const session = await runUnscoped("refresh: the session id is a secret that names its own organisation", () => AuthSession.findById(decoded.sid));
+  if (!session || session.revokedAt || session.expiresAt <= new Date() || !session.companyId)
     throw new AppError(SESSION_ENDED, 401, "SESSION_REVOKED");
 
-  const admin = await Admin.findById(decoded.id);
-  if (!admin || !admin.isActive || admin.status !== "active")
-    throw new AppError("Admin not found or inactive", 401, "ADMIN_INACTIVE");
-
-  await AuthSession.updateOne({ _id: session._id }, { lastSeenAt: new Date() });
+  await assertOrganisationOpen(session.companyId);
+  const { admin } = await runWithTenant({ companyId: session.companyId }, async () => {
+    const found = await Admin.findById(decoded.id);
+    if (!found || !found.isActive || found.status !== "active")
+      throw new AppError("Admin not found or inactive", 401, "ADMIN_INACTIVE");
+    await AuthSession.updateOne({ _id: session._id }, { lastSeenAt: new Date() });
+    return { admin: found };
+  });
 
   const tokenPayload = {
     id: admin._id,
@@ -371,6 +394,8 @@ const refreshAccessToken = async (refreshToken) => {
     type: admin.type,
     permissions: permissionsFor(admin.type), // derived: what an old row once stored is ignored
     name: admin.name,
+    companyId: admin.companyId,
+    branchId: admin.branchId,
   };
   const { accessToken } = generateTokens(tokenPayload, session._id);
 
@@ -391,7 +416,9 @@ const logoutSession = async (refreshToken) => {
     return;
   }
   if (decoded?.type === "refresh" && decoded.sid) {
-    await AuthSession.updateOne({ _id: decoded.sid, revokedAt: null }, { revokedAt: new Date() });
+    await runUnscoped("logout: the session id is a secret that names the session to end", () =>
+      AuthSession.updateOne({ _id: decoded.sid, revokedAt: null }, { revokedAt: new Date() })
+    );
   }
 };
 

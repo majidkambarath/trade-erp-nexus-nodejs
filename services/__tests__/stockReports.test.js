@@ -61,6 +61,7 @@ test.before(async () => {
     tenant: require("../../utils/tenant"),
   };
   await mongoose.connection.syncIndexes();
+  await require("../core/organisationService").ensureDefault(); // an account must belong to an organisation that exists, as the server arranges at start-up
 
   // one fiscal year spanning last year and this one, so back-dated documents are never refused
   const year = Number(dubaiDay().slice(0, 4));

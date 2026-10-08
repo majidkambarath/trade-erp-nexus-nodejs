@@ -43,6 +43,7 @@ test.before(async () => {
     Admin: require("../../models/core/adminModel"),
   };
   await mongoose.connection.syncIndexes();
+  await require("../core/organisationService").ensureDefault(); // an account must belong to an organisation that exists, as the server arranges at start-up
   await svc.seed({ log: () => {} });
   customer = await svc.Customer.create({ customerId: "C1", customerName: "Al Noor", contactPerson: "x", creditLimit: 1e6 });
   vendor = await svc.Vendor.create({ vendorId: "V1", vendorName: "Gulf Mills", contactPerson: "x", address: "y" });

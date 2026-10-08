@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const { permissionsFor } = require("../../utils/adminPermissions");
+const tenantPlugin = require("../../utils/tenantPlugin");
 
 const adminSchema = new mongoose.Schema(
   {
@@ -34,6 +35,10 @@ const adminSchema = new mongoose.Schema(
         default: null
       }
     },
+    // The organisation this person belongs to, and the branch they work from. One person belongs to one
+    // organisation, so the email stays unique across all of them and signing in needs no organisation picker.
+    companyId: { type: String, required: true },
+    branchId: { type: String, default: "main" },
     type: {
       type: String,
       enum: {
@@ -194,6 +199,7 @@ adminSchema.virtual("isLocked").get(function () {
 // Indexes
 adminSchema.index({ email: 1 }, { unique: true });
 adminSchema.index({ type: 1 });
+adminSchema.index({ companyId: 1, type: 1 });
 adminSchema.index({ status: 1 });
 adminSchema.index({ createdAt: -1 });
 adminSchema.index({ "companyInfo.companyName": 1 });
@@ -291,6 +297,9 @@ adminSchema.methods.toJSON = function () {
   delete admin.lockUntil;
   return admin;
 };
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+adminSchema.plugin(tenantPlugin);
 
 const Admin = mongoose.model("Admin", adminSchema);
 

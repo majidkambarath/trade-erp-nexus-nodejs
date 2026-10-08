@@ -6,6 +6,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "..", ".env") });
 
 const mongoose = require("mongoose");
 const Admin = require("../models/core/adminModel");
+const { DEFAULT_TENANT, runWithTenant } = require("./tenantContext");
 
 // Ensure MONGO_URI is defined
 if (!process.env.MONGO_URI) {
@@ -28,7 +29,11 @@ mongoose
   .connect(MONGO_URI)
   .then(() => {
     console.log("✅ MongoDB connected successfully");
-    return setupAdmins();
+    // An account must belong to an organisation, and signing in checks that it exists, so the original
+    // organisation is adopted first; the seeded admins are then made as members of it.
+    return require("../services/core/organisationService")
+      .ensureDefault()
+      .then(() => runWithTenant({ companyId: DEFAULT_TENANT.companyId, branchId: DEFAULT_TENANT.branchId }, setupAdmins));
   })
   .catch((err) => {
     console.error("❌ MongoDB connection error:", err.message);

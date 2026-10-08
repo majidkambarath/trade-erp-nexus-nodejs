@@ -59,6 +59,7 @@ test.before(async () => {
     NumberSeries: require("../core/numberSeriesService"),
   };
   await mongoose.connection.syncIndexes();
+  await require("../core/organisationService").ensureDefault(); // an account must belong to an organisation that exists, as the server arranges at start-up
   await svc.seed({ log: () => {} });
 });
 

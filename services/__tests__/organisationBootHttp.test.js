@@ -16,7 +16,7 @@ let logs = "";
 async function boot() {
   const port = 3300 + Math.floor(Math.random() * 400);
   const uri = process.env.MONGO_URI.replace(/\/([^/?]*)\?/, `/${DB}?`);
-  const child = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, MONGO_URI: uri, PORT: String(port), LOG_SILENT: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, MONGO_URI: uri, PORT: String(port), LOG_SILENT: "1", TENANT_LEGACY_DEFAULT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout.on("data", (d) => (logs += d));
   child.stderr.on("data", (d) => (logs += d));
   const deadline = Date.now() + 60000;

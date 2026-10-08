@@ -54,6 +54,7 @@ test.before(async () => {
     partyMaster: require("../../utils/partyMaster"),
   };
   await mongoose.connection.syncIndexes();
+  await require("../core/organisationService").ensureDefault(); // an account must belong to an organisation that exists, as the server arranges at start-up
   await svc.seed({ log: () => {} });
 
   // the three new routers, mounted the way server.js will mount them

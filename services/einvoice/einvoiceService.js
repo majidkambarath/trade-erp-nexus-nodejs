@@ -11,6 +11,7 @@ const ei = require("../../utils/eInvoice");
 const { encrypt } = require("../../utils/secretBox");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
+const { runWithTenant, runUnscoped } = require("../../utils/tenantContext");
 
 const ELIGIBLE = ["sales_order", "sales_return"];
 const BACKOFF_MS = (attempt) => Math.min(60000 * 2 ** Math.max(attempt - 1, 0), 6 * 3600 * 1000); // 1m, 2m, 4m ... capped at 6h
@@ -306,19 +307,29 @@ class EInvoiceService {
 
   // Background pass: retry failed deliveries whose time has come, and poll in-flight invoices.
   static async processDue(now = new Date()) {
-    const enabled = await EInvoiceSettings.find({ enabled: true }).select("companyId").lean();
+    // Listing which organisations have e-invoicing on is the one cross-organisation read; each one's work
+    // then runs inside its own scope.
+    const enabled = await runUnscoped("background job: lists the organisations that have e-invoicing switched on", () =>
+      EInvoiceSettings.find({ enabled: true }).select("companyId").lean()
+    );
     let retried = 0, polled = 0;
     for (const { companyId } of enabled) {
-      const settings = await this.loadSettings(companyId);
-      const failed = await EInvoiceSubmission.find({ companyId, status: "FAILED", retryable: true, nextRetryAt: { $lte: now } }).limit(25);
-      for (const sub of failed) {
-        this.transition(sub, "QUEUED", "Automatic retry");
-        await sub.save();
-        await this.attempt(sub, settings);
-        retried += 1;
-      }
-      const inflight = await EInvoiceSubmission.find({ companyId, status: { $in: ["SUBMITTED", "ACKNOWLEDGED"] } }).limit(50);
-      for (const sub of inflight) { await this.refreshOne(sub); polled += 1; }
+      const done = await runWithTenant({ companyId }, async () => {
+        let r = 0, p = 0;
+        const settings = await this.loadSettings(companyId);
+        const failed = await EInvoiceSubmission.find({ companyId, status: "FAILED", retryable: true, nextRetryAt: { $lte: now } }).limit(25);
+        for (const sub of failed) {
+          this.transition(sub, "QUEUED", "Automatic retry");
+          await sub.save();
+          await this.attempt(sub, settings);
+          r += 1;
+        }
+        const inflight = await EInvoiceSubmission.find({ companyId, status: { $in: ["SUBMITTED", "ACKNOWLEDGED"] } }).limit(50);
+        for (const sub of inflight) { await this.refreshOne(sub); p += 1; }
+        return { r, p };
+      });
+      retried += done.r;
+      polled += done.p;
     }
     return { retried, polled };
   }

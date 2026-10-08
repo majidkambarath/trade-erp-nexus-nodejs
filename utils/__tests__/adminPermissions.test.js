@@ -69,7 +69,7 @@ test("nobody removes their own account, so an organisation cannot lock itself ou
 });
 
 test("a request body can never set the system's own fields", () => {
-  const clean = withoutSystemFields({ name: "Ali", permissions: ["backup_restore"], createdBy: "x", loginAttempts: 0, lockUntil: null, _id: "y", type: "viewer" });
+  const clean = withoutSystemFields({ name: "Ali", permissions: ["backup_restore"], companyId: "someone-else", createdBy: "x", loginAttempts: 0, lockUntil: null, _id: "y", type: "viewer" });
   assert.deepEqual(clean, { name: "Ali", type: "viewer" });
   assert.deepEqual(withoutSystemFields(undefined), {});
 });

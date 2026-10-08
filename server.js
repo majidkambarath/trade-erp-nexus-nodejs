@@ -70,19 +70,41 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Connect to MongoDB, then repair data older versions wrote (idempotent, so safe on every start)
-mongodb()
+// Connect to MongoDB, then repair data older versions wrote (idempotent, so safe on every start), then
+// adopt the original organisation. Signing in needs its organisation to exist, so requests wait for this
+// (see the gate below) instead of being refused in the first moments after a start.
+const organisationsReady = mongodb()
   .then(() => require("./utils/migrations").runMigrations())
   .then((done) => { if (Object.values(done).some(Boolean)) console.log("[migrations]", done); })
   .catch((err) => console.error("[migrations] failed:", err.message))
   // the organisation that existed before organisations did becomes a real one, with its head office
   .then(() => require("./services/core/organisationService").ensureDefault())
   .then((adopted) => { if (adopted) console.log("[organisations] adopted the original organisation:", adopted.code); })
-  .catch((err) => console.error("[organisations] could not adopt the original organisation:", err.message))
-  // a company that never chose otherwise has ledger posting on, and every customer / vendor its
-  // account, from the first start (not only once somebody opens the chart of accounts)
-  .then(() => require("./services/financial/defaultChartService").onOpen({}))
-  .then((done) => { if (done?.postingEnabled || done?.partyAccounts) console.log("[ledger]", done); })
+  .catch((err) => console.error("[organisations] could not adopt the original organisation:", err.message));
+
+let organisationsSettled = false;
+organisationsReady.finally(() => { organisationsSettled = true; });
+const BOOT_WAIT_MS = 20000; // never hold a request longer than this, however slow the database is
+app.use((req, res, next) => {
+  if (organisationsSettled || req.path === "/api/v1/health") return next();
+  let released = false;
+  const release = () => { if (!released) { released = true; clearTimeout(timer); next(); } };
+  const timer = setTimeout(release, BOOT_WAIT_MS);
+  organisationsReady.then(release, release);
+});
+
+// a company that never chose otherwise has ledger posting on, and every customer / vendor its
+// account, from the first start (not only once somebody opens the chart of accounts)
+organisationsReady
+  .then(() => {
+    const Organisations = require("./services/core/organisationService");
+    return Organisations.forEach((code) => {
+      // another organisation's chart is only touched once the ledger is separated by organisation
+      if (code !== Organisations.DEFAULT_CODE && !Organisations.chartIsSafeToProvision()) return null;
+      return require("./services/financial/defaultChartService").onOpen({});
+    }, { label: "ledger" });
+  })
+  .then((runs) => { for (const { code, result } of runs || []) if (result?.postingEnabled || result?.partyAccounts) console.log("[ledger]", code, result); })
   .catch((err) => console.error("[ledger] start-up check failed:", err.message));
 
 // Health check endpoint. Declared before the route mounts: adminRouter is mounted at

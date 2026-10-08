@@ -131,6 +131,23 @@ class OrganisationService {
     return { rows, total, page, limit };
   }
 
+  // Run `fn(code)` once for every organisation that is live, each inside its own scope, so a job that has no
+  // request (start-up checks, timers) still knows whose data it is touching. One organisation failing never
+  // stops the others: its error is logged and returned.
+  static async forEach(fn, { label = "job" } = {}) {
+    const orgs = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code").lean();
+    const out = [];
+    for (const { code } of orgs) {
+      try {
+        out.push({ code, result: await runWithTenant({ companyId: code, branchId: HEAD_OFFICE }, () => fn(code)) });
+      } catch (error) {
+        console.error(`[${label}] ${code}:`, error.message);
+        out.push({ code, error: error.message });
+      }
+    }
+    return out;
+  }
+
   // ---- create
 
   // The developer's "new organisation". Returns { organisation, headOffice, provisioning }.
@@ -226,6 +243,7 @@ class OrganisationService {
     await ready();
     if (await Organisation.exists({ code: DEFAULT_CODE })) return null;
     const settings = await runWithTenant({ companyId: DEFAULT_CODE }, () => CompanySettings.findOne({ companyId: DEFAULT_CODE }).lean());
+    // Another server starting at the same moment may adopt it first: that is the same outcome, not a failure.
     const org = await retryTransient(() => withTransactionSession(async (session) => {
       const [organisation] = await Organisation.create(
         [{
@@ -242,7 +260,10 @@ class OrganisationService {
         }
       });
       return organisation;
-    })());
+    })()).catch((error) => {
+      if (error?.code === 11000) return null;
+      throw error;
+    });
     return org;
   }
 

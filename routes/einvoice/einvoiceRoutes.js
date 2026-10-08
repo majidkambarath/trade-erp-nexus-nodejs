@@ -5,20 +5,31 @@ const EInvoiceService = require("../../services/einvoice/einvoiceService");
 const InboundService = require("../../services/einvoice/inboundService");
 const AuditService = require("../../services/core/auditService");
 const { getTenant } = require("../../utils/tenant");
+const Organisation = require("../../models/core/organisationModel");
+const AppError = require("../../utils/AppError");
+const { runWithTenant, DEFAULT_TENANT } = require("../../utils/tenantContext");
 
 const router = express.Router();
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
 
 // Delivered by the access point, authenticated by an HMAC signature over the raw body rather than
 // by a login. Registered BEFORE authenticateToken.
-router.post(
-  "/inbound/webhook",
+// There is no login here, so there is no organisation in scope: the URL names it. /inbound/webhook/:org is
+// for every organisation; the bare /inbound/webhook is the original URL, kept for the original organisation
+// so a service provider that is already configured is not broken. An unknown organisation answers the same
+// 404 as an unknown path, so the address cannot be used to find out which organisations exist.
+const webhook = (organisationCode) =>
   catchAsync(async (req, res) => {
-    await InboundService.verifyWebhook(req.rawBody, req.get("x-einvoice-signature"), getTenant(req).companyId);
-    const { invoice, duplicate } = await InboundService.ingest(req.body, { source: "webhook", req });
-    ok(res, { id: invoice._id, duplicate }, duplicate ? 200 : 201);
-  })
-);
+    const org = await Organisation.findOne({ code: String(organisationCode(req) || "").toLowerCase() });
+    if (!org) throw new AppError("Not found", 404, "NOT_FOUND");
+    const result = await runWithTenant({ companyId: org.code }, async () => {
+      await InboundService.verifyWebhook(req.rawBody, req.get("x-einvoice-signature"), getTenant(req).companyId);
+      return InboundService.ingest(req.body, { source: "webhook", req });
+    });
+    ok(res, { id: result.invoice._id, duplicate: result.duplicate }, result.duplicate ? 200 : 201);
+  });
+router.post("/inbound/webhook/:org", webhook((req) => req.params.org));
+router.post("/inbound/webhook", webhook(() => DEFAULT_TENANT.companyId));
 
 router.use(authenticateToken);
 const canChange = requireRole(["super_admin", "admin"]);
