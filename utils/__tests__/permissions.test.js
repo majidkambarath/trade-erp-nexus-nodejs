@@ -177,5 +177,12 @@ test("the catalogue the editor draws covers every key exactly once, and marks th
   assert.deepEqual([...drawn].sort(), [...p.KEYS].sort());
   assert.equal(new Set(drawn).size, drawn.length);
   assert.deepEqual(p.catalogue().filter((m) => m.automatic).map((m) => m.key), ["lookups"]);
-  for (const m of p.catalogue()) assert.ok(m.label && m.actions.every((a) => a.label), m.key);
+  for (const m of p.catalogue()) assert.ok(m.label && m.actions.every((a) => a.label && a.short), m.key);
+  const all = Object.fromEntries(p.catalogue().flatMap((m) => m.actions.map((a) => [a.key, a])));
+  assert.deepEqual(all["sales.approve"].implies.sort(), ["inventory.view", "lookups.view", "sales.view"], "what ticking approve brings with it, for the editor to lock");
+  assert.deepEqual(all["sales.view"].implies, []);
+  assert.equal(all["reports.financial"].read, true);
+  assert.equal(all["sales.create"].read, false);
+  assert.equal(all["sales.create"].short, "Add and edit");
+  assert.equal(all["users.manage"].short, "Manage people and roles");
 });

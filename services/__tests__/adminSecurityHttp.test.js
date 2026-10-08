@@ -156,6 +156,28 @@ test("an admin can manage ordinary accounts, and the new account gets only its o
   assert.ok(!after.permissions.includes("system_settings"));
 });
 
+test("naming a role in a request does nothing: nobody makes themselves, or anyone, an owner through an account route", { skip }, async () => {
+  // an administrator creating an account while naming the owner's role
+  const mk = await call("POST", "/", { token: tok.adm, body: { name: "Sly", email: "sly@test.uae", password: PASSWORD, type: "viewer", roleKey: "super_admin" } });
+  assert.equal(mk.status, 201, JSON.stringify(mk.data));
+  const sly = await Admin.findOne({ email: "sly@test.uae" });
+  assert.equal(sly.roleKey ?? null, null, "the role was not taken from the body");
+  assert.equal(sly.type, "viewer");
+  // ...and a person editing their own profile cannot give themselves one
+  const own = await call("PUT", "/profile/me", { token: tok.viewer, body: { name: "Viewer", roleKey: "super_admin" } });
+  assert.ok(own.status < 500, JSON.stringify(own.data));
+  assert.equal((await stored("viewer")).roleKey ?? null, null);
+  // ...nor can an administrator re-role someone with PUT
+  const up = await call("PUT", `/${ids.victim}`, { token: tok.adm, body: { roleKey: "super_admin" } });
+  assert.ok(up.status < 500, JSON.stringify(up.data));
+  assert.equal((await stored("victim")).roleKey ?? null, null);
+  // and the account that was made holds a viewer's powers, not the owner's
+  const slyToken = await login("sly@test.uae");
+  const status = await call("GET", "/organisation/status", { token: slyToken });
+  assert.equal(status.body.me.role.key, "viewer");
+  assert.ok(!status.body.me.grants.includes("users.manage"));
+});
+
 test("a request body cannot write the system's own fields", { skip }, async () => {
   const r = await call("PUT", `/${ids.mgr}`, { token: tok.boss, body: { name: "Mgr", permissions: ["backup_restore", "users_manage"], loginAttempts: 99, createdBy: ids.viewer } });
   assert.equal(r.status, 200, JSON.stringify(r.data));

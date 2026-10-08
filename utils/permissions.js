@@ -352,14 +352,29 @@ function legacyPermissions(grants, rank = 0) {
   return out;
 }
 
-/** What the role editor draws: every module, with its actions, labelled. Sent by the server so the screen never keeps its own copy. */
+// The name a checkbox carries in the role editor; the full sentence is its hint. An entry here for "module.action" wins.
+const SHORT = {
+  view: "View", create: "Add and edit", approve: "Approve", delete: "Delete", send: "Send to customers", creditOverride: "Override credit limit",
+  adjust: "Adjust stock", manage: "Manage", reconcile: "Reconcile", close: "Close periods", financial: "Financial reports", vat: "File VAT",
+  "settings.manage": "Change settings", "users.manage": "Manage people and roles", "audit.view": "Read the trail", "lookups.view": "Pick lists",
+};
+const shortName = (key) => SHORT[key] || SHORT[key.split(".")[1]] || key;
+
+/**
+ * What the role editor draws: every module, with its actions, named and explained, and for each action what ticking it
+ * brings with it (`implies`). Sent by the server so the screen never keeps its own copy of the rules: it locks "View"
+ * when someone ticks "Approve" because this says so.
+ */
 const catalogue = () =>
   MODULE_KEYS.map((m) => ({
     key: m,
     label: MODULES[m].label,
     hint: MODULES[m].hint,
     automatic: m === "lookups", // ticked for you whenever a role does anything beyond looking
-    actions: Object.entries(MODULES[m].actions).map(([action, label]) => ({ key: `${m}.${action}`, action, label })),
+    actions: Object.entries(MODULES[m].actions).map(([action, label]) => {
+      const key = `${m}.${action}`;
+      return { key, action, short: shortName(key), label, read: isRead(key), implies: expand([key]).filter((k) => k !== key) };
+    }),
   }));
 
 module.exports = {

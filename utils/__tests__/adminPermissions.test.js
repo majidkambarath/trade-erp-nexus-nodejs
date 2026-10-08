@@ -16,6 +16,12 @@ test("each account type carries only what it needs; nobody but a super admin can
   }
 });
 
+test("a request body cannot name a role: the role is the account's whole power", () => {
+  const { withoutSystemFields, SYSTEM_FIELDS } = require("../adminPermissions");
+  assert.ok(SYSTEM_FIELDS.includes("roleKey"));
+  assert.deepEqual(withoutSystemFields({ name: "x", roleKey: "super_admin", permissions: ["users_manage"], companyId: "other" }), { name: "x" });
+});
+
 test("an unknown type gets nothing, never everything", () => {
   assert.deepEqual(permissionsFor("root"), []);
   assert.deepEqual(permissionsFor(undefined), []);

@@ -35,7 +35,9 @@ function mayManage({ actor, target, nextType, self = false, action = "update" })
 // Fields nobody may set through a request body, whatever their role: they are the system's to write.
 // companyId is among them: an account belongs to the organisation of whoever creates it, never to one
 // the request names.
-const SYSTEM_FIELDS = ["permissions", "companyId", "createdBy", "updatedBy", "loginAttempts", "lockUntil", "lastLogin", "_id", "__v", "createdAt", "updatedAt"];
+// roleKey is the one that matters most: the role IS the account's power, so it is only ever set through the users API,
+// which checks the actor's rank. Left open here, "create an account" could name any role, owner included.
+const SYSTEM_FIELDS = ["permissions", "roleKey", "companyId", "createdBy", "updatedBy", "loginAttempts", "lockUntil", "lastLogin", "_id", "__v", "createdAt", "updatedAt"];
 
 function withoutSystemFields(body) {
   const out = { ...(body || {}) };
