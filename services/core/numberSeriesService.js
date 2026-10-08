@@ -48,6 +48,13 @@ const SERIES_BY_VOUCHER_TYPE = {
   credit_note: "CN",
 };
 
+const HEAD_OFFICE = "main";
+
+// A document number is unique across the organisation, not per branch (a tax invoice number must be unique for the
+// taxpayer), so every branch but the head office carries its code in front: SO-2026-0001 at head office, SHJ-SO-2026-0001
+// in Sharjah. The prefix is fixed when a branch first uses a series.
+const prefixFor = (def, branchId) => (!branchId || branchId === HEAD_OFFICE ? def.prefix : `${String(branchId).toUpperCase()}-${def.prefix}`);
+
 class NumberSeriesService {
   // Allocates the next number with ONE atomic findOneAndUpdate($inc). Concurrent callers get
   // distinct numbers; a rolled-back transaction leaves a gap but never a duplicate. Numbers
@@ -65,7 +72,7 @@ class NumberSeriesService {
       { companyId, branchId, series, fiscalYear },
       {
         $inc: { next: 1 },
-        $setOnInsert: { prefix: def.prefix, numberLength: def.numberLength },
+        $setOnInsert: { prefix: prefixFor(def, branchId), numberLength: def.numberLength },
       },
       { upsert: true, new: true, session }
     );
@@ -84,7 +91,7 @@ class NumberSeriesService {
     const fiscalYear = await FiscalYearService.keyForDate(date, { session, companyId });
     const doc = await NumberSeries.findOneAndUpdate(
       { companyId, branchId, series, fiscalYear },
-      { $inc: { next: count }, $setOnInsert: { prefix: def.prefix, numberLength: def.numberLength } },
+      { $inc: { next: count }, $setOnInsert: { prefix: prefixFor(def, branchId), numberLength: def.numberLength } },
       { upsert: true, new: true, session }
     );
     return Array.from({ length: count }, (_, i) => `${doc.prefix}-${fiscalYear}-${String(doc.next - count + 1 + i).padStart(doc.numberLength, "0")}`);

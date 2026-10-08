@@ -157,6 +157,7 @@ inventoryMovementSchema.statics.getStockAtDate = async function(stockId, date) {
 };
 
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
-inventoryMovementSchema.plugin(tenantPlugin, { leadIndexes: true });
+// documents belong to a branch: a person working in one branch sees only that branch's (utils/tenantPlugin.js)
+inventoryMovementSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
 
 module.exports = mongoose.model("InventoryMovement", inventoryMovementSchema);

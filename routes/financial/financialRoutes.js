@@ -1,11 +1,14 @@
 const express = require("express");
 const { authenticateToken } = require("../../middleware/authMiddleware");
+const { branchOfDocument } = require("../../middleware/branchOfDocument");
+const { Voucher } = require("../../models/modules/financial/financialModels");
 const FinancialController = require("../../controllers/financial/financialController");
 const { uploadSingle } = require("../../middleware/upload");
 const router = express.Router();
 
 // Apply authentication middleware to all routes
 router.use(authenticateToken);
+router.param("id", branchOfDocument(Voucher)); // a head office working across branches posts to the document's own branch
 
 // Main voucher CRUD operations
 router.post(

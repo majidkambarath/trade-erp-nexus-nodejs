@@ -9,6 +9,7 @@ const Branch = require("../../models/core/branchModel");
 const Admin = require("../../models/core/adminModel");
 const Transaction = require("../../models/modules/transactionModel");
 const PlatformAudit = require("../../models/platform/platformAuditModel");
+const CompanySettings = require("../../models/modules/financial/companySettingsModel");
 const OrganisationService = require("../core/organisationService");
 const BranchService = require("../core/branchService");
 const AuditService = require("../core/auditService");
@@ -86,8 +87,10 @@ class PlatformOrganisationService {
     const org = await OrganisationService.get(code);
     const usage = await this.usage(org.code);
     const limits = plans.effectiveLimits(org);
+    const settings = await inOrg(org.code, () => CompanySettings.findOne().select("profile").lean());
     return {
       organisation: org.toJSON(),
+      profile: settings?.profile || {},
       features: plans.effectiveFeatures(org),
       limits,
       usage,

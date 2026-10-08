@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { runInBranchOf } = require("../../utils/tenantContext");
 const { LedgerAccount, LedgerEntry } = require("../../models/modules/financial/financialModels");
 const AccountGroup = require("../../models/modules/financial/accountGroupModel");
 const AccountConfigService = require("./accountConfigService");
@@ -170,12 +171,13 @@ class PostingService {
       if (await LedgerEntry.exists({ voucherId: tx._id })) { result.skipped += 1; continue; }
       const session = await mongoose.startSession();
       try {
-        await session.withTransaction(async () => {
+        // posted to the document's own branch, whichever branch is being looked at
+        await runInBranchOf(tx, () => session.withTransaction(async () => {
           // the cost the stock moved at gives the cost of goods sold on sales and returns
           const moves = await InventoryMovement.find({ referenceType: "Transaction", referenceId: tx._id, isReversed: { $ne: true } }).session(session).lean();
           const stockUpdates = moves.map((m) => ({ itemId: m.itemId, cost: Number(m.cogsAmount ?? Math.abs(m.totalValue ?? 0)) || 0 }));
           await this.postTransaction(tx, { stockUpdates, createdBy, session });
-        });
+        }));
         result.posted += 1;
       } catch (err) {
         result.failed.push({ transactionNo: tx.transactionNo, reason: err.message });

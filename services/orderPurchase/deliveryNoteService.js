@@ -12,6 +12,7 @@ const TransactionService = require("./transactionService");
 const Links = require("./deliveryNoteLinks");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { getTenant } = require("../../utils/tenant");
+const { allBranches } = require("../../utils/tenantContext");
 const { todayInDubai, dubaiDay, diffDays, toExpiryDay } = require("../../utils/documentExpiry");
 const {
   DELIVERY_ACTIONS, DELIVERY_EDITABLE, INVOICE_STATE, QUOTATION_CONVERTIBLE,
@@ -233,7 +234,8 @@ class DeliveryNoteService {
     if (!ids.length) return [];
     const { companyId } = getTenant();
     const oid = ids.map((i) => new mongoose.Types.ObjectId(i));
-    const [stocks, committed] = await Promise.all([
+    // Stock is held by the organisation, so what other branches' notes have promised from it counts against this one too
+    const [stocks, committed] = await allBranches(() => Promise.all([
       Stock.find({ _id: { $in: oid } }).select("currentStock").lean(),
       DeliveryNote.aggregate([
         { $match: { companyId, status: { $ne: "CANCELLED" }, invoiceStatus: { $ne: INVOICE_STATE.INVOICED }, ...(excludeId && S.isId(excludeId) && { _id: { $ne: new mongoose.Types.ObjectId(excludeId) } }) } },
@@ -241,7 +243,7 @@ class DeliveryNoteService {
         { $match: { "items.itemId": { $in: oid } } },
         { $group: { _id: "$items.itemId", qty: { $sum: { $cond: [{ $eq: ["$status", "DELIVERED"] }, { $ifNull: ["$items.deliveredQty", "$items.qty"] }, "$items.qty"] } } } },
       ]),
-    ]);
+    ]));
     const held = new Map(committed.map((c) => [String(c._id), c.qty]));
     return stocks.map((s) => {
       const onHand = s.currentStock ?? 0;

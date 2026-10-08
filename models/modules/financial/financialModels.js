@@ -270,7 +270,8 @@ voucherSchema.index({ currency: 1, voucherType: 1, date: -1 }, { partialFilterEx
 voucherSchema.index({ voucherNo: 1 }, { unique: true }); // unique within an organisation
 
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
-voucherSchema.plugin(tenantPlugin, { leadIndexes: true });
+// documents belong to a branch: a person working in one branch sees only that branch's (utils/tenantPlugin.js)
+voucherSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
 
 const Voucher = mongoose.model("Voucher", voucherSchema);
 
@@ -486,7 +487,8 @@ ledgerEntrySchema.index({ partyId: 1, partyType: 1 }); // For FinancialService.g
 ledgerEntrySchema.index({ financialYear: 1, month: 1 }); // For FinancialService.getFinancialReports
 
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
-ledgerEntrySchema.plugin(tenantPlugin, { leadIndexes: true });
+// documents belong to a branch: a person working in one branch sees only that branch's (utils/tenantPlugin.js)
+ledgerEntrySchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
 
 const LedgerEntry = mongoose.model("LedgerEntry", ledgerEntrySchema);
 

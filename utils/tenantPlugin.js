@@ -17,6 +17,9 @@ const UPDATE_OPS = new Set(["findOneAndUpdate", "findOneAndReplace", "updateOne"
 const REPLACE_OPS = new Set(["findOneAndReplace", "replaceOne"]);
 const MUST_BE_FIRST = new Set(["$geoNear", "$search", "$searchMeta", "$vectorSearch", "$collStats", "$indexStats", "$currentOp"]);
 
+const crossBranch = (what, given, want) =>
+  new TenantScopeError(`Refusing ${what}: it is for branch ${JSON.stringify(given)} but this call is working in branch ${JSON.stringify(want)}`, "CROSS_BRANCH");
+
 const crossTenant = (what, given, want) =>
   new TenantScopeError(`Refusing ${what}: it names organisation ${JSON.stringify(given)} but this call is scoped to ${JSON.stringify(want)}`, "CROSS_TENANT");
 
@@ -51,22 +54,38 @@ function tenantedCollections() {
   return set;
 }
 
+// Collections whose documents belong to a branch (models plugged in with { branchScoped: true }).
+function branchScopedCollections() {
+  const set = new Set();
+  for (const name of mongoose.modelNames()) {
+    const model = mongoose.model(name);
+    if (model.schema.options.branchScoped) set.add(model.collection.collectionName);
+  }
+  return set;
+}
+
+// What a join into `collection` may see: the organisation, and the branch being worked in when the collection holds documents.
+const scopeMatch = (tenant, collection, branchScoped) => ({
+  companyId: tenant.companyId,
+  ...(tenant.branchView && branchScoped.has(collection) ? { branchId: tenant.branchView } : {}),
+});
+
 // Walk a pipeline and scope every join into a tenanted collection. The top-level $match for the
 // pipeline's own collection is added by the caller; this handles what it pulls in from elsewhere.
-function scopeStages(stages, tenant, tenanted) {
+function scopeStages(stages, tenant, tenanted, branchScoped) {
   for (const stage of stages || []) {
     if (stage.$lookup) {
       const lookup = stage.$lookup;
       const from = typeof lookup.from === "string" ? lookup.from : lookup.from?.coll;
-      if (tenanted.has(from)) lookup.pipeline = [{ $match: { companyId: tenant.companyId } }, ...(lookup.pipeline || [])];
-      scopeStages(lookup.pipeline, tenant, tenanted);
+      if (tenanted.has(from)) lookup.pipeline = [{ $match: scopeMatch(tenant, from, branchScoped) }, ...(lookup.pipeline || [])];
+      scopeStages(lookup.pipeline, tenant, tenanted, branchScoped);
     } else if (stage.$unionWith) {
       const union = typeof stage.$unionWith === "string" ? { coll: stage.$unionWith } : stage.$unionWith;
-      if (tenanted.has(union.coll)) union.pipeline = [{ $match: { companyId: tenant.companyId } }, ...(union.pipeline || [])];
-      scopeStages(union.pipeline, tenant, tenanted);
+      if (tenanted.has(union.coll)) union.pipeline = [{ $match: scopeMatch(tenant, union.coll, branchScoped) }, ...(union.pipeline || [])];
+      scopeStages(union.pipeline, tenant, tenanted, branchScoped);
       stage.$unionWith = union;
     } else if (stage.$facet) {
-      for (const branch of Object.values(stage.$facet)) scopeStages(branch, tenant, tenanted);
+      for (const branch of Object.values(stage.$facet)) scopeStages(branch, tenant, tenanted, branchScoped);
     } else if (stage.$graphLookup && tenanted.has(stage.$graphLookup.from)) {
       throw new TenantScopeError("$graphLookup into a tenanted collection cannot be scoped; do the traversal in code", "UNSUPPORTED_STAGE");
     }
@@ -87,6 +106,11 @@ function tenantPlugin(schema, options = {}) {
     );
   }
   const hasBranch = Boolean(schema.path("branchId"));
+  // options.branchScoped: this model holds DOCUMENTS (they belong to a branch), so a person working in one branch
+  // sees and changes only that branch's. Masters leave it off and stay shared by every branch.
+  const branchScoped = Boolean(options.branchScoped);
+  if (branchScoped && !hasBranch) throw new Error("tenantPlugin: branchScoped needs a branchId path to scope by");
+  schema.options.branchScoped = branchScoped;
 
   // ---- queries
   schema.pre(QUERY_OPS, function scopeQuery() {
@@ -95,7 +119,10 @@ function tenantPlugin(schema, options = {}) {
     const what = `${this.op} on ${this.model.modelName}`;
     const filter = this.getFilter();
     checkFilter(filter, tenant, what);
-    this.setQuery({ ...filter, companyId: tenant.companyId });
+    const scoped = { ...filter, companyId: tenant.companyId };
+    // $and, not a plain field: a caller's own branchId (or an $or) can narrow the view but never widen it
+    if (branchScoped && tenant.branchView) scoped.$and = [{ branchId: tenant.branchView }, ...(Array.isArray(filter.$and) ? filter.$and : [])];
+    this.setQuery(scoped);
     if (UPDATE_OPS.has(this.op)) {
       const update = this.getUpdate();
       checkUpdate(update, tenant, what);
@@ -117,8 +144,8 @@ function tenantPlugin(schema, options = {}) {
     const first = pipeline[0] && Object.keys(pipeline[0])[0];
     if (MUST_BE_FIRST.has(first)) throw new TenantScopeError(`${first} must be the first stage, so it cannot be scoped by the plugin`, "UNSUPPORTED_STAGE");
     for (const stage of pipeline) if (stage.$match) checkFilter(stage.$match, tenant, "an aggregation $match");
-    scopeStages(pipeline, tenant, tenantedCollections());
-    pipeline.unshift({ $match: { companyId: tenant.companyId } });
+    scopeStages(pipeline, tenant, tenantedCollections(), branchScopedCollections());
+    pipeline.unshift({ $match: { companyId: tenant.companyId, ...(branchScoped && tenant.branchView ? { branchId: tenant.branchView } : {}) } });
   });
 
   // ---- documents
@@ -126,11 +153,13 @@ function tenantPlugin(schema, options = {}) {
     if (doc.companyId == null || doc.$isDefault?.("companyId")) doc.companyId = tenant.companyId;
     else if (doc.companyId !== tenant.companyId) throw crossTenant(`saving a ${doc.constructor?.modelName || "document"}`, doc.companyId, tenant.companyId);
     if (hasBranch && (doc.branchId == null || doc.$isDefault?.("branchId"))) doc.branchId = tenant.branchId;
+    if (branchScoped && tenant.branchView && doc.branchId !== tenant.branchView) throw crossBranch(`saving a ${doc.constructor?.modelName || "document"}`, doc.branchId, tenant.branchView);
   };
   const stampPlain = (doc, tenant, what) => {
     if (doc.companyId == null) doc.companyId = tenant.companyId;
     else if (doc.companyId !== tenant.companyId) throw crossTenant(what, doc.companyId, tenant.companyId);
     if (hasBranch && doc.branchId == null) doc.branchId = tenant.branchId;
+    if (branchScoped && tenant.branchView && doc.branchId !== tenant.branchView) throw crossBranch(what, doc.branchId, tenant.branchView);
   };
 
   // Only a NEW document is stamped. An existing one is often loaded with only some fields (select("status")),
@@ -197,3 +226,4 @@ function tenantPlugin(schema, options = {}) {
 
 module.exports = tenantPlugin;
 module.exports.tenantedCollections = tenantedCollections;
+module.exports.branchScopedCollections = branchScopedCollections;

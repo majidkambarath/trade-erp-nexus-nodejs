@@ -223,6 +223,7 @@ transactionSchema.index({ createdAt: -1 });
 transactionSchema.index({ transactionNo: 1 }, { unique: true }); // unique within an organisation - NOT per branch: a tax invoice number must be unique per taxpayer, so branches take their own prefix in the number format
 
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
-transactionSchema.plugin(tenantPlugin, { leadIndexes: true });
+// documents belong to a branch: a person working in one branch sees only that branch's (utils/tenantPlugin.js)
+transactionSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
 
 module.exports = mongoose.model("Transaction", transactionSchema);

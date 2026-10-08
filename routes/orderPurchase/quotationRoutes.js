@@ -1,11 +1,14 @@
 const express = require("express");
 const { requireFeature } = require("../../middleware/featureGate");
 const { authenticateToken } = require("../../middleware/authMiddleware");
+const { branchOfDocument } = require("../../middleware/branchOfDocument");
+const Quotation = require("../../models/modules/quotationModel");
 const c = require("../../controllers/orderPurchase/quotationController");
 
 const router = express.Router();
 router.use(authenticateToken);
 router.use(requireFeature("quotations"));
+router.param("id", branchOfDocument(Quotation)); // a head office working across branches posts to the document's own branch
 
 // Fixed paths first: "/summary" must not be read as an id.
 router.get("/summary", c.summary);

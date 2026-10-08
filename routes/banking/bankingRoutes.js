@@ -5,6 +5,11 @@ const c = require("../../controllers/banking/bankingController");
 
 const router = express.Router();
 router.use(authenticateToken);
+
+// Every voucher form reads these to offer cash, bank and transfer, so they are open to every plan; what the banking
+// feature adds (cheques, cards) is left out of the answer when it is off.
+router.get("/payment-options", c.paymentOptions);
+
 router.use(requireFeature("banking"));
 
 // Anyone signed in can read the masters (the voucher forms need them); changing them, and acting
@@ -13,8 +18,6 @@ const canChange = requireRole(["super_admin", "admin"]);
 
 // Bank statement import, matching and reconciliation, and card settlement: /api/v1/banking/reconciliation/*
 router.use("/reconciliation", requireFeature("reconciliation"), require("./reconciliationRoutes"));
-
-router.get("/payment-options", c.paymentOptions);
 
 router.get("/banks", c.listBanks);
 router.post("/banks", canChange, c.createBank);

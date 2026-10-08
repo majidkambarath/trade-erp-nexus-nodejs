@@ -87,10 +87,24 @@ class UsageService {
 
   // Everything a screen needs to know about what it may show: the plan, the switched-on features, the limits with
   // their use, and where the subscription stands.
-  static async status(org, now = new Date()) {
+  // `who` is the caller: { admin, tenant } from the request. It adds where they are working: their branch, whether they
+  // may switch (a head-office user in an organisation with more than one branch), and the branches they could choose.
+  static async status(org, now = new Date(), who = {}) {
     const usage = await this.current(org, now);
     const limits = plans.effectiveLimits(org);
+    const branches = await Branch.find({ isActive: true }).sort({ isHeadOffice: -1, name: 1 }).select("code name isHeadOffice").lean();
+    const here = who.tenant?.branchId || "main";
+    const mine = branches.find((b) => b.code === here);
     return {
+      branches: branches.map((b) => ({ code: b.code, name: b.name, isHeadOffice: Boolean(b.isHeadOffice) })),
+      branch: {
+        code: here,
+        name: mine?.name || here,
+        isHeadOffice: Boolean(mine?.isHeadOffice),
+        canSwitch: (who.admin?.branchId || "main") === "main" && branches.length > 1,
+        view: who.tenant?.branchView || null,
+      },
+      support: { contact: process.env.SUPPORT_CONTACT || process.env.SUPPORT_EMAIL || null },
       organisation: { code: org.code, legalName: org.legalName, country: org.country, baseCurrency: org.baseCurrency, timezone: org.timezone, planCode: org.planCode, planName: plans.PLANS[org.planCode]?.name || org.planCode },
       subscription: plans.subscriptionState(org, now),
       features: plans.effectiveFeatures(org),

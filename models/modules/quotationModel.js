@@ -52,6 +52,7 @@ quotationSchema.index({ companyId: 1, "convertedTo.id": 1 }, { sparse: true });
 quotationSchema.index({ companyId: 1, createdAt: -1 });
 
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
-quotationSchema.plugin(tenantPlugin);
+// documents belong to a branch: a person working in one branch sees only that branch's (utils/tenantPlugin.js)
+quotationSchema.plugin(tenantPlugin, { branchScoped: true });
 
 module.exports = mongoose.model("Quotation", quotationSchema);

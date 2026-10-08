@@ -4,6 +4,7 @@ const AgeingService = require("./ageingService");
 const AuditService = require("../core/auditService");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
+const { allBranches } = require("../../utils/tenantContext");
 const { round2 } = require("../../utils/accounting");
 
 const ACK_FIELD = "riskAck_limit_party_credit";
@@ -61,8 +62,9 @@ class CreditControlService {
     const customer = await (session ? q.session(session) : q);
     if (!customer) return;
 
+    // A customer owes the organisation, not a branch: the overdue check reads every branch's invoices whoever is selling.
     const overdue = cfg.overdueBlockDays > 0
-      ? await AgeingService.openInvoices({ type: "receivable", partyId: transaction.partyId, session })
+      ? await allBranches(() => AgeingService.openInvoices({ type: "receivable", partyId: transaction.partyId, session }))
       : [];
     const breaches = this.evaluate({
       creditLimit: Number(customer.creditLimit) || 0,

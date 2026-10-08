@@ -10,6 +10,7 @@ const { deleteFromCloudinary } = require("../../middleware/upload");
 const { signInRefusal } = require("../../utils/subscriptionGate");
 const { subscriptionState } = require("../../utils/plans");
 const UsageService = require("./usageService");
+const Branch = require("../../models/core/branchModel");
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 // Short access tokens: a stolen one stops working within minutes, and the session cookie renews it.
@@ -163,6 +164,13 @@ const createAdmin = async (adminData, files = null, creatorId = null, actorType 
     // The plan allows only so many people. Checked after the permission and duplicate checks, so a refusal for
     // those reasons is not hidden behind this one, and inside the try so an upload is cleaned up when it refuses.
     await UsageService.assertRoom("users");
+
+    // a person belongs to a branch that exists in this organisation and is switched on (the head office is always there)
+    if (adminData.branchId && String(adminData.branchId).toLowerCase() !== "main") {
+      const code = String(adminData.branchId).toLowerCase();
+      if (!(await Branch.exists({ code, isActive: true }))) throw new AppError("That branch does not exist in this organisation", 400, "BRANCH_NOT_FOUND");
+      adminData.branchId = code;
+    }
 
     // Handle profile image
     if (files?.profileImage) {

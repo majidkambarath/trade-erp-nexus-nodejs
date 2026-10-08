@@ -45,7 +45,11 @@ const clean = (tenant) => {
   const companyId = typeof tenant?.companyId === "string" ? tenant.companyId.trim() : "";
   if (!companyId) throw new TenantScopeError("A tenant scope needs a companyId", "TENANT_INVALID");
   const branchId = typeof tenant.branchId === "string" && tenant.branchId.trim() ? tenant.branchId.trim() : DEFAULT_TENANT.branchId;
-  return Object.freeze({ companyId, branchId });
+  // The branch whose DOCUMENTS the scope may see: set for a person working in one branch (their own, or one a head
+  // office user has chosen), null for a head office looking at every branch. It narrows reads and writes of the
+  // branch-scoped models (documents) and is ignored by the rest (masters are shared by the whole organisation).
+  const branchView = typeof tenant.branchView === "string" && tenant.branchView.trim() ? tenant.branchView.trim() : null;
+  return Object.freeze({ companyId, branchId, branchView });
 };
 
 // Run `fn` for one organisation. Everything it starts - awaited or not - inherits the scope.
@@ -64,6 +68,28 @@ const runUnscoped = (reason, fn) => {
   return store.run({ tenant: null, unscoped: true, reason }, () => settle(fn()));
 };
 const unscopedStats = () => Object.fromEntries(unscopedUses);
+
+// Lift the branch view for one call that must see the WHOLE organisation whoever is asking: a customer's credit
+// exposure, what other branches have promised from the same stock. Still inside the organisation. Use it sparingly
+// and say why at the call site: it is the one way a branch user's figures reach beyond their branch.
+const allBranches = (fn) => {
+  const scope = store.getStore();
+  if (scope?.tenant?.branchView) {
+    return store.run({ ...scope, tenant: Object.freeze({ ...scope.tenant, branchView: null }) }, () => settle(fn()));
+  }
+  return settle(fn());
+};
+
+// Run `fn` writing to the branch a document belongs to, whatever branch is being worked in. A head office looking
+// at every branch can approve, change or delete a document of another branch; what that posts (ledger entries, stock
+// movements) must carry the DOCUMENT'S branch, not the head office's.
+const runInBranchOf = (doc, fn) => {
+  const scope = store.getStore();
+  const tenant = scope?.tenant;
+  const branch = doc?.branchId;
+  if (!tenant || !branch || branch === tenant.branchId) return fn();
+  return store.run({ ...scope, tenant: Object.freeze({ ...tenant, branchId: branch }) }, () => settle(fn()));
+};
 
 const currentScope = () => store.getStore();
 const isUnscoped = () => Boolean(store.getStore()?.unscoped);
@@ -85,6 +111,6 @@ const tenantForQuery = () => {
 };
 
 module.exports = {
-  DEFAULT_TENANT, TenantScopeError, runWithTenant, runUnscoped, unscopedStats,
+  DEFAULT_TENANT, TenantScopeError, runWithTenant, runUnscoped, unscopedStats, allBranches, runInBranchOf,
   currentScope, isUnscoped, ambientTenant, tenantForQuery, legacyDefaultEnabled,
 };

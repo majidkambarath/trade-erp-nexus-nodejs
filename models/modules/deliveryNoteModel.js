@@ -68,6 +68,7 @@ deliveryNoteSchema.index({ companyId: 1, "invoice.id": 1 }, { sparse: true });
 deliveryNoteSchema.index({ companyId: 1, createdAt: -1 });
 
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
-deliveryNoteSchema.plugin(tenantPlugin);
+// documents belong to a branch: a person working in one branch sees only that branch's (utils/tenantPlugin.js)
+deliveryNoteSchema.plugin(tenantPlugin, { branchScoped: true });
 
 module.exports = mongoose.model("DeliveryNote", deliveryNoteSchema);

@@ -6,6 +6,7 @@ const { CardService, groupFamily } = require("./cardService");
 const BankMasterService = require("./bankMasterService");
 const AppError = require("../../utils/AppError");
 const UsageService = require("../core/usageService");
+const plans = require("../../utils/plans");
 const { round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
 
@@ -208,9 +209,11 @@ class PaymentModeService {
       _id: a._id, accountName: a.accountName, accountCode: a.accountCode, balance: a.currentBalance || 0,
       bank: BankMasterService.describeAccountBank(a.bank, byId),
     });
-    const cards = await CardService.list(req, { active: true });
+    // Cheques and cards belong to the banking feature: without it they are not offered
+    const banking = !req?.organisation || plans.hasFeature(req.organisation, "banking");
+    const cards = banking ? await CardService.list(req, { active: true }) : [];
     return {
-      modes: MODES,
+      modes: banking ? MODES : MODES.filter((m) => m !== "cheque" && m !== "card"),
       cashAccounts: accounts.filter((a) => cashSet.has(String(a.groupId))).map(shape),
       bankAccounts: accounts.filter((a) => !cashSet.has(String(a.groupId))).map(shape),
       banks: banks.filter((b) => b.isActive).map((b) => ({ _id: b._id, bankName: b.bankName, bankCode: b.bankCode })),

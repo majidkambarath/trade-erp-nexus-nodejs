@@ -3,6 +3,8 @@ const { createAppError } = require("../utils/errorHandler");
 const Admin = require("../models/core/adminModel");
 const Organisation = require("../models/core/organisationModel");
 const { permissionsFor } = require("../utils/adminPermissions");
+const Branch = require("../models/core/branchModel");
+const AppError = require("../utils/AppError");
 const { runWithTenant, runUnscoped } = require("../utils/tenantContext");
 const { requestRefusal, warningHeaders } = require("../utils/subscriptionGate");
 
@@ -17,6 +19,27 @@ async function accountFor(decoded) {
   const organisation = await Organisation.findOne({ code: admin.companyId });
   if (!organisation) return { failure: "ORGANISATION_NOT_FOUND", message: "This account's organisation could not be found" };
   return { admin, organisation };
+}
+
+const HEAD_OFFICE = "main";
+
+// Which branch a request works in, and which branch's documents it may see.
+//   A branch user works in their own branch, always: the X-Branch header may only repeat it.
+//   A head-office user works in the head office and sees every branch, unless the header names a branch: then they
+//   work in that branch and see only it. (The header is sent by the branch switcher; it is checked every time.)
+async function resolveBranch(admin, header) {
+  const home = admin.branchId || HEAD_OFFICE;
+  const asked = String(header || "").trim().toLowerCase();
+  const active = (code) => runWithTenant({ companyId: admin.companyId, branchId: home }, () => Branch.exists({ code, isActive: true }));
+
+  if (home !== HEAD_OFFICE) {
+    if (asked && asked !== home) return { failure: new AppError("You can only work in your own branch", 403, "BRANCH_NOT_ALLOWED") };
+    if (!(await active(home))) return { failure: new AppError("Your branch has been switched off. Please contact your administrator.", 403, "BRANCH_INACTIVE") };
+    return { branchId: home, branchView: home };
+  }
+  if (!asked || asked === "all") return { branchId: HEAD_OFFICE, branchView: null };
+  if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(asked) || !(await active(asked))) return { failure: new AppError("That branch was not found", 403, "BRANCH_NOT_FOUND") };
+  return { branchId: asked, branchView: asked };
 }
 
 const identityOf = (admin) => ({
@@ -56,11 +79,14 @@ const makeAuthenticator = ({ allowBlocked = false } = {}) => async (req, res, ne
     }
     res.set(warningHeaders(organisation));
 
+    const branch = await resolveBranch(admin, req.get("x-branch"));
+    if (branch.failure) return next(branch.failure);
+
     req.admin = identityOf(admin);
     req.organisation = organisation;
-    req.tenant = { companyId: admin.companyId, branchId: admin.branchId };
+    req.tenant = { companyId: admin.companyId, branchId: branch.branchId, branchView: branch.branchView };
 
-    // Everything downstream - the route, the services, every query - runs as this organisation.
+    // Everything downstream - the route, the services, every query - runs as this organisation, in this branch.
     return runWithTenant(req.tenant, next);
   } catch (error) {
     console.error("Authentication error:", error);
