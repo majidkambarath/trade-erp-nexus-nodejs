@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const AuthSession = require("../../models/core/authSessionModel");
 const AppError = require("../../utils/AppError");
+const { permissionsFor, mayManage, withoutSystemFields } = require("../../utils/adminPermissions");
 const { deleteFromCloudinary } = require("../../middleware/upload");
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
@@ -84,7 +85,7 @@ const loginAdmin = async (email, password, ipAddress = null, context = {}) => {
     id: admin._id,
     email: admin.email,
     type: admin.type,
-    permissions: admin.permissions,
+    permissions: permissionsFor(admin.type), // derived: what an old row once stored is ignored
     name: admin.name,
   };
 
@@ -108,7 +109,23 @@ const loginAdmin = async (email, password, ipAddress = null, context = {}) => {
 };
 
 // Create new admin
-const createAdmin = async (adminData, files = null, creatorId = null) => {
+// Throws when this actor may not do this to this account. Done inside the service, after any upload, so a
+// refused request still passes through the cleanup below instead of leaving files behind.
+const assertMay = (args) => {
+  const verdict = mayManage(args);
+  if (!verdict.ok) throw new AppError(verdict.message, 403, verdict.code);
+};
+
+const createAdmin = async (adminData, files = null, creatorId = null, actorType = null) => {
+  adminData = withoutSystemFields(adminData);
+  if (!actorType) throw new AppError("Authentication required", 401, "AUTH_REQUIRED");
+  try {
+    assertMay({ actor: actorType, nextType: adminData.type, action: "create" });
+  } catch (error) {
+    if (files?.profileImage) await deleteFromCloudinary(files.profileImage.filename);
+    if (files?.companyLogo) await deleteFromCloudinary(files.companyLogo.filename);
+    throw error;
+  }
   const existing = await Admin.findOne({
     email: adminData.email.toLowerCase(),
   });
@@ -148,7 +165,11 @@ const createAdmin = async (adminData, files = null, creatorId = null) => {
 };
 
 // Update admin
-const updateAdmin = async (adminId, updateData, files = null, updatedBy = null) => {
+// policy is { actorType } for one person managing another, or { selfService: true } for the profile screen,
+// where a person edits only themselves (that route has already removed type, status and the rest). With
+// neither, it refuses: a new caller that forgets the policy must fail, not pass.
+const updateAdmin = async (adminId, updateData, files = null, updatedBy = null, policy = {}) => {
+  updateData = withoutSystemFields(updateData);
   const admin = await Admin.findById(adminId);
   if (!admin) {
     // Cleanup uploaded files if admin not found
@@ -162,6 +183,10 @@ const updateAdmin = async (adminId, updateData, files = null, updatedBy = null) 
   }
 
   try {
+    if (!policy.selfService) {
+      if (!policy.actorType) throw new AppError("Authentication required", 401, "AUTH_REQUIRED");
+      assertMay({ actor: policy.actorType, target: admin.type, nextType: updateData.type, self: String(admin._id) === String(updatedBy), action: "update" });
+    }
     // Store old image public IDs for cleanup
     const oldProfileImageId = admin.profileImage?.publicId;
     const oldCompanyLogoId = admin.companyInfo?.companyLogo?.publicId;
@@ -287,11 +312,13 @@ const getAllAdmins = async (page = 1, limit = 10, filters = {}) => {
 };
 
 // Delete admin (soft delete)
-const deleteAdmin = async (adminId, deletedBy = null) => {
+const deleteAdmin = async (adminId, deletedBy = null, actorType = null) => {
+  if (!actorType) throw new AppError("Authentication required", 401, "AUTH_REQUIRED");
   const admin = await Admin.findById(adminId);
   if (!admin) {
     throw new AppError("Admin not found", 404, "ADMIN_NOT_FOUND");
   }
+  assertMay({ actor: actorType, target: admin.type, self: String(admin._id) === String(deletedBy), action: "delete" });
 
   // Set admin as inactive instead of hard delete
   admin.isActive = false;
@@ -342,7 +369,7 @@ const refreshAccessToken = async (refreshToken) => {
     id: admin._id,
     email: admin.email,
     type: admin.type,
-    permissions: admin.permissions,
+    permissions: permissionsFor(admin.type), // derived: what an old row once stored is ignored
     name: admin.name,
   };
   const { accessToken } = generateTokens(tokenPayload, session._id);

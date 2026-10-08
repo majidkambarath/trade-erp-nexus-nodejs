@@ -53,7 +53,7 @@ exports.createAdmin = catchAsync(async (req, res) => {
     }
   }
 
-  const admin = await adminService.createAdmin(adminData, files, creatorId);
+  const admin = await adminService.createAdmin(adminData, files, creatorId, req.admin?.type);
   res.status(201).json({ 
     success: true, 
     message: "Admin created successfully", 
@@ -108,7 +108,7 @@ exports.updateAdmin = catchAsync(async (req, res) => {
     }
   }
 
-  const admin = await adminService.updateAdmin(id, updateData, files, updatedBy);
+  const admin = await adminService.updateAdmin(id, updateData, files, updatedBy, { actorType: req.admin?.type });
   res.status(200).json({
     success: true,
     message: "Admin updated successfully",
@@ -120,9 +120,6 @@ exports.updateAdmin = catchAsync(async (req, res) => {
 exports.updateProfile = catchAsync(async (req, res) => {
   const adminId = req.admin.id;
   let updateData = { ...req.body };
-  
-  console.log("Admin ID:", adminId);
-  console.log("Raw Update Data:", updateData);
   
   // Parse companyInfo if it's a string (from FormData)
   if (typeof updateData.companyInfo === 'string') {
@@ -137,8 +134,6 @@ exports.updateProfile = catchAsync(async (req, res) => {
     }
   }
   
-  console.log("Parsed Update Data:", updateData);
-
   // Handle uploaded files
   const files = {};
   if (req.files) {
@@ -150,8 +145,6 @@ exports.updateProfile = catchAsync(async (req, res) => {
     }
   }
   
-  console.log("Files:", files);
-
   // Restrict certain fields from being updated by the user themselves
   delete updateData.type;
   delete updateData.permissions;
@@ -159,9 +152,11 @@ exports.updateProfile = catchAsync(async (req, res) => {
   delete updateData.isActive;
   delete updateData.createdBy;
   delete updateData.updatedBy;
+  // The password changes only through change-password, which asks for the current one.
+  delete updateData.password;
 
   try {
-    const admin = await adminService.updateAdmin(adminId, updateData, files, adminId);
+    const admin = await adminService.updateAdmin(adminId, updateData, files, adminId, { selfService: true });
 
     res.status(200).json({
       success: true,
@@ -183,7 +178,7 @@ exports.deleteAdmin = catchAsync(async (req, res) => {
   const { id } = req.params;
   const deletedBy = req.admin?.id || null;
 
-  const result = await adminService.deleteAdmin(id, deletedBy);
+  const result = await adminService.deleteAdmin(id, deletedBy, req.admin?.type);
   res.status(200).json({
     success: true,
     message: result.message
@@ -283,7 +278,7 @@ exports.uploadProfileImage = catchAsync(async (req, res) => {
   }
 
   const files = { profileImage: req.file };
-  const admin = await adminService.updateAdmin(adminId, {}, files, adminId);
+  const admin = await adminService.updateAdmin(adminId, {}, files, adminId, { selfService: true });
   
   res.status(200).json({
     success: true,
@@ -304,7 +299,7 @@ exports.uploadCompanyLogo = catchAsync(async (req, res) => {
   }
 
   const files = { companyLogo: req.file };
-  const admin = await adminService.updateAdmin(adminId, {}, files, adminId);
+  const admin = await adminService.updateAdmin(adminId, {}, files, adminId, { selfService: true });
   
   res.status(200).json({
     success: true,

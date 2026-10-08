@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+const { permissionsFor } = require("../../utils/adminPermissions");
 
 const adminSchema = new mongoose.Schema(
   {
@@ -213,16 +214,9 @@ adminSchema.pre("save", async function (next) {
 // Pre-save hook to assign permissions
 adminSchema.pre("save", function (next) {
   if (this.isModified("type") || this.isNew) {
-    const allPermissions = [
-      "users_manage",
-      "inventory_manage",
-      "transactions_manage",
-      "transactions_approve",
-      "financial_reports",
-      "system_settings",
-      "backup_restore"
-    ];
-    this.permissions = allPermissions;
+    // By type (utils/adminPermissions.js). This used to hand all seven to every account, so a viewer
+    // could do anything a super admin could wherever permissions were checked.
+    this.permissions = permissionsFor(this.type);
   }
   next();
 });

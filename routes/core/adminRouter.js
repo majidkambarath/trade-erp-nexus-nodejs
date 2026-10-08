@@ -1,6 +1,6 @@
 const express = require("express");
 const adminController = require("../../controllers/core/adminController");
-const { authenticateToken } = require("../../middleware/authMiddleware");
+const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
 const {
   uploadSingle,
   uploadFields,
@@ -18,6 +18,14 @@ const {
 
 const router = express.Router();
 
+// Managing other people's accounts is for administrators. Whether this administrator may touch THIS account
+// (an admin cannot create or change a super admin) is decided in the service, which knows the target.
+const canManageUsers = requireRole(["super_admin", "admin"]);
+
+// A person may read their own record; reading anyone else's is for administrators.
+const selfOrManager = (req, res, next) =>
+  String(req.params.id) === String(req.admin?.id) ? next() : canManageUsers(req, res, next);
+
 // =================== PUBLIC ROUTES ===================
 router.post("/login", validateLogin, adminController.login);
 
@@ -33,6 +41,8 @@ router.get("/test", (req, res) => res.json({ message: "Admin router works!" }));
 // Admin CRUD operations
 router.post(
   "/",
+  authenticateToken,
+  canManageUsers,
   uploadFields([
     { name: "profileImage", maxCount: 1 },
     { name: "companyLogo", maxCount: 1 },
@@ -44,6 +54,7 @@ router.post(
 router.get(
   "/",
   authenticateToken,
+  canManageUsers,
   validateGetAllAdmins,
   adminController.getAllAdmins
 );
@@ -51,6 +62,7 @@ router.get(
 router.get(
   "/:id",
   authenticateToken,
+  selfOrManager,
   validateObjectId,
   adminController.getAdmin
 );
@@ -58,6 +70,7 @@ router.get(
 router.put(
   "/:id",
   authenticateToken,
+  canManageUsers,
   validateObjectId,
   uploadFields([
     { name: "profileImage", maxCount: 1 },
@@ -70,7 +83,8 @@ router.put(
 
 router.delete(
   "/:id",
-  // authenticateToken,
+  authenticateToken,
+  canManageUsers,
   validateObjectId,
   adminController.deleteAdmin
 );
@@ -135,7 +149,7 @@ router.get("/status/active", authenticateToken, (req, res, next) => {
 });
 
 // Activate/Deactivate admin
-router.patch("/:id/status", authenticateToken, async (req, res, next) => {
+router.patch("/:id/status", authenticateToken, canManageUsers, async (req, res, next) => {
   try {
     const { status } = req.body;
     if (!["active", "inactive", "suspended"].includes(status)) {
