@@ -1,8 +1,10 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 const { vatFields, creditFields, contactSchema, bankAccountSchema, documentSchema, jsonTransform, keepTrnInStep } = require("./partyMasterSchemas");
 const { isValidTerms } = require("../../utils/partyMaster");
 
 const customerSchema = new mongoose.Schema({
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
   customerId: { type: String, required: true, trim: true },
   customerName: { type: String, required: true, trim: true },
   contactPerson: { type: String, required: true, trim: true },
@@ -70,5 +72,8 @@ customerSchema.index({ createdAt: -1 }); // For sorting by creation date
 
 customerSchema.set("toJSON", { transform: jsonTransform("customer") });
 keepTrnInStep(customerSchema, "trnNumber");
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+customerSchema.plugin(tenantPlugin, { leadIndexes: true });
 
 module.exports = mongoose.model("Customer", customerSchema);

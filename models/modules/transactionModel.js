@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 
 const itemSchema = new mongoose.Schema({
   itemId: {
@@ -71,7 +72,9 @@ const lastSendSchema = new mongoose.Schema(
 );
 
 const transactionSchema = new mongoose.Schema({
-  transactionNo: { type: String, unique: true, required: true, trim: true },
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
+  branchId: { type: String, default: "main" }, // the branch it belongs to; head office is "main"
+  transactionNo: { type: String, required: true, trim: true }, // unique within an organisation: see the index below
   // Sales invoice specific fields
   docno: { type: String, default: null, trim: true },
   lpono: { type: String, default: null, trim: true },
@@ -216,5 +219,10 @@ transactionSchema.index({ isOpening: 1, type: 1, partyId: 1 });
 // falls back to an in-memory sort of every matching document.
 transactionSchema.index({ type: 1, createdAt: -1 });
 transactionSchema.index({ createdAt: -1 });
+
+transactionSchema.index({ transactionNo: 1 }, { unique: true }); // unique within an organisation - NOT per branch: a tax invoice number must be unique per taxpayer, so branches take their own prefix in the number format
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+transactionSchema.plugin(tenantPlugin, { leadIndexes: true });
 
 module.exports = mongoose.model("Transaction", transactionSchema);

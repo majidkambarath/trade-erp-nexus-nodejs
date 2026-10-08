@@ -73,10 +73,19 @@ function scopeStages(stages, tenant, tenanted) {
   }
 }
 
-function tenantPlugin(schema) {
+// options.leadIndexes: put companyId at the front of every index the schema DECLARED (schema.index(...)), so
+// "unique" means "unique within an organisation" and every query, which always carries companyId, finds an
+// index that starts with it. A field-level unique/index on a path is not covered: declare those with
+// schema.index() instead (tenantGuard fails any unique index that is left global).
+function tenantPlugin(schema, options = {}) {
   if (!schema.path("companyId")) throw new Error("tenantPlugin: this schema has no companyId path, so there is nothing to scope by");
   if (schema.options.tenantScoped) return; // already applied (a model file can be evaluated twice)
   schema.options.tenantScoped = true;
+  if (options.leadIndexes) {
+    schema._indexes = schema._indexes.map(([fields, indexOptions]) =>
+      Object.prototype.hasOwnProperty.call(fields, "companyId") ? [fields, indexOptions] : [{ companyId: 1, ...fields }, indexOptions]
+    );
+  }
   const hasBranch = Boolean(schema.path("branchId"));
 
   // ---- queries
@@ -124,9 +133,17 @@ function tenantPlugin(schema) {
     if (hasBranch && doc.branchId == null) doc.branchId = tenant.branchId;
   };
 
+  // Only a NEW document is stamped. An existing one is often loaded with only some fields (select("status")),
+  // so a missing companyId there means "not loaded", not "unassigned": stamping it would write the current
+  // organisation and branch over what is stored. An existing document is only CHECKED: if it names another
+  // organisation than the one in scope, saving it is refused.
   schema.pre("validate", function stampOnValidate() {
     const tenant = tenantForQuery();
-    if (tenant) stampDocument(this, tenant);
+    if (!tenant) return;
+    if (this.isNew) stampDocument(this, tenant);
+    else if (this.companyId != null && this.companyId !== tenant.companyId) {
+      throw crossTenant(`saving a ${this.constructor?.modelName || "document"}`, this.companyId, tenant.companyId);
+    }
   });
   schema.pre("save", function noMoving() {
     if (!this.isNew && this.isModified("companyId") && tenantForQuery()) {

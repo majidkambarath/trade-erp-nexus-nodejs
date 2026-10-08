@@ -5,6 +5,7 @@ const CompanySettings = require("../../models/modules/financial/companySettingsM
 const AccountGroupService = require("./accountGroupService");
 const AccountConfigService = require("./accountConfigService");
 const TaxCodeService = require("./taxCodeService");
+const Organisation = require("../../models/core/organisationModel");
 const PostingService = require("./postingService");
 const AuditService = require("../core/auditService");
 const { backfillPartyAccounts } = require("./partyAccounts");
@@ -99,7 +100,11 @@ class DefaultChartService {
     }
     await settings.save();
 
-    created.taxCodes = await TaxCodeService.ensureStarter(companyId);
+    // The starter tax codes are the UAE's (VAT 5%, zero-rated, exempt, out of scope). An organisation in another
+    // country must not be handed another country's tax: it adds its own in Accounting setup. One with no
+    // registry row (the older single-company set-up) keeps the old behaviour.
+    const organisation = await Organisation.findOne({ code: companyId }).select("country").lean();
+    if (!organisation || organisation.country === "AE") created.taxCodes = await TaxCodeService.ensureStarter(companyId);
     return created;
   }
 

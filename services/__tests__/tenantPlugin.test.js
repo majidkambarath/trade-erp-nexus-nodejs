@@ -257,3 +257,27 @@ test("queries inside a transaction are scoped as well", { skip }, async () => {
   }
   assert.equal((await raw(() => Widget.findOne({ name: "in-tx" }).lean())).companyId, "A");
 });
+
+test("a document loaded with only some fields can be changed and saved, and keeps its organisation and branch", { skip }, async () => {
+  // Code loads documents with select("status") and saves them all the time. The missing companyId there means
+  // "not loaded", not "unassigned": stamping it would have written the current organisation over the stored one
+  // (and then tripped the rule against moving a document between organisations).
+  const made = await as("A", () => Widget.create({ name: "partial-load", qty: 1 }), "dxb");
+  await as("A", async () => {
+    const partial = await Widget.findById(made._id).select("name qty"); // no companyId, no branchId
+    assert.equal(partial.companyId, undefined, "not loaded");
+    partial.qty = 99;
+    await partial.save();
+  }, "ajm"); // saved from a different branch than the one it was made in
+  const stored = await raw(() => Widget.findById(made._id).lean());
+  assert.equal(stored.qty, 99, "the change was saved");
+  assert.equal(stored.companyId, "A", "the organisation was not overwritten");
+  assert.equal(stored.branchId, "dxb", "and neither was the branch: an existing document keeps the branch it was made in");
+});
+
+test("saving a document that belongs to another organisation is refused, even loaded in full", { skip }, async () => {
+  const bs = await raw(() => Widget.findOne({ companyId: "B", name: "only-B" })); // a full document of B's
+  bs.qty = 1234;
+  await as("A", () => assert.rejects(() => bs.save(), { code: "CROSS_TENANT" }));
+  assert.notEqual((await raw(() => Widget.findById(bs._id).lean())).qty, 1234, "B's row was not written by A");
+});

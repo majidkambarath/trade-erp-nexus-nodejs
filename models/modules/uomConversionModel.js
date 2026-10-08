@@ -1,6 +1,8 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 
 const uomConversionSchema = new mongoose.Schema({
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
   fromUOM: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'UOM', 
@@ -38,5 +40,8 @@ uomConversionSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
   next();
 });
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+uomConversionSchema.plugin(tenantPlugin, { leadIndexes: true });
 
 module.exports = mongoose.model("UOMConversion", uomConversionSchema);

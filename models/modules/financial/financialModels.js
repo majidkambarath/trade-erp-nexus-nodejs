@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 // Voucher Line Item Schema
 const voucherLineSchema = new mongoose.Schema({
@@ -23,10 +24,11 @@ const voucherLineSchema = new mongoose.Schema({
 
 // Voucher Schema
 const voucherSchema = new mongoose.Schema({
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
+  branchId: { type: String, default: "main" }, // the branch it belongs to; head office is "main"
   voucherNo: {
     type: String,
-    unique: true,
-    required: true,
+    required: true, // unique within an organisation: see the index below
     trim: true,
   },
   voucherType: {
@@ -265,10 +267,16 @@ voucherSchema.index({ createdBy: 1, createdAt: -1 }); // For FinancialService.ge
 // the currency register and "is this currency used?"; only foreign-currency vouchers are indexed
 voucherSchema.index({ currency: 1, voucherType: 1, date: -1 }, { partialFilterExpression: { foreignAmount: { $exists: true } } });
 
+voucherSchema.index({ voucherNo: 1 }, { unique: true }); // unique within an organisation
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+voucherSchema.plugin(tenantPlugin, { leadIndexes: true });
+
 const Voucher = mongoose.model("Voucher", voucherSchema);
 
 // Ledger Account Schema
 const ledgerAccountSchema = new mongoose.Schema({
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
   accountCode: {
     type: String,
     required: false,
@@ -373,10 +381,15 @@ ledgerAccountSchema.index({ accountType: 1, subType: 1 }); // For FinancialServi
 ledgerAccountSchema.index({ isActive: 1, allowDirectPosting: 1 }); // For FinancialService.processJournalVoucher
 ledgerAccountSchema.index({ groupId: 1, accountCode: 1 });
 
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+ledgerAccountSchema.plugin(tenantPlugin, { leadIndexes: true });
+
 const LedgerAccount = mongoose.model("LedgerAccount", ledgerAccountSchema);
 
 // Ledger Entry Schema
 const ledgerEntrySchema = new mongoose.Schema({
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
+  branchId: { type: String, default: "main" }, // the branch it belongs to; head office is "main"
   voucherId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Voucher",
@@ -471,6 +484,9 @@ ledgerEntrySchema.index({ voucherId: 1, accountId: 1, date: 1 }); // For Financi
 ledgerEntrySchema.index({ accountId: 1, date: 1 }); // For FinancialService.getTrialBalance
 ledgerEntrySchema.index({ partyId: 1, partyType: 1 }); // For FinancialService.getPartyStatement
 ledgerEntrySchema.index({ financialYear: 1, month: 1 }); // For FinancialService.getFinancialReports
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+ledgerEntrySchema.plugin(tenantPlugin, { leadIndexes: true });
 
 const LedgerEntry = mongoose.model("LedgerEntry", ledgerEntrySchema);
 

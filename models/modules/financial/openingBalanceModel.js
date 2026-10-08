@@ -40,7 +40,7 @@ const openingBalanceSchema = new mongoose.Schema(
     companyId: { type: String, required: true },
     branchId: { type: String, required: true },
     section: { type: String, enum: ["accounts", "stock"], required: true },
-    voucherNo: { type: String, required: true, unique: true, trim: true },
+    voucherNo: { type: String, required: true, trim: true }, // unique within an organisation: see below
     date: { type: Date, required: true },
     narration: { type: String, trim: true },
     // accounts
@@ -62,6 +62,7 @@ const openingBalanceSchema = new mongoose.Schema(
 );
 
 openingBalanceSchema.index({ companyId: 1, section: 1, status: 1, date: -1 });
+openingBalanceSchema.index({ companyId: 1, voucherNo: 1 }, { unique: true }); // unique within an organisation
 
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
 openingBalanceSchema.plugin(tenantPlugin);

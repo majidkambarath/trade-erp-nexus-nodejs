@@ -70,10 +70,12 @@ test("provisioning says plainly what is done, what was skipped and what is waiti
   assert.equal(steps.fiscalYear.state, "done");
   assert.equal(steps.taxCodes.state, "skipped", "there is no starter tax set for Saudi Arabia");
   assert.match(steps.taxCodes.reason, /SA/);
-  assert.equal(steps.chart.state, "pending", "the chart of accounts waits until the ledger is separated by organisation");
-  assert.match(steps.chart.reason, /ledger/);
-  assert.equal(complete, false, "an organisation with a pending chart is not reported as complete");
-  assert.equal(await inOrg(org.code, () => svc.TaxCode.countDocuments()), 0);
+  assert.equal(steps.chart.state, "done", "the chart is provisioned now that the ledger is separated by organisation");
+  assert.equal(complete, true, "every step is done or knowingly skipped, so the organisation is complete");
+  assert.equal(await inOrg(org.code, () => svc.TaxCode.countDocuments()), 0, "skipped tax codes stay skipped: nothing was invented");
+  const accounts = await inOrg(org.code, () => mongoose.models.LedgerAccount.countDocuments());
+  assert.ok(accounts > 10, "it has a chart of its own");
+  assert.equal(await inOrg("default", () => mongoose.models.LedgerAccount.countDocuments()), 0, "and the original organisation was not touched by it");
 });
 
 test("a UAE organisation gets the UAE VAT starter codes; a second one's masters never mix with the first's", { skip }, async () => {

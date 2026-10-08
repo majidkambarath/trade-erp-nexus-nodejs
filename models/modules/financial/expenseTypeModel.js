@@ -1,7 +1,9 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 const expenseCategorySchema = new mongoose.Schema(
   {
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
     name: {
       type: String,
       required: [true, "Category name is required"],
@@ -75,5 +77,8 @@ expenseCategorySchema.index(
     background: true,
   }
 );
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+expenseCategorySchema.plugin(tenantPlugin, { leadIndexes: true });
 
 module.exports = mongoose.model("ExpenseCategory", expenseCategorySchema);

@@ -194,10 +194,12 @@ test("status defaults from the TRN, the legacy field still works on its own, and
   const again = await svc.Customers.updateCustomer(legacy._id, { trnNumber: TRN_C });
   assert.equal(again.vat.status, "registered");
 
-  // a record saved before the block existed: no vat in the database, derived on the way out
+  // a record saved before the block existed: no vat in the database, derived on the way out. It is written with
+  // the raw driver, as an older version left it, but it already carries the organisation the start-up migration
+  // assigns to every old row: without one it would (rightly) be invisible to every organisation.
   const rawId = new mongoose.Types.ObjectId();
   await svc.Customer.collection.insertOne({
-    _id: rawId, customerId: "RAWC1", customerName: "Pre-Master Customer", contactPerson: "x", trnNumber: "ABC-OLD-TRN", paymentTerms: "Net 45",
+    _id: rawId, companyId: "default", customerId: "RAWC1", customerName: "Pre-Master Customer", contactPerson: "x", trnNumber: "ABC-OLD-TRN", paymentTerms: "Net 45",
     status: "Active", creditLimit: 0, createdAt: new Date(), updatedAt: new Date(),
   });
   const raw = await svc.Customer.findById(rawId);

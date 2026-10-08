@@ -1,10 +1,11 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 const transactorSchema = new mongoose.Schema({
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
   accountCode: {
     type: String,
     required: true,
-    unique: true,
     match: /^[A-Z]{3}\d{3}$/,
     trim: true,
   },
@@ -82,5 +83,10 @@ transactorSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
 transactorSchema.index({ accountCode: 1, isActive: 1, deletedAt: 1 }); // For FinancialService.processContraVoucher
 transactorSchema.index({ accountType: 1 }); // For filtering by type
 transactorSchema.index({ isActive: 1 }); // For active transactor filtering
+
+transactorSchema.index({ accountCode: 1 }, { unique: true }); // unique within an organisation
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+transactorSchema.plugin(tenantPlugin, { leadIndexes: true });
 
 module.exports = mongoose.model("Transactor", transactorSchema);

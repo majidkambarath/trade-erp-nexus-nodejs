@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 
 const inventoryMovementSchema = new mongoose.Schema({
   stockId: { 
@@ -106,8 +107,8 @@ const inventoryMovementSchema = new mongoose.Schema({
   poolQtyAfter: { type: Number, default: null },
   // Cost of goods sold for a sales dispatch (quantity x average cost); null for other events.
   cogsAmount: { type: Number, default: null },
-  companyId: { type: String, default: null },
-  branchId: { type: String, default: null },
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
+  branchId: { type: String, default: "main" }, // the branch; head office is "main"
   isReversed: {
     type: Boolean,
     default: false
@@ -154,5 +155,8 @@ inventoryMovementSchema.statics.getStockAtDate = async function(stockId, date) {
   
   return movements.reduce((total, movement) => total + movement.quantity, 0);
 };
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+inventoryMovementSchema.plugin(tenantPlugin, { leadIndexes: true });
 
 module.exports = mongoose.model("InventoryMovement", inventoryMovementSchema);

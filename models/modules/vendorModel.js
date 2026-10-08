@@ -1,8 +1,10 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 const { vatFields, creditFields, contactSchema, bankAccountSchema, documentSchema, jsonTransform, keepTrnInStep } = require("./partyMasterSchemas");
 const { isValidTerms } = require("../../utils/partyMaster");
 
 const vendorSchema = new mongoose.Schema({
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
   vendorId: { type: String, required: true, trim: true },
   vendorName: { type: String, required: true, trim: true },
   trnNO: { type: String, default: null }, // kept equal to vat.trn
@@ -56,5 +58,8 @@ vendorSchema.index({ createdAt: -1 }); // For sorting by creation date
 
 vendorSchema.set("toJSON", { transform: jsonTransform("vendor") });
 keepTrnInStep(vendorSchema, "trnNO");
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+vendorSchema.plugin(tenantPlugin, { leadIndexes: true });
 
 module.exports = mongoose.model("Vendor", vendorSchema);

@@ -1,6 +1,8 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 
 const debitLogSchema = new mongoose.Schema({
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
   vendorId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Vendor",
@@ -24,5 +26,8 @@ const debitLogSchema = new mongoose.Schema({
   },
   createdBy: { type: String, required: true },
 }, { timestamps: true });
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+debitLogSchema.plugin(tenantPlugin, { leadIndexes: true });
 
 module.exports = mongoose.model("DebitLog", debitLogSchema);

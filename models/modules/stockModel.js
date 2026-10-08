@@ -1,8 +1,10 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 
 const stockSchema = new mongoose.Schema({
-  itemId: { type: String, unique: true, required: true },
-  sku: { type: String, unique: true, required: true },
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
+  itemId: { type: String, required: true }, // unique within an organisation: see below
+  sku: { type: String, required: true }, // unique within an organisation: see below
   itemName: { type: String, required: true },
   category: {
     type: mongoose.Schema.Types.ObjectId,
@@ -50,5 +52,11 @@ stockSchema.pre("findOneAndUpdate", function (next) {
   this.set({ updatedAt: Date.now() });
   next();
 });
+
+stockSchema.index({ itemId: 1 }, { unique: true }); // unique within an organisation
+stockSchema.index({ sku: 1 }, { unique: true }); // unique within an organisation
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+stockSchema.plugin(tenantPlugin, { leadIndexes: true });
 
 module.exports = mongoose.model("Stock", stockSchema);

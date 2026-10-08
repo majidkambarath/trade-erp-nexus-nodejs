@@ -1,9 +1,11 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 
 const stockPurchaseLogSchema = new mongoose.Schema({
+  companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
+  branchId: { type: String, default: "main" }, // the branch it belongs to; head office is "main"
   transactionNo: {
     type: String,
-    unique: true,
     required: [true, "Transaction number is required"],
     trim: true,
   },
@@ -106,5 +108,10 @@ stockPurchaseLogSchema.pre("findOneAndUpdate", function (next) {
   next();
 });
 
+
+stockPurchaseLogSchema.index({ transactionNo: 1 }, { unique: true }); // unique within an organisation
+
+// Scope every query and write to the organisation in scope, and make every declared index per-organisation.
+stockPurchaseLogSchema.plugin(tenantPlugin, { leadIndexes: true });
 
 module.exports = mongoose.model("StockPurchaseLog", stockPurchaseLogSchema);
