@@ -75,6 +75,10 @@ mongodb()
   .then(() => require("./utils/migrations").runMigrations())
   .then((done) => { if (Object.values(done).some(Boolean)) console.log("[migrations]", done); })
   .catch((err) => console.error("[migrations] failed:", err.message))
+  // the organisation that existed before organisations did becomes a real one, with its head office
+  .then(() => require("./services/core/organisationService").ensureDefault())
+  .then((adopted) => { if (adopted) console.log("[organisations] adopted the original organisation:", adopted.code); })
+  .catch((err) => console.error("[organisations] could not adopt the original organisation:", err.message))
   // a company that never chose otherwise has ledger posting on, and every customer / vendor its
   // account, from the first start (not only once somebody opens the chart of accounts)
   .then(() => require("./services/financial/defaultChartService").onOpen({}))
