@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 const fiscalYearSchema = new mongoose.Schema(
   {
@@ -23,5 +24,8 @@ fiscalYearSchema.pre("validate", function (next) {
   }
   next();
 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+fiscalYearSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.model("FiscalYear", fiscalYearSchema);

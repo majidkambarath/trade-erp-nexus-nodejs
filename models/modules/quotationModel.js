@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 const { baseLineFields, chargeSchema, pricingSchema, linkSchema } = require("./salesDocumentParts");
 
 // An offer to a customer. Posts nothing and moves no stock (see utils/salesDocuments.js); when the
@@ -49,5 +50,8 @@ quotationSchema.index({ companyId: 1, status: 1, date: -1 });
 quotationSchema.index({ companyId: 1, partyId: 1, date: -1 });
 quotationSchema.index({ companyId: 1, "convertedTo.id": 1 }, { sparse: true });
 quotationSchema.index({ companyId: 1, createdAt: -1 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+quotationSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.model("Quotation", quotationSchema);

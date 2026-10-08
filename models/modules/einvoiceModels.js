@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 const { STATUSES } = require("../../utils/eInvoice");
 
 const settingsSchema = new mongoose.Schema(
@@ -76,6 +77,11 @@ const inboundSchema = new mongoose.Schema(
 );
 inboundSchema.index({ companyId: 1, providerId: 1 }, { unique: true });
 inboundSchema.index({ companyId: 1, status: 1, createdAt: -1 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+settingsSchema.plugin(tenantPlugin);
+submissionSchema.plugin(tenantPlugin);
+inboundSchema.plugin(tenantPlugin);
 
 module.exports = {
   EInvoiceSettings: mongoose.model("EInvoiceSettings", settingsSchema),

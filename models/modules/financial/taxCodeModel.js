@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 // A tax code says HOW a line is taxed, not just at what percentage: zero-rated and exempt supplies
 // are both 0% but are reported differently on the VAT return (and on an e-invoice).
@@ -20,6 +21,9 @@ const taxCodeSchema = new mongoose.Schema(
 );
 
 taxCodeSchema.index({ companyId: 1, name: 1 }, { unique: true });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+taxCodeSchema.plugin(tenantPlugin);
 
 const TaxCode = mongoose.model("TaxCode", taxCodeSchema);
 TaxCode.KINDS = KINDS;

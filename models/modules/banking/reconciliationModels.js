@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 const { Schema } = mongoose;
 
 // ---------------------------------------------------------------------------------------------
@@ -222,6 +223,15 @@ const setupSchema = new Schema(
 setupSchema.index({ companyId: 1, accountId: 1 }, { unique: true });
 
 const m = (name, schema) => mongoose.models[name] || mongoose.model(name, schema);
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+importSchema.plugin(tenantPlugin);
+lineSchema.plugin(tenantPlugin);
+matchSchema.plugin(tenantPlugin);
+reconciliationSchema.plugin(tenantPlugin);
+cardSettlementSchema.plugin(tenantPlugin);
+profileSchema.plugin(tenantPlugin);
+setupSchema.plugin(tenantPlugin);
 
 module.exports = {
   BankStatementImport: m("BankStatementImport", importSchema),

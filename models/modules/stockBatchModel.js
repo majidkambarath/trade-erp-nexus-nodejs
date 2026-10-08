@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 
 // A batch is a property of a RECEIPT, not of the product: the same item arrives in several lots
 // with different expiry dates. Quantity and expiry live here; cost stays in the item's weighted
@@ -25,5 +26,8 @@ const stockBatchSchema = new mongoose.Schema(
 stockBatchSchema.index({ companyId: 1, stockId: 1, status: 1, expiryDate: 1, receivedAt: 1 });
 stockBatchSchema.index({ companyId: 1, expiryDate: 1 });
 stockBatchSchema.index({ sourceTransactionId: 1 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+stockBatchSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.model("StockBatch", stockBatchSchema);

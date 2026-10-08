@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 // A stored file. The bytes live on disk under uploads/attachments (never served statically); this
 // row is the access-controlled record. Documents that reference a file carry its id.
@@ -23,5 +24,8 @@ const attachmentSchema = new mongoose.Schema(
 );
 
 attachmentSchema.index({ companyId: 1, ownerType: 1, ownerId: 1 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+attachmentSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.model("Attachment", attachmentSchema);

@@ -8,6 +8,7 @@ const { ShareLink, DocumentSend } = require("../../models/modules/messagingModel
 const Transaction = require("../../models/modules/transactionModel");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
+const { runWithTenant, runUnscoped } = require("../../utils/tenantContext");
 const { newToken, parseToken, secretMatches } = require("../../utils/shareToken");
 const { coarseIp } = require("../../middleware/rateLimit");
 const { isAllowedOrigin, normalizeOrigin } = require("../../utils/allowedOrigins");
@@ -61,7 +62,11 @@ class ShareService {
   static async resolve(token) {
     const parsed = parseToken(token);
     if (!parsed) throw notFound();
-    const link = await ShareLink.findOne({ publicId: parsed.publicId });
+    // The one lookup that has no organisation to scope by: a customer's browser knows only the secret link.
+    // It finds the row by its selector, then everything after runs AS the organisation the row names.
+    const link = await runUnscoped("public share link reader: finds the row by its secret selector, the organisation is read from the row", () =>
+      ShareLink.findOne({ publicId: parsed.publicId })
+    );
     if (!link || !secretMatches(parsed.secret, link.secretHash)) throw notFound();
     const company = link.snapshot?.company?.companyName || null;
     if (link.revokedAt) throw new AppError("This link has been withdrawn.", 410, "SHARE_REVOKED", { company });
@@ -71,13 +76,19 @@ class ShareService {
 
   // Every raw fetch, person or mail scanner. It proves nothing about a person, so it only counts.
   static async recordFetch(link) {
-    await ShareLink.updateOne({ _id: link._id }, { $inc: { fetchCount: 1 }, $set: { lastFetchAt: new Date() } });
+    await runWithTenant({ companyId: link.companyId }, () =>
+      ShareLink.updateOne({ _id: link._id }, { $inc: { fetchCount: 1 }, $set: { lastFetchAt: new Date() } })
+    );
   }
 
   // The page sends this once it has really loaded: that is a person (or a browser, at least). The
   // first one is stamped on the link, the send and the invoice.
   static async recordView(token, req) {
     const link = await this.resolve(token);
+    return runWithTenant({ companyId: link.companyId, branchId: link.branchId }, () => this._recordView(link, req));
+  }
+
+  static async _recordView(link, req) {
     const now = new Date();
     const view = { at: now, ip: coarseIp(req.headers?.["x-forwarded-for"]?.split(",")[0].trim() || req.ip), ua: String(req.get?.("user-agent") || "").slice(0, 120) };
     await ShareLink.updateOne(

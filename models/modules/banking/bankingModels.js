@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 // ---------------------------------------------------------------------------------------------
 // Bank master: the banks the company deals with (its own and its customers'/vendors').
@@ -127,6 +128,12 @@ const chequeSchema = new mongoose.Schema(
 chequeSchema.index({ companyId: 1, status: 1, chequeDate: 1 });
 chequeSchema.index({ companyId: 1, voucherId: 1 });
 chequeSchema.index({ companyId: 1, direction: 1, chequeNo: 1 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+bankSchema.plugin(tenantPlugin);
+cardTypeSchema.plugin(tenantPlugin);
+cardSchema.plugin(tenantPlugin);
+chequeSchema.plugin(tenantPlugin);
 
 const BankMaster = mongoose.models.BankMaster || mongoose.model("BankMaster", bankSchema);
 const CardType = mongoose.models.CardType || mongoose.model("CardType", cardTypeSchema);

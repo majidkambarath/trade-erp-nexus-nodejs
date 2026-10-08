@@ -4,6 +4,7 @@
 // to a customer five times (a new accounts contact, a chase, a typo in the address). The guard
 // against a double click is on the REQUEST (idempotencyKey), not on the document.
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 
 const DOC_TYPES = ["tax_invoice", "quotation", "delivery_note", "statement"];
 const SOURCE_TYPES = ["Transaction", "Quotation", "DeliveryNote", "Customer"];
@@ -134,6 +135,11 @@ const shareSchema = new mongoose.Schema(
 );
 shareSchema.index({ companyId: 1, sourceType: 1, sourceId: 1, createdAt: -1 });
 shareSchema.index({ companyId: 1, expiresAt: 1 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+settingsSchema.plugin(tenantPlugin);
+sendSchema.plugin(tenantPlugin);
+shareSchema.plugin(tenantPlugin);
 
 module.exports = {
   MessagingSettings: mongoose.model("MessagingSettings", settingsSchema),

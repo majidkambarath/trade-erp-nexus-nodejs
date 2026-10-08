@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 // Append-only record of who changed what. Configuration changes (account mapping, e-invoice
 // settings, period close) are logged as well as documents, because those are what an auditor
@@ -23,5 +24,8 @@ const activityLogSchema = new mongoose.Schema(
 activityLogSchema.index({ companyId: 1, at: -1 });
 activityLogSchema.index({ companyId: 1, entity: 1, entityId: 1, at: -1 });
 activityLogSchema.index({ companyId: 1, action: 1, at: -1 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+activityLogSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.model("ActivityLog", activityLogSchema);

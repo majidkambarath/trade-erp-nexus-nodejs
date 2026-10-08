@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 // ---------------------------------------------------------------------------------------------
 // Currency master. One row per currency the company deals in; exactly one is the base currency
@@ -39,6 +40,10 @@ const exchangeRateSchema = new mongoose.Schema(
   { timestamps: true }
 );
 exchangeRateSchema.index({ companyId: 1, code: 1, effectiveDate: 1 }, { unique: true });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+currencySchema.plugin(tenantPlugin);
+exchangeRateSchema.plugin(tenantPlugin);
 
 const Currency = mongoose.models.Currency || mongoose.model("Currency", currencySchema);
 const ExchangeRate = mongoose.models.ExchangeRate || mongoose.model("ExchangeRate", exchangeRateSchema);

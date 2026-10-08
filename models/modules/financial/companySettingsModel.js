@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 // The posting map: which ledger account a business event posts to. Posting code asks for a
 // configKey ("vat-sales") and never hard-codes an account. An unmapped key makes posting
@@ -67,5 +68,8 @@ const companySettingsSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+companySettingsSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.model("CompanySettings", companySettingsSchema);

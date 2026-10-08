@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 // One counter per {company, branch, series, fiscal year}. Allocation is a single atomic
 // $inc (see services/core/numberSeriesService.js), so concurrent requests can never receive
@@ -20,5 +21,8 @@ numberSeriesSchema.index(
   { companyId: 1, branchId: 1, series: 1, fiscalYear: 1 },
   { unique: true }
 );
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+numberSeriesSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.model("NumberSeries", numberSeriesSchema);

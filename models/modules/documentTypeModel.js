@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 
 // A kind of KYC document a customer or vendor can hold (trade licence, Emirates ID...). It says
 // whether the document expires and how long its number may be, so the party form can check both.
@@ -21,5 +22,8 @@ const documentTypeSchema = new mongoose.Schema(
 // Case-insensitive names, so "passport" and "Passport" cannot both exist.
 documentTypeSchema.index({ companyId: 1, name: 1 }, { unique: true, collation: { locale: "en", strength: 2 } });
 documentTypeSchema.index({ companyId: 1, code: 1 }, { unique: true });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+documentTypeSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.models.DocumentType || mongoose.model("DocumentType", documentTypeSchema);

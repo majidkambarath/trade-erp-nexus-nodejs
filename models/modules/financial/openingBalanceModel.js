@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 // One go-live submission that posts a single ledger voucher: either account balances (the trial
 // balance) or opening stock. Customer and vendor opening invoices are not stored here - they are
@@ -61,5 +62,8 @@ const openingBalanceSchema = new mongoose.Schema(
 );
 
 openingBalanceSchema.index({ companyId: 1, section: 1, status: 1, date: -1 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+openingBalanceSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.model("OpeningBalanceVoucher", openingBalanceSchema);

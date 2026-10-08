@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 const CATEGORIES = ["ASSET", "LIABILITY", "INCOME", "EXPENSE", "EQUITY"];
 
@@ -22,6 +23,9 @@ const accountGroupSchema = new mongoose.Schema(
 accountGroupSchema.index({ companyId: 1, name: 1 }, { unique: true });
 accountGroupSchema.index({ companyId: 1, prefix: 1 }, { unique: true });
 accountGroupSchema.index({ companyId: 1, parentGroup: 1 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+accountGroupSchema.plugin(tenantPlugin);
 
 const AccountGroup = mongoose.model("AccountGroup", accountGroupSchema);
 AccountGroup.CATEGORIES = CATEGORIES;

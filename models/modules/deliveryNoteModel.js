@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../utils/tenantPlugin");
 const { baseLineFields, chargeSchema, pricingSchema, linkSchema } = require("./salesDocumentParts");
 
 // The paper that travels with the goods, signed by whoever receives them. It posts nothing and moves
@@ -65,5 +66,8 @@ deliveryNoteSchema.index({ companyId: 1, partyId: 1, date: -1 });
 deliveryNoteSchema.index({ companyId: 1, "source.id": 1 }, { sparse: true });
 deliveryNoteSchema.index({ companyId: 1, "invoice.id": 1 }, { sparse: true });
 deliveryNoteSchema.index({ companyId: 1, createdAt: -1 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+deliveryNoteSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.model("DeliveryNote", deliveryNoteSchema);

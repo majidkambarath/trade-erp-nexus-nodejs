@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const tenantPlugin = require("../../../utils/tenantPlugin");
 
 // A VAT return as it stood when it was finalised: the boxes are copied here so that a later change
 // to a document cannot silently restate a return that has been prepared or filed. The live figures
@@ -36,5 +37,8 @@ const vatReturnSchema = new mongoose.Schema(
 
 vatReturnSchema.index({ companyId: 1, returnNo: 1 }, { unique: true });
 vatReturnSchema.index({ companyId: 1, periodFrom: 1, periodTo: 1 });
+
+// Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
+vatReturnSchema.plugin(tenantPlugin);
 
 module.exports = mongoose.model("VATReturn", vatReturnSchema);
