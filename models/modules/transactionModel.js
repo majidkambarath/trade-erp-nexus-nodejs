@@ -63,6 +63,13 @@ const closedShortSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// How a document last went to the customer (services/messaging). Written when a send settles, so a list
+// can say "Emailed 6 Oct" without a join. The full history is the DocumentSend log.
+const lastSendSchema = new mongoose.Schema(
+  { sendId: mongoose.Schema.Types.ObjectId, channel: String, status: String, provider: String, at: Date, to: String, openedAt: Date, error: String },
+  { _id: false }
+);
+
 const transactionSchema = new mongoose.Schema({
   transactionNo: { type: String, unique: true, required: true, trim: true },
   // Sales invoice specific fields
@@ -160,6 +167,7 @@ const transactionSchema = new mongoose.Schema({
   creditNoteIssued: { type: Boolean, default: false },
   // A sales order the customer will not take the rest of (utils/closeShort.js).
   closedShort: { type: closedShortSchema, default: undefined },
+  lastSend: { type: lastSendSchema, default: undefined },
   createdBy: { type: String, required: true, trim: true },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

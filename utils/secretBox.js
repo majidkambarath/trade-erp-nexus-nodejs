@@ -1,13 +1,16 @@
-// Encrypts secrets (ASP API keys, webhook secrets) at rest with AES-256-GCM. The key is
-// EINVOICE_SECRET_KEY (64 hex chars) when set, otherwise derived from JWT_SECRET. Secrets are
-// decrypted only inside the server and are never returned by any API.
+// Encrypts secrets (ASP and email provider API keys, webhook secrets) at rest with AES-256-GCM. The
+// key is SECRET_BOX_KEY (64 hex chars) when set, else EINVOICE_SECRET_KEY (its earlier name), else
+// derived from JWT_SECRET - in which case rotating JWT_SECRET makes every stored secret unreadable.
+// Secrets are decrypted only inside the server and are never returned by any API.
 const crypto = require("crypto");
 
 function key() {
-  const k = process.env.EINVOICE_SECRET_KEY;
-  if (k && /^[0-9a-f]{64}$/i.test(k)) return Buffer.from(k, "hex");
+  for (const name of ["SECRET_BOX_KEY", "EINVOICE_SECRET_KEY"]) {
+    const k = process.env[name];
+    if (k && /^[0-9a-f]{64}$/i.test(k)) return Buffer.from(k, "hex");
+  }
   const base = process.env.JWT_SECRET;
-  if (!base) throw new Error("Set EINVOICE_SECRET_KEY (or JWT_SECRET) to store integration secrets");
+  if (!base) throw new Error("Set SECRET_BOX_KEY (or JWT_SECRET) to store integration secrets");
   return crypto.scryptSync(base, "erp-einvoice-secrets", 32);
 }
 

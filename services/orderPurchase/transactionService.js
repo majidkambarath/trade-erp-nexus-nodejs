@@ -22,6 +22,7 @@ const DebitLog = require("../../models/modules/DebitLog");
 const CreditLog = require("../../models/modules/CreditLog");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const DocumentLinks = require("./deliveryNoteLinks");
+const ShareService = require("../messaging/shareService");
 
 function logInbound(tag, payload) {
   try {
@@ -312,6 +313,7 @@ class TransactionService {
       assertStatusNotForced(data.status);
       // closing an order short is its own action (orderCloseService), never a field of an edit
       delete data.closedShort;
+      delete data.lastSend; // written only when a send settles (services/messaging)
 
       // A draft sales order may already have delivery notes against its lines: keep each line's id so they stay
       // linked, and refuse an edit that would take away goods a note covers.
@@ -438,6 +440,9 @@ class TransactionService {
       await Transaction.findByIdAndDelete(id).session(session);
       // Delivery notes and quotations that pointed at this order are released.
       await DocumentLinks.onSalesOrderChanged(transaction, { session, deleted: true });
+      // The online link a customer was sent no longer points at anything that exists. Fire and forget:
+      // failing to withdraw it must never fail the delete.
+      ShareService.revokeFor("Transaction", transaction._id, "The document was deleted");
       return removed;
     }
   );
@@ -869,6 +874,7 @@ const logAmount = balanceEffect;
             dueDate: { $first: "$dueDate" },
             // a sales order the customer will not take the rest of (without its reopen copy, dropped above)
             closedShort: { $first: "$closedShort" },
+            lastSend: { $first: "$lastSend" },
 
             // keep the raw lookup arrays
             customerData: { $first: "$customerData" },

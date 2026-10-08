@@ -7,6 +7,7 @@ const CreditLog = require("../../models/modules/CreditLog");
 const ActivityLog = require("../../models/modules/financial/activityLogModel");
 const { LedgerEntry, Voucher } = require("../../models/modules/financial/financialModels");
 const { EInvoiceSubmission } = require("../../models/modules/einvoiceModels");
+const { DocumentSend, ShareLink } = require("../../models/modules/messagingModels");
 const AccountConfigService = require("../financial/accountConfigService");
 const { getTenant } = require("../../utils/tenant");
 const AppError = require("../../utils/AppError");
@@ -88,7 +89,7 @@ class DocumentAuditService {
     const partyKey = doc.partyType === "Vendor" ? "vendorId" : "customerId";
     const { companyId } = getTenant();
 
-    const [entries, movements, partyRows, settlements, activity, einvoice, postingEnabled, party] =
+    const [entries, movements, partyRows, settlements, activity, einvoice, sends, shares, postingEnabled, party] =
       await Promise.all([
         LedgerEntry.find({ voucherId: doc._id }).sort({ createdAt: 1, _id: 1 }).lean(),
         InventoryMovement.find({ referenceType: "Transaction", referenceId: doc._id })
@@ -106,6 +107,17 @@ class DocumentAuditService {
           .lean(),
         EInvoiceSubmission.findOne({ companyId, sourceType: "Transaction", sourceId: doc._id })
           .select("documentNo status taxStatus attempts lastError submittedAt acknowledgedAt reportedAt")
+          .lean(),
+        // how it went to the customer: every email and WhatsApp hand-over, and the links made for them
+        DocumentSend.find({ companyId, sourceType: "Transaction", sourceId: doc._id })
+          .select("channel status to phone subject sentAt failedAt lastError lastErrorCode openedAt sentByName attempts attachment.fileName attachment.bytes shareLinkId createdAt")
+          .sort({ createdAt: -1 })
+          .limit(50)
+          .lean(),
+        ShareLink.find({ companyId, sourceType: "Transaction", sourceId: doc._id })
+          .select("publicId expiresAt revokedAt revokeReason fetchCount viewCount firstViewedAt createdAt")
+          .sort({ createdAt: -1 })
+          .limit(50)
           .lean(),
         AccountConfigService.isPostingEnabled().catch(() => false),
         this.partyName(doc),
@@ -185,6 +197,8 @@ class DocumentAuditService {
         };
       }),
       einvoice: einvoice || null,
+      sends,
+      shares,
       activity: activity.map((a) => ({
         _id: a._id,
         at: a.at,

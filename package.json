@@ -24,6 +24,7 @@
     "mongoose": "^8.16.4",
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
+    "nodemailer": "^10.0.16",
     "nodemon": "^3.1.10",
     "path-to-regexp": "^1.8.0"
   }

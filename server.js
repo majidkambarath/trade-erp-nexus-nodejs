@@ -34,8 +34,9 @@ const port = process.env.PORT || 4444;
 
 // Middleware
 app.use(express.static("public"));
-// rawBody is kept so signed webhooks (e-invoice inbound) can be verified byte for byte.
-app.use(express.json({ limit: "50mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
+// rawBody is kept so signed webhooks (e-invoice inbound) can be verified byte for byte. Only for those:
+// keeping a copy of every JSON body of every request would hold a large upload in memory twice.
+app.use(express.json({ limit: "50mb", verify: (req, _res, buf) => { if (req.originalUrl.includes("/webhook")) req.rawBody = buf; } }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 app.use(cookieParser()); // the session cookie (controllers/core/adminController.js)
 
@@ -44,22 +45,9 @@ app.use(cookieParser()); // the session cookie (controllers/core/adminController
 // CORS_ORIGINS (comma separated), so a new frontend URL or custom domain needs no code change.
 // Unknown origins are refused: the old version logged "change this in production" and then
 // allowed everyone anyway, which with credentials: true let any site ride a logged-in session.
-const DEFAULT_ALLOWED_ORIGINS = [
-  "http://localhost:5173", // vite dev server
-  "http://localhost:4173", // vite preview
-  "http://localhost:3000",
-  "http://localhost:8080",
-  "https://zarvia.onrender.com", // deployed frontend
-];
-
-// Trailing slashes are stripped so "https://x.com/" in the env var still matches the Origin
-// header, which never carries one.
-const normalizeOrigin = (value) => value.trim().replace(/[/]+$/, "");
-
-const allowedOrigins = [
-  ...DEFAULT_ALLOWED_ORIGINS,
-  ...(process.env.CORS_ORIGINS || "").split(",").map(normalizeOrigin).filter(Boolean),
-];
+// The trusted browser origins live in utils/allowedOrigins.js, because the messaging service needs the
+// same list to decide which frontend a customer's document link points at.
+const { allowedOrigins, normalizeOrigin } = require("./utils/allowedOrigins");
 
 const corsOptions = {
   origin: function (origin, callback) {
@@ -74,7 +62,7 @@ const corsOptions = {
     );
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "x-secret-key", "Authorization"],
+  allowedHeaders: ["Content-Type", "x-secret-key", "Authorization", "Idempotency-Key"],
   credentials: true,
   preflightContinue: false,
   optionsSuccessStatus: 204,
@@ -121,6 +109,8 @@ app.use("/api/v1/currencies", require("./routes/financial/currencyRoutes")); // 
 app.use("/api/v1/quotations", require("./routes/orderPurchase/quotationRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/delivery-notes", require("./routes/orderPurchase/deliveryNoteRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/document-flow", require("./routes/orderPurchase/documentFlowRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/messaging", require("./routes/messaging/messagingRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/share", require("./routes/messaging/shareRoutes")); // PUBLIC (no login): the document link a customer opens
 app.use("/api/v1", adminRouter);
 app.use("/api/v1/vendors", vendorRouter);
 app.use("/api/v1/customers", customerRouter);
@@ -156,6 +146,10 @@ app.listen(port, () => {
 // e-Invoicing: once a minute, retry deliveries that failed and poll the ones in flight. A no-op
 // for a company that has not enabled e-invoicing.
 const EInvoiceService = require("./services/einvoice/einvoiceService");
+// Messaging: the same minute, the same idea: retry emails that failed for a temporary reason, and wipe any
+// message held past a day. A no-op while sending is switched off.
+const MessagingService = require("./services/messaging/messagingService");
 setInterval(() => {
   EInvoiceService.processDue().catch((err) => console.error("[einvoice] background pass failed:", err.message));
+  MessagingService.processDue().catch((err) => console.error("[messaging] background pass failed:", err.message));
 }, 60000).unref();

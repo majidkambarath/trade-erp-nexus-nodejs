@@ -31,7 +31,7 @@ class DocumentFlowService {
         .select("deliveryNoteNo status date deliveredAt totalAmount invoiceStatus source invoice reference receivedBy items.sourceLineId items.qty items.deliveredQty")
         .sort(newest).limit(LIMIT + 1).lean(),
       Transaction.find({ partyId, type: "sales_order", isOpening: { $ne: true } })
-        .select("transactionNo status date totalAmount quoteRef linkedRef lpono paidAmount outstandingAmount items._id items.qty items.description closedShort.at closedShort.reason closedShort.trimmed closedShort.valueShort closedShort.lines")
+        .select("transactionNo status date totalAmount quoteRef linkedRef lpono paidAmount outstandingAmount items._id items.qty items.description closedShort.at closedShort.reason closedShort.trimmed closedShort.valueShort closedShort.lines lastSend")
         .sort(newest).limit(LIMIT + 1).lean(),
     ]);
     const truncated = [quotations, notes, orders].some((rows) => rows.length > LIMIT);

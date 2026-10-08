@@ -13,15 +13,7 @@
 // is not built yet: when it is, it is a second provider implementing these same two methods, and
 // nothing else in the pipeline (payload, validation, state machine, retries) changes.
 
-class ProviderError extends Error {
-  constructor(message, { retryable = true, status, raw } = {}) {
-    super(message);
-    this.name = "ProviderError";
-    this.retryable = retryable;
-    this.status = status;
-    this.raw = raw;
-  }
-}
+const { ProviderError } = require("../../utils/providerError");
 
 // The sandbox needs no account. Its behaviour is driven by the buyer's name so every path of the
 // pipeline can be exercised: "NETFAIL" -> temporary network failure, "BADREQ" -> payload refused,
