@@ -4,6 +4,7 @@ const AuditService = require("../../services/core/auditService");
 const DocumentAuditService = require("../../services/orderPurchase/documentAuditService");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
+const roles = require("../../utils/permissions");
 
 // Helper to resolve createdBy consistently
 const resolveCreatedBy = (req) =>
@@ -61,7 +62,16 @@ exports.createTransaction = catchAsync(async (req, res) => {
 
 // Get all transactions
 exports.getAllTransactions = catchAsync(async (req, res) => {
-  const result = await TransactionService.getAllTransactions(req.query);
+  // One list serves all four document types, so the route can only ask that SOME of them may be seen. Narrow it to the
+  // types this person may: a sales clerk's unfiltered list holds sales documents only, and asking for a type they may
+  // not see is refused rather than quietly returning nothing.
+  const allowed = roles.viewableTypes(req.admin?.grants);
+  const asked = [].concat(req.query.type || []).flatMap((t) => String(t).split(",")).filter(Boolean);
+  const refused = asked.filter((t) => !allowed.includes(t));
+  if (refused.length) {
+    throw new AppError("Your role does not allow you to see these documents.", 403, "PERMISSION_DENIED", { required: [...new Set(refused.map((t) => `${roles.moduleOfType(t)}.view`))], role: req.admin?.role?.key || null });
+  }
+  const result = await TransactionService.getAllTransactions({ ...req.query, type: asked.length ? asked : allowed });
   sendPaginated(res, result);
 });
 // Get transaction by ID
@@ -119,12 +129,18 @@ exports.processTransaction = catchAsync(async (req, res) => {
       400
     );
 
+  // Pressing "approve anyway" on a credit warning is a decision of its own, and not everyone who may approve may make it.
+  const acknowledged = req.body?.[CreditControlService.ACK_FIELD] === true;
+  if (acknowledged && !roles.can(req.admin?.grants, "sales.creditOverride")) {
+    throw new AppError("Your role does not allow you to approve a sale past a customer's credit limit.", 403, "PERMISSION_DENIED", { required: ["sales.creditOverride"], role: req.admin?.role?.key || null });
+  }
+
   const transaction = await TransactionService.processTransaction(
     req.params.id,
     action,
     resolveCreatedBy(req),
     // Each risk warning has its own acknowledgement field, so one cannot acknowledge another.
-    { acknowledged: req.body?.[CreditControlService.ACK_FIELD] === true, req }
+    { acknowledged, req }
   );
   await logProcessed(req, transaction, action);
   res.status(200).json({ status: "success", data: { transaction } });

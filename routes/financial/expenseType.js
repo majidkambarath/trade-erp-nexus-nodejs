@@ -8,16 +8,17 @@ const {
   updateCategory,
 } = require("../../controllers/financial/expenseTypeController");
 
+const { requirePermission } = require("../../middleware/permissionGate");
 const router = express.Router();
 
 // Apply authentication middleware to all routes
 router.use(authenticateToken);
 
 // Expense Type CRUD routes
-router.post("/categories", createCategory);
-router.get("/categories", getAllCategories);
-router.get("/categories/:id", getCategoryById);
-router.put("/categories/:id", updateCategory);
-router.delete("/categories/:id", deleteCategory);
+router.post("/categories", requirePermission("finance.create"), createCategory);
+router.get("/categories", requirePermission(["finance.view","lookups.view"]), getAllCategories);
+router.get("/categories/:id", requirePermission(["finance.view","lookups.view"]), getCategoryById);
+router.put("/categories/:id", requirePermission("finance.create"), updateCategory);
+router.delete("/categories/:id", requirePermission("finance.delete"), deleteCategory);
 
 module.exports = router;

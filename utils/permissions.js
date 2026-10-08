@@ -328,6 +328,15 @@ function validateCustomRole({ key, name, rank, permissions }, actor, { isNew = t
   return { ok: Object.keys(errors).length === 0, errors };
 }
 
+// One router serves all four trade documents, so what a person may do to one depends on its TYPE, not its address.
+const DOCUMENT_MODULE = { sales_order: "sales", sales_return: "sales", purchase_order: "purchase", purchase_return: "purchase" };
+
+/** The module a trade document belongs to. An unknown type is treated as sales: the request is refused further on anyway. */
+const moduleOfType = (type) => DOCUMENT_MODULE[type] || "sales";
+
+/** The document types a person may look at, from what they hold: sales.view brings the sales ones, purchase.view the purchase ones. */
+const viewableTypes = (granted) => Object.keys(DOCUMENT_MODULE).filter((t) => can(granted, `${DOCUMENT_MODULE[t]}.view`));
+
 /** The seven coarse permissions the access token has always carried, derived from the real grants. */
 function legacyPermissions(grants, rank = 0) {
   const g = new Set(grants || []);
@@ -356,5 +365,5 @@ const catalogue = () =>
 module.exports = {
   MODULES, MODULE_KEYS, KEYS, ALL_KEYS, IMPLIES, BUILT_IN, BUILT_IN_KEYS, LEGACY_TYPES, TOP_RANK,
   isKey, isRead, isBuiltIn, expand, unknownKeys, resolveRole, grantsOf, roleKeyOf, can, canAny, mayManage,
-  validateCustomRole, legacyPermissions, catalogue,
+  validateCustomRole, legacyPermissions, catalogue, DOCUMENT_MODULE, moduleOfType, viewableTypes,
 };

@@ -1,22 +1,22 @@
 const express = require("express");
 const { requireFeature } = require("../../middleware/featureGate");
-const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
+const { authenticateToken } = require("../../middleware/authMiddleware");
 const c = require("../../controllers/reports/vatReturnController");
 
 // Mounted at /api/v1/vat-return. Reading is open to any signed-in admin; preparing, finalising and
 // filing a return needs an admin or super admin.
+const { requirePermission } = require("../../middleware/permissionGate");
 const router = express.Router();
 router.use(authenticateToken);
 router.use(requireFeature("vatReturn"));
-const canChange = requireRole(["super_admin", "admin"]);
 
-router.get("/return", c.compute);
-router.get("/detail", c.detail);
-router.get("/returns", c.list);
-router.get("/returns/:id", c.get);
-router.post("/returns", canChange, c.createDraft);
-router.post("/returns/:id/finalize", canChange, c.finalize);
-router.post("/returns/:id/file", canChange, c.file);
-router.delete("/returns/:id", canChange, c.remove);
+router.get("/return", requirePermission("reports.financial"), c.compute);
+router.get("/detail", requirePermission("reports.financial"), c.detail);
+router.get("/returns", requirePermission("reports.financial"), c.list);
+router.get("/returns/:id", requirePermission("reports.financial"), c.get);
+router.post("/returns", requirePermission("reports.vat"), c.createDraft);
+router.post("/returns/:id/finalize", requirePermission("reports.vat"), c.finalize);
+router.post("/returns/:id/file", requirePermission("reports.vat"), c.file);
+router.delete("/returns/:id", requirePermission("reports.vat"), c.remove);
 
 module.exports = router;

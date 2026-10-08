@@ -6,13 +6,14 @@ const { authenticateToken } = require("../../middleware/authMiddleware");
 //   movementValidationRules,
 // } = require("../validations/movementValidation");
 
+const { requirePermission } = require("../../middleware/permissionGate");
 const router = express.Router();
 
 router.use(authenticateToken);
 
-router.post("/inventory", InventoryMovementController.createMovement);
-router.get("/inventory", InventoryMovementController.getAllMovements);
-router.get("/inventory/stats", InventoryMovementController.getMovementStats);
-router.get("/inventory/:id", InventoryMovementController.getMovementById);
+router.post("/inventory", requirePermission("inventory.adjust"), InventoryMovementController.createMovement);
+router.get("/inventory", requirePermission("inventory.view"), InventoryMovementController.getAllMovements);
+router.get("/inventory/stats", requirePermission("inventory.view"), InventoryMovementController.getMovementStats);
+router.get("/inventory/:id", requirePermission("inventory.view"), InventoryMovementController.getMovementById);
 
 module.exports = router;

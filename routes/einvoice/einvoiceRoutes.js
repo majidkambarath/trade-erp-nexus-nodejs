@@ -1,6 +1,6 @@
 const express = require("express");
 const { requireFeature } = require("../../middleware/featureGate");
-const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
+const { authenticateToken } = require("../../middleware/authMiddleware");
 const catchAsync = require("../../utils/catchAsync");
 const EInvoiceService = require("../../services/einvoice/einvoiceService");
 const InboundService = require("../../services/einvoice/inboundService");
@@ -10,6 +10,7 @@ const Organisation = require("../../models/core/organisationModel");
 const AppError = require("../../utils/AppError");
 const { runWithTenant, DEFAULT_TENANT } = require("../../utils/tenantContext");
 
+const { requirePermission, publicRoute } = require("../../middleware/permissionGate");
 const router = express.Router();
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
 
@@ -29,18 +30,15 @@ const webhook = (organisationCode) =>
     });
     ok(res, { id: result.invoice._id, duplicate: result.duplicate }, result.duplicate ? 200 : 201);
   });
-router.post("/inbound/webhook/:org", webhook((req) => req.params.org));
-router.post("/inbound/webhook", webhook(() => DEFAULT_TENANT.companyId));
+router.post("/inbound/webhook/:org", publicRoute("a signed e-invoice delivery: verified by HMAC over the raw body, no login"), webhook((req) => req.params.org));
+router.post("/inbound/webhook", publicRoute("a signed e-invoice delivery: verified by HMAC over the raw body, no login"), webhook(() => DEFAULT_TENANT.companyId));
 
 router.use(authenticateToken);
 router.use(requireFeature("einvoicing"));
-const canChange = requireRole(["super_admin", "admin"]);
-const canSend = requireRole(["super_admin", "admin", "manager"]);
 
-router.get("/settings", catchAsync(async (req, res) => ok(res, await EInvoiceService.getSettings(req))));
+router.get("/settings", requirePermission(["settings.view","reports.financial"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.getSettings(req))));
 router.put(
-  "/settings",
-  canChange,
+  "/settings", requirePermission("settings.manage"),
   catchAsync(async (req, res) => {
     const out = await EInvoiceService.updateSettings(req.body, req);
     // never log the secrets themselves
@@ -49,28 +47,28 @@ router.put(
   })
 );
 
-router.get("/readiness", catchAsync(async (req, res) => ok(res, await EInvoiceService.readiness(req))));
-router.patch("/parties/:id", canChange, catchAsync(async (req, res) => ok(res, await EInvoiceService.updateParty(req.params.id, req.body))));
+router.get("/readiness", requirePermission(["settings.view","reports.financial","sales.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.readiness(req))));
+router.patch("/parties/:id", requirePermission("sales.create"), catchAsync(async (req, res) => ok(res, await EInvoiceService.updateParty(req.params.id, req.body))));
 
-router.get("/documents", catchAsync(async (req, res) => ok(res, await EInvoiceService.documents(req, req.query))));
-router.get("/preview/:transactionId", catchAsync(async (req, res) => ok(res, await EInvoiceService.preview(req.params.transactionId, req))));
-router.post("/submit/:transactionId", canSend, catchAsync(async (req, res) => {
+router.get("/documents", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.documents(req, req.query))));
+router.get("/preview/:transactionId", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.preview(req.params.transactionId, req))));
+router.post("/submit/:transactionId", requirePermission("sales.approve"), catchAsync(async (req, res) => {
   const r = await EInvoiceService.submit(req.params.transactionId, req);
   ok(res, r, r.alreadySubmitted ? 200 : 201);
 }));
 
-router.get("/submissions", catchAsync(async (req, res) => ok(res, await EInvoiceService.listSubmissions(req, req.query))));
-router.get("/submissions/:id", catchAsync(async (req, res) => ok(res, await EInvoiceService.getSubmission(req.params.id, req))));
-router.post("/submissions/:id/retry", canSend, catchAsync(async (req, res) => ok(res, await EInvoiceService.retry(req.params.id, req))));
-router.post("/submissions/:id/refresh", catchAsync(async (req, res) => ok(res, await EInvoiceService.refresh(req.params.id, req))));
-router.get("/dashboard", catchAsync(async (req, res) => ok(res, await EInvoiceService.dashboard(req))));
+router.get("/submissions", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.listSubmissions(req, req.query))));
+router.get("/submissions/:id", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.getSubmission(req.params.id, req))));
+router.post("/submissions/:id/retry", requirePermission("sales.approve"), catchAsync(async (req, res) => ok(res, await EInvoiceService.retry(req.params.id, req))));
+router.post("/submissions/:id/refresh", requirePermission("sales.approve"), catchAsync(async (req, res) => ok(res, await EInvoiceService.refresh(req.params.id, req))));
+router.get("/dashboard", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.dashboard(req))));
 
-router.get("/inbound", catchAsync(async (req, res) => ok(res, await InboundService.list(req, req.query))));
-router.post("/inbound", canChange, catchAsync(async (req, res) => {
+router.get("/inbound", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await InboundService.list(req, req.query))));
+router.post("/inbound", requirePermission("purchase.create"), catchAsync(async (req, res) => {
   const r = await InboundService.ingest(req.body, { source: "manual", req });
   ok(res, { id: r.invoice._id, duplicate: r.duplicate, matchNote: r.invoice.matchNote }, r.duplicate ? 200 : 201);
 }));
-router.post("/inbound/:id/accept", canSend, catchAsync(async (req, res) => ok(res, await InboundService.decide(req.params.id, "ACCEPTED", req.body, req))));
-router.post("/inbound/:id/reject", canSend, catchAsync(async (req, res) => ok(res, await InboundService.decide(req.params.id, "REJECTED", req.body, req))));
+router.post("/inbound/:id/accept", requirePermission("purchase.approve"), catchAsync(async (req, res) => ok(res, await InboundService.decide(req.params.id, "ACCEPTED", req.body, req))));
+router.post("/inbound/:id/reject", requirePermission("purchase.approve"), catchAsync(async (req, res) => ok(res, await InboundService.decide(req.params.id, "REJECTED", req.body, req))));
 
 module.exports = router;

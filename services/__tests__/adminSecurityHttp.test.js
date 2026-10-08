@@ -98,7 +98,7 @@ test("a viewer or manager cannot create an account", { skip }, async () => {
   for (const who of ["viewer", "mgr"]) {
     const r = await call("POST", "/", { token: tok[who], body: { name: "X", email: `x-${who}@test.uae`, password: PASSWORD, type: "viewer" } });
     assert.equal(r.status, 403, who);
-    assert.equal(r.code, "INSUFFICIENT_ROLE");
+    assert.equal(r.code, "PERMISSION_DENIED");
   }
   assert.equal(await Admin.findOne({ email: /^x-/ }), null);
 });

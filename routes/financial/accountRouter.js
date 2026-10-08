@@ -2,35 +2,36 @@ const express = require("express");
 const { authenticateToken } = require("../../middleware/authMiddleware");
 const AccountController = require("../../controllers/financial/accountController");
 const { uploadSingle } = require("../../middleware/upload");
+const { requirePermission } = require("../../middleware/permissionGate");
 const router = express.Router();
 
 router.use(authenticateToken);
 
 router.post(
-  "/account-vouchers",
+  "/account-vouchers", requirePermission("finance.create"),
   uploadSingle("attachedProof"),
   AccountController.createAccountVoucher
 );
-router.get("/account-vouchers", AccountController.getAllAccountVouchers);
-router.get("/account-vouchers/:id", AccountController.getAccountVoucherById);
+router.get("/account-vouchers", requirePermission("finance.view"), AccountController.getAllAccountVouchers);
+router.get("/account-vouchers/:id", requirePermission("finance.view"), AccountController.getAccountVoucherById);
 router.put(
-  "/account-vouchers/:id",
+  "/account-vouchers/:id", requirePermission("finance.create"),
   uploadSingle("attachedProof"),
   AccountController.updateAccountVoucher
 );
-router.delete("/account-vouchers/:id", AccountController.deleteAccountVoucher);
+router.delete("/account-vouchers/:id", requirePermission("finance.delete"), AccountController.deleteAccountVoucher);
 
 router.patch(
-  "/account-vouchers/:id/approve",
+  "/account-vouchers/:id/approve", requirePermission("finance.approve"),
   AccountController.processAccountVoucherApproval
 );
 router.get(
-  "/account-vouchers/pending/approvals",
+  "/account-vouchers/pending/approvals", requirePermission("finance.view"),
   AccountController.getPendingAccountVouchers
 );
 
-router.get("/account-vouchers/export/data", AccountController.exportAccountVouchers);
+router.get("/account-vouchers/export/data", requirePermission("reports.financial"), AccountController.exportAccountVouchers);
 
-router.get("/account-vouchers/type/:type", AccountController.getAccountVouchersByType);
+router.get("/account-vouchers/type/:type", requirePermission("finance.view"), AccountController.getAccountVouchersByType);
 
 module.exports = router;

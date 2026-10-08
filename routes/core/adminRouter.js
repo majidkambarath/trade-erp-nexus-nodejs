@@ -1,6 +1,7 @@
 const express = require("express");
 const adminController = require("../../controllers/core/adminController");
-const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
+const { authenticateToken } = require("../../middleware/authMiddleware");
+const { requirePermission, selfOr, signedIn, publicRoute } = require("../../middleware/permissionGate");
 const {
   uploadSingle,
   uploadFields,
@@ -18,23 +19,14 @@ const {
 
 const router = express.Router();
 
-// Managing other people's accounts is for administrators. Whether this administrator may touch THIS account
-// (an admin cannot create or change a super admin) is decided in the service, which knows the target.
-const canManageUsers = requireRole(["super_admin", "admin"]);
-
-// A person may read their own record; reading anyone else's is for administrators.
-const selfOrManager = (req, res, next) =>
-  String(req.params.id) === String(req.admin?.id) ? next() : canManageUsers(req, res, next);
-
+// Managing other people's accounts needs users.manage (seeing them, users.view). Whether this person may touch THIS
+// account - one of a lower rank than their own - is decided in the service, which knows the target.
 // =================== PUBLIC ROUTES ===================
-router.post("/login", validateLogin, adminController.login);
+router.post("/login", publicRoute("signing in: there is no one to check yet"), validateLogin, adminController.login);
 
-router.post("/refresh-token", adminController.refreshToken);
+router.post("/refresh-token", publicRoute("renewing a session: the session cookie is the credential"), adminController.refreshToken);
 
-router.post("/logout", adminController.logout);
-
-// Test route
-router.get("/test", (req, res) => res.json({ message: "Admin router works!" }));
+router.post("/logout", publicRoute("ending a session: the session cookie names it"), adminController.logout);
 
 // =================== PROTECTED ROUTES ===================
 
@@ -42,7 +34,7 @@ router.get("/test", (req, res) => res.json({ message: "Admin router works!" }));
 router.post(
   "/",
   authenticateToken,
-  canManageUsers,
+  requirePermission("users.manage"),
   uploadFields([
     { name: "profileImage", maxCount: 1 },
     { name: "companyLogo", maxCount: 1 },
@@ -54,7 +46,7 @@ router.post(
 router.get(
   "/",
   authenticateToken,
-  canManageUsers,
+  requirePermission("users.view"),
   validateGetAllAdmins,
   adminController.getAllAdmins
 );
@@ -62,7 +54,7 @@ router.get(
 router.get(
   "/:id",
   authenticateToken,
-  selfOrManager,
+  selfOr("users.view"),
   validateObjectId,
   adminController.getAdmin
 );
@@ -70,7 +62,7 @@ router.get(
 router.put(
   "/:id",
   authenticateToken,
-  canManageUsers,
+  requirePermission("users.manage"),
   validateObjectId,
   uploadFields([
     { name: "profileImage", maxCount: 1 },
@@ -84,7 +76,7 @@ router.put(
 router.delete(
   "/:id",
   authenticateToken,
-  canManageUsers,
+  requirePermission("users.manage"),
   validateObjectId,
   adminController.deleteAdmin
 );
@@ -92,12 +84,13 @@ router.delete(
 // =================== PROFILE ROUTES ===================
 
 // Get current admin profile
-router.get("/profile/me", authenticateToken, adminController.getProfile);
+router.get("/profile/me", authenticateToken, signedIn("a person's own profile"), adminController.getProfile);
 
 // Update current admin profile
 router.put(
   "/profile/me",
   authenticateToken,
+  signedIn("a person's own profile"),
   uploadFields([
     { name: "profileImage", maxCount: 1 },
     { name: "companyLogo", maxCount: 1 },
@@ -110,6 +103,7 @@ router.put(
 router.put(
   "/profile/change-password",
   authenticateToken,
+  signedIn("a person's own password"),
   validateChangePassword,
   adminController.changePassword
 );
@@ -120,6 +114,7 @@ router.put(
 router.post(
   "/profile/upload-image",
   authenticateToken,
+  signedIn("a person's own picture"),
   uploadSingle("profileImage"),
   handleUploadError,
   adminController.uploadProfileImage
@@ -129,6 +124,7 @@ router.post(
 router.post(
   "/profile/upload-logo",
   authenticateToken,
+  signedIn("a person's own company copy of the letterhead"),
   uploadSingle("companyLogo"),
   handleUploadError,
   adminController.uploadCompanyLogo
@@ -137,19 +133,19 @@ router.post(
 // =================== ADMIN MANAGEMENT ROUTES ===================
 
 // Get admins by type
-router.get("/type/:type", authenticateToken, (req, res, next) => {
+router.get("/type/:type", authenticateToken, requirePermission("users.view"), (req, res, next) => {
   req.query.type = req.params.type;
   adminController.getAllAdmins(req, res, next);
 });
 
 // Get active admins only
-router.get("/status/active", authenticateToken, (req, res, next) => {
+router.get("/status/active", authenticateToken, requirePermission("users.view"), (req, res, next) => {
   req.query.status = "active";
   adminController.getAllAdmins(req, res, next);
 });
 
 // Activate/Deactivate admin
-router.patch("/:id/status", authenticateToken, canManageUsers, async (req, res, next) => {
+router.patch("/:id/status", authenticateToken, requirePermission("users.manage"), async (req, res, next) => {
   try {
     const { status } = req.body;
     if (!["active", "inactive", "suspended"].includes(status)) {

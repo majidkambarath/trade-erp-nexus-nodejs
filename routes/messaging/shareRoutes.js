@@ -10,6 +10,7 @@ const catchAsync = require("../../utils/catchAsync");
 const { rateLimit } = require("../../middleware/rateLimit");
 const ShareService = require("../../services/messaging/shareService");
 
+const { publicRoute } = require("../../middleware/permissionGate");
 const router = express.Router();
 
 // A bearer link must never be cached, indexed or passed on in a Referer header.
@@ -23,14 +24,14 @@ const byAddress = rateLimit({ windowMs: 5 * 60 * 1000, max: 60, code: "SHARE_RAT
 // One leaked link cannot be used as a bandwidth amplifier whatever addresses it comes from.
 const byLink = rateLimit({ windowMs: 60 * 60 * 1000, max: 120, key: (req) => String(req.params.token || "").split(".")[0], code: "SHARE_RATE_LIMIT", message: TOO_MANY });
 
-router.get("/:token", byAddress, byLink, catchAsync(async (req, res) => {
+router.get("/:token", publicRoute("a customer opens the link they were sent; the secret in it is the credential"), byAddress, byLink, catchAsync(async (req, res) => {
   const link = await ShareService.resolve(req.params.token);
   await ShareService.recordFetch(link);
   res.status(200).json({ success: true, data: { ...link.snapshot, expiresAt: link.expiresAt } });
 }));
 
 // Sent by the page once it has really loaded, which a mail scanner does not do.
-router.post("/:token/viewed", byAddress, byLink, catchAsync(async (req, res) => {
+router.post("/:token/viewed", publicRoute("the customer's page reports that it was opened; the secret in the link is the credential"), byAddress, byLink, catchAsync(async (req, res) => {
   await ShareService.recordView(req.params.token, req);
   res.status(204).end();
 }));

@@ -1,26 +1,26 @@
 const express = require("express");
-const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
+const { authenticateToken } = require("../../middleware/authMiddleware");
 const c = require("../../controllers/financial/openingBalanceController");
 
 // Mounted at /api/v1/opening-balances. Reading is open to any signed-in admin; posting or
 // reversing an opening balance needs an admin or super admin, like the rest of the accounting setup.
+const { requirePermission } = require("../../middleware/permissionGate");
 const router = express.Router();
 router.use(authenticateToken);
-const canChange = requireRole(["super_admin", "admin"]);
 
-router.get("/summary", c.summary);
-router.put("/go-live", canChange, c.setGoLive);
+router.get("/summary", requirePermission("accounts.view"), c.summary);
+router.put("/go-live", requirePermission("accounts.manage"), c.setGoLive);
 
-router.get("/accounts", c.listAccounts);
-router.post("/accounts", canChange, c.postAccounts);
-router.delete("/accounts/:id", canChange, c.reverseAccounts);
+router.get("/accounts", requirePermission("accounts.view"), c.listAccounts);
+router.post("/accounts", requirePermission("accounts.manage"), c.postAccounts);
+router.delete("/accounts/:id", requirePermission("accounts.manage"), c.reverseAccounts);
 
-router.get("/parties", c.listParties); // ?type=customer|vendor
-router.post("/parties", canChange, c.postParties);
-router.delete("/parties/:id", canChange, c.reverseParty);
+router.get("/parties", requirePermission("accounts.view"), c.listParties); // ?type=customer|vendor
+router.post("/parties", requirePermission("accounts.manage"), c.postParties);
+router.delete("/parties/:id", requirePermission("accounts.manage"), c.reverseParty);
 
-router.get("/stock", c.listStock);
-router.post("/stock", canChange, c.postStock);
-router.delete("/stock/:id", canChange, c.reverseStock);
+router.get("/stock", requirePermission("accounts.view"), c.listStock);
+router.post("/stock", requirePermission("accounts.manage"), c.postStock);
+router.delete("/stock/:id", requirePermission("accounts.manage"), c.reverseStock);
 
 module.exports = router;

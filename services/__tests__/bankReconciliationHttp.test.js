@@ -125,7 +125,7 @@ test("anyone signed in can read; only an admin can change", { skip }, async () =
   ]) {
     const r = await call(method, `${REC}${url}`, { body, token: S.viewer });
     assert.equal(r.status, 403, `${method} ${url}`);
-    assert.equal(r.data.errorCode, "INSUFFICIENT_ROLE");
+    assert.equal(r.data.errorCode, "PERMISSION_DENIED");
   }
 });
 
