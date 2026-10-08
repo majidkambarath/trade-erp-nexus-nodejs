@@ -21,7 +21,7 @@ async function boot() {
   child.stderr.on("data", (d) => (logs += d));
   const deadline = Date.now() + 60000;
   for (;;) {
-    try { if ((await fetch(`http://127.0.0.1:${port}/api/v1/health`)).ok) break; } catch (_) { /* not up yet */ }
+    try { { const h = await fetch(`http://127.0.0.1:${port}/api/v1/health`); if (h.ok && (await h.json()).ready !== false) break; } } catch (_) { /* not up yet */ }
     if (Date.now() > deadline) { child.kill(); throw new Error(`server did not start:\n${logs.slice(-1500)}`); }
     await new Promise((r) => setTimeout(r, 400));
   }

@@ -49,7 +49,7 @@ test.before(async () => {
   const deadline = Date.now() + 60000;
   for (;;) {
     try {
-      if ((await fetch(`${BASE}/health`)).ok) break;
+      { const h = await fetch(`${BASE}/health`); if (h.ok && (await h.json()).ready !== false) break; }
     } catch (_) { /* not up yet */ }
     if (Date.now() > deadline) throw new Error(`server did not start:\n${logs.slice(-1500)}`);
     await new Promise((r) => setTimeout(r, 400));

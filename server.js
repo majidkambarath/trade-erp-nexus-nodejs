@@ -115,6 +115,9 @@ app.get("/api/v1/health", (req, res) => {
   res.json({
     success: true,
     message: "Server is running successfully",
+    // false until the start-up work (migrations, adopting the original organisation) is done: the server answers while it
+    // is still building a fresh database, and a sign-in in that window would be refused. Health checks may ignore it.
+    ready: organisationsSettled,
     timestamp: new Date().toISOString(),
   });
 });
