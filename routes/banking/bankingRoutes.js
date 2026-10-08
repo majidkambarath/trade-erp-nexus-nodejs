@@ -1,16 +1,18 @@
 const express = require("express");
+const { requireFeature } = require("../../middleware/featureGate");
 const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
 const c = require("../../controllers/banking/bankingController");
 
 const router = express.Router();
 router.use(authenticateToken);
+router.use(requireFeature("banking"));
 
 // Anyone signed in can read the masters (the voucher forms need them); changing them, and acting
 // on a cheque, needs an admin or super admin.
 const canChange = requireRole(["super_admin", "admin"]);
 
 // Bank statement import, matching and reconciliation, and card settlement: /api/v1/banking/reconciliation/*
-router.use("/reconciliation", require("./reconciliationRoutes"));
+router.use("/reconciliation", requireFeature("reconciliation"), require("./reconciliationRoutes"));
 
 router.get("/payment-options", c.paymentOptions);
 

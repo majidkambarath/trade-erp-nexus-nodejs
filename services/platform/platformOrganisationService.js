@@ -182,7 +182,7 @@ class PlatformOrganisationService {
       if (await this.emailTaken(input.email)) throw new AppError("That email already belongs to a user of an organisation", 409, "EMAIL_EXISTS");
       const used = await Admin.countDocuments({ isActive: true, status: "active" });
       const room = plans.checkLimit(org, "users", used);
-      if (!room.ok) throw new AppError(`This organisation is limited to ${room.limit} users and already has ${room.used}. Raise its limit first.`, 403, "LIMIT_REACHED", { limit: "users", ...room });
+      if (!room.ok) throw new AppError(`This organisation is limited to ${room.limit} users and already has ${room.used}. Raise its limit first.`, 403, "LIMIT_REACHED", { resource: "users", ...room });
       const branchId = input.branchId || HEAD_OFFICE;
       if (!(await Branch.exists({ code: branchId, isActive: true }))) throw new AppError("That branch does not exist in this organisation", 400, "BRANCH_NOT_FOUND");
       return new Admin({ name: input.name, email: input.email, password: input.password, type, status: "active", isActive: true, branchId }).save();

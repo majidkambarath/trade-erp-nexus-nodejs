@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const Transaction = require("../../models/modules/transactionModel");
+const UsageService = require("../core/usageService");
 const StockPurchaseLog = require("../../models/modules/StockPurchaseLog"); // Import StockPurchaseLog model
 const InventoryMovement = require("../../models/modules/inventoryMovementModel");
 const StockService = require("../stock/stockService");
@@ -156,6 +157,10 @@ class TransactionService {
         lpono,
         discount,
       } = data;
+
+      // The plan allows only so many trade documents a month. Counted before anything is written, so a refusal
+      // leaves nothing behind. (Opening balances are the go-live load, not trading, and are made elsewhere.)
+      if (!data.isOpening) await UsageService.assertRoom("documentsPerMonth");
 
       if (!type || !partyId || !partyType)
         throw new AppError("Missing required fields", 400);

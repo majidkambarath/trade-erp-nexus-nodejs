@@ -43,7 +43,7 @@ class BranchService {
     }
     const used = await Branch.countDocuments({ isActive: true });
     const room = plans.checkLimit(org, "branches", used);
-    if (!room.ok) throw new AppError(`This organisation is limited to ${room.limit} branches and already has ${room.used}.`, 403, "LIMIT_REACHED", { limit: "branches", ...room });
+    if (!room.ok) throw new AppError(`This organisation is limited to ${room.limit} branches and already has ${room.used}.`, 403, "LIMIT_REACHED", { resource: "branches", ...room });
     if (await Branch.exists({ code })) throw new AppError("That branch code is already used", 409, "BRANCH_CODE_TAKEN");
 
     return Branch.create({

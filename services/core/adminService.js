@@ -7,6 +7,9 @@ const Organisation = require("../../models/core/organisationModel");
 const { runWithTenant, runUnscoped } = require("../../utils/tenantContext");
 const { permissionsFor, mayManage, withoutSystemFields } = require("../../utils/adminPermissions");
 const { deleteFromCloudinary } = require("../../middleware/upload");
+const { signInRefusal } = require("../../utils/subscriptionGate");
+const { subscriptionState } = require("../../utils/plans");
+const UsageService = require("./usageService");
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 // Short access tokens: a stolen one stops working within minutes, and the session cookie renews it.
@@ -64,15 +67,21 @@ const loginAdmin = async (email, password, ipAddress = null, context = {}) => {
   if (!admin)
     throw new AppError("Invalid email or password", 401, "INVALID_CREDENTIALS");
 
-  await assertOrganisationOpen(admin.companyId);
-  return runWithTenant({ companyId: admin.companyId, branchId: admin.branchId }, () => finishLogin(admin, password, ipAddress, context));
+  const organisation = await assertOrganisationOpen(admin.companyId);
+  const result = await runWithTenant({ companyId: admin.companyId, branchId: admin.branchId }, () => finishLogin(admin, password, ipAddress, context));
+  // Where the subscription stands, so the app can warn in the grace period or explain a read-only organisation
+  // before the first thing is refused.
+  return { ...result, subscription: subscriptionState(organisation) };
 };
 
-// An account whose organisation is gone must not sign in. (A subscription that has expired or been
-// suspended is refused here too, once that is enforced.)
+// An account whose organisation is gone must not sign in, and neither must one whose organisation is suspended,
+// closed, or past the end of its subscription (unless that organisation is set to read-only, which may still
+// sign in and look). The refusal says which, and when it ended, so the screen can tell the person.
 const assertOrganisationOpen = async (companyId) => {
   const organisation = await Organisation.findOne({ code: companyId });
   if (!organisation) throw new AppError("This account's organisation could not be found. Please contact support.", 403, "ORGANISATION_NOT_FOUND");
+  const refusal = signInRefusal(organisation);
+  if (refusal) throw refusal;
   return organisation;
 };
 
@@ -151,6 +160,10 @@ const createAdmin = async (adminData, files = null, creatorId = null, actorType 
   if (existing) throw new AppError("Email already exists", 400, "EMAIL_EXISTS");
 
   try {
+    // The plan allows only so many people. Checked after the permission and duplicate checks, so a refusal for
+    // those reasons is not hidden behind this one, and inside the try so an upload is cleaned up when it refuses.
+    await UsageService.assertRoom("users");
+
     // Handle profile image
     if (files?.profileImage) {
       adminData.profileImage = {

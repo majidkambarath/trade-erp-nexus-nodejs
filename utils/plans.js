@@ -125,7 +125,30 @@ function endsAtFor(planCode, startsAt, periodDays) {
   return new Date(new Date(startsAt).getTime() + days * DAY);
 }
 
+// The instant a calendar month began on the wall clock of `timezone`, which is where "this month" has to be
+// counted: a document made at 01:00 on the 1st in Dubai belongs to the new month although it is still the 30th in UTC.
+function monthStartIn(timezone, now = new Date()) {
+  const zone = timezone || "UTC";
+  const wall = (instant) => {
+    const p = new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" }).formatToParts(new Date(instant));
+    const get = (type) => Number(p.find((x) => x.type === type).value);
+    return { year: get("year"), month: get("month"), ms: Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")) };
+  };
+  let here;
+  try {
+    here = wall(now instanceof Date ? now.getTime() : Number(now));
+  } catch (_) {
+    return monthStartIn("UTC", now); // an unknown zone name counts in UTC rather than refusing to count
+  }
+  // The wall clock reads the 1st at 00:00 at the instant guess - (zone offset then). The offset is read at the
+  // guess and again at the answer, so a month that begins just after a clock change still lands on the right instant.
+  const guess = Date.UTC(here.year, here.month - 1, 1);
+  let t = guess - (wall(guess).ms - guess);
+  t = guess - (wall(t).ms - t);
+  return new Date(t);
+}
+
 module.exports = {
   FEATURES, FEATURE_KEYS, PLANS, PLAN_CODES, LIMIT_KEYS,
-  effectiveFeatures, hasFeature, effectiveLimits, checkLimit, subscriptionState, endsAtFor,
+  effectiveFeatures, hasFeature, effectiveLimits, checkLimit, subscriptionState, endsAtFor, monthStartIn,
 };

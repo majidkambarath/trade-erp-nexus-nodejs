@@ -1,9 +1,11 @@
 const express = require("express");
+const { requireFeature } = require("../../middleware/featureGate");
 const { authenticateToken } = require("../../middleware/authMiddleware");
 const c = require("../../controllers/orderPurchase/quotationController");
 
 const router = express.Router();
 router.use(authenticateToken);
+router.use(requireFeature("quotations"));
 
 // Fixed paths first: "/summary" must not be read as an id.
 router.get("/summary", c.summary);

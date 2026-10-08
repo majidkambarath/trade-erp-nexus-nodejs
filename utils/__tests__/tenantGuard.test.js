@@ -25,6 +25,7 @@ const GLOBAL_UNIQUE = {
   Admin: { email: "one person belongs to one organisation, so sign-in needs no organisation picker" },
   Organisation: { code: "the registry of organisations: its code is the companyId" },
   Attachment: { key: "a random server-generated storage path, not something a person chooses" },
+  PlatformUser: { email: "the developer console's own people belong to no organisation at all: their own collection, their own sign-in" },
   ShareLink: { publicId: "the public selector of a link: the public reader finds its row by it, with no organisation known" },
 };
 

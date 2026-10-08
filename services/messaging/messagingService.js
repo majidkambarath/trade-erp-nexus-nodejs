@@ -14,6 +14,7 @@ const { DocumentSend, MessagingSettings, ShareLink } = require("../../models/mod
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 const { runWithTenant, runUnscoped } = require("../../utils/tenantContext");
+const UsageService = require("../core/usageService");
 const { ProviderError } = require("../../utils/providerError");
 const { renderDocumentEmail, DOC_LABEL, fmtDay, fmtMoney } = require("../../utils/emailTemplates");
 const { toWaNumber, waMeUrl } = require("../../utils/phone");
@@ -337,7 +338,9 @@ class MessagingService {
     // Listing which organisations have something to retry is the one cross-organisation read; each one's
     // work then runs inside its own scope.
     const owing = await runUnscoped("background job: lists the organisations that have sends waiting to be retried", () => DocumentSend.distinct("companyId", due));
+    const live = await UsageService.liveCodes({ feature: "messaging", now });
     for (const companyId of owing) {
+      if (!live.has(companyId)) continue; // suspended, expired or without the feature: nothing is sent for it
       await runWithTenant({ companyId }, async () => {
         const settings = await Settings.load(companyId, { withSecrets: true });
         if (!settings.enabled) return; // switched off: leave them for when it is switched on

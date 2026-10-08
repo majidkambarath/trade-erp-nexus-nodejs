@@ -1,4 +1,5 @@
 const express = require("express");
+const { requireFeature } = require("../../middleware/featureGate");
 const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
 const catchAsync = require("../../utils/catchAsync");
 const EInvoiceService = require("../../services/einvoice/einvoiceService");
@@ -32,6 +33,7 @@ router.post("/inbound/webhook/:org", webhook((req) => req.params.org));
 router.post("/inbound/webhook", webhook(() => DEFAULT_TENANT.companyId));
 
 router.use(authenticateToken);
+router.use(requireFeature("einvoicing"));
 const canChange = requireRole(["super_admin", "admin"]);
 const canSend = requireRole(["super_admin", "admin", "manager"]);
 

@@ -12,6 +12,7 @@ const { encrypt } = require("../../utils/secretBox");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 const { runWithTenant, runUnscoped } = require("../../utils/tenantContext");
+const UsageService = require("../core/usageService");
 
 const ELIGIBLE = ["sales_order", "sales_return"];
 const BACKOFF_MS = (attempt) => Math.min(60000 * 2 ** Math.max(attempt - 1, 0), 6 * 3600 * 1000); // 1m, 2m, 4m ... capped at 6h
@@ -312,8 +313,10 @@ class EInvoiceService {
     const enabled = await runUnscoped("background job: lists the organisations that have e-invoicing switched on", () =>
       EInvoiceSettings.find({ enabled: true }).select("companyId").lean()
     );
+    const live = await UsageService.liveCodes({ feature: "einvoicing", now });
     let retried = 0, polled = 0;
     for (const { companyId } of enabled) {
+      if (!live.has(companyId)) continue; // suspended, expired or without the feature: nothing is submitted for it
       const done = await runWithTenant({ companyId }, async () => {
         let r = 0, p = 0;
         const settings = await this.loadSettings(companyId);

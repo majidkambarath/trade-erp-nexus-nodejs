@@ -109,3 +109,18 @@ test("a trial plan ends after its trial days; a paid plan after the period it is
   assert.equal(p.endsAtFor("standard", start, 365).toISOString().slice(0, 10), "2027-10-08");
   assert.equal(p.endsAtFor("internal", start), null, "no period given, no end");
 });
+
+test("'this month' is counted on the organisation's own calendar, not UTC's", () => {
+  // 01:00 on 1 October in Dubai is still 21:00 on 30 September in UTC, and belongs to October.
+  assert.equal(p.monthStartIn("Asia/Dubai", new Date("2026-09-30T21:00:00Z")).toISOString(), "2026-09-30T20:00:00.000Z");
+  assert.equal(p.monthStartIn("Asia/Dubai", new Date("2026-10-15T10:00:00Z")).toISOString(), "2026-09-30T20:00:00.000Z");
+  // ...and 23:30 on 30 September in Dubai is 19:30Z, still September.
+  assert.equal(p.monthStartIn("Asia/Dubai", new Date("2026-09-30T19:30:00Z")).toISOString(), "2026-08-31T20:00:00.000Z");
+  assert.equal(p.monthStartIn("UTC", new Date("2026-10-15T10:00:00Z")).toISOString(), "2026-10-01T00:00:00.000Z");
+  // a zone with daylight saving: the offset in force on the 1st, not the one in force today
+  assert.equal(p.monthStartIn("America/New_York", new Date("2026-03-20T10:00:00Z")).toISOString(), "2026-03-01T05:00:00.000Z");
+  assert.equal(p.monthStartIn("America/New_York", new Date("2026-04-02T10:00:00Z")).toISOString(), "2026-04-01T04:00:00.000Z");
+  // no zone, or a zone name that does not exist, counts in UTC rather than failing
+  assert.equal(p.monthStartIn(undefined, new Date("2026-10-15T10:00:00Z")).toISOString(), "2026-10-01T00:00:00.000Z");
+  assert.equal(p.monthStartIn("Not/AZone", new Date("2026-10-15T10:00:00Z")).toISOString(), "2026-10-01T00:00:00.000Z");
+});

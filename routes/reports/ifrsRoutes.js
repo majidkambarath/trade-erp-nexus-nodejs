@@ -1,4 +1,5 @@
 const express = require("express");
+const { requireFeature } = require("../../middleware/featureGate");
 const { authenticateToken } = require("../../middleware/authMiddleware");
 const IfrsReportsController = require("../../controllers/reports/ifrsReportsController");
 
@@ -6,6 +7,7 @@ const IfrsReportsController = require("../../controllers/reports/ifrsReportsCont
 const router = express.Router();
 
 router.use(authenticateToken);
+router.use(requireFeature("ifrsStatements"));
 router.use(require("../../middleware/ledgerReady"));
 
 // ?asAt=YYYY-MM-DD[&from=][&compare=prior-year|prior-period|none]

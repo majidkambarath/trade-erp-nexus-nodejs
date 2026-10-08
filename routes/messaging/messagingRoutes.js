@@ -4,6 +4,7 @@
 // Anyone signed in may send, withdraw a link or retry (the same people who print and download today);
 // every send records who. Changing the setup is for admins, because that is where the key lives.
 const express = require("express");
+const { requireFeature } = require("../../middleware/featureGate");
 const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
 const { rateLimit } = require("../../middleware/rateLimit");
 const { pdfUpload } = require("../../middleware/pdfUpload");
@@ -12,6 +13,7 @@ const c = require("../../controllers/messaging/messagingController");
 
 const router = express.Router();
 router.use(authenticateToken);
+router.use(requireFeature("messaging"));
 const canChange = requireRole(["super_admin", "admin"]);
 
 const perCompany = (req) => getTenant(req).companyId;

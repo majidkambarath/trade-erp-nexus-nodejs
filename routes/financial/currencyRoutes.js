@@ -1,9 +1,11 @@
 const express = require("express");
+const { requireFeature } = require("../../middleware/featureGate");
 const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
 const c = require("../../controllers/financial/currencyController");
 
 const router = express.Router();
 router.use(authenticateToken);
+router.use(requireFeature("currencies"));
 
 // Anyone signed in can read the currencies and rates (the voucher forms need them); changing them
 // needs an admin or super admin, as with the other masters.

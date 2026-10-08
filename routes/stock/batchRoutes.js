@@ -1,5 +1,6 @@
 const express = require("express");
 const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
+const { requireFeature } = require("../../middleware/featureGate");
 const catchAsync = require("../../utils/catchAsync");
 const BatchService = require("../../services/stock/batchService");
 const WriteOffService = require("../../services/stock/writeOffService");
@@ -7,6 +8,7 @@ const AuditService = require("../../services/core/auditService");
 
 const router = express.Router();
 router.use(authenticateToken);
+router.use(requireFeature("batches"));
 
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
 

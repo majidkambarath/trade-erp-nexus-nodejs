@@ -5,6 +5,7 @@ const DefaultChartService = require("../financial/defaultChartService");
 const { CardService, groupFamily } = require("./cardService");
 const BankMasterService = require("./bankMasterService");
 const AppError = require("../../utils/AppError");
+const UsageService = require("../core/usageService");
 const { round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
 
@@ -88,6 +89,8 @@ class PaymentModeService {
   // the voucher. The caller adds the party side. Receipts debit these legs, payments credit them.
   static async resolve({ direction, mode, details = {}, amount, date, description, session, req }) {
     mode = normalizeMode(mode);
+    // Cheques and cards belong to the banking feature; cash and a transfer to a bank account do not need it.
+    if (mode === "cheque" || mode === "card") await UsageService.assertFeature("banking");
     amount = round2(amount);
     if (!(amount > 0)) throw new AppError("Valid total amount is required", 400, "INVALID_AMOUNT");
     const isReceipt = direction === "receipt";

@@ -4,6 +4,7 @@ const Admin = require("../models/core/adminModel");
 const Organisation = require("../models/core/organisationModel");
 const { permissionsFor } = require("../utils/adminPermissions");
 const { runWithTenant, runUnscoped } = require("../utils/tenantContext");
+const { requestRefusal, warningHeaders } = require("../utils/subscriptionGate");
 
 // Who a token belongs to is decided by the DATABASE, not by what the token says. The account row names its
 // organisation, its role and so its permissions, so a token cannot choose its organisation, and an
@@ -28,7 +29,10 @@ const identityOf = (admin) => ({
   branchId: admin.branchId,
 });
 
-const authenticateToken = async (req, res, next) => {
+// `allowBlocked` is for the one route that has to answer an organisation whose subscription has ended (the screen that
+// tells it so, and when to renew). Everything else is refused while the organisation is blocked, and while it is
+// read-only anything but a read.
+const makeAuthenticator = ({ allowBlocked = false } = {}) => async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     const token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -46,6 +50,12 @@ const authenticateToken = async (req, res, next) => {
     const { admin, organisation, failure, message } = await accountFor(decoded);
     if (failure) return res.status(401).json({ success: false, message, error: failure });
 
+    if (!allowBlocked) {
+      const refusal = requestRefusal(organisation, req.method);
+      if (refusal) return next(refusal);
+    }
+    res.set(warningHeaders(organisation));
+
     req.admin = identityOf(admin);
     req.organisation = organisation;
     req.tenant = { companyId: admin.companyId, branchId: admin.branchId };
@@ -62,6 +72,9 @@ const authenticateToken = async (req, res, next) => {
   }
 };
 
+const authenticateToken = makeAuthenticator();
+const authenticateTokenAllowingBlocked = makeAuthenticator({ allowBlocked: true });
+
 const optionalAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -71,7 +84,8 @@ const optionalAuth = async (req, res, next) => {
       try {
         const decoded = verifyToken(token);
         const { admin, organisation, failure } = await accountFor(decoded);
-        if (!failure) {
+        // An organisation that may not use the system (or not change anything) is treated as anonymous here.
+        if (!failure && !requestRefusal(organisation, req.method)) {
           req.admin = identityOf(admin);
           req.organisation = organisation;
           req.tenant = { companyId: admin.companyId, branchId: admin.branchId };
@@ -196,6 +210,7 @@ const authRateLimit = (windowMs = 15 * 60 * 1000, maxAttempts = 2) => {
 
 module.exports = {
   authenticateToken,
+  authenticateTokenAllowingBlocked,
   optionalAuth,
   requirePermission,
   requireRole,

@@ -135,8 +135,12 @@ class OrganisationService {
   // Run `fn(code)` once for every organisation that is live, each inside its own scope, so a job that has no
   // request (start-up checks, timers) still knows whose data it is touching. One organisation failing never
   // stops the others: its error is logged and returned.
-  static async forEach(fn, { label = "job" } = {}) {
-    const orgs = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code").lean();
+  // An organisation whose subscription has ended (or that is read-only) is skipped: a job must not send its
+  // customers' email, submit its e-invoices or post its backlog while the organisation cannot change anything.
+  // `includeLocked` is for the few jobs that only look.
+  static async forEach(fn, { label = "job", includeLocked = false, now = new Date() } = {}) {
+    const found = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code status planCode subscription").lean();
+    const orgs = includeLocked ? found : found.filter((o) => plans.subscriptionState(o, now).canWrite);
     const out = [];
     for (const { code } of orgs) {
       try {

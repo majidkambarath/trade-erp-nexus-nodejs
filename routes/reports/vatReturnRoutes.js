@@ -1,4 +1,5 @@
 const express = require("express");
+const { requireFeature } = require("../../middleware/featureGate");
 const { authenticateToken, requireRole } = require("../../middleware/authMiddleware");
 const c = require("../../controllers/reports/vatReturnController");
 
@@ -6,6 +7,7 @@ const c = require("../../controllers/reports/vatReturnController");
 // filing a return needs an admin or super admin.
 const router = express.Router();
 router.use(authenticateToken);
+router.use(requireFeature("vatReturn"));
 const canChange = requireRole(["super_admin", "admin"]);
 
 router.get("/return", c.compute);

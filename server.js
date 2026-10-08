@@ -63,6 +63,8 @@ const corsOptions = {
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "x-secret-key", "Authorization", "Idempotency-Key"],
+  // The subscription warning headers (grace period, ending soon) are for the app to read.
+  exposedHeaders: ["X-Subscription-State", "X-Subscription-Days-Left", "X-Subscription-Ends"],
   credentials: true,
   preflightContinue: false,
   optionsSuccessStatus: 204,
@@ -136,6 +138,7 @@ app.use("/api/v1/quotations", require("./routes/orderPurchase/quotationRoutes"))
 app.use("/api/v1/delivery-notes", require("./routes/orderPurchase/deliveryNoteRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/document-flow", require("./routes/orderPurchase/documentFlowRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/messaging", require("./routes/messaging/messagingRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/organisation", require("./routes/core/organisationRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/platform", require("./routes/platform/platformRoutes")); // the developer console: its own people and its own tokens, never a customer's
 app.use("/api/v1/share", require("./routes/messaging/shareRoutes")); // PUBLIC (no login): the document link a customer opens
 app.use("/api/v1", adminRouter);
