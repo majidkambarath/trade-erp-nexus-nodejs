@@ -75,11 +75,14 @@ class UsageService {
   // feature - with that feature switched on. A cross-organisation read by design: it returns codes only.
   static async liveCodes({ feature = null, now = new Date() } = {}) {
     const found = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code status planCode subscription featureOverrides").lean();
-    return new Set(
+    const live = new Set(
       found
         .filter((o) => plans.subscriptionState(o, now).canWrite && (!feature || plans.hasFeature(o, feature)))
         .map((o) => o.code)
     );
+    // Single-company compatibility mode: the original company has no registry row (see organisation()), and is live.
+    if (legacyDefaultEnabled() && !found.some((o) => o.code === DEFAULT_TENANT.companyId)) live.add(DEFAULT_TENANT.companyId);
+    return live;
   }
 
   // Everything a screen needs to know about what it may show: the plan, the switched-on features, the limits with
