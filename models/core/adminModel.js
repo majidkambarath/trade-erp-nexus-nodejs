@@ -49,6 +49,12 @@ const adminSchema = new mongoose.Schema(
       },
       default: "viewer"
     },
+    // The role this person holds: a built-in role key or the key of one their organisation made (models/core/roleModel.js).
+    // Empty means "the role of my type", which is how every account made before roles existed keeps what it had. A person
+    // with a custom role keeps type "viewer", the safest base, so anything still reading the type fails closed.
+    roleKey: { type: String, default: null, lowercase: true, trim: true },
+    // LEGACY: the old coarse list, still written from the type and still carried in the token, but nothing trusts it.
+    // What a person may do is their role (utils/permissions.js), resolved from the database on every request.
     permissions: {
       type: [String],
       default: []

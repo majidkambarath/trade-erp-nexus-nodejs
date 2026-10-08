@@ -4,5 +4,8 @@ const UsageService = require("../../services/core/usageService");
 // Who the caller's organisation is, what its plan switches on, what it has used, and where its subscription
 // stands. The screens use it to hide what the plan does not include and to warn before a subscription ends.
 exports.status = catchAsync(async (req, res) => {
-  res.status(200).json({ success: true, data: await UsageService.status(req.organisation, new Date(), { admin: req.admin, tenant: req.tenant }) });
+  const status = await UsageService.status(req.organisation, new Date(), { admin: req.admin, tenant: req.tenant });
+  // And who is asking, so a screen knows what this person may do without a second request.
+  const me = { id: req.admin.id, name: req.admin.name, email: req.admin.email, role: req.admin.role, grants: req.admin.grants };
+  res.status(200).json({ success: true, data: { ...status, me } });
 });

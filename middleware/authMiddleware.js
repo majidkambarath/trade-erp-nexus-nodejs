@@ -2,7 +2,8 @@ const { verifyToken } = require("../services/core/adminService");
 const { createAppError } = require("../utils/errorHandler");
 const Admin = require("../models/core/adminModel");
 const Organisation = require("../models/core/organisationModel");
-const { permissionsFor } = require("../utils/adminPermissions");
+const Role = require("../models/core/roleModel");
+const roles = require("../utils/permissions");
 const Branch = require("../models/core/branchModel");
 const AppError = require("../utils/AppError");
 const { runWithTenant, runUnscoped } = require("../utils/tenantContext");
@@ -19,6 +20,15 @@ async function accountFor(decoded) {
   const organisation = await Organisation.findOne({ code: admin.companyId });
   if (!organisation) return { failure: "ORGANISATION_NOT_FOUND", message: "This account's organisation could not be found" };
   return { admin, organisation };
+}
+
+// The role a person holds, resolved from the database on every request like the rest of their identity: a built-in role
+// is code, a custom one is a row of their own organisation. One that is missing or switched off holds NOTHING.
+async function roleOf(admin) {
+  const key = roles.roleKeyOf(admin);
+  if (roles.isBuiltIn(key)) return roles.resolveRole(key);
+  const row = await runWithTenant({ companyId: admin.companyId }, () => Role.findOne({ key }).lean());
+  return roles.resolveRole(key, row ? [row] : []);
 }
 
 const HEAD_OFFICE = "main";
@@ -42,15 +52,22 @@ async function resolveBranch(admin, header) {
   return { branchId: asked, branchView: asked };
 }
 
-const identityOf = (admin) => ({
-  id: String(admin._id),
-  email: admin.email,
-  type: admin.type,
-  permissions: permissionsFor(admin.type),
-  name: admin.name,
-  companyId: admin.companyId,
-  branchId: admin.branchId,
-});
+const identityOf = (admin, role) => {
+  const grants = roles.grantsOf(role);
+  return {
+    id: String(admin._id),
+    email: admin.email,
+    type: admin.type,
+    // what the person may do: their role and the permissions it expands to (utils/permissions.js)
+    role: role ? { key: role.key, name: role.name, rank: role.rank, builtIn: role.builtIn, active: role.isActive !== false } : { key: roles.roleKeyOf(admin), name: null, rank: 0, builtIn: false, active: false },
+    grants,
+    // the seven coarse permissions the token has always carried, now derived from the real ones
+    permissions: roles.legacyPermissions(grants, role?.rank),
+    name: admin.name,
+    companyId: admin.companyId,
+    branchId: admin.branchId,
+  };
+};
 
 // `allowBlocked` is for the one route that has to answer an organisation whose subscription has ended (the screen that
 // tells it so, and when to renew). Everything else is refused while the organisation is blocked, and while it is
@@ -82,7 +99,7 @@ const makeAuthenticator = ({ allowBlocked = false } = {}) => async (req, res, ne
     const branch = await resolveBranch(admin, req.get("x-branch"));
     if (branch.failure) return next(branch.failure);
 
-    req.admin = identityOf(admin);
+    req.admin = identityOf(admin, await roleOf(admin));
     req.organisation = organisation;
     req.tenant = { companyId: admin.companyId, branchId: branch.branchId, branchView: branch.branchView };
 
@@ -112,7 +129,7 @@ const optionalAuth = async (req, res, next) => {
         const { admin, organisation, failure } = await accountFor(decoded);
         // An organisation that may not use the system (or not change anything) is treated as anonymous here.
         if (!failure && !requestRefusal(organisation, req.method)) {
-          req.admin = identityOf(admin);
+          req.admin = identityOf(admin, await roleOf(admin));
           req.organisation = organisation;
           req.tenant = { companyId: admin.companyId, branchId: admin.branchId };
         }
