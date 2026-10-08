@@ -17,7 +17,9 @@ const adminSchema = new mongoose.Schema(
       required: [true, "Email is required"],
       lowercase: true,
       trim: true,
-      match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, "Please enter a valid email"]
+      // Any address of the form something@domain.ending, the ending two or more characters. The old pattern allowed a
+      // two or three letter ending only, so a customer on .company, .agency, .africa or .travel could not be created.
+      match: [/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/, "Please enter a valid email"]
     },
     password: {
       type: String,

@@ -17,6 +17,7 @@ const { DEFAULT_TENANT, runWithTenant } = require("../../utils/tenantContext");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const plans = require("../../utils/plans");
 const currencies = require("../../utils/currencyCatalog");
+const { isValidTrn } = require("../../utils/partyMaster");
 
 const HEAD_OFFICE = "main"; // the branchId every existing document already carries
 const DEFAULT_CODE = DEFAULT_TENANT.companyId;
@@ -352,6 +353,8 @@ class OrganisationService {
     const $set = {};
     for (const k of ALLOWED) if (profile[k] !== undefined) $set[`profile.${k}`] = String(profile[k]).trim();
     if (profile.vatRegistered !== undefined) $set["profile.vatRegistered"] = Boolean(profile.vatRegistered);
+    // A UAE tax registration number is exactly 15 digits. Other countries have their own shapes, which are not checked here.
+    if (org.country === "AE" && $set["profile.trn"] && !isValidTrn($set["profile.trn"])) throw bad("A UAE TRN is exactly 15 digits", "INVALID_TRN");
     if (!Object.keys($set).length) throw bad("Nothing to change", "NOTHING_TO_UPDATE");
     await runWithTenant({ companyId: org.code, branchId: HEAD_OFFICE }, () => CompanySettings.updateOne({ companyId: org.code }, { $set }));
     return runWithTenant({ companyId: org.code }, () => CompanySettings.findOne({ companyId: org.code }).select("profile baseCurrency").lean());
