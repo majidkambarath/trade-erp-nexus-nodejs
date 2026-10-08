@@ -91,7 +91,7 @@ exports.updateStock = catchAsync(async (req, res) => {
   // (otherwise an editor could correct away a shortage). The form sends the unchanged quantity back, so compare first.
   if (req.body.currentStock !== undefined) {
     const stored = await StockService.getStockById(req.params.id);
-    if (Number(req.body.currentStock) !== Number(stored.currentStock)) /* mutated */;
+    if (Number(req.body.currentStock) !== Number(stored.currentStock)) assertPermission(req, "inventory.adjust");
   }
   const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
   const stock = await StockService.updateStock(req.params.id, req.body, createdBy);
