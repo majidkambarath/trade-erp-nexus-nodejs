@@ -15,7 +15,7 @@ router.post("/transactions", requirePermission(byDocumentType("create")), Transa
 router.get("/transactions", requirePermission(byDocumentType("view")), TransactionController.getAllTransactions);
 router.get("/transactions/:id", requirePermission(byDocumentType("view")), TransactionController.getTransactionById);
 router.get("/transactions/:id/audit", requirePermission(byDocumentType("view")), TransactionController.getTransactionAudit);
-router.put("/transactions/:id", requirePermission(byDocumentType("create")), TransactionController.updateTransaction);
+router.put("/transactions/:id", requirePermission(byDocumentType("edit")), TransactionController.updateTransaction);
 router.delete("/transactions/:id", requirePermission(byDocumentType("delete")), TransactionController.deleteTransaction);
 router.patch(
   "/transactions/:id/process", requirePermission(byDocumentType("approve")),

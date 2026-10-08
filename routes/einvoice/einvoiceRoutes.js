@@ -48,7 +48,7 @@ router.put(
 );
 
 router.get("/readiness", requirePermission(["settings.view","reports.financial","sales.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.readiness(req))));
-router.patch("/parties/:id", requirePermission("sales.create"), catchAsync(async (req, res) => ok(res, await EInvoiceService.updateParty(req.params.id, req.body))));
+router.patch("/parties/:id", requirePermission("sales.edit"), catchAsync(async (req, res) => ok(res, await EInvoiceService.updateParty(req.params.id, req.body))));
 
 router.get("/documents", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.documents(req, req.query))));
 router.get("/preview/:transactionId", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.preview(req.params.transactionId, req))));

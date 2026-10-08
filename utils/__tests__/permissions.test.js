@@ -183,6 +183,34 @@ test("the catalogue the editor draws covers every key exactly once, and marks th
   assert.deepEqual(all["sales.view"].implies, []);
   assert.equal(all["reports.financial"].read, true);
   assert.equal(all["sales.create"].read, false);
-  assert.equal(all["sales.create"].short, "Add and edit");
+  assert.equal(all["sales.create"].short, "Add");
+  assert.equal(all["sales.edit"].short, "Edit");
   assert.equal(all["users.manage"].short, "Manage people and roles");
+});
+
+test("Add and Edit are separate: each brings View and the pick lists, and neither brings the other", () => {
+  for (const module of ["sales", "purchase", "inventory", "finance"]) {
+    assert.ok(p.isKey(`${module}.create`) && p.isKey(`${module}.edit`), module);
+    assert.ok(p.expand([`${module}.create`]).includes(`${module}.view`) && p.expand([`${module}.create`]).includes("lookups.view"), `${module}: add sees and can fill in a form`);
+    assert.ok(p.expand([`${module}.edit`]).includes(`${module}.view`), `${module}: edit sees`);
+    assert.ok(p.expand([`${module}.edit`]).includes("lookups.view"), `${module}: edit can fill in a form`);
+    assert.ok(!p.expand([`${module}.create`]).includes(`${module}.edit`), `${module}: adding does not edit`);
+    assert.ok(!p.expand([`${module}.edit`]).includes(`${module}.create`), `${module}: editing does not add`);
+  }
+  // editing or adding a voucher reads the invoices it settles
+  assert.ok(p.expand(["finance.edit"]).includes("sales.view") && p.expand(["finance.edit"]).includes("purchase.view"));
+});
+
+test("every built-in role that could add could also edit before the split, so none loses a thing", () => {
+  for (const role of Object.values(p.BUILT_IN)) {
+    for (const module of ["sales", "purchase", "inventory", "finance"]) {
+      assert.equal(role.permissions.includes(`${module}.create`), role.permissions.includes(`${module}.edit`), `${role.key}: ${module} add and edit travel together in the built-in roles`);
+    }
+  }
+});
+
+test("the coarse permissions the token has always carried follow either", () => {
+  assert.deepEqual(p.legacyPermissions(["sales.edit"]), ["transactions_manage"]);
+  assert.deepEqual(p.legacyPermissions(["inventory.edit"]), ["inventory_manage"]);
+  assert.deepEqual(p.legacyPermissions(["sales.view"]), []);
 });

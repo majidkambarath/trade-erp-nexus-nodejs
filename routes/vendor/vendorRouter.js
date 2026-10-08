@@ -12,7 +12,7 @@ router.use(authenticateToken);
 router.post("/vendors", requirePermission("purchase.create"), VendorController.createVendor);
 router.get("/vendors", requirePermission(["purchase.view","accounts.view"]), VendorController.getAllVendors);
 router.get("/vendors/:id", requirePermission(["purchase.view","accounts.view"]), VendorController.getVendorById);
-router.put("/vendors/:id", requirePermission("purchase.create"), VendorController.updateVendor);
+router.put("/vendors/:id", requirePermission("purchase.edit"), VendorController.updateVendor);
 router.delete("/vendors/:id", requirePermission("purchase.delete"), VendorController.deleteVendor);
 
 module.exports = router;

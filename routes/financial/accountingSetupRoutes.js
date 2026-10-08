@@ -69,9 +69,9 @@ router.post("/tax-codes", requirePermission("accounts.manage"), chart.createTaxC
 router.put("/tax-codes/:id", requirePermission("accounts.manage"), chart.updateTaxCode);
 
 // attachments (upload, link to a document, list, authenticated download, delete)
-router.post("/attachments", requirePermission(["finance.create","sales.create","purchase.create","inventory.create","accounts.manage"]), uploadOne, chart.uploadAttachment);
+router.post("/attachments", requirePermission(["finance.create","finance.edit","sales.create","sales.edit","purchase.create","purchase.edit","inventory.create","inventory.edit","accounts.manage"]), uploadOne, chart.uploadAttachment);
 router.get("/attachments", requirePermission(["finance.view","sales.view","purchase.view","accounts.view"]), chart.listAttachments);
-router.post("/attachments/:id/link", requirePermission(["finance.create","sales.create","purchase.create","inventory.create","accounts.manage"]), chart.linkAttachment);
+router.post("/attachments/:id/link", requirePermission(["finance.create","finance.edit","sales.create","sales.edit","purchase.create","purchase.edit","inventory.create","inventory.edit","accounts.manage"]), chart.linkAttachment);
 router.get("/attachments/:id", requirePermission(["finance.view","sales.view","purchase.view","accounts.view"]), chart.downloadAttachment);
 router.delete("/attachments/:id", requirePermission(["finance.delete","sales.delete","purchase.delete","accounts.manage"]), chart.deleteAttachment);
 

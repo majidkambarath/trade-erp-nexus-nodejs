@@ -1,6 +1,7 @@
 const StockService = require("../../services/stock/stockService");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
+const { assertPermission } = require("../../middleware/permissionGate");
 
 exports.createStock = catchAsync(async (req, res) => {
   const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
@@ -86,6 +87,12 @@ exports.getStockByItemId = catchAsync(async (req, res) => {
 });
 
 exports.updateStock = catchAsync(async (req, res) => {
+  // Changing an item's details is Edit; changing the quantity on hand is a stock adjustment and needs its own permission
+  // (otherwise an editor could correct away a shortage). The form sends the unchanged quantity back, so compare first.
+  if (req.body.currentStock !== undefined) {
+    const stored = await StockService.getStockById(req.params.id);
+    if (Number(req.body.currentStock) !== Number(stored.currentStock)) /* mutated */;
+  }
   const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
   const stock = await StockService.updateStock(req.params.id, req.body, createdBy);
 

@@ -15,7 +15,7 @@ router.post(
 router.get("/account-vouchers", requirePermission("finance.view"), AccountController.getAllAccountVouchers);
 router.get("/account-vouchers/:id", requirePermission("finance.view"), AccountController.getAccountVoucherById);
 router.put(
-  "/account-vouchers/:id", requirePermission("finance.create"),
+  "/account-vouchers/:id", requirePermission("finance.edit"),
   uploadSingle("attachedProof"),
   AccountController.updateAccountVoucher
 );

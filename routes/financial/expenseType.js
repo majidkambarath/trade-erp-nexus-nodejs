@@ -18,7 +18,7 @@ router.use(authenticateToken);
 router.post("/categories", requirePermission("finance.create"), createCategory);
 router.get("/categories", requirePermission(["finance.view","lookups.view"]), getAllCategories);
 router.get("/categories/:id", requirePermission(["finance.view","lookups.view"]), getCategoryById);
-router.put("/categories/:id", requirePermission("finance.create"), updateCategory);
+router.put("/categories/:id", requirePermission("finance.edit"), updateCategory);
 router.delete("/categories/:id", requirePermission("finance.delete"), deleteCategory);
 
 module.exports = router;

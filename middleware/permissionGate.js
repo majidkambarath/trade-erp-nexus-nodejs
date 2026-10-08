@@ -45,6 +45,15 @@ function requirePermission(need) {
   return gate;
 }
 
+/**
+ * For the rare handler that learns, only once it has read the record, that the request needs MORE than the route asked
+ * (editing an item is one permission; editing it so that its quantity on hand changes is another). Throws the same 403.
+ */
+function assertPermission(req, key) {
+  if (!req.admin) throw new AppError("Authentication required", 401, "AUTH_REQUIRED");
+  if (!roles.can(req.admin.grants, key)) throw denied(req, [key]);
+}
+
 /** A person's own record, or - for anyone else's - the permission. */
 function selfOr(need) {
   const inner = requirePermission(need);
@@ -98,4 +107,4 @@ const byDocumentType = (action) => async (req) => {
   return [`sales.${action}`, `purchase.${action}`];
 };
 
-module.exports = { requirePermission, selfOr, signedIn, publicRoute, byDocumentType };
+module.exports = { requirePermission, assertPermission, selfOr, signedIn, publicRoute, byDocumentType };

@@ -23,7 +23,7 @@ router.get("/customers", requirePermission(["sales.view","accounts.view"]), Cust
 router.post("/", requirePermission("sales.create"), CustomerController.createCustomer);
 
 router.get("/:id", requirePermission(["sales.view","accounts.view"]), CustomerController.getCustomerById);
-router.put("/:id", requirePermission("sales.create"), CustomerController.updateCustomer);
+router.put("/:id", requirePermission("sales.edit"), CustomerController.updateCustomer);
 router.patch("/:id/stats", requirePermission("accounts.manage"), CustomerController.updateCustomerStats);
 router.delete("/:id", requirePermission("sales.delete"), CustomerController.deleteCustomer);
 

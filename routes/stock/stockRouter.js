@@ -21,7 +21,7 @@ router.get("/stock/stats", requirePermission(["inventory.view","lookups.view"]),
 router.get("/stock/:id", requirePermission(["inventory.view","lookups.view"]), StockController.getStockById);
 router.get("/stock/:id/current", requirePermission(["inventory.view","lookups.view"]), StockController.getCurrentStockById);
 router.get("/stock/item/:itemId", requirePermission(["inventory.view","lookups.view"]), StockController.getStockByItemId);
-router.put("/stock/:id", requirePermission("inventory.create"), StockController.updateStock);
+router.put("/stock/:id", requirePermission("inventory.edit"), StockController.updateStock);
 router.patch("/stock/:id/quantity", requirePermission("inventory.adjust"), StockController.updateStockQuantity);
 router.delete("/stock/:id", requirePermission("inventory.delete"), StockController.deleteStock);
 router.get("/stock/:id/purchase-logs", requirePermission("inventory.view"), StockController.getPurchaseLogsByItemId);

@@ -23,7 +23,7 @@ router.post("/", requirePermission("sales.create"), c.create);
 router.get("/:id", requirePermission("sales.view"), c.get);
 router.get("/:id/pick-list", requirePermission("sales.view"), c.pickList);
 router.get("/:id/activity", requirePermission("sales.view"), c.activity);
-router.put("/:id", requirePermission("sales.create"), c.update);
+router.put("/:id", requirePermission("sales.edit"), c.update);
 router.delete("/:id", requirePermission("sales.delete"), c.remove);
 
 router.post("/:id/dispatch", requirePermission("sales.approve"), c.dispatch);

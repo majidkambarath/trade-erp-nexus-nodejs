@@ -21,7 +21,7 @@ router.get("/vouchers", requirePermission("finance.view"), FinancialController.g
 router.get("/vouchers/:id", requirePermission("finance.view"), FinancialController.getVoucherById);
 router.get("/vouchers/:id/audit", requirePermission("finance.view"), FinancialController.getVoucherAudit);
 router.put(
-  "/vouchers/:id", requirePermission("finance.create"),
+  "/vouchers/:id", requirePermission("finance.edit"),
   uploadSingle("attachedProof"),
   FinancialController.updateVoucher
 );

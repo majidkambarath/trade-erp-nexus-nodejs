@@ -12,7 +12,8 @@ const MODULES = {
     hint: "Quotations, sales orders, delivery notes, sales returns and customers",
     actions: {
       view: "See sales documents and customers",
-      create: "Create and edit quotations, orders, delivery notes, returns and customers",
+      create: "Add quotations, orders, delivery notes, returns and customers",
+      edit: "Change a quotation, order, delivery note, return or customer that already exists",
       approve: "Approve, reject or cancel a sales document; dispatch and deliver goods",
       delete: "Delete a sales document or a customer",
       send: "Send a document to a customer by email or WhatsApp",
@@ -24,7 +25,8 @@ const MODULES = {
     hint: "Purchase orders, purchase returns and vendors",
     actions: {
       view: "See purchase documents and vendors",
-      create: "Create and edit purchase orders, returns and vendors",
+      create: "Add purchase orders, returns and vendors",
+      edit: "Change a purchase order, return or vendor that already exists",
       approve: "Approve, reject or cancel a purchase document (receives the goods)",
       delete: "Delete a purchase document or a vendor",
     },
@@ -34,7 +36,8 @@ const MODULES = {
     hint: "Items, categories, units, batches and stock movements",
     actions: {
       view: "See items, stock and batches",
-      create: "Create and edit items, categories and units",
+      create: "Add items, categories and units",
+      edit: "Change an item, category or unit that already exists",
       delete: "Delete an item, category or unit",
       adjust: "Change a quantity on hand, write off a batch, record a stock movement",
     },
@@ -44,7 +47,8 @@ const MODULES = {
     hint: "Receipts, payments, journals, contra, expenses, notes and cheques",
     actions: {
       view: "See vouchers and the ledger entries behind them",
-      create: "Create and edit receipts, payments, journals, contra, expenses and notes",
+      create: "Add receipts, payments, journals, contra, expenses and notes",
+      edit: "Change a voucher that already exists",
       approve: "Approve or reject a voucher; clear, bounce or cancel a cheque",
       delete: "Delete a voucher",
     },
@@ -122,6 +126,7 @@ const IMPLIES = {
   "sales.approve": ["inventory.view"],
   "purchase.approve": ["inventory.view"],
   "finance.create": ["sales.view", "purchase.view"], // a receipt is allocated against invoices, so they must be visible
+  "finance.edit": ["sales.view", "purchase.view"],
   "finance.approve": ["sales.view", "purchase.view"],
   "reports.vat": ["reports.financial"],
   "reports.financial": ["reports.view"],
@@ -179,7 +184,7 @@ const BUILT_IN = {
     description: "Approves sales, purchases and vouchers, and runs stock. Does not manage people, settings or the books' setup.",
     permissions: only(
       ...modules("sales", "purchase", "inventory"),
-      "finance.view", "finance.create", "finance.approve", "finance.delete",
+      "finance.view", "finance.create", "finance.edit", "finance.approve", "finance.delete",
       "banking.view", "accounts.view", "reports.view", "reports.financial"
     ),
   },
@@ -200,28 +205,28 @@ const BUILT_IN = {
     name: "Operator",
     rank: 40,
     description: "Enters documents and stock. Cannot approve or delete anything.",
-    permissions: only("sales.create", "purchase.create", "inventory.create", "inventory.adjust", "finance.create", "reports.view"),
+    permissions: only("sales.create", "sales.edit", "purchase.create", "purchase.edit", "inventory.create", "inventory.edit", "inventory.adjust", "finance.create", "finance.edit", "reports.view"),
   },
   sales: {
     key: "sales",
     name: "Sales executive",
     rank: 40,
     description: "Raises quotations, orders and delivery notes and sends them to customers. Cannot approve.",
-    permissions: only("sales.create", "sales.send", "inventory.view", "reports.view"),
+    permissions: only("sales.create", "sales.edit", "sales.send", "inventory.view", "reports.view"),
   },
   purchase: {
     key: "purchase",
     name: "Purchase officer",
     rank: 40,
     description: "Raises purchase orders and returns. Cannot approve.",
-    permissions: only("purchase.create", "inventory.view", "reports.view"),
+    permissions: only("purchase.create", "purchase.edit", "inventory.view", "reports.view"),
   },
   storekeeper: {
     key: "storekeeper",
     name: "Storekeeper",
     rank: 40,
     description: "Looks after items and stock, including adjustments. Sees sales and purchase documents but cannot raise them.",
-    permissions: only("inventory.create", "inventory.adjust", "sales.view", "purchase.view", "reports.view"),
+    permissions: only("inventory.create", "inventory.edit", "inventory.adjust", "sales.view", "purchase.view", "reports.view"),
   },
   viewer: {
     key: "viewer",
@@ -343,8 +348,8 @@ function legacyPermissions(grants, rank = 0) {
   const any = (...keys) => keys.some((k) => g.has(k));
   const out = [];
   if (g.has("users.manage")) out.push("users_manage");
-  if (any("inventory.create", "inventory.adjust")) out.push("inventory_manage");
-  if (any("sales.create", "purchase.create", "finance.create")) out.push("transactions_manage");
+  if (any("inventory.create", "inventory.edit", "inventory.adjust")) out.push("inventory_manage");
+  if (any("sales.create", "sales.edit", "purchase.create", "purchase.edit", "finance.create", "finance.edit")) out.push("transactions_manage");
   if (any("sales.approve", "purchase.approve", "finance.approve")) out.push("transactions_approve");
   if (g.has("reports.financial")) out.push("financial_reports");
   if (g.has("settings.manage")) out.push("system_settings");
@@ -354,7 +359,7 @@ function legacyPermissions(grants, rank = 0) {
 
 // The name a checkbox carries in the role editor; the full sentence is its hint. An entry here for "module.action" wins.
 const SHORT = {
-  view: "View", create: "Add and edit", approve: "Approve", delete: "Delete", send: "Send to customers", creditOverride: "Override credit limit",
+  view: "View", create: "Add", edit: "Edit", approve: "Approve", delete: "Delete", send: "Send to customers", creditOverride: "Override credit limit",
   adjust: "Adjust stock", manage: "Manage", reconcile: "Reconcile", close: "Close periods", financial: "Financial reports", vat: "File VAT",
   "settings.manage": "Change settings", "users.manage": "Manage people and roles", "audit.view": "Read the trail", "lookups.view": "Pick lists",
 };
