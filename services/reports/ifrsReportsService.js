@@ -1,4 +1,5 @@
 const AccountGroup = require("../../models/modules/financial/accountGroupModel");
+const FiscalYear = require("../../models/modules/financial/fiscalYearModel");
 const LedgerReports = require("./ledgerReportsService");
 const AccountConfigService = require("../financial/accountConfigService");
 const AgeingService = require("../financial/ageingService");
@@ -27,9 +28,10 @@ const orgLocale = require("../../utils/orgLocale");
 //     (direct income / direct expense groups). Of the remaining expenses, accounts or groups named
 //     like TAX_RX are income tax, DEPRECIATION_RX depreciation and amortisation, FINANCE_RX finance
 //     costs; the rest are operating expenses.
-//   Profit is not closed to equity by any entry, so the position shows it inside equity: profit
-//     before `from` as "Accumulated profit brought forward" and profit from `from` to `asAt` as
-//     "Profit for the period".
+//   Profit is shown inside equity until a year is closed: profit before `from` as "Accumulated profit
+//     brought forward" (a year that WAS closed has its profit in Retained Earnings by its year-end
+//     closing entry, so only years never closed appear here) and profit from `from` to `asAt` as
+//     "Profit for the period". `from` defaults to the start of the fiscal year the date falls in.
 //   An account with a balance on the opposite side of its group (an asset in credit, say) is shown
 //     as a negative on its own side; nothing is reclassified between assets and liabilities.
 
@@ -243,6 +245,8 @@ class IfrsReportsService {
     const profile = settings.profile || {};
     const { companyId } = getTenant();
     const groups = await AccountGroup.find({ companyId }).select("name parentGroup").lean();
+    // the company's own fiscal years, as calendar days: a statement opens at the start of the real year, not a guess from a month
+    const years = (await FiscalYear.find({}).select("startDate endDate").lean()).map((y) => ({ start: orgLocale.dayOf(y.startDate), end: orgLocale.dayOf(y.endDate) }));
     const byId = new Map(groups.map((g) => [String(g._id), g]));
     const paths = new Map();
     // group names from the top of the tree down to the group itself
@@ -276,6 +280,7 @@ class IfrsReportsService {
         vatRegistered: profile.vatRegistered !== false,
       },
       fiscalYearStartMonth: settings.fiscalYearStartMonth || 1,
+      years,
       pathNames,
       cash,
       cashIds: new Set(cash.map((a) => String(a._id))),
@@ -284,11 +289,12 @@ class IfrsReportsService {
     };
   }
 
-  // The dates a request asks for. `asAt` (or `to`) defaults to today in Dubai, `from` to the
-  // start of the fiscal year that date falls in.
+  // The dates a request asks for. `asAt` (or `to`) defaults to today in the organisation's zone, `from` to the
+  // start of the fiscal year that date falls in (the company's own year when it has one, else the settings month).
   static period(ctx, query = {}) {
     const to = toDay(query.asAt) || toDay(query.to) || orgToday();
-    const from = toDay(query.from) || fiscalYearStart(to, ctx.fiscalYearStartMonth);
+    const own = (ctx.years || []).find((y) => y.start <= to && to <= y.end);
+    const from = toDay(query.from) || own?.start || fiscalYearStart(to, ctx.fiscalYearStartMonth);
     if (from > to) throw new AppError("from must not be after to", 400, "INVALID_RANGE");
     const mode = compareMode(query.compare);
     return { from, to, mode, comparative: comparativeRange(from, to, mode) };

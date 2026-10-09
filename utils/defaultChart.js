@@ -50,7 +50,7 @@ const ACCOUNTS = [
   ["Bank Loan", "Long-term Liabilities", null],
 
   ["Owner's Capital", "Equity", null],
-  ["Retained Earnings", "Equity", null],
+  ["Retained Earnings", "Equity", "retained-earnings"],
   ["Opening Balance Equity", "Equity", "opening-balance-equity"],
 
   ["Sales Revenue", "Sales Income", "sales-revenue"],

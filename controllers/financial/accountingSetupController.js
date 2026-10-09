@@ -3,6 +3,7 @@ const AppError = require("../../utils/AppError");
 const AccountGroupService = require("../../services/financial/accountGroupService");
 const AccountConfigService = require("../../services/financial/accountConfigService");
 const FiscalYearService = require("../../services/core/fiscalYearService");
+const YearEndService = require("../../services/financial/yearEndService");
 const NumberSeriesService = require("../../services/core/numberSeriesService");
 const PostingService = require("../../services/financial/postingService");
 const AuditService = require("../../services/core/auditService");
@@ -50,14 +51,11 @@ exports.createFiscalYear = catchAsync(async (req, res) => {
   await AuditService.log({ req, action: "FISCAL_YEAR_CREATED", entity: "FiscalYear", entityId: fy._id, summary: fy.code });
   ok(res, fy, 201);
 });
-const setYearStatus = (status, action) =>
-  catchAsync(async (req, res) => {
-    const fy = await FiscalYearService.setStatus(req.params.id, status, req.admin?.id);
-    await AuditService.log({ req, action, entity: "FiscalYear", entityId: fy._id, summary: `${fy.code} ${status}` });
-    ok(res, fy);
-  });
-exports.closeFiscalYear = setYearStatus("closed", "PERIOD_CLOSED");
-exports.reopenFiscalYear = setYearStatus("open", "PERIOD_REOPENED");
+// Closing and reopening a year do more than flip a lock (services/financial/yearEndService.js): they post and
+// reverse the closing entry, create the next year, and write their own audit rows.
+exports.yearEnd = catchAsync(async (req, res) => ok(res, await YearEndService.preview(req.params.id, req)));
+exports.closeFiscalYear = catchAsync(async (req, res) => ok(res, await YearEndService.close(req.params.id, { acknowledge: req.body?.acknowledge }, req)));
+exports.reopenFiscalYear = catchAsync(async (req, res) => ok(res, await YearEndService.reopen(req.params.id, req)));
 
 // --- number series ---
 exports.listNumberSeries = catchAsync(async (req, res) => ok(res, await NumberSeriesService.list(req)));

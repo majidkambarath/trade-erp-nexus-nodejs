@@ -11,6 +11,8 @@ const Transactor = require("../../models/modules/financial/transactorModel");
 const AppError = require("../../utils/AppError");
 const NumberSeriesService = require("../core/numberSeriesService");
 const FiscalYearService = require("../core/fiscalYearService");
+const { CLOSING_VOUCHER_TYPE } = require("../../utils/yearEnd");
+const { applyBalances } = require("./ledgerBalances");
 const { naturalBalance, categoryOf } = require("../../utils/accounting");
 const mongoose = require("mongoose");
 const { ensurePartyAccount } = require("./partyAccounts");
@@ -1124,24 +1126,11 @@ class FinancialService {
 }
 
   // Update account balances after posting - Parallel updates
+  // One increment per account, however many lines the voucher has on it: reading each account and saving it back
+  // in parallel loses an update when two lines name the same account (a journal with two lines on one account,
+  // a closing entry that credits Retained Earnings once per branch).
   static async updateAccountBalances(entries, session) {
-    const updatePromises = entries.map(async (entry) => {
-      if (!mongoose.Types.ObjectId.isValid(entry.accountId)) return;
-      const account = await LedgerAccount.findById(entry.accountId)
-        .select("accountType currentBalance")
-        .session(session);
-      if (account) {
-        const netChange = entry.debitAmount - entry.creditAmount;
-        if (["asset", "expense"].includes(account.accountType)) {
-          account.currentBalance += netChange;
-        } else {
-          account.currentBalance -= netChange;
-        }
-        await account.save({ session });
-      }
-    });
-
-    await Promise.all(updatePromises);
+    await applyBalances(entries.filter((entry) => mongoose.Types.ObjectId.isValid(entry.accountId)), session);
   }
 
   // Helper method to get cash/bank account based on payment mode - With caching option
@@ -1781,23 +1770,16 @@ class FinancialService {
       };
 
       await LedgerEntry.create([reversalEntry], { session });
-
-      // Only update LedgerAccount balances, not Transactor
-      const account = await LedgerAccount.findById(entry.accountId)
-        .select("accountType currentBalance")
-        .session(session);
-      if (account) {
-        const originalNetChange = entry.debitAmount - entry.creditAmount;
-        if (["asset", "expense"].includes(account.accountType)) {
-          account.currentBalance -= originalNetChange;
-        } else {
-          account.currentBalance += originalNetChange;
-        }
-        await account.save({ session });
-      }
     });
 
     await Promise.all(reversalPromises);
+
+    // Only LedgerAccount balances, not Transactor: the mirror image of each entry, applied once per account
+    // (see updateAccountBalances for why not one by one in parallel).
+    await applyBalances(
+      entries.map((entry) => ({ accountId: entry.accountId, debitAmount: entry.creditAmount, creditAmount: entry.debitAmount })),
+      session
+    );
 
     await LedgerEntry.updateMany(
       { voucherId },
@@ -1834,7 +1816,7 @@ class FinancialService {
 
     switch (reportType) {
       case "trial_balance":
-        return this.getTrialBalance(dateFrom, dateTo);
+        return this.getTrialBalance(dateFrom, dateTo, { includeClosing: ["true", "1", true].includes(filters.includeClosing) });
       case "profit_loss":
         return this.getProfitAndLoss(dateFrom, dateTo);
       case "balance_sheet":
@@ -1862,15 +1844,22 @@ class FinancialService {
   // LedgerEntry rows exist only for approved vouchers (createLedgerEntries is called on
   // approval), and the entry has no `status` field - the previous `{status:"approved"}` match
   // therefore matched nothing and the report was always empty.
-  static async getTrialBalance(dateFrom, dateTo) {
+  //
+  // A year-end closing entry (voucherType "closing") dated before `dateFrom` is part of the opening balance - that is how a
+  // closed year's profit reaches Retained Earnings and income and expense start the next year at zero. One dated inside
+  // the period is left out of its movement, so the closed year still shows its own profit; `includeClosing` counts it.
+  static async getTrialBalance(dateFrom, dateTo, { includeClosing = false } = {}) {
     const from = dateFrom ? new Date(dateFrom) : null;
     const to = dateTo ? new Date(dateTo) : null;
 
     const match = { isReversed: { $ne: true } };
     if (to) match.date = { $lte: to };
 
-    const inPeriod = (field) =>
-      from ? { $cond: [{ $gte: ["$date", from] }, field, 0] } : field;
+    const notClosing = { $ne: ["$voucherType", CLOSING_VOUCHER_TYPE] };
+    const periodTest = from
+      ? (includeClosing ? { $gte: ["$date", from] } : { $and: [{ $gte: ["$date", from] }, notClosing] })
+      : (includeClosing ? null : notClosing);
+    const inPeriod = (field) => (periodTest ? { $cond: [periodTest, field, 0] } : field);
     const beforePeriod = (field) =>
       from ? { $cond: [{ $lt: ["$date", from] }, field, 0] } : 0;
 
@@ -1965,10 +1954,12 @@ class FinancialService {
     return { dateFrom: dateFrom || null, dateTo: dateTo || null, income, expenses, totalIncome, totalExpenses, netProfit: r2(totalIncome - totalExpenses) };
   }
 
-  // Balance Sheet as at a date. Profit earned to that date is shown inside equity (no year-end
-  // closing entries exist), so assets = liabilities + equity holds without them.
+  // Balance Sheet as at a date. The profit of the fiscal year the date falls in is shown inside equity (it is not
+  // closed to Retained Earnings until the year is closed); the profit of closed years is already in Retained Earnings.
+  // Read from the start of that year, so the closing entries of earlier years count and this year's own do not.
   static async getBalanceSheet(asOf) {
-    const { trialBalance } = await this.getTrialBalance(undefined, asOf);
+    const year = await FiscalYearService.getForDate(asOf ? new Date(asOf) : new Date());
+    const { trialBalance } = await this.getTrialBalance(year ? year.startDate : undefined, asOf);
     const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
     const lines = (category) =>
       trialBalance

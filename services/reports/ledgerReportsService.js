@@ -9,6 +9,7 @@ const AgeingService = require("../financial/ageingService");
 const AppError = require("../../utils/AppError");
 const { naturalBalance, categoryOf, round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
+const { CLOSING_VOUCHER_TYPE } = require("../../utils/yearEnd");
 
 // Reports read straight from the general ledger, so they cannot disagree with the Trial Balance:
 // General ledger, Profit and loss (with gross profit), Day book, Cash and bank book, Cash flow and
@@ -36,7 +37,7 @@ const dayEnd = (v) => bound(v, "end");
 const VOUCHER_LABEL = {
   receipt: "Receipt", payment: "Payment", journal: "Journal", contra: "Contra", expense: "Expense",
   debit_note: "Debit note", credit_note: "Credit note",
-  opening: "Opening balance", opening_stock: "Opening stock", stock_writeoff: "Stock write-off",
+  opening: "Opening balance", opening_stock: "Opening stock", stock_writeoff: "Stock write-off", closing: "Year-end closing",
   sales_order: "Sales invoice", sales_return: "Sales return", purchase_order: "Purchase invoice", purchase_return: "Purchase return",
 };
 const CASH_FLOW_LABEL = {
@@ -54,14 +55,24 @@ class LedgerReportsService {
 
   // Per account: debits and credits before `from` (opening) and from `from` to `to` (period),
   // with the account's group and category.
-  static async accountMovements({ from, to, accountIds } = {}) {
+  //
+  // A year-end closing entry (voucherType "closing", utils/yearEnd.js) is a posting but not activity. One dated BEFORE
+  // `from` is part of the balance brought forward - that is how a closed year's profit reaches Retained Earnings and how
+  // income and expense start the next year at zero. One dated INSIDE the period is left out of its movement, so the
+  // year that was closed still shows the profit it earned. `includeClosing` counts them as the postings they are (the
+  // post-closing trial balance).
+  static async accountMovements({ from, to, accountIds, includeClosing = false } = {}) {
     const start = dayStart(from);
     const end = dayEnd(to);
     const match = { isReversed: { $ne: true } };
     if (end) match.date = { $lte: end };
     if (accountIds) match.accountId = { $in: accountIds.map((id) => new mongoose.Types.ObjectId(String(id))) };
     const before = (f) => (start ? { $cond: [{ $lt: ["$date", start] }, f, 0] } : 0);
-    const within = (f) => (start ? { $cond: [{ $gte: ["$date", start] }, f, 0] } : f);
+    const notClosing = { $ne: ["$voucherType", CLOSING_VOUCHER_TYPE] };
+    const inPeriod = start
+      ? (includeClosing ? { $gte: ["$date", start] } : { $and: [{ $gte: ["$date", start] }, notClosing] })
+      : (includeClosing ? null : notClosing);
+    const within = (f) => (inPeriod ? { $cond: [inPeriod, f, 0] } : f);
 
     const rows = await LedgerEntry.aggregate([
       { $match: match },
@@ -112,8 +123,8 @@ class LedgerReportsService {
 
   // Every account with its opening balance, the period's debits and credits, and the closing
   // balance, filed by group. Zero accounts are left out.
-  static async generalLedger({ from, to, category, includeZero = false } = {}) {
-    const rows = await this.accountMovements({ from, to });
+  static async generalLedger({ from, to, category, includeZero = false, includeClosing = false } = {}) {
+    const rows = await this.accountMovements({ from, to, includeClosing });
     const groups = new Map();
     for (const r of rows) {
       if (category && r.category !== category) continue;

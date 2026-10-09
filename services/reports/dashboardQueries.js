@@ -5,6 +5,7 @@ const AccountConfigService = require("../financial/accountConfigService");
 const LedgerReports = require("./ledgerReportsService");
 const { naturalBalance, categoryOf, round2 } = require("../../utils/accounting");
 const orgLocale = require("../../utils/orgLocale");
+const { CLOSING_VOUCHER_TYPE } = require("../../utils/yearEnd");
 
 // The aggregations behind the home dashboard that no report offers by month, week or hour. Each is
 // ONE pass over its collection (grouped by Dubai month / day), so a 8-month chart costs one query
@@ -60,8 +61,9 @@ async function accountClasses(ids) {
 // definitions (direct income / direct cost groups of the posting map), one query for all months.
 async function monthlyProfit(months, lastDay) {
   const [rows, directIncome, directCost] = await Promise.all([
+    // the year-end closing entry takes a year's income and expense to equity: it is not December's trading
     LedgerEntry.aggregate([
-      { $match: { isReversed: { $ne: true }, date: range(`${months[0]}-01`, lastDay) } },
+      { $match: { isReversed: { $ne: true }, voucherType: { $ne: CLOSING_VOUCHER_TYPE }, date: range(`${months[0]}-01`, lastDay) } },
       { $group: { _id: { month: monthKey("$date"), accountId: "$accountId" }, debit: { $sum: "$debitAmount" }, credit: { $sum: "$creditAmount" } } },
     ]),
     LedgerReports.groupSet(["sales-income-group", "direct-income-group"]),

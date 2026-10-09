@@ -29,6 +29,8 @@ const SERIES = {
   OST: { prefix: "OST", numberLength: 4, label: "Opening stock voucher" },
   // A completed bank reconciliation (a bank account proven against its statement as of a date).
   BRC: { prefix: "BRC", numberLength: 4, label: "Bank reconciliation" },
+  // The entry that closes a fiscal year: income and expense taken to Retained Earnings.
+  YEC: { prefix: "YEC", numberLength: 4, label: "Year-end closing" },
 };
 
 const SERIES_BY_TRANSACTION_TYPE = {

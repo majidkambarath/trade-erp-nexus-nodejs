@@ -40,6 +40,8 @@ const SEED = [
   k("stock-adjustment", "Stock adjustment", "EXPENSE", "account"),
   k("inventory-asset", "Inventory (stock on hand)", "ASSET", "account"),
   k("opening-balance-equity", "Opening balance equity", "EQUITY", "account"),
+  // year-end closing: where a year's profit (or loss) goes when the year is closed
+  k("retained-earnings", "Retained earnings (year-end profit goes here)", "EQUITY", "account"),
 
   // --- purchase side ---
   k("purchase-group", "Purchase postings", null, "none"),

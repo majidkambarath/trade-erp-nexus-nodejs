@@ -33,6 +33,7 @@ router.put("/account-configuration/posting", requirePermission("accounts.manage"
 
 router.get("/fiscal-years", requirePermission(["accounts.view","lookups.view"]), c.listFiscalYears);
 router.post("/fiscal-years", requirePermission("accounts.manage"), c.createFiscalYear);
+router.get("/fiscal-years/:id/year-end", requirePermission("accounts.close"), c.yearEnd);
 router.post("/fiscal-years/:id/close", requirePermission("accounts.close"), c.closeFiscalYear);
 router.post("/fiscal-years/:id/reopen", requirePermission("accounts.close"), c.reopenFiscalYear);
 

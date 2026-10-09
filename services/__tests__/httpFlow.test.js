@@ -354,7 +354,22 @@ test("batches: expiry write-off through the API books the loss", { skip }, async
 });
 
 test("period lock: a closed year refuses new documents, and reopening allows them", { skip }, async () => {
-  assert.equal((await call("POST", `/accounting/fiscal-years/${S.fy}/close`)).status, 200);
+  // closing is a decision with checks of its own (yearEnd.test.js): what stands in the way is read first, and a year that
+  // has not ended yet is closed only by someone who says so
+  assert.equal((await call("GET", `/accounting/fiscal-years/${S.fy}/year-end`, { token: S.viewer })).status, 403, "a viewer cannot even ask");
+  const pre = await call("GET", `/accounting/fiscal-years/${S.fy}/year-end`);
+  assert.equal(pre.status, 200);
+  assert.equal(pre.body.year.status, "open");
+  assert.equal(pre.body.canClose, true, JSON.stringify(pre.body.blockers));
+  assert.ok(pre.body.warnings.some((w) => w.code === "YEAR_NOT_ENDED"));
+  assert.equal((await call("POST", `/accounting/fiscal-years/${S.fy}/close`, { token: S.viewer })).status, 403);
+  const unsaid = await call("POST", `/accounting/fiscal-years/${S.fy}/close`);
+  assert.equal(unsaid.status, 409);
+  assert.equal(unsaid.data.errorCode, "YEAR_CLOSE_WARNINGS");
+  const closed = await call("POST", `/accounting/fiscal-years/${S.fy}/close`, { body: { acknowledge: ["YEAR_NOT_ENDED"] } });
+  assert.equal(closed.status, 200, JSON.stringify(closed.data));
+  assert.equal(closed.body.year.status, "closed");
+  assert.equal(closed.body.closing.posted, true, "the year had trading: its profit went to Retained Earnings");
   const refused = await order("sales_order", S.customer, "Customer", [line(1, 50)]);
   assert.equal(refused.status, 422);
   assert.equal(refused.data.errorCode, "PERIOD_CLOSED");

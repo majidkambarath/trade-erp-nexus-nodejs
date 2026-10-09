@@ -154,6 +154,7 @@ test("an operator enters documents, and a manager approves them", { skip }, asyn
   await cannot("operator", "POST", "/accounting/accounts", { accountName: "x" });
   await cannot("operator", "PUT", "/accounting/account-configuration", {});
   await cannot("operator", "POST", `/accounting/fiscal-years/${FAKE}/close`);
+  await cannot("operator", "GET", `/accounting/fiscal-years/${FAKE}/year-end`);
   await cannot("operator", "POST", "/opening-balances/accounts", {});
   await cannot("operator", "POST", "/messaging/send", {});
 
@@ -235,6 +236,7 @@ test("an accountant keeps the books, but does not close a period, change setting
   await can("accountant", "GET", "/banking/reconciliation/accounts");
   await cannot("accountant", "POST", `/accounting/fiscal-years/${FAKE}/close`);
   await cannot("accountant", "POST", `/accounting/fiscal-years/${FAKE}/reopen`);
+  await cannot("accountant", "GET", `/accounting/fiscal-years/${FAKE}/year-end`); // reading what closing would do is accounts.close too
   await cannot("accountant", "PUT", "/accounting/settings", { creditControl: { mode: "off" } });
   await cannot("accountant", "PATCH", `/transactions/transactions/${ID.so}/process`, { action: "approve" });
   await cannot("accountant", "POST", "/transactions/transactions", { type: "sales_order" });
@@ -262,6 +264,7 @@ test("an administrator and the owner may do the setup and the people, and the ga
   for (const who of ["admin", "owner"]) {
     await can(who, "PUT", "/accounting/settings", { creditControl: { mode: "off" } });
     await can(who, "POST", `/accounting/fiscal-years/${FAKE}/close`);
+    await can(who, "GET", `/accounting/fiscal-years/${FAKE}/year-end`);
     await can(who, "POST", "/accounting/accounts", { accountName: "x" });
     await can(who, "GET", "/");
     await can(who, "GET", "/accounting/audit-log");

@@ -15,7 +15,7 @@ const read = (fn) =>
   });
 
 exports.generalLedger = read((req) =>
-  LedgerReports.generalLedger({ from: req.query.from, to: req.query.to, category: req.query.category, includeZero: flag(req.query.includeZero) }));
+  LedgerReports.generalLedger({ from: req.query.from, to: req.query.to, category: req.query.category, includeZero: flag(req.query.includeZero), includeClosing: flag(req.query.includeClosing) }));
 
 exports.profitAndLoss = read((req) => LedgerReports.profitAndLoss({ from: req.query.from, to: req.query.to }));
 
