@@ -19,6 +19,7 @@ const { CLOSING_VOUCHER_TYPE } = require("../../utils/yearEnd");
 // Dates are calendar days in the organisation's own time zone (utils/orgLocale.js): `from` starts at 00:00 and `to`
 // ends at 23:59:59.999 of that day there, the same days people see on screen.
 const orgLocale = require("../../utils/orgLocale");
+const tz = require("../../utils/tz");
 
 const CATEGORY_ORDER = ["ASSET", "LIABILITY", "EQUITY", "INCOME", "EXPENSE"];
 const ymd = /^\d{4}-\d{2}-\d{2}$/;
@@ -44,7 +45,16 @@ const CASH_FLOW_LABEL = {
   receipt: "Received from customers", payment: "Paid to vendors", expense: "Expenses paid", contra: "Moved between cash and bank",
   journal: "Journal entries", sales_order: "Sales settled at once", purchase_order: "Purchases settled at once",
   sales_return: "Sales returns refunded", purchase_return: "Purchase returns refunded", debit_note: "Debit notes", credit_note: "Credit notes",
-  opening: "Opening balances",
+  opening: "Opening balances", cheque_clearance: "Cheques cleared",
+};
+// The order voucher kinds read in on a screen: trade documents, then money, then books, then the rest.
+const TYPE_ORDER = [
+  "sales_order", "sales_return", "purchase_order", "purchase_return", "receipt", "payment", "expense", "journal", "contra",
+  "debit_note", "credit_note", "cheque_clearance", "stock_adjustment", "stock_writeoff", "opening", "opening_stock", "closing",
+];
+const typeRank = (t) => {
+  const i = TYPE_ORDER.indexOf(t);
+  return i < 0 ? TYPE_ORDER.length : i;
 };
 const titleCase = (s) => String(s || "other").replace(/[_-]+/g, " ").replace(/^./, (c) => c.toUpperCase());
 
@@ -205,6 +215,36 @@ class LedgerReportsService {
     return ids;
   }
 
+  // The part of "one row per voucher" that the day book and the daily summary share, so the two cannot disagree about
+  // what a voucher is worth. `fields` goes in the $group (by voucherId), `after` in the $addFields that follows.
+  //
+  // A cheque that clears posts again under the same voucher (voucherType "cheque_clearance": Dr bank, Cr cheques in
+  // hand). That moves the money, it is not a second receipt: counting it would show a cleared 300 cheque as a 600
+  // receipt. The voucher's amount and type are those of its own posting; a period holding only the clearing shows it
+  // as a "Cheque clearance" of the cheque's amount. A sale's amount is the invoice: its cost-of-goods and stock legs
+  // are left out.
+  static voucherRow(costIds) {
+    const isClearing = { $eq: ["$voucherType", "cheque_clearance"] };
+    return {
+      fields: {
+        voucherType: { $max: { $cond: [isClearing, null, "$voucherType"] } },
+        debitAll: { $sum: "$debitAmount" },
+        amount: {
+          $sum: {
+            $cond: [
+              { $or: [isClearing, ...(costIds.length ? [{ $and: [{ $in: ["$voucherType", ["sales_order", "sales_return"]] }, { $in: ["$accountId", costIds] }] }] : [])] },
+              0,
+              "$debitAmount",
+            ],
+          },
+        },
+        clearing: { $sum: { $cond: [isClearing, "$debitAmount", 0] } },
+        credit: { $sum: "$creditAmount" },
+      },
+      after: { voucherType: { $ifNull: ["$voucherType", "cheque_clearance"] }, amount: { $cond: [{ $gt: ["$amount", 0] }, "$amount", "$clearing"] } },
+    };
+  }
+
   // One line per voucher (an invoice, a receipt, a journal...) in date order, with what moved and
   // who it concerned. `includeLines` adds each voucher's debit and credit lines (the journals register).
   static async dayBook({ from, to, type, search, page = 1, limit = 50, includeLines = false } = {}) {
@@ -217,29 +257,12 @@ class LedgerReportsService {
     const costIds = await this.costLegAccountIds();
     const size = Math.min(Math.max(Number(limit) || 50, 1), 200);
     const skip = (Math.max(Number(page) || 1, 1) - 1) * size;
-    // A cheque that clears posts again under the same voucher (voucherType "cheque_clearance": Dr bank,
-    // Cr cheques in hand). That moves the money, it is not a second receipt: counting it would show a
-    // cleared 300 cheque as a 600 receipt. The voucher's amount and type are those of its own posting;
-    // a period holding only the clearing shows it as a "Cheque clearance" of the cheque's amount.
-    const isClearing = { $eq: ["$voucherType", "cheque_clearance"] };
+    const row = this.voucherRow(costIds);
     const group = {
       _id: "$voucherId",
       date: { $min: "$date" },
       voucherNo: { $first: "$voucherNo" },
-      voucherType: { $max: { $cond: [isClearing, null, "$voucherType"] } },
-      debitAll: { $sum: "$debitAmount" },
-      // a sale's amount is the invoice: leave out its cost-of-goods / stock legs
-      amount: {
-        $sum: {
-          $cond: [
-            { $or: [isClearing, ...(costIds.length ? [{ $and: [{ $in: ["$voucherType", ["sales_order", "sales_return"]] }, { $in: ["$accountId", costIds] }] }] : [])] },
-            0,
-            "$debitAmount",
-          ],
-        },
-      },
-      clearing: { $sum: { $cond: [isClearing, "$debitAmount", 0] } },
-      credit: { $sum: "$creditAmount" },
+      ...row.fields,
       narration: { $max: "$narration" },
       accounts: { $addToSet: "$accountName" },
       lineCount: { $sum: 1 },
@@ -248,7 +271,7 @@ class LedgerReportsService {
     const pipeline = [
       { $match: match },
       { $group: group },
-      { $addFields: { voucherType: { $ifNull: ["$voucherType", "cheque_clearance"] }, amount: { $cond: [{ $gt: ["$amount", 0] }, "$amount", "$clearing"] } } },
+      { $addFields: row.after },
     ];
     const needle = String(search || "").trim();
     if (needle) {
@@ -356,6 +379,142 @@ class LedgerReportsService {
     const totalOut = round2(lines.reduce((t, l) => t + l.outflow, 0));
     const closing = round2(opening + totalIn - totalOut);
     return { from: from || null, to: to || null, accounts: accounts.length, opening, lines, totalIn, totalOut, net: round2(totalIn - totalOut), closing, closingPerLedger, reconciles: Math.abs(closing - closingPerLedger) < 0.01 };
+  }
+
+  // ---------------------------------------------------------------- Daily voucher summary
+
+  // The day book by day: for each day, how many vouchers of each kind were posted and what they came to, and how many
+  // of them did not balance. A voucher is worth what the day book says it is (voucherRow), and falls on the day of its
+  // first posting in the organisation's own calendar, so a day's figures are the day book's for that day.
+  static async dailySummary({ from, to } = {}) {
+    const start = dayStart(from);
+    const end = dayEnd(to);
+    const match = { isReversed: { $ne: true } };
+    if (start || end) match.date = { ...(start ? { $gte: start } : {}), ...(end ? { $lte: end } : {}) };
+    const row = this.voucherRow(await this.costLegAccountIds());
+    const found = await LedgerEntry.aggregate([
+      { $match: match },
+      { $group: { _id: "$voucherId", date: { $min: "$date" }, ...row.fields } },
+      { $addFields: row.after },
+      {
+        $group: {
+          _id: { day: { $dateToString: { format: "%Y-%m-%d", date: "$date", timezone: orgLocale.timezone() } }, type: "$voucherType" },
+          count: { $sum: 1 },
+          amount: { $sum: "$amount" },
+          unbalanced: { $sum: { $cond: [{ $gte: [{ $abs: { $subtract: ["$debitAll", "$credit"] } }, 0.01] }, 1, 0] } },
+        },
+      },
+    ]);
+
+    const days = new Map();
+    const totals = { count: 0, unbalanced: 0, byType: {} };
+    const types = new Set();
+    for (const r of found) {
+      const type = r._id.type;
+      types.add(type);
+      const day = days.get(r._id.day) || { day: r._id.day, count: 0, unbalanced: 0, byType: {} };
+      day.byType[type] = { count: r.count, amount: round2(r.amount) };
+      day.count += r.count;
+      day.unbalanced += r.unbalanced;
+      days.set(r._id.day, day);
+      const t = totals.byType[type] || { count: 0, amount: 0 };
+      totals.byType[type] = { count: t.count + r.count, amount: round2(t.amount + r.amount) };
+      totals.count += r.count;
+      totals.unbalanced += r.unbalanced;
+    }
+    const label = (t) => VOUCHER_LABEL[t] || titleCase(t);
+    return {
+      from: from || null, to: to || null,
+      types: [...types].sort((a, b) => typeRank(a) - typeRank(b) || label(a).localeCompare(label(b))).map((t) => ({ voucherType: t, label: label(t) })),
+      days: [...days.values()].sort((a, b) => b.day.localeCompare(a.day)),
+      totals,
+    };
+  }
+
+  // ---------------------------------------------------------------- Day end: cash and bank
+
+  // The cash and bank position for ONE day, as the cashier closes it: each account's opening, what came in, what went
+  // out and what it holds at the end of the day, where the money came from and went to, and whether the day agrees
+  // with the ledger. Built from the cash book and the cash flow, so it cannot disagree with either.
+  // (Named dayEndSummary because LedgerReportsService.dayEnd is already the end-of-day DATE helper others call.)
+  static async dayEndSummary({ date } = {}) {
+    const day = date ? String(date).slice(0, 10) : orgLocale.today();
+    const start = dayStart(day); // refuses what is not a date
+    const end = dayEnd(day);
+    const [book, flow] = await Promise.all([this.cashBook({ from: day, to: day }), this.cashFlow({ from: day, to: day })]);
+    const ids = book.rows.map((r) => r.accountId);
+    const touched = ids.length
+      ? await LedgerEntry.aggregate([
+          { $match: { accountId: { $in: ids }, isReversed: { $ne: true }, date: { $gte: start, $lte: end } } },
+          { $group: { _id: "$accountId", vouchers: { $addToSet: "$voucherId" } } },
+        ])
+      : [];
+    const vouchersOf = new Map(touched.map((t) => [String(t._id), t.vouchers.length]));
+    const all = book.totals.all;
+    const moved = round2(all.receipts - flow.totalIn);
+    return {
+      date: day,
+      accounts: book.rows.map((r) => ({ ...r, vouchers: vouchersOf.get(String(r.accountId)) || 0 })),
+      totals: book.totals,
+      // where the money came from and went to, by kind of voucher (a move between two accounts of your own is in neither)
+      sources: flow.lines, moneyIn: flow.totalIn, moneyOut: flow.totalOut,
+      movedBetweenAccounts: Math.abs(moved) < 0.005 ? 0 : moved,
+      hadActivity: all.receipts !== 0 || all.payments !== 0,
+      closingPerLedger: flow.closingPerLedger,
+      reconciles: flow.reconciles && Math.abs(all.closing - flow.closingPerLedger) < 0.01 && Math.abs(all.opening - flow.opening) < 0.01,
+    };
+  }
+
+  // The day-end position of cash and of bank for each day that had a movement in a range: what came in, what went out,
+  // and what was held at the end of the day. Only days with a movement are listed; the balance on any other day is the
+  // balance of the day before it.
+  static async dayEndRegister({ from, to } = {}) {
+    const endDay = to ? String(to).slice(0, 10) : orgLocale.today();
+    const startDay = from ? String(from).slice(0, 10) : tz.addDays(endDay, -13);
+    const start = dayStart(startDay);
+    const end = dayEnd(endDay);
+    if (start > end) throw new AppError("from must not be after to", 400, "INVALID_RANGE");
+
+    const accounts = await this.cashBankAccounts();
+    const kindOf = new Map(accounts.map((a) => [String(a._id), a.kind]));
+    const ids = accounts.map((a) => a._id);
+    const dayOf = { $dateToString: { format: "%Y-%m-%d", date: "$date", timezone: orgLocale.timezone() } };
+    const rows = ids.length
+      ? await LedgerEntry.aggregate([
+          { $match: { accountId: { $in: ids }, isReversed: { $ne: true }, date: { $lte: end } } },
+          { $group: { _id: { day: { $cond: [{ $lt: ["$date", start] }, "before", dayOf] }, accountId: "$accountId" }, debit: { $sum: "$debitAmount" }, credit: { $sum: "$creditAmount" } } },
+        ])
+      : [];
+
+    const opening = { cash: 0, bank: 0 };
+    const byDay = new Map();
+    for (const r of rows) {
+      const kind = kindOf.get(String(r._id.accountId));
+      if (!kind) continue;
+      if (r._id.day === "before") {
+        opening[kind] = round2(opening[kind] + r.debit - r.credit);
+        continue;
+      }
+      const d = byDay.get(r._id.day) || { day: r._id.day, cash: { in: 0, out: 0 }, bank: { in: 0, out: 0 } };
+      d[kind].in = round2(d[kind].in + r.debit);
+      d[kind].out = round2(d[kind].out + r.credit);
+      byDay.set(r._id.day, d);
+    }
+    let cash = opening.cash;
+    let bank = opening.bank;
+    const days = [...byDay.values()]
+      .sort((a, b) => a.day.localeCompare(b.day))
+      .map((d) => {
+        cash = round2(cash + d.cash.in - d.cash.out);
+        bank = round2(bank + d.bank.in - d.bank.out);
+        return { day: d.day, cash: { ...d.cash, closing: cash }, bank: { ...d.bank, closing: bank }, closing: round2(cash + bank) };
+      });
+    return {
+      from: startDay, to: endDay,
+      opening: { ...opening, all: round2(opening.cash + opening.bank) },
+      days,
+      closing: { cash, bank, all: round2(cash + bank) },
+    };
   }
 
   // ---------------------------------------------------------------- Party balances

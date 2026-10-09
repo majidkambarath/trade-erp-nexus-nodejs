@@ -122,6 +122,8 @@ test("a viewer looks at things and changes nothing", { skip }, async () => {
   await can("viewer", "GET", "/vouchers/vouchers");
   await can("viewer", "GET", "/accounting/chart");
   await can("viewer", "GET", "/accounting/reports/profit-loss?from=2000-01-01&to=2100-01-01");
+  await can("viewer", "GET", "/accounting/reports/daily-summary?from=2000-01-01&to=2100-01-01");
+  await can("viewer", "GET", "/accounting/reports/day-end"); // reading the cash position is reading the financial reports
   await can("viewer", "GET", "/customers/customers");
   await can("viewer", "GET", "/dashboard-summary");
   await cannot("viewer", "POST", "/transactions/transactions", { type: "sales_order" });
@@ -222,6 +224,7 @@ test("a storekeeper looks after stock, and touches no money and raises no sale",
   await cannot("storekeeper", "POST", "/vouchers/vouchers", { voucherType: "payment" });
   await cannot("storekeeper", "GET", "/accounting/chart");
   await cannot("storekeeper", "GET", "/accounting/reports/profit-loss");
+  await cannot("storekeeper", "GET", "/accounting/reports/day-end/register");
 });
 
 test("an accountant keeps the books, but does not close a period, change settings or approve a sale", { skip }, async () => {
@@ -232,6 +235,9 @@ test("an accountant keeps the books, but does not close a period, change setting
   await can("accountant", "POST", "/accounting/tax-codes", {});
   await can("accountant", "POST", "/vat-return/returns", {});
   await can("accountant", "GET", "/accounting/reports/profit-loss?from=2000-01-01&to=2100-01-01");
+  await can("accountant", "GET", "/accounting/reports/day-end");
+  await can("accountant", "GET", "/accounting/reports/day-end/register");
+  await can("accountant", "GET", "/accounting/reports/daily-summary");
   await can("accountant", "GET", "/accounting/audit-log");
   await can("accountant", "GET", "/banking/reconciliation/accounts");
   await cannot("accountant", "POST", `/accounting/fiscal-years/${FAKE}/close`);

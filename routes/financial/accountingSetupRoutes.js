@@ -57,9 +57,12 @@ router.get("/reports/statement", requirePermission(["reports.view","finance.view
 router.get("/reports/general-ledger", requirePermission("reports.financial"), ledgerReports.generalLedger);
 router.get("/reports/profit-loss", requirePermission("reports.financial"), ledgerReports.profitAndLoss);
 router.get("/reports/day-book", requirePermission(["reports.financial","finance.view"]), ledgerReports.dayBook);
+router.get("/reports/daily-summary", requirePermission(["reports.financial","finance.view"]), ledgerReports.dailySummary);
 router.get("/reports/voucher/:id", requirePermission(["reports.financial","finance.view"]), ledgerReports.voucherImpact);
 router.get("/reports/cash-book", requirePermission("reports.financial"), ledgerReports.cashBook);
 router.get("/reports/cash-flow", requirePermission("reports.financial"), ledgerReports.cashFlow);
+router.get("/reports/day-end", requirePermission("reports.financial"), ledgerReports.dayEnd);
+router.get("/reports/day-end/register", requirePermission("reports.financial"), ledgerReports.dayEndRegister);
 router.get("/reports/party-balances", requirePermission(["reports.financial","finance.view"]), ledgerReports.partyBalances);
 router.get("/returnable/:id", requirePermission(["sales.view","purchase.view"]), chart.getReturnable);
 router.get("/audit-log", requirePermission("audit.view"), chart.getAuditLog);

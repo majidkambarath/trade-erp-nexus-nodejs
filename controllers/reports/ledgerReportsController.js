@@ -25,11 +25,17 @@ exports.dayBook = read((req) =>
     page: req.query.page, limit: req.query.limit, includeLines: flag(req.query.includeLines),
   }));
 
+exports.dailySummary = read((req) => LedgerReports.dailySummary({ from: req.query.from, to: req.query.to }));
+
 exports.voucherImpact = read((req) => LedgerReports.voucherImpact(req.params.id));
 
 exports.cashBook = read((req) => LedgerReports.cashBook({ from: req.query.from, to: req.query.to, kind: req.query.kind }));
 
 exports.cashFlow = read((req) => LedgerReports.cashFlow({ from: req.query.from, to: req.query.to }));
+
+exports.dayEnd = read((req) => LedgerReports.dayEndSummary({ date: req.query.date }));
+
+exports.dayEndRegister = read((req) => LedgerReports.dayEndRegister({ from: req.query.from, to: req.query.to }));
 
 exports.partyBalances = read((req) =>
   LedgerReports.partyBalances({ type: req.query.type, asOn: req.query.asOn, includeZero: flag(req.query.includeZero) }));
