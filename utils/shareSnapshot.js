@@ -11,6 +11,8 @@
 // The shapes mirror what the printed sheet reads (components/PurchaseOrder/shared/invoiceDocuments.js),
 // so the page and the PDF attachment are drawn by the same builder from the same data.
 
+const orgLocale = require("./orgLocale");
+
 const pick = (src, keys) => {
   const out = {};
   for (const k of keys) if (src && src[k] !== undefined && src[k] !== null) out[k] = src[k];
@@ -31,7 +33,7 @@ const COMPANY_KEYS = [
 
 const toPlain = (v) => (v && typeof v.toObject === "function" ? v.toObject() : v);
 
-function invoiceSnapshot({ transaction, customer, company, currency = "AED" }) {
+function invoiceSnapshot({ transaction, customer, company, currency = orgLocale.baseCurrency() }) {
   const tx = toPlain(transaction) || {};
   const c = toPlain(customer) || {};
   const document = {

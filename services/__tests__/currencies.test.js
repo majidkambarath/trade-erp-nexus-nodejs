@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "..", "..", ".env") });
 const mongoose = require("mongoose");
-const { dubaiDay, dubaiDayStart } = require("../../utils/fx");
+const { orgDay, orgDayStart } = require("../../utils/fx");
 
 const skip = !process.env.MONGO_URI && "MONGO_URI not set";
 const DB = `erp_test_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -62,7 +62,7 @@ const r2 = (n) => Math.round(n * 100) / 100;
 const acct = (name) => svc.LedgerAccount.findOne({ accountName: name });
 const balance = async (name) => r2((await acct(name))?.currentBalance ?? 0);
 const day = (n = 0) => new Date(Date.now() + n * 86400000);
-const ymd = (n = 0) => dubaiDay(day(n));
+const ymd = (n = 0) => orgDay(day(n));
 const receipt = (extra) => svc.Financial.createVoucher({ voucherType: "receipt", customerId: customer._id, totalAmount: 100, date: day(), ...extra }, admin);
 const payment = (extra) => svc.Financial.createVoucher({ voucherType: "payment", vendorId: vendor._id, totalAmount: 100, date: day(), ...extra }, admin);
 const live = async (voucher) => (await svc.LedgerEntry.find({ voucherId: voucher._id, isReversed: { $ne: true } }).lean());
@@ -165,7 +165,7 @@ test("rates are looked up as of the day: a rate holds until the next one, none b
   await assert.rejects(() => svc.Currencies.rateOn("EUR", new Date()), { code: "NO_RATE" }, "a currency with no rates never answers 1");
 
   // a Dubai calendar day: 21:30 UTC is 01:30 the next day in Dubai
-  const edge = dubaiDayStart(later).getTime();
+  const edge = orgDayStart(later).getTime();
   assert.equal((await svc.Currencies.rateOn("USD", new Date(edge - 30 * 60000))).rate, 3.6, "23:30 Dubai the evening before");
   assert.equal((await svc.Currencies.rateOn("USD", new Date(edge + 30 * 60000))).rate, 3.65, "00:30 Dubai on the day");
   assert.equal((await svc.Currencies.rateOn("USD", later)).rate, 3.65, "a plain YYYY-MM-DD is that calendar day");
@@ -179,7 +179,7 @@ test("a rate for a day already recorded replaces it and the old value goes to th
   const again = await svc.Currencies.addRate("USD", { rate: 3.66, effectiveDate: d, note: "corrected" }, { admin: { id: String(admin) } });
   assert.equal(again.replaced, true);
   assert.equal(again.previousRate, 3.65);
-  assert.equal(await svc.ExchangeRate.countDocuments({ code: "USD", effectiveDate: dubaiDayStart(d) }), 1, "still one row for that day");
+  assert.equal(await svc.ExchangeRate.countDocuments({ code: "USD", effectiveDate: orgDayStart(d) }), 1, "still one row for that day");
   assert.equal((await svc.Currencies.rateOn("USD", d)).rate, 3.66);
 
   const log = await svc.ActivityLog.findOne({ action: "EXCHANGE_RATE_REPLACED", entity: "ExchangeRate" });
@@ -219,7 +219,7 @@ test("a USD cash receipt posts in AED at the master rate, with the foreign amoun
   assert.equal(r.exchangeRate, 3.6725);
   assert.equal(r.foreignAmount, 1000);
   assert.equal(r.rateSource, "cbuae");
-  assert.equal(dubaiDay(r.rateDate), ymd(-3), "the day of the master rate it came from");
+  assert.equal(orgDay(r.rateDate), ymd(-3), "the day of the master rate it came from");
   assert.ok(!r.rateOverridden);
   assert.deepEqual((await legs(r)).sort(), ["Cash in Hand:Dr3672.5", "Customer Advance - Al Noor:Cr3672.5"].sort());
   assert.equal(await balance("Cash in Hand"), r2(cashBefore + 3672.5), "the cash account is an AED account and moves by the AED amount");
@@ -507,7 +507,7 @@ test("editing a foreign voucher: it keeps the rate it was made at; a new day, cu
   const moved = await svc.Financial.updateVoucher(v._id, { customerId: customer._id, date: day(0), forceUpdate: true }, admin);
   assert.equal(moved.exchangeRate, 4.8);
   assert.equal(moved.totalAmount, 960);
-  assert.equal(dubaiDay(moved.rateDate), ymd(-1));
+  assert.equal(orgDay(moved.rateDate), ymd(-1));
 
   // a typed rate is judged like on a new voucher, and a refusal leaves the voucher as it was
   const snapshot = { total: moved.totalAmount, cash: await balance("Cash in Hand") };

@@ -4,7 +4,7 @@ const { branchOfDocument } = require("../../middleware/branchOfDocument");
 const { Voucher } = require("../../models/modules/financial/financialModels");
 const FinancialController = require("../../controllers/financial/financialController");
 const { uploadSingle } = require("../../middleware/upload");
-const { requirePermission } = require("../../middleware/permissionGate");
+const { requirePermission, byVoucherDelete } = require("../../middleware/permissionGate");
 const router = express.Router();
 
 // Apply authentication middleware to all routes
@@ -25,7 +25,7 @@ router.put(
   uploadSingle("attachedProof"),
   FinancialController.updateVoucher
 );
-router.delete("/vouchers/:id", requirePermission("finance.delete"), FinancialController.deleteVoucher);
+router.delete("/vouchers/:id", requirePermission(byVoucherDelete), FinancialController.deleteVoucher); // an approved one needs deletePosted
 
 // Voucher type-specific queries (optimized with param)
 router.get("/vouchers/type/:type", requirePermission("finance.view"), FinancialController.getVouchersByType);

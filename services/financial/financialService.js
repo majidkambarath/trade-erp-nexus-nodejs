@@ -1380,6 +1380,8 @@ class FinancialService {
         if (oldVoucher.status === "approved" && !data.forceUpdate) {
           throw new AppError("Cannot update approved voucher", 400);
         }
+        // changing a voucher that is waiting for its second approver takes back the first: what was approved is no longer what is there
+        if (oldVoucher.status !== "approved" && oldVoucher.approvals?.length) oldVoucher.approvals = [];
         if (!["receipt", "payment"].includes(oldVoucher.voucherType)) await FxVoucherService.assertBaseCurrencyOnly(data, { session });
 
         let needReprocess = false;
@@ -1612,7 +1614,7 @@ class FinancialService {
   }
 
   // Approve/Reject voucher - With retry
-  static async processVoucherApproval(id, action, approvedBy, comments) {
+  static async processVoucherApproval(id, action, approvedBy, comments, options = {}) {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       throw new AppError("Invalid voucher ID", 400);
     }
@@ -1643,11 +1645,29 @@ class FinancialService {
           );
         }
 
+        // May THIS person approve THIS voucher - limits, separate approver, a second approver above an amount
+        let approval = null;
+        if (action === "approve") {
+          const verdict = await require("../core/approvalPolicyService").judge({
+            amount: voucher.totalAmount, preparedBy: voucher.createdBy, approvals: voucher.approvals, req: options.req, session,
+          });
+          if (!verdict.final) {
+            // The first of two approvals: kept; the voucher stays pending until a different person gives the second
+            voucher.approvals = [...(voucher.approvals || []), verdict.approval];
+            await voucher.save({ session });
+            await session.commitTransaction();
+            return { ...voucher.toObject(), linkedInvoices: [], awaitingSecondApproval: true };
+          }
+          approval = verdict.approval || null;
+        }
+
         // Update voucher status
         voucher.status = action === "approve" ? "approved" : "rejected";
         voucher.approvalStatus = action === "approve" ? "approved" : "rejected";
         voucher.approvedBy = approvedBy;
         voucher.approvedAt = new Date();
+        if (approval) voucher.approvals = require("../../utils/approvalRules").addApproval(voucher.approvals, approval);
+        else if (action === "reject") voucher.approvals = [];
 
         if (comments) {
           voucher.notes = `${

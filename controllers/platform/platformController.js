@@ -36,13 +36,14 @@ exports.profile = catchAsync(async (req, res) => ok(res, await Orgs.updateCompan
 
 // an organisation's people and branches
 exports.orgUsers = catchAsync(async (req, res) => ok(res, await Orgs.listUsers(req.params.code)));
+exports.orgRoles = catchAsync(async (req, res) => ok(res, await Orgs.listRoles(req.params.code)));
 exports.orgCreateUser = catchAsync(async (req, res) => {
   const user = await Orgs.createUser(req.params.code, req.body || {}, ctx(req));
-  ok(res, { id: user._id, name: user.name, email: user.email, type: user.type, status: user.status }, 201);
+  ok(res, { id: user._id, name: user.name, email: user.email, type: user.type, role: user.roleKey || user.type, status: user.status }, 201);
 });
 exports.orgUpdateUser = catchAsync(async (req, res) => {
   const user = await Orgs.updateUser(req.params.code, req.params.id, req.body || {}, ctx(req));
-  ok(res, { id: user._id, name: user.name, email: user.email, type: user.type, status: user.status });
+  ok(res, { id: user._id, name: user.name, email: user.email, type: user.type, role: user.roleKey || user.type, status: user.status });
 });
 exports.branches = catchAsync(async (req, res) => ok(res, await Orgs.listBranches(req.params.code)));
 exports.createBranch = catchAsync(async (req, res) => ok(res, await Orgs.createBranch(req.params.code, req.body || {}, ctx(req)), 201));

@@ -19,7 +19,7 @@ let stock;
 let vouchers = {};
 
 // Dubai calendar day, the way the reports read dates
-const dubaiDay = (offset = 0) => new Date(Date.now() + 4 * 3600e3 + offset * 86400e3).toISOString().slice(0, 10);
+const orgDay = (offset = 0) => new Date(Date.now() + 4 * 3600e3 + offset * 86400e3).toISOString().slice(0, 10);
 
 test.before(async () => {
   if (skip) return;
@@ -76,7 +76,7 @@ test.after(async () => {
 const closingOf = (gl, name) => gl.groups.flatMap((g) => g.accounts).find((a) => a.accountName === name)?.closing;
 
 test("general ledger: every account with opening, debits, credits and closing, filed by group, and it balances", { skip }, async () => {
-  const gl = await svc.Reports.generalLedger({ from: dubaiDay(), to: dubaiDay() });
+  const gl = await svc.Reports.generalLedger({ from: orgDay(), to: orgDay() });
   assert.ok(gl.groups.length > 3);
   assert.equal(gl.totals.debit, gl.totals.credit, "debits equal credits");
   assert.equal(gl.totals.closing, 0, "closing balances net to nothing");
@@ -90,7 +90,7 @@ test("general ledger: every account with opening, debits, credits and closing, f
   assert.deepEqual(cats, [...cats].sort((a, b) => ["ASSET", "LIABILITY", "EQUITY", "INCOME", "EXPENSE"].indexOf(a) - ["ASSET", "LIABILITY", "EQUITY", "INCOME", "EXPENSE"].indexOf(b)));
 
   // a later period sees all of it as opening, with no movement of its own
-  const later = await svc.Reports.generalLedger({ from: dubaiDay(1), to: dubaiDay(3) });
+  const later = await svc.Reports.generalLedger({ from: orgDay(1), to: orgDay(3) });
   assert.equal(closingOf(later, "Cash in Hand"), 3590);
   assert.equal(later.groups.flatMap((g) => g.accounts).find((a) => a.accountName === "Cash in Hand").opening, 3590);
   assert.equal(later.totals.debit, 0);
@@ -100,7 +100,7 @@ test("general ledger: every account with opening, debits, credits and closing, f
 });
 
 test("profit and loss: revenue less direct costs is the gross profit, and the net agrees with the old statement", { skip }, async () => {
-  const pl = await svc.Reports.profitAndLoss({ from: dubaiDay(), to: dubaiDay() });
+  const pl = await svc.Reports.profitAndLoss({ from: orgDay(), to: orgDay() });
   assert.equal(pl.revenue.total, 200);
   assert.equal(pl.directCosts.total, 100, "cost of the 10 bags sold at 10 each");
   assert.equal(pl.grossProfit, 100);
@@ -109,7 +109,7 @@ test("profit and loss: revenue less direct costs is the gross profit, and the ne
   assert.equal(pl.otherIncome.total, 0);
   assert.equal(pl.netProfit, -100);
 
-  const old = await svc.Financial.getProfitAndLoss(`${dubaiDay()}T00:00:00+04:00`, `${dubaiDay()}T23:59:59.999+04:00`);
+  const old = await svc.Financial.getProfitAndLoss(`${orgDay()}T00:00:00+04:00`, `${orgDay()}T23:59:59.999+04:00`);
   assert.equal(pl.netProfit, old.netProfit);
   assert.equal(pl.revenue.total + pl.otherIncome.total, old.totalIncome);
   assert.equal(pl.directCosts.total + pl.operatingExpenses.total, old.totalExpenses);
@@ -117,7 +117,7 @@ test("profit and loss: revenue less direct costs is the gross profit, and the ne
 });
 
 test("day book: one line per voucher with its party and amount, filters, search and paging", { skip }, async () => {
-  const all = await svc.Reports.dayBook({ from: dubaiDay(), to: dubaiDay() });
+  const all = await svc.Reports.dayBook({ from: orgDay(), to: orgDay() });
   assert.equal(all.total, 7, "capital journal, purchase, sale, receipt, payment, expense, contra");
   assert.ok(all.rows.every((r) => r.balanced));
   const byLabel = Object.fromEntries(all.byType.map((t) => [t.voucherType, t]));
@@ -139,7 +139,7 @@ test("day book: one line per voucher with its party and amount, filters, search 
   assert.equal(page2.rows.length, 3);
   assert.equal(page2.total, 7);
 
-  const nothing = await svc.Reports.dayBook({ from: dubaiDay(2), to: dubaiDay(3) });
+  const nothing = await svc.Reports.dayBook({ from: orgDay(2), to: orgDay(3) });
   assert.equal(nothing.total, 0);
 
   const journals = await svc.Reports.dayBook({ type: "journal", includeLines: true });
@@ -160,7 +160,7 @@ test("voucher impact: the balanced lines one voucher posted", { skip }, async ()
 });
 
 test("cash and bank book: each account's opening, in, out and closing", { skip }, async () => {
-  const book = await svc.Reports.cashBook({ from: dubaiDay(), to: dubaiDay() });
+  const book = await svc.Reports.cashBook({ from: orgDay(), to: orgDay() });
   const cash = book.rows.find((r) => r.accountName === "Cash in Hand");
   const bank = book.rows.find((r) => r.accountName === "ENBD Current");
   assert.equal(cash.kind, "cash");
@@ -171,12 +171,12 @@ test("cash and bank book: each account's opening, in, out and closing", { skip }
   assert.equal(book.totals.cash.closing + book.totals.bank.closing, book.totals.all.closing);
   assert.ok((await svc.Reports.cashBook({ kind: "bank" })).rows.every((r) => r.kind === "bank"));
 
-  const next = await svc.Reports.cashBook({ from: dubaiDay(1), to: dubaiDay(2) });
+  const next = await svc.Reports.cashBook({ from: orgDay(1), to: orgDay(2) });
   assert.equal(next.rows.find((r) => r.accountName === "Cash in Hand").opening, 3590);
 });
 
 test("cash flow: in and out by kind of voucher, a move between cash and bank is neither, and it reconciles", { skip }, async () => {
-  const flow = await svc.Reports.cashFlow({ from: dubaiDay(), to: dubaiDay() });
+  const flow = await svc.Reports.cashFlow({ from: orgDay(), to: orgDay() });
   assert.equal(flow.opening, 0);
   const line = (t) => flow.lines.find((l) => l.voucherType === t);
   assert.equal(line("receipt").inflow, 100);
@@ -190,14 +190,14 @@ test("cash flow: in and out by kind of voucher, a move between cash and bank is 
   assert.equal(flow.reconciles, true);
   assert.equal(line("receipt").label, "Received from customers");
 
-  const later = await svc.Reports.cashFlow({ from: dubaiDay(1), to: dubaiDay(2) });
+  const later = await svc.Reports.cashFlow({ from: orgDay(1), to: orgDay(2) });
   assert.equal(later.opening, 4590);
   assert.deepEqual(later.lines, []);
   assert.equal(later.closing, 4590);
 });
 
 test("party balances: what customers owe and vendors are owed, with credit limit use and what is overdue", { skip }, async () => {
-  const c = await svc.Reports.partyBalances({ type: "customer", asOn: dubaiDay() });
+  const c = await svc.Reports.partyBalances({ type: "customer", asOn: orgDay() });
   const row = c.rows.find((r) => r.partyName === "Al Noor");
   assert.equal(row.balance, 110);
   assert.equal(row.creditLimit, 500);
@@ -207,17 +207,17 @@ test("party balances: what customers owe and vendors are owed, with credit limit
   assert.equal(c.totals.owed, 110);
 
   await svc.Customer.updateOne({ _id: customer._id }, { creditLimit: 100 });
-  const over = (await svc.Reports.partyBalances({ type: "customer", asOn: dubaiDay() })).rows.find((r) => r.partyName === "Al Noor");
+  const over = (await svc.Reports.partyBalances({ type: "customer", asOn: orgDay() })).rows.find((r) => r.partyName === "Al Noor");
   assert.equal(over.status, "over");
   await svc.Customer.updateOne({ _id: customer._id }, { creditLimit: 0 });
-  assert.equal((await svc.Reports.partyBalances({ type: "customer", asOn: dubaiDay() })).rows[0].status, "no-limit");
+  assert.equal((await svc.Reports.partyBalances({ type: "customer", asOn: orgDay() })).rows[0].status, "no-limit");
 
-  const v = await svc.Reports.partyBalances({ type: "vendor", asOn: dubaiDay() });
+  const v = await svc.Reports.partyBalances({ type: "vendor", asOn: orgDay() });
   assert.equal(v.rows.find((r) => r.partyName === "Gulf Mills").balance, 750);
   assert.equal(v.totals.owed, 750);
 
   // before anything happened nobody owes anything
-  const earlier = await svc.Reports.partyBalances({ type: "customer", asOn: dubaiDay(-5) });
+  const earlier = await svc.Reports.partyBalances({ type: "customer", asOn: orgDay(-5) });
   assert.deepEqual(earlier.rows, []);
 });
 
@@ -229,7 +229,7 @@ test("bad input is refused with a clear message", { skip }, async () => {
 test("day book: a cheque receipt that has cleared is one voucher of its own amount, not the amount twice", { skip }, async () => {
   const Cheque = require("../banking/chequeService");
   const bank = await svc.LedgerAccount.findOne({ accountName: "ENBD Current" });
-  const before = await svc.Reports.dayBook({ from: dubaiDay(-1), to: dubaiDay() });
+  const before = await svc.Reports.dayBook({ from: orgDay(-1), to: orgDay() });
   const receiptsBefore = before.byType.find((t) => t.voucherType === "receipt")?.amount || 0;
 
   // received yesterday, cleared today: yesterday's post is the receipt, today's is the clearing of the same voucher
@@ -242,7 +242,7 @@ test("day book: a cheque receipt that has cleared is one voucher of its own amou
   await Cheque.clear(row._id, { clearedOn: new Date() }, {}, admin);
 
   // both days: the voucher is still a 150 receipt
-  const both = await svc.Reports.dayBook({ from: dubaiDay(-1), to: dubaiDay() });
+  const both = await svc.Reports.dayBook({ from: orgDay(-1), to: orgDay() });
   const mine = both.rows.find((x) => x.voucherNo === r.voucherNo);
   assert.equal(mine.voucherType, "receipt");
   assert.equal(mine.amount, 150, "not 300: the clearing is a move of the same money");
@@ -251,12 +251,12 @@ test("day book: a cheque receipt that has cleared is one voucher of its own amou
   assert.equal(both.byType.find((t) => t.voucherType === "receipt").amount, receiptsBefore + 150, "the receipts total grows by what was received");
 
   // the day it was received: the receipt only
-  const first = await svc.Reports.dayBook({ from: dubaiDay(-1), to: dubaiDay(-1) });
+  const first = await svc.Reports.dayBook({ from: orgDay(-1), to: orgDay(-1) });
   assert.equal(first.rows.find((x) => x.voucherNo === r.voucherNo).amount, 150);
   assert.equal(first.rows.find((x) => x.voucherNo === r.voucherNo).voucherType, "receipt");
 
   // the day it cleared: only the clearing is in the period, shown as itself with the cheque's amount
-  const second = await svc.Reports.dayBook({ from: dubaiDay(), to: dubaiDay() });
+  const second = await svc.Reports.dayBook({ from: orgDay(), to: orgDay() });
   const cleared = second.rows.find((x) => x.voucherNo === r.voucherNo);
   assert.equal(cleared.voucherType, "cheque_clearance");
   assert.equal(cleared.typeLabel, "Cheque clearance");
@@ -264,6 +264,6 @@ test("day book: a cheque receipt that has cleared is one voucher of its own amou
   assert.equal(second.byType.find((t) => t.voucherType === "cheque_clearance").amount, 150);
 
   // a filter by type finds the receipt, not the clearing
-  const receipts = await svc.Reports.dayBook({ type: "receipt", from: dubaiDay(-1), to: dubaiDay() });
+  const receipts = await svc.Reports.dayBook({ type: "receipt", from: orgDay(-1), to: orgDay() });
   assert.equal(receipts.rows.find((x) => x.voucherNo === r.voucherNo).amount, 150);
 });

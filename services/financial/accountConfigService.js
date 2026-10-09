@@ -183,6 +183,7 @@ class AccountConfigService {
       creditControl: { mode: "off", overdueBlockDays: 0, ...(s.creditControl || {}) },
       returnWindowDays: s.returnWindowDays || 0,
       requireReturnLink: Boolean(s.requireReturnLink),
+      approvals: require("../../utils/approvalRules").normalisePolicy(s.approvals),
       fiscalYearStartMonth: s.fiscalYearStartMonth,
       amountDecimal: s.amountDecimal,
       quantityDecimal: s.quantityDecimal,
@@ -213,6 +214,18 @@ class AccountConfigService {
       set.returnWindowDays = n;
     }
     if (data.requireReturnLink !== undefined) set.requireReturnLink = Boolean(data.requireReturnLink);
+    if (data.approvals) {
+      const { separateApprover, secondApprovalAbove } = data.approvals;
+      if (separateApprover !== undefined) set["approvals.separateApprover"] = separateApprover === true || separateApprover === "true";
+      if (secondApprovalAbove !== undefined) {
+        if (secondApprovalAbove === null || secondApprovalAbove === "") set["approvals.secondApprovalAbove"] = null;
+        else {
+          const n = Number(secondApprovalAbove);
+          if (!Number.isFinite(n) || n < 0) throw new AppError("secondApprovalAbove must be an amount, 0 or more, or empty for never", 400, "APPROVALS_INVALID");
+          set["approvals.secondApprovalAbove"] = Math.round(n * 100) / 100;
+        }
+      }
+    }
     if (data.fiscalYearStartMonth !== undefined) {
       const n = Number(data.fiscalYearStartMonth);
       if (!Number.isInteger(n) || n < 1 || n > 12) throw new AppError("fiscalYearStartMonth must be 1-12", 400);

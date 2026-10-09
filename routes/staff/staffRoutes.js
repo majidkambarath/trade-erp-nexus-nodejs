@@ -15,16 +15,16 @@ const router = express.Router();
 router.use(authenticateToken);
 
 // Staff CRUD routes
-router.post("/staff", requirePermission("users.manage"), StaffController.createStaff);
-router.get("/staff", requirePermission("users.view"), StaffController.getAllStaff);
-router.get("/staff/stats", requirePermission("users.view"), StaffController.getStaffStats);
-router.get("/staff/:id", requirePermission("users.view"), StaffController.getStaffById);
-router.get("/staff/staffId/:staffId", requirePermission("users.view"), StaffController.getStaffByStaffId);
+router.post("/staff", requirePermission("staff.manage"), StaffController.createStaff);
+router.get("/staff", requirePermission("staff.view"), StaffController.getAllStaff);
+router.get("/staff/stats", requirePermission("staff.view"), StaffController.getStaffStats);
+router.get("/staff/:id", requirePermission("staff.view"), StaffController.getStaffById);
+router.get("/staff/staffId/:staffId", requirePermission("staff.view"), StaffController.getStaffByStaffId);
 router.put(
-  "/staff/:id", requirePermission("users.manage"),
+  "/staff/:id", requirePermission("staff.manage"),
   StaffController.updateStaff,
   handleUploadError
 );
-router.delete("/staff/:id", requirePermission("users.manage"), StaffController.deleteStaff);
+router.delete("/staff/:id", requirePermission("staff.manage"), StaffController.deleteStaff);
 
 module.exports = router;

@@ -108,7 +108,8 @@ exports.processAccountVoucherApproval = catchAsync(async (req, res) => {
     req.params.id,
     action,
     approvedBy,
-    comments
+    comments,
+    { req }
   );
 
   res.status(200).json({

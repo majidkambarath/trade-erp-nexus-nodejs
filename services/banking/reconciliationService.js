@@ -13,7 +13,7 @@ const M = require("../../utils/bankMatching");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 const { round2 } = require("../../utils/accounting");
-const { dubaiDay, todayInDubai, addDays } = require("../../utils/documentExpiry");
+const { orgDay, todayInOrg, addDays } = require("../../utils/documentExpiry");
 
 // Bank reconciliation: bring a bank account's statement and its ledger into agreement, line by
 // line, and prove it as of a date. A statement line is matched to entries the books already have,
@@ -125,7 +125,7 @@ class ReconciliationService {
     await Core.bankAccount(accountId, { req });
     const { companyId, branchId } = getTenant(req);
     if (!Core.isDay(startDay)) throw new AppError("Enter the day the statement starts", 400, "INVALID_DATE");
-    if (startDay > todayInDubai()) throw new AppError("The start day cannot be in the future", 400, "INVALID_DATE");
+    if (startDay > todayInOrg()) throw new AppError("The start day cannot be in the future", 400, "INVALID_DATE");
     const opening = Number(statementOpening);
     if (!Number.isFinite(opening)) throw new AppError("Enter the bank's balance on the day before the statement starts", 400, "OPENING_REQUIRED");
     const ids = [...new Set((outstandingEntryIds || []).map(String))];
@@ -492,7 +492,7 @@ class ReconciliationService {
       lines: lines.map((l) => ({ id: String(l._id), day: l.day, amount: l.amount, state: l.state === "reconciled" ? "matched" : l.state, groupId: l.matchId ? String(l.matchId) : null, description: l.description, reference: l.reference, lineNo: l.lineNo })),
     });
     const blockers = [];
-    if (asOf > todayInDubai()) blockers.push({ code: "FUTURE_DATE", message: "The statement date cannot be in the future" });
+    if (asOf > todayInOrg()) blockers.push({ code: "FUTURE_DATE", message: "The statement date cannot be in the future" });
     if (last && asOf <= last.asOf) blockers.push({ code: "NOT_AFTER_LAST", message: `${last.number} already covers up to ${last.asOf}. Choose a later date, or reopen it.` });
     const inPeriod = lines.filter((l) => !last || l.day > last.asOf).length;
     if (!inPeriod) blockers.push({ code: "NO_LINES", message: "There are no statement lines in this period" });

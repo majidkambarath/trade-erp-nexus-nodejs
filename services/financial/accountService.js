@@ -848,7 +848,7 @@ class AccountService {
     }
   }
 
-  static async processAccountVoucherApproval(id, action, approvedBy, comments) {
+  static async processAccountVoucherApproval(id, action, approvedBy, comments, options = {}) {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -860,6 +860,23 @@ class AccountService {
       if (!["pending", "draft"].includes(voucher.status)) {
         throw new AppError("Voucher cannot be approved/rejected in current state", 400);
       }
+
+      // limits, the separate approver and a second approver above an amount apply to this older route as well
+      let approval = null;
+      if (action === "approve") {
+        const verdict = await require("../core/approvalPolicyService").judge({
+          amount: voucher.totalAmount, preparedBy: voucher.createdBy, approvals: voucher.approvals, req: options.req, session,
+        });
+        if (!verdict.final) {
+          voucher.approvals = [...(voucher.approvals || []), verdict.approval];
+          await voucher.save({ session });
+          await session.commitTransaction();
+          return { voucher: this.formatVoucherResponse(voucher), message: "First approval recorded; a second approver is needed", awaitingSecondApproval: true };
+        }
+        approval = verdict.approval || null;
+      }
+      if (approval) voucher.approvals = require("../../utils/approvalRules").addApproval(voucher.approvals, approval);
+      else if (action === "reject") voucher.approvals = [];
 
       voucher.status = action === "approve"
         ? this.PAYMENT_VOUCHER_STATUS.APPROVED

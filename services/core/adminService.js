@@ -147,6 +147,8 @@ const assertMay = (args) => {
 
 const createAdmin = async (adminData, files = null, creatorId = null, actorType = null) => {
   adminData = withoutSystemFields(adminData);
+  // The company's letterhead belongs to the organisation (services/core/companyProfileService.js), never to a person.
+  delete adminData.companyInfo;
   if (!actorType) throw new AppError("Authentication required", 401, "AUTH_REQUIRED");
   try {
     assertMay({ actor: actorType, nextType: adminData.type, action: "create" });
@@ -180,16 +182,10 @@ const createAdmin = async (adminData, files = null, creatorId = null, actorType 
       };
     }
 
-    // Handle company logo
-    if (files?.companyLogo) {
-      if (!adminData.companyInfo) adminData.companyInfo = {};
-      adminData.companyInfo.companyLogo = {
-        url: files.companyLogo.path,
-        publicId: files.companyLogo.filename
-      };
-    }
+    // A company logo sent with a person is not kept on the person: it is discarded (and removed from storage).
+    if (files?.companyLogo) { await deleteFromCloudinary(files.companyLogo.filename).catch(() => {}); files = { ...files, companyLogo: null }; }
 
-    const admin = new Admin({ ...adminData, createdBy: creatorId });
+    const admin = new Admin({ ...adminData, mustChangePassword: true, createdBy: creatorId });
     await admin.save();
     return admin.toJSON();
   } catch (error) {
@@ -210,6 +206,7 @@ const createAdmin = async (adminData, files = null, creatorId = null, actorType 
 // neither, it refuses: a new caller that forgets the policy must fail, not pass.
 const updateAdmin = async (adminId, updateData, files = null, updatedBy = null, policy = {}) => {
   updateData = withoutSystemFields(updateData);
+  delete updateData.companyInfo; // the letterhead is the organisation's, changed through /company/profile
   const admin = await Admin.findById(adminId);
   if (!admin) {
     // Cleanup uploaded files if admin not found
@@ -226,10 +223,15 @@ const updateAdmin = async (adminId, updateData, files = null, updatedBy = null, 
     if (!policy.selfService) {
       if (!policy.actorType) throw new AppError("Authentication required", 401, "AUTH_REQUIRED");
       assertMay({ actor: policy.actorType, target: admin.type, nextType: updateData.type, self: String(admin._id) === String(updatedBy), action: "update" });
+      // Switching someone back on takes a seat again, so it meets the plan's user limit just as adding a new person does
+      // (the same rule userService applies on the new users API). Inside the try: a refusal cleans up its uploads.
+      const flag = (value, otherwise) => (value === undefined ? otherwise : value === true || value === "true"); // a form sends text
+      const wasActive = admin.isActive !== false && admin.status === "active";
+      const willBeActive = flag(updateData.isActive, admin.isActive !== false) && (updateData.status ?? admin.status) === "active";
+      if (!wasActive && willBeActive) await UsageService.assertRoom("users");
     }
     // Store old image public IDs for cleanup
     const oldProfileImageId = admin.profileImage?.publicId;
-    const oldCompanyLogoId = admin.companyInfo?.companyLogo?.publicId;
 
     // Handle profile image update
     if (files?.profileImage) {
@@ -239,40 +241,17 @@ const updateAdmin = async (adminId, updateData, files = null, updatedBy = null, 
       };
     }
 
-    // Handle company logo update
-    if (files?.companyLogo) {
-      // Initialize companyInfo if it doesn't exist
-      if (!updateData.companyInfo) {
-        updateData.companyInfo = {};
-      }
-      
-      // Merge existing companyInfo with new data
-      if (admin.companyInfo) {
-        updateData.companyInfo = { 
-          ...admin.companyInfo.toObject(), 
-          ...updateData.companyInfo 
-        };
-      }
-      
-      updateData.companyInfo.companyLogo = {
-        url: files.companyLogo.path,
-        publicId: files.companyLogo.filename
-      };
-    }
-
-    // Handle nested company info updates (even without logo)
-    if (updateData.companyInfo && admin.companyInfo) {
-      updateData.companyInfo = { 
-        ...admin.companyInfo.toObject(), 
-        ...updateData.companyInfo 
-      };
-    }
+    // A company logo sent with a person is not kept on the person: it is discarded (and removed from storage).
+    if (files?.companyLogo) { await deleteFromCloudinary(files.companyLogo.filename).catch(() => {}); files = { ...files, companyLogo: null }; }
 
     // Set the updatedBy field using $locals
     if (updatedBy) {
       admin.$locals = admin.$locals || {};
       admin.$locals.updatedBy = updatedBy;
     }
+
+    // A password set by someone else (an administrator resetting it) is theirs to replace at the next sign-in.
+    if (!policy.selfService && updateData.password) { updateData.mustChangePassword = true; updateData.lockUntil = undefined; updateData.loginAttempts = 0; }
 
     // Apply updates to the admin object
     Object.assign(admin, updateData);
@@ -283,9 +262,6 @@ const updateAdmin = async (adminId, updateData, files = null, updatedBy = null, 
     // Delete old images from Cloudinary after successful update
     if (files?.profileImage && oldProfileImageId) {
       await deleteFromCloudinary(oldProfileImageId);
-    }
-    if (files?.companyLogo && oldCompanyLogoId) {
-      await deleteFromCloudinary(oldCompanyLogoId);
     }
 
     return savedAdmin.toJSON();
@@ -373,9 +349,7 @@ const deleteAdmin = async (adminId, deletedBy = null, actorType = null) => {
   if (admin.profileImage?.publicId) {
     imagesToDelete.push(admin.profileImage.publicId);
   }
-  if (admin.companyInfo?.companyLogo?.publicId) {
-    imagesToDelete.push(admin.companyInfo.companyLogo.publicId);
-  }
+  // (not companyInfo.companyLogo: the organisation's adopted letterhead may use that very image)
   
   if (imagesToDelete.length > 0) {
     await deleteFromCloudinary(imagesToDelete);

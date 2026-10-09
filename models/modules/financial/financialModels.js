@@ -166,6 +166,9 @@ const voucherSchema = new mongoose.Schema({
     ref: "Admin",
   },
   approvedAt: { type: Date },
+  // Who has approved it so far. Always one entry once approved; two when the policy asked for a second approver, and
+  // then the first entry is the document waiting for its second (utils/approvalRules.js).
+  approvals: [{ _id: false, by: { type: String }, name: { type: String }, at: { type: Date }, step: { type: Number } }],
   totalAmount: {
     type: Number,
     required: true,

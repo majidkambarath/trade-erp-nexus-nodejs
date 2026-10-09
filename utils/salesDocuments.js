@@ -6,7 +6,7 @@
 // transactionService.js. These documents therefore live in their own collections: nothing that
 // reads Transaction (VAT return, ageing, dashboards, e-invoicing) can ever pick them up.
 
-const { addDays, diffDays, dubaiDay, todayInDubai, toExpiryDay, isCalendarDay } = require("./documentExpiry");
+const { addDays, diffDays, orgDay, todayInOrg, toExpiryDay, isCalendarDay } = require("./documentExpiry");
 
 // ---- quotation ---------------------------------------------------------------------------
 
@@ -38,7 +38,7 @@ const DEFAULT_VALIDITY_DAYS = 30;
 // been offered yet, and an accepted one is a commitment made inside its validity.
 function quotationExpiry(quotation, now = new Date()) {
   const validDay = toExpiryDay(quotation?.validUntil);
-  const today = todayInDubai(now);
+  const today = todayInOrg(now);
   const daysLeft = validDay ? diffDays(today, validDay) : null;
   return { validDay, daysLeft, expired: quotation?.status === "SENT" && daysLeft !== null && daysLeft < 0 };
 }
@@ -146,9 +146,9 @@ const lastDayOfMonth = (day) => {
 // clock: "within" (comfortably inside 14 days), "dueSoon" (3 days or fewer left), "pastStandard"
 // (the 14 days are gone but a summary invoice is still in time), "overdue" (both have passed).
 function invoiceClock(deliveredAt, now = new Date()) {
-  const deliveredDay = typeof deliveredAt === "string" && isCalendarDay(deliveredAt) ? deliveredAt : dubaiDay(deliveredAt);
+  const deliveredDay = typeof deliveredAt === "string" && isCalendarDay(deliveredAt) ? deliveredAt : orgDay(deliveredAt);
   if (!deliveredDay) return null;
-  const today = todayInDubai(now);
+  const today = todayInOrg(now);
   const standardDue = addDays(deliveredDay, INVOICE_WINDOW_DAYS);
   const summaryDue = addDays(lastDayOfMonth(deliveredDay), INVOICE_WINDOW_DAYS);
   const toStandard = diffDays(today, standardDue);

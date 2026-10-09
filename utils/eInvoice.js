@@ -23,8 +23,10 @@ function taxCategoryFor(item) {
   return Number(item.vatPercent) > 0 ? "S" : "";
 }
 
-// Dubai calendar date of an instant, YYYY-MM-DD. A UTC slice would back-date anything issued
-// between 00:00 and 04:00 local.
+// UAE e-invoicing (PINT AE) is defined in UAE terms: the issue date is the UAE calendar date and the document currency is
+// AED. So this is deliberately NOT the organisation's own zone and currency (utils/orgLocale.js): the e-invoicing feature
+// is for UAE organisations, and the mandate fixes both. A UTC slice would back-date anything issued between 00:00 and
+// 04:00 local.
 const dubaiDate = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Dubai" }).format(new Date(d));
 
 const isUae = (code, country) =>

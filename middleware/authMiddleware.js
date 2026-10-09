@@ -4,6 +4,16 @@ const Admin = require("../models/core/adminModel");
 const Organisation = require("../models/core/organisationModel");
 const Role = require("../models/core/roleModel");
 const roles = require("../utils/permissions");
+const orgLocale = require("../utils/orgLocale");
+
+// While a person's password is one someone else chose, they may only choose their own: read who they are and what they may
+// do (so the screen can show that), change the password, and sign out. Everything else is refused, the same way on every
+// route, here where the person is identified.
+const ONLY_WHEN_CHANGING_PASSWORD = [["PUT", "/api/v1/profile/change-password"], ["GET", "/api/v1/organisation/status"], ["GET", "/api/v1/profile/me"]];
+const mayContinue = (req) => {
+  const url = String(req.originalUrl || "").split("?")[0].replace(/\/+$/, "");
+  return ONLY_WHEN_CHANGING_PASSWORD.some(([method, path]) => req.method === method && url === path);
+};
 const Branch = require("../models/core/branchModel");
 const AppError = require("../utils/AppError");
 const { runWithTenant, runUnscoped } = require("../utils/tenantContext");
@@ -19,13 +29,13 @@ async function accountFor(decoded) {
   if (decoded.companyId && decoded.companyId !== admin.companyId) return { failure: "TOKEN_ORGANISATION_MISMATCH", message: "This token does not belong to this account's organisation" };
   const organisation = await Organisation.findOne({ code: admin.companyId });
   if (!organisation) return { failure: "ORGANISATION_NOT_FOUND", message: "This account's organisation could not be found" };
+  orgLocale.warm(organisation); // its base currency and time zone, for everything this request does
   return { admin, organisation };
 }
 
 // The role a person holds, resolved from the database on every request like the rest of their identity: a built-in role
 // is code, a custom one is a row of their own organisation. One that is missing or switched off holds NOTHING.
-async function roleOf(admin) {
-  const key = roles.roleKeyOf(admin);
+async function roleOf(admin, key = roles.roleKeyOf(admin)) {
   if (roles.isBuiltIn(key)) return roles.resolveRole(key);
   const row = await runWithTenant({ companyId: admin.companyId }, () => Role.findOne({ key }).lean());
   return roles.resolveRole(key, row ? [row] : []);
@@ -41,13 +51,18 @@ async function resolveBranch(admin, header) {
   const home = admin.branchId || HEAD_OFFICE;
   const asked = String(header || "").trim().toLowerCase();
   const active = (code) => runWithTenant({ companyId: admin.companyId, branchId: home }, () => Branch.exists({ code, isActive: true }));
+  // Branches the person was given a role in. With any, their role is not the same everywhere, so they work in ONE branch at
+  // a time and never in the all-branches view (which would let their strongest role apply to every branch at once).
+  const given = (admin.branchRoles || []).map((b) => b.branchId);
 
   if (home !== HEAD_OFFICE) {
-    if (asked && asked !== home) return { failure: new AppError("You can only work in your own branch", 403, "BRANCH_NOT_ALLOWED") };
-    if (!(await active(home))) return { failure: new AppError("Your branch has been switched off. Please contact your administrator.", 403, "BRANCH_INACTIVE") };
-    return { branchId: home, branchView: home };
+    const allowed = new Set([home, ...given]);
+    if (asked && !allowed.has(asked)) return { failure: new AppError(given.length ? "You can only work in the branches you have been given" : "You can only work in your own branch", 403, "BRANCH_NOT_ALLOWED") };
+    const target = asked || home;
+    if (!(await active(target))) return { failure: new AppError(target === home ? "Your branch has been switched off. Please contact your administrator." : "That branch has been switched off. Please contact your administrator.", 403, "BRANCH_INACTIVE") };
+    return { branchId: target, branchView: target };
   }
-  if (!asked || asked === "all") return { branchId: HEAD_OFFICE, branchView: null };
+  if (!asked || asked === "all") return given.length ? { branchId: HEAD_OFFICE, branchView: HEAD_OFFICE } : { branchId: HEAD_OFFICE, branchView: null };
   if (!/^[a-z0-9][a-z0-9-]{0,30}$/.test(asked) || !(await active(asked))) return { failure: new AppError("That branch was not found", 403, "BRANCH_NOT_FOUND") };
   return { branchId: asked, branchView: asked };
 }
@@ -59,13 +74,17 @@ const identityOf = (admin, role) => {
     email: admin.email,
     type: admin.type,
     // what the person may do: their role and the permissions it expands to (utils/permissions.js)
-    role: role ? { key: role.key, name: role.name, rank: role.rank, builtIn: role.builtIn, active: role.isActive !== false } : { key: roles.roleKeyOf(admin), name: null, rank: 0, builtIn: false, active: false },
+    role: role ? { key: role.key, name: role.name, rank: role.rank, builtIn: role.builtIn, active: role.isActive !== false, approvalLimit: role.approvalLimit ?? null } : { key: roles.roleKeyOf(admin), name: null, rank: 0, builtIn: false, active: false },
     grants,
     // the seven coarse permissions the token has always carried, now derived from the real ones
     permissions: roles.legacyPermissions(grants, role?.rank),
     name: admin.name,
     companyId: admin.companyId,
     branchId: admin.branchId,
+    mustChangePassword: Boolean(admin.mustChangePassword),
+    // where they belong, and the branches they were given a role in (the role above is the one for the branch they are in)
+    homeBranch: admin.branchId || HEAD_OFFICE,
+    branchRoles: (admin.branchRoles || []).map((b) => ({ branchId: b.branchId, roleKey: b.roleKey })),
   };
 };
 
@@ -99,9 +118,13 @@ const makeAuthenticator = ({ allowBlocked = false } = {}) => async (req, res, ne
     const branch = await resolveBranch(admin, req.get("x-branch"));
     if (branch.failure) return next(branch.failure);
 
-    req.admin = identityOf(admin, await roleOf(admin));
+    // the role they hold in the branch they are working in (their own, unless they were given another for it)
+    req.admin = identityOf(admin, await roleOf(admin, roles.roleKeyAt(admin, branch.branchId)));
     req.organisation = organisation;
     req.tenant = { companyId: admin.companyId, branchId: branch.branchId, branchView: branch.branchView };
+    if (admin.mustChangePassword && !mayContinue(req)) {
+      return next(new AppError("Please choose a new password of your own before you continue.", 403, "PASSWORD_CHANGE_REQUIRED"));
+    }
 
     // Everything downstream - the route, the services, every query - runs as this organisation, in this branch.
     return runWithTenant(req.tenant, next);
@@ -129,7 +152,7 @@ const optionalAuth = async (req, res, next) => {
         const { admin, organisation, failure } = await accountFor(decoded);
         // An organisation that may not use the system (or not change anything) is treated as anonymous here.
         if (!failure && !requestRefusal(organisation, req.method)) {
-          req.admin = identityOf(admin, await roleOf(admin));
+          req.admin = identityOf(admin, await roleOf(admin, roles.roleKeyAt(admin, admin.branchId || HEAD_OFFICE)));
           req.organisation = organisation;
           req.tenant = { companyId: admin.companyId, branchId: admin.branchId };
         }

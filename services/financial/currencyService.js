@@ -4,8 +4,11 @@ const CompanySettings = require("../../models/modules/financial/companySettingsM
 const AuditService = require("../core/auditService");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
-const { RATE_DECIMALS, decimalPlaces, dubaiDay, dubaiDayStart, isCalendarDay, displayDay } = require("../../utils/fx");
+const { RATE_DECIMALS, decimalPlaces, orgDay, orgDayStart, isCalendarDay, displayDay } = require("../../utils/fx");
 
+const orgLocale = require("../../utils/orgLocale");
+
+// What a company's base currency reads as when its settings do not say: the organisation's own (AED for the original one).
 const DEFAULT_BASE = "AED";
 const DEFAULT_TOLERANCE_PERCENT = 5;
 const RATE_SOURCES = ["manual", "cbuae", "import"];
@@ -37,14 +40,14 @@ function normCode(code) {
 // An effective date or a lookup date as a Dubai calendar day "YYYY-MM-DD". A plain day is taken as
 // it is; a full timestamp is read as the Dubai day it falls in.
 function toDay(value, label = "date") {
-  if (value === undefined || value === null || value === "") return dubaiDay(new Date());
-  const day = dubaiDay(value);
+  if (value === undefined || value === null || value === "") return orgDay(new Date());
+  const day = orgDay(value);
   if (!day || !isCalendarDay(day)) throw new AppError(`Enter a valid ${label}`, 400, "INVALID_DATE");
   return day;
 }
 
 const shapeRate = (r) => ({
-  _id: r._id, code: r.code, rate: r.rate, effectiveDate: r.effectiveDate, effectiveDay: dubaiDay(r.effectiveDate),
+  _id: r._id, code: r.code, rate: r.rate, effectiveDate: r.effectiveDate, effectiveDay: orgDay(r.effectiveDate),
   source: r.source, note: r.note || "", createdBy: r.createdBy || null, createdAt: r.createdAt, updatedAt: r.updatedAt,
 });
 
@@ -79,7 +82,7 @@ class CurrencyService {
   static async baseCode({ session, req } = {}) {
     const { companyId } = getTenant(req);
     const base = await withSession(Currency.findOne({ companyId, isBase: true }).select("code").lean(), session);
-    return base?.code || DEFAULT_BASE;
+    return base?.code || orgLocale.baseCurrency();
   }
 
   static async get(code, { session, req } = {}) {
@@ -102,7 +105,7 @@ class CurrencyService {
   static async list(req) {
     await this.ensureSeeded(req);
     const { companyId } = getTenant(req);
-    const asOf = dubaiDayStart(dubaiDay(new Date()));
+    const asOf = orgDayStart(orgDay(new Date()));
     const [rows, latest, counts, used] = await Promise.all([
       Currency.find({ companyId }).lean(),
       ExchangeRate.aggregate([
@@ -121,7 +124,7 @@ class CurrencyService {
         return {
           _id: c._id, code: c.code, name: c.name, symbol: c.symbol, decimals: c.decimals, isBase: c.isBase, isActive: c.isActive,
           latestRate: c.isBase ? 1 : l?.rate ?? null,
-          latestRateDate: c.isBase ? null : l ? dubaiDay(l.effectiveDate) : null,
+          latestRateDate: c.isBase ? null : l ? orgDay(l.effectiveDate) : null,
           latestSource: c.isBase ? null : l?.source ?? null,
           rateCount: countBy.get(c.code) || 0,
           used: used.has(c.code),
@@ -207,7 +210,7 @@ class CurrencyService {
     const source = data.source === undefined || data.source === "" ? "manual" : String(data.source);
     if (!RATE_SOURCES.includes(source)) throw new AppError(`The source must be one of ${RATE_SOURCES.join(", ")}`, 400, "INVALID_SOURCE");
     const day = toDay(data.effectiveDate, "effective date");
-    const effectiveDate = dubaiDayStart(day);
+    const effectiveDate = orgDayStart(day);
     const note = String(data.note ?? "").trim().slice(0, 200);
     const createdBy = req?.admin?.id ? String(req.admin.id) : null;
 
@@ -234,8 +237,8 @@ class CurrencyService {
     const q = { companyId, code: currency.code };
     if (from || to) {
       q.effectiveDate = {};
-      if (from) q.effectiveDate.$gte = dubaiDayStart(toDay(from, "from date"));
-      if (to) q.effectiveDate.$lte = dubaiDayStart(toDay(to, "to date"));
+      if (from) q.effectiveDate.$gte = orgDayStart(toDay(from, "from date"));
+      if (to) q.effectiveDate.$lte = orgDayStart(toDay(to, "to date"));
     }
     const lim = Math.min(Math.max(Number(limit) || 100, 1), 1000);
     const rows = await ExchangeRate.find(q).sort({ effectiveDate: -1 }).limit(lim).lean();
@@ -250,11 +253,11 @@ class CurrencyService {
     const day = toDay(date);
     if (c === (await this.baseCode({ session, req }))) return { code: c, rate: 1, rateDate: null, rateDay: null, source: "base", note: "", forDay: day };
     const row = await withSession(
-      ExchangeRate.findOne({ companyId, code: c, effectiveDate: { $lte: dubaiDayStart(day) } }).sort({ effectiveDate: -1 }).lean(),
+      ExchangeRate.findOne({ companyId, code: c, effectiveDate: { $lte: orgDayStart(day) } }).sort({ effectiveDate: -1 }).lean(),
       session
     );
     if (!row) throw new AppError(`No ${c} rate on or before ${displayDay(day)}. Add one under Currencies.`, 422, "NO_RATE");
-    return { code: c, rate: row.rate, rateDate: row.effectiveDate, rateDay: dubaiDay(row.effectiveDate), source: row.source, note: row.note || "", forDay: day };
+    return { code: c, rate: row.rate, rateDate: row.effectiveDate, rateDay: orgDay(row.effectiveDate), source: row.source, note: row.note || "", forDay: day };
   }
 
   // ---------------------------------------------------------------------------------- settings
@@ -262,7 +265,7 @@ class CurrencyService {
   static async getSettings(req, { session } = {}) {
     const { companyId } = getTenant(req);
     const s = await withSession(CompanySettings.findOne({ companyId }).select("baseCurrency fxTolerancePercent").lean(), session);
-    return { baseCurrency: s?.baseCurrency || DEFAULT_BASE, fxTolerancePercent: s?.fxTolerancePercent ?? DEFAULT_TOLERANCE_PERCENT };
+    return { baseCurrency: s?.baseCurrency || orgLocale.baseCurrency(), fxTolerancePercent: s?.fxTolerancePercent ?? DEFAULT_TOLERANCE_PERCENT };
   }
 
   // How far, in percent, a rate typed on a voucher may be from the master rate before a reason is needed.

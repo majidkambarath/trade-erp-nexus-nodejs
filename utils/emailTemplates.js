@@ -7,6 +7,8 @@
 // signal, and the customer chooses to click it. A text part is always produced: some mail systems
 // score a message with no text part as spam, and it is what the history keeps as a preview.
 
+const orgLocale = require("./orgLocale");
+
 const DOC_LABEL = {
   tax_invoice: "Tax invoice",
   quotation: "Quotation",
@@ -22,15 +24,15 @@ const escapeHtml = (v) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-// 6 Oct 2026, in Dubai time: the day a UAE customer would say.
+// 6 Oct 2026, on the organisation's own calendar (utils/orgLocale.js): the day its customer would say.
 const fmtDay = (value) => {
   if (!value) return "";
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "";
-  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Dubai" }).format(d);
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: orgLocale.timezone() }).format(d);
 };
 
-const fmtMoney = (n, currency = "AED") => {
+const fmtMoney = (n, currency = orgLocale.baseCurrency()) => {
   const v = Number(n);
   if (!Number.isFinite(v)) return "";
   return `${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;

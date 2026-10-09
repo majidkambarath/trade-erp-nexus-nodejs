@@ -16,10 +16,16 @@ const AppError = require("../../utils/AppError");
 const { DEFAULT_TENANT, runWithTenant } = require("../../utils/tenantContext");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const plans = require("../../utils/plans");
+const tz = require("../../utils/tz");
+const orgLocale = require("../../utils/orgLocale");
 const currencies = require("../../utils/currencyCatalog");
 const { isValidTrn } = require("../../utils/partyMaster");
 
 const HEAD_OFFICE = "main"; // the branchId every existing document already carries
+
+// How utils/orgLocale.js learns an organisation it has not been told about: the registry row, which holds its base currency
+// and time zone. (The registry is not tenant-scoped, so this is a plain read.)
+orgLocale.useLoader((code) => Organisation.findOne({ code }).select("code baseCurrency timezone country").lean());
 const DEFAULT_CODE = DEFAULT_TENANT.companyId;
 
 const bad = (message, code, details) => new AppError(message, 400, code, details);
@@ -74,6 +80,8 @@ function clean(input = {}) {
 
   out.timezone = String(input.timezone || "").trim();
   if (!validTimezone(out.timezone) || !out.timezone) throw bad("Choose a valid timezone, for example Asia/Dubai", "TIMEZONE_INVALID");
+  const zone = tz.supportedZone(out.timezone);
+  if (!zone.ok) throw bad(zone.reason, "TIMEZONE_UNSUPPORTED");
 
   out.planCode = String(input.planCode || "").trim();
   if (!plans.PLAN_CODES.includes(out.planCode)) throw bad(`Choose a plan: ${plans.PLAN_CODES.join(", ")}`, "PLAN_INVALID");
@@ -139,10 +147,12 @@ class OrganisationService {
   // customers' email, submit its e-invoices or post its backlog while the organisation cannot change anything.
   // `includeLocked` is for the few jobs that only look.
   static async forEach(fn, { label = "job", includeLocked = false, now = new Date() } = {}) {
-    const found = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code status planCode subscription").lean();
+    const found = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code status planCode subscription baseCurrency timezone country").lean();
     const orgs = includeLocked ? found : found.filter((o) => plans.subscriptionState(o, now).canWrite);
     const out = [];
-    for (const { code } of orgs) {
+    for (const org of orgs) {
+      const { code } = org;
+      orgLocale.warm(org); // its own currency and zone for as long as its job runs
       try {
         out.push({ code, result: await runWithTenant({ companyId: code, branchId: HEAD_OFFICE }, () => fn(code)) });
       } catch (error) {
@@ -184,6 +194,7 @@ class OrganisationService {
       return { organisation, headOffice };
     })());
 
+    orgLocale.warm(made.organisation); // provisioning needs its zone: the fiscal year begins on 1 January THERE
     const provisioning = await this.provision(code);
     return { organisation: await this.get(code), headOffice: made.headOffice, provisioning };
   }
@@ -243,6 +254,14 @@ class OrganisationService {
     return { steps, complete };
   }
 
+  // Teach utils/orgLocale.js every organisation's base currency and time zone. Run at start-up, so the first request already
+  // reads the right ones; it is also refreshed whenever an organisation is loaded.
+  static async warmLocales() {
+    const rows = await Organisation.find({}).select("code baseCurrency timezone country").lean();
+    rows.forEach((o) => orgLocale.warm(o));
+    return rows.length;
+  }
+
   // The organisation that existed before organisations did. Idempotent; run at start-up.
   static async ensureDefault() {
     await ready();
@@ -294,6 +313,8 @@ class OrganisationService {
     if (patch.notes !== undefined) org.notes = String(patch.notes).trim();
     if (patch.timezone !== undefined) {
       if (!validTimezone(String(patch.timezone))) throw bad("Choose a valid timezone, for example Asia/Dubai", "TIMEZONE_INVALID");
+      const zone = tz.supportedZone(String(patch.timezone).trim());
+      if (!zone.ok) throw bad(zone.reason, "TIMEZONE_UNSUPPORTED");
       org.timezone = String(patch.timezone).trim();
     }
     if (patch.planCode !== undefined) {
@@ -327,6 +348,7 @@ class OrganisationService {
     if (sub.startsAt !== undefined) org.subscription.startsAt = new Date(sub.startsAt);
 
     await org.save(); // runs the model's validators on every override and enum
+    orgLocale.warm(org); // a change of time zone applies from the next read
     return org;
   }
 

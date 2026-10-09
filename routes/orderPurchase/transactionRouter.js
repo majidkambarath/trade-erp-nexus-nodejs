@@ -5,7 +5,7 @@ const Transaction = require("../../models/modules/transactionModel");
 const TransactionController = require("../../controllers/orderPurchase/transactionController");
 const OrderClose = require("../../controllers/orderPurchase/orderCloseController");
 
-const { requirePermission, byDocumentType } = require("../../middleware/permissionGate");
+const { requirePermission, byDocumentType, byDocumentDelete } = require("../../middleware/permissionGate");
 const router = express.Router();
 
 router.use(authenticateToken);
@@ -16,7 +16,7 @@ router.get("/transactions", requirePermission(byDocumentType("view")), Transacti
 router.get("/transactions/:id", requirePermission(byDocumentType("view")), TransactionController.getTransactionById);
 router.get("/transactions/:id/audit", requirePermission(byDocumentType("view")), TransactionController.getTransactionAudit);
 router.put("/transactions/:id", requirePermission(byDocumentType("edit")), TransactionController.updateTransaction);
-router.delete("/transactions/:id", requirePermission(byDocumentType("delete")), TransactionController.deleteTransaction);
+router.delete("/transactions/:id", requirePermission(byDocumentDelete), TransactionController.deleteTransaction); // an approved one needs deletePosted
 router.patch(
   "/transactions/:id/process", requirePermission(byDocumentType("approve")),
   TransactionController.processTransaction

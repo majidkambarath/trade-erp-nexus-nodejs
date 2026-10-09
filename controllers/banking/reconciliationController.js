@@ -3,6 +3,7 @@ const Rec = require("../../services/banking/reconciliationService");
 const Posting = require("../../services/banking/reconciliationPosting");
 const Card = require("../../services/banking/cardSettlementService");
 const AuditService = require("../../services/core/auditService");
+const { assertPermission } = require("../../middleware/permissionGate");
 
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
 const by = (req) => req.admin?.id || req.admin?._id;
@@ -49,7 +50,10 @@ exports.accept = catchAsync(async (req, res) => {
   ok(res, out);
 });
 exports.unmatch = catchAsync(async (req, res) => {
-  const out = await Rec.unmatch(req.params.id, { deleteVouchers: req.body?.deleteVouchers === true || req.query.deleteVouchers === "true" }, req, by(req));
+  const deleteVouchers = req.body?.deleteVouchers === true || req.query.deleteVouchers === "true";
+  // "and delete its entries" deletes APPROVED vouchers, which reverses them: the same right as deleting one by hand
+  if (deleteVouchers) assertPermission(req, "finance.deletePosted");
+  const out = await Rec.unmatch(req.params.id, { deleteVouchers }, req, by(req));
   await AuditService.log({ req, action: "BANK_LINES_UNMATCHED", entity: "BankMatch", entityId: req.params.id, summary: `Match undone${req.body?.deleteVouchers ? " and its entries deleted" : ""}` });
   ok(res, out);
 });

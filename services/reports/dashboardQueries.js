@@ -4,6 +4,7 @@ const AccountGroup = require("../../models/modules/financial/accountGroupModel")
 const AccountConfigService = require("../financial/accountConfigService");
 const LedgerReports = require("./ledgerReportsService");
 const { naturalBalance, categoryOf, round2 } = require("../../utils/accounting");
+const orgLocale = require("../../utils/orgLocale");
 
 // The aggregations behind the home dashboard that no report offers by month, week or hour. Each is
 // ONE pass over its collection (grouped by Dubai month / day), so a 8-month chart costs one query
@@ -11,16 +12,17 @@ const { naturalBalance, categoryOf, round2 } = require("../../utils/accounting")
 // here (the same groups, the same approved statuses, the same VAT-exclusive line value), and the
 // tests check these series against that report month by month.
 
-const TZ = "Asia/Dubai";
+// Grouping by day and month happens in the organisation's own zone, read each time a pipeline is built.
+const tzName = () => orgLocale.timezone();
 // Approval is a status of its own; PAID / PARTIAL are what documents approved by older versions may still carry.
 const APPROVED = ["APPROVED", "PAID", "PARTIAL"];
 
-const monthKey = (field) => ({ $dateToString: { format: "%Y-%m", date: field, timezone: TZ } });
-const dayKey = (field) => ({ $dateToString: { format: "%Y-%m-%d", date: field, timezone: TZ } });
+const monthKey = (field) => ({ $dateToString: { format: "%Y-%m", date: field, timezone: tzName() } });
+const dayKey = (field) => ({ $dateToString: { format: "%Y-%m-%d", date: field, timezone: tzName() } });
 // A document line's value before VAT, after its discount (what the stock reports call net)
 const LINE_NET = { $subtract: ["$items.lineTotal", { $ifNull: ["$items.vatAmount", 0] }] };
 
-// ---------------------------------------------------------------- dates (Dubai calendar days as "YYYY-MM-DD")
+// ---------------------------------------------------------------- dates (the organisation's calendar days as "YYYY-MM-DD")
 
 const pad = (n) => String(n).padStart(2, "0");
 const utc = (ymd) => new Date(`${ymd}T00:00:00Z`);
@@ -312,7 +314,7 @@ async function weeklyCollections(weeks, to) {
 async function hourlyPulse(to) {
   const match = { createdAt: range(addDays(to, -27), to) };
   const group = {
-    _id: { dow: { $isoDayOfWeek: { date: "$createdAt", timezone: TZ } }, hour: { $hour: { date: "$createdAt", timezone: TZ } } },
+    _id: { dow: { $isoDayOfWeek: { date: "$createdAt", timezone: tzName() } }, hour: { $hour: { date: "$createdAt", timezone: tzName() } } },
     n: { $sum: 1 },
   };
   const [a, b] = await Promise.all([Transaction.aggregate([{ $match: match }, { $group: group }]), Voucher.aggregate([{ $match: match }, { $group: group }])]);
@@ -332,7 +334,7 @@ async function hourlyPulse(to) {
 }
 
 module.exports = {
-  APPROVED, TZ,
+  APPROVED, tzName,
   addDays, daysBetween, lastDayOf, shiftMonth, monthRange, weekStart, quarterStart,
   monthlyProfit, accountMonthly, inventoryBalances, cashFlowMonthly,
   monthlyTrade, itemSalesByMonth, invoiceStats, orderStatuses, drafts, dailyOrders, pipeline, settlement, customersByItem,

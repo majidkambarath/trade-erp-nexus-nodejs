@@ -95,13 +95,19 @@ class UsageService {
     const branches = await Branch.find({ isActive: true }).sort({ isHeadOffice: -1, name: 1 }).select("code name isHeadOffice").lean();
     const here = who.tenant?.branchId || "main";
     const mine = branches.find((b) => b.code === here);
+    // A head-office person may work in any branch. Anyone else works in their own and the ones they were given a role in.
+    const home = who.admin?.homeBranch || who.admin?.branchId || "main";
+    const given = (who.admin?.branchRoles || []).map((b) => b.branchId);
+    const offered = home === "main" ? branches : branches.filter((b) => b.code === home || given.includes(b.code));
     return {
-      branches: branches.map((b) => ({ code: b.code, name: b.name, isHeadOffice: Boolean(b.isHeadOffice) })),
+      branches: offered.map((b) => ({ code: b.code, name: b.name, isHeadOffice: Boolean(b.isHeadOffice) })),
       branch: {
         code: here,
         name: mine?.name || here,
         isHeadOffice: Boolean(mine?.isHeadOffice),
-        canSwitch: (who.admin?.branchId || "main") === "main" && branches.length > 1,
+        canSwitch: offered.length > 1,
+        // the "all branches" choice is only for a head-office person whose role is the same in every branch
+        canViewAll: home === "main" && given.length === 0,
         view: who.tenant?.branchView || null,
       },
       support: { contact: process.env.SUPPORT_CONTACT || process.env.SUPPORT_EMAIL || null },

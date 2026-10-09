@@ -3,7 +3,7 @@ const { Currency } = require("../../models/modules/financial/currencyModels");
 const CurrencyService = require("./currencyService");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
-const { decimalPlaces, convertToBase, deviationPercent, roundTo, splitForeign, dubaiDay, dubaiDayStart, dubaiDayEnd, isCalendarDay, RATE_DECIMALS } = require("../../utils/fx");
+const { decimalPlaces, convertToBase, deviationPercent, roundTo, splitForeign, orgDay, orgDayStart, orgDayEnd, isCalendarDay, RATE_DECIMALS } = require("../../utils/fx");
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const num = (n) => (Number.isFinite(n) ? n : 0);
@@ -146,7 +146,7 @@ class FxVoucherService {
     if (data.rateOverrideReason === undefined) delete processData.rateOverrideReason;
     const typed = data.exchangeRate !== undefined && data.exchangeRate !== null && data.exchangeRate !== "";
     const sameCurrency = String(data.currency || old.currency || "").toUpperCase() === String(old.currency || "").toUpperCase();
-    const sameDay = data.date === undefined || dubaiDay(data.date) === dubaiDay(old.date);
+    const sameDay = data.date === undefined || orgDay(data.date) === orgDay(old.date);
     // a form that sends the voucher's own rate back changes nothing about it
     if (sameCurrency && sameDay && (!typed || Number(data.exchangeRate) === Number(old.exchangeRate))) processData._fxKeep = true;
     else if (!typed) delete processData.exchangeRate; // look it up for the new currency or day
@@ -176,8 +176,8 @@ class FxVoucherService {
     };
     if (from || to) {
       match.date = {};
-      if (from) match.date.$gte = dubaiDayStart(day(from, "from date"));
-      if (to) match.date.$lt = dubaiDayEnd(day(to, "to date"));
+      if (from) match.date.$gte = orgDayStart(day(from, "from date"));
+      if (to) match.date.$lt = orgDayEnd(day(to, "to date"));
     }
 
     const CAP = 5000;

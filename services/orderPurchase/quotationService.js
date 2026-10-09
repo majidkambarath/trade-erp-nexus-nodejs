@@ -6,7 +6,7 @@ const NumberSeriesService = require("../core/numberSeriesService");
 const TransactionService = require("./transactionService");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { getTenant } = require("../../utils/tenant");
-const { todayInDubai } = require("../../utils/documentExpiry");
+const { todayInOrg } = require("../../utils/documentExpiry");
 const {
   QUOTATION_ACTIONS, QUOTATION_CONVERTIBLE, QUOTATION_REVISABLE, QUOTATION_EDITABLE,
   quotationExpiry, defaultValidUntil, revisionNumber,
@@ -43,7 +43,7 @@ function present(q, now = new Date()) {
   };
 }
 
-const todayDate = (now = new Date()) => new Date(todayInDubai(now));
+const todayDate = (now = new Date()) => new Date(todayInOrg(now));
 
 class QuotationService {
   // ---- reading -----------------------------------------------------------------------------
@@ -129,8 +129,8 @@ class QuotationService {
 
   static create = withTransactionSession(async (data, createdBy, session) => {
     await S.loadCustomer(data.partyId, { session });
-    const date = S.dayToDate(data.date) || new Date(todayInDubai());
-    const validUntil = S.dayToDate(data.validUntil) || new Date(defaultValidUntil(todayInDubai(date)));
+    const date = S.dayToDate(data.date) || new Date(todayInOrg());
+    const validUntil = S.dayToDate(data.validUntil) || new Date(defaultValidUntil(todayInOrg(date)));
     if (validUntil < date) throw fail("The quotation cannot be valid for a period that ends before its date", 400, "INVALID_VALIDITY");
     const priced = await S.priceDocument({ items: data.items, charges: data.charges, discount: data.discount, date }, { session });
 
@@ -248,7 +248,7 @@ class QuotationService {
     if (!QUOTATION_REVISABLE.includes(old.status)) {
       throw fail(`${old.quotationNo} is ${old.status.toLowerCase()} and cannot be revised`, 409, "QUOTATION_STATE");
     }
-    const today = todayInDubai();
+    const today = todayInOrg();
     const date = new Date(today);
     const priced = await S.priceDocument(
       {
@@ -295,7 +295,7 @@ class QuotationService {
     const expiry = quotationExpiry(doc);
     if (expiry.expired) throw fail(`${doc.quotationNo} expired on ${expiry.validDay}. Revise it to offer it again.`, 409, "QUOTATION_EXPIRED");
 
-    const date = input?.date ? S.dayToDate(input.date) : new Date(todayInDubai());
+    const date = input?.date ? S.dayToDate(input.date) : new Date(todayInOrg());
     if (!date) throw fail("Enter a valid date", 400, "INVALID_DATE");
 
     const salesOrder = await TransactionService.createTransaction(

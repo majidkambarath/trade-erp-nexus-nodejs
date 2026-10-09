@@ -5,6 +5,8 @@ const AgeingService = require("../financial/ageingService");
 const AppError = require("../../utils/AppError");
 const { naturalBalance, round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
+const currencyCatalog = require("../../utils/currencyCatalog");
+const orgLocale = require("../../utils/orgLocale");
 
 // IFRS statements read straight from the general ledger, so they cannot disagree with the Trial
 // Balance, the Balance Sheet or the Profit and loss screens:
@@ -14,7 +16,7 @@ const { getTenant } = require("../../utils/tenant");
 //   cashFlows           Statement of cash flows (IAS 7, indirect method)
 //   notes               Basic notes with note tables taken from the ledger
 // Each takes `compare` = prior-year | prior-period | none (default prior-year) and returns the
-// comparative column next to the current one. Dates are Dubai calendar days (see
+// comparative column next to the current one. Dates are the organisation's calendar days (see
 // ledgerReportsService); a period runs from the start of `from` to the end of `to`.
 //
 // CLASSIFICATION RULES (also shown as the footnote on the screen)
@@ -31,7 +33,8 @@ const { getTenant } = require("../../utils/tenant");
 //   An account with a balance on the opposite side of its group (an asset in credit, say) is shown
 //     as a negative on its own side; nothing is reclassified between assets and liabilities.
 
-const CURRENCY = "AED";
+const currency = () => orgLocale.baseCurrency(); // the books are kept in the organisation's base currency
+const currencyName = () => currencyCatalog.SUPPORTED[currency()]?.name || currency(); // "UAE Dirham", "Pound Sterling"
 const NON_CURRENT_RX = /fixed|non.?current|property|plant|equipment|intangible|long.?term/i;
 const FINANCE_RX = /interest|finance|bank charges/i;
 const DEPRECIATION_RX = /depreciation|amortis|amortiz/i;
@@ -59,7 +62,7 @@ const isPnl = (r) => r.category === "INCOME" || r.category === "EXPENSE";
 const matches = (rx, ...texts) => texts.some((t) => rx.test(String(t || "")));
 
 // ------------------------------------------------------------------ calendar days (YYYY-MM-DD)
-// Plain string arithmetic on calendar days: no time zones, so a Dubai day never shifts.
+// Plain string arithmetic on calendar days: no time zones, so a day never shifts.
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86400000;
@@ -92,7 +95,7 @@ const addMonths = (s, n) => {
   const nm = (t % 12) + 1;
   return dayString(ny, nm, Math.min(d, daysInMonth(ny, nm)));
 };
-const dubaiToday = () => new Date(Date.now() + 4 * 3600e3).toISOString().slice(0, 10);
+const orgToday = () => orgLocale.today();
 
 // A valid calendar day, or null when none was given.
 function toDay(value) {
@@ -222,7 +225,7 @@ const linesBlock = (accounts, hasPrevious) => ({
 // ------------------------------------------------------------------ the service
 
 class IfrsReportsService {
-  static CURRENCY = CURRENCY;
+  static get CURRENCY() { return currency(); }
   static COMPARE_MODES = COMPARE_MODES;
   static EQUITY_COLUMNS = EQUITY_COLUMNS;
   // Pure helpers, exported so the rules can be tested without a database.
@@ -284,7 +287,7 @@ class IfrsReportsService {
   // The dates a request asks for. `asAt` (or `to`) defaults to today in Dubai, `from` to the
   // start of the fiscal year that date falls in.
   static period(ctx, query = {}) {
-    const to = toDay(query.asAt) || toDay(query.to) || dubaiToday();
+    const to = toDay(query.asAt) || toDay(query.to) || orgToday();
     const from = toDay(query.from) || fiscalYearStart(to, ctx.fiscalYearStartMonth);
     if (from > to) throw new AppError("from must not be after to", 400, "INVALID_RANGE");
     const mode = compareMode(query.compare);
@@ -310,7 +313,7 @@ class IfrsReportsService {
   }
 
   static head(ctx, statement, title) {
-    return { statement, title, entity: ctx.entity, currency: CURRENCY };
+    return { statement, title, entity: ctx.entity, currency: currency() };
   }
 
   // ---------------------------------------------------------------- 1. Financial position
@@ -753,7 +756,7 @@ class IfrsReportsService {
       disclaimer: "Basic notes generated from the general ledger. They are not a complete set of IFRS disclosures and should be reviewed with your accountant.",
       policies: [
         { key: "entity", title: "Reporting entity", text: `${name}${ctx.entity.trn ? ` (TRN ${ctx.entity.trn})` : ""} trades in food products in the United Arab Emirates. These notes accompany the statements for the period ended ${to}.` },
-        { key: "basis", title: "Basis of preparation", text: "The statements are prepared in accordance with International Financial Reporting Standards (IFRS) on the historical cost basis, from the company's general ledger. The functional and presentation currency is the UAE dirham (AED). Amounts are rounded to two decimal places." },
+        { key: "basis", title: "Basis of preparation", text: `The statements are prepared in accordance with International Financial Reporting Standards (IFRS) on the historical cost basis, from the company's general ledger. The functional and presentation currency is the ${currencyName()} (${currency()}). Amounts are rounded to two decimal places.` },
         { key: "inventory", title: "Inventories", text: "Inventories are stated at the lower of cost and net realisable value. Cost is the weighted average cost, recalculated on each purchase; a sale takes stock out at the current average and does not change it." },
         { key: "revenue", title: "Revenue recognition", text: "Revenue from the sale of goods is recognised at the point in time control passes to the customer, when the goods are dispatched and invoiced. It is measured at the transaction price net of VAT, discounts and returns (IFRS 15)." },
         { key: "vat", title: "Value added tax", text: "Revenue, expenses and assets are recognised net of VAT. Output VAT charged on sales is a liability to the Federal Tax Authority and input VAT on purchases is recoverable from it; the net is settled with the authority." },

@@ -77,7 +77,7 @@ test("signing in: the same refusal for a wrong password and for no such person",
 });
 
 test("every console route needs a console token", { skip }, async () => {
-  for (const [m, u] of [["GET", "/me"], ["GET", "/catalog"], ["GET", "/organisations"], ["POST", "/organisations"], ["GET", "/organisations/x"], ["PATCH", "/organisations/x"], ["POST", "/organisations/x/extend"], ["POST", "/organisations/x/status"], ["GET", "/organisations/x/users"], ["POST", "/organisations/x/users"], ["GET", "/organisations/x/branches"], ["GET", "/users"], ["POST", "/users"], ["GET", "/audit"]]) {
+  for (const [m, u] of [["GET", "/me"], ["GET", "/catalog"], ["GET", "/organisations"], ["POST", "/organisations"], ["GET", "/organisations/x"], ["PATCH", "/organisations/x"], ["POST", "/organisations/x/extend"], ["POST", "/organisations/x/status"], ["GET", "/organisations/x/users"], ["POST", "/organisations/x/users"], ["GET", "/organisations/x/roles"], ["GET", "/organisations/x/branches"], ["GET", "/users"], ["POST", "/users"], ["GET", "/audit"]]) {
     assert.equal((await plat(m, u, undefined, null)).status, 401, `${m} ${u}`);
     assert.equal((await plat(m, u, undefined, "not.a.token")).status, 401, `${m} ${u} with garbage`);
   }
@@ -132,7 +132,15 @@ test("a new organisation arrives complete: its own books in the chosen currency,
   const owner = await raw(() => M.Admin.findOne({ email: "owner@gulffresh.test" }).lean());
   assert.equal(owner.companyId, S.org);
   assert.equal(owner.type, "super_admin", "the first administrator can manage their own people");
-  assert.equal((await call("GET", "/currencies", { token: S.erpToken })).status, 200);
+  // The developer typed that administrator's password, so it is not theirs yet: until they choose their own, the product lets
+  // them do nothing else (passwordPolicyHttp.test.js proves the rule; here, that the console sets it).
+  assert.equal(owner.mustChangePassword, true, "a password the developer chose must be replaced at first sign-in");
+  const held = await call("GET", "/currencies", { token: S.erpToken });
+  assert.equal(held.status, 403);
+  assert.equal(held.code, "PASSWORD_CHANGE_REQUIRED");
+  const chose = await call("PUT", "/profile/change-password", { token: S.erpToken, body: { currentPassword: "owner-password-1", newPassword: "owner-chose-this-1", confirmPassword: "owner-chose-this-1" } });
+  assert.equal(chose.status, 200, JSON.stringify(chose.data));
+  assert.equal((await call("GET", "/currencies", { token: S.erpToken })).status, 200, "and then everything opens");
 });
 
 test("a bad organisation is refused with the reason, and nothing is half made", { skip }, async () => {
@@ -198,7 +206,7 @@ test("the organisation's people are managed from the console, within its limits"
   assert.equal(over.status, 403);
   assert.equal(over.code, "LIMIT_REACHED");
   assert.equal((await plat("POST", `/organisations/${S.org}/users`, { name: "Dup", email: "owner@gulffresh.test", password: "clerk-password-3" })).code, "EMAIL_EXISTS");
-  assert.equal((await plat("POST", `/organisations/${S.org}/users`, { name: "Bad", email: "bad@gulffresh.test", password: "x", type: "wizard" })).code, "TYPE_INVALID");
+  assert.equal((await plat("POST", `/organisations/${S.org}/users`, { name: "Bad", email: "bad@gulffresh.test", password: "x", type: "wizard" })).code, "ROLE_NOT_FOUND"); // `type` is still accepted, as the older spelling of `role`
   await plat("PATCH", `/organisations/${S.org}`, { resetLimits: ["users"] });
 
   assert.ok(await erpLogin("clerk@gulffresh.test", "clerk-password-1"), "the new account signs in");
@@ -212,12 +220,75 @@ test("the organisation's people are managed from the console, within its limits"
 
 test("the organisation can never be left with no administrator", { skip }, async () => {
   const ownerId = (await plat("GET", `/organisations/${S.org}/users`)).body.find((u) => u.email === "owner@gulffresh.test")._id;
-  for (const patch of [{ status: "inactive" }, { type: "viewer" }]) {
+  for (const patch of [{ status: "inactive" }, { type: "viewer" }, { role: "accountant" }]) {
     const r = await plat("PATCH", `/organisations/${S.org}/users/${ownerId}`, patch);
     assert.equal(r.status, 409, JSON.stringify(patch));
     assert.equal(r.code, "LAST_ADMIN");
   }
   assert.equal((await plat("PATCH", `/organisations/${S.org}/users/${new mongoose.Types.ObjectId()}`, { name: "Ghost" })).status, 404);
+});
+
+test("the developer gives a person any role of the organisation: a ready-made one, or one the organisation made", { skip }, async () => {
+  const roles = async () => (await plat("GET", `/organisations/${S.org}/roles`)).body;
+  const before = await roles();
+  for (const k of ["super_admin", "admin", "manager", "accountant", "sales", "purchase", "storekeeper", "operator", "viewer"]) assert.ok(before.some((r) => r.key === k), `${k} is offered`);
+  assert.equal(before.find((r) => r.key === "super_admin").people, 1, "the owner");
+  assert.ok(before.every((r) => r.name && typeof r.rank === "number" && r.builtIn === true), "nothing custom yet");
+
+  // the organisation's own owner makes a role of its own, and the console offers it too
+  const made = await call("POST", "/access/roles", { token: S.erpToken, body: { key: "yard_lead", name: "Yard lead", description: "Receives goods", rank: 30, permissions: ["inventory.view", "inventory.create"] } });
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  const yardRole = (await roles()).find((r) => r.key === "yard_lead");
+  assert.deepEqual({ name: yardRole.name, builtIn: yardRole.builtIn, isActive: yardRole.isActive, people: yardRole.people }, { name: "Yard lead", builtIn: false, isActive: true, people: 0 });
+
+  // a ready-made role, a custom one, and an old account type: each is stored the way the organisation's own screen stores it
+  const make = (name, email, role) => plat("POST", `/organisations/${S.org}/users`, { name, email, password: "a-first-password-1", role });
+  const amal = await make("Amal Accounts", "amal@gulffresh.test", "accountant");
+  const yusuf = await make("Yusuf Yard", "yusuf@gulffresh.test", "yard_lead");
+  const mona = await make("Mona Manager", "mona@gulffresh.test", "manager");
+  for (const r of [amal, yusuf, mona]) assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.deepEqual([amal.body.role, yusuf.body.role, mona.body.role], ["accountant", "yard_lead", "manager"]);
+  const stored = async (email) => { const a = await raw(() => M.Admin.findOne({ email }).lean()); return { type: a.type, roleKey: a.roleKey || null }; };
+  assert.deepEqual(await stored("amal@gulffresh.test"), { type: "viewer", roleKey: "accountant" }, "a role beyond the old five rides on the safest type");
+  assert.deepEqual(await stored("yusuf@gulffresh.test"), { type: "viewer", roleKey: "yard_lead" });
+  assert.deepEqual(await stored("mona@gulffresh.test"), { type: "manager", roleKey: null }, "an old type stays an old type");
+
+  // the people list names each person's role
+  const people = (await plat("GET", `/organisations/${S.org}/users`)).body;
+  const roleOf = (email) => people.find((u) => u.email === email).role;
+  assert.deepEqual(roleOf("amal@gulffresh.test"), { key: "accountant", name: "Accountant", rank: 50, active: true });
+  assert.deepEqual(roleOf("yusuf@gulffresh.test"), { key: "yard_lead", name: "Yard lead", rank: 30, active: true });
+  assert.equal(roleOf("mona@gulffresh.test").key, "manager");
+  assert.equal(roleOf("owner@gulffresh.test").key, "super_admin");
+
+  // and the role really is what they hold when they sign in
+  const amalToken = await erpLogin("amal@gulffresh.test", "a-first-password-1");
+  const status = (await call("GET", "/organisation/status", { token: amalToken })).body;
+  assert.equal(status.me.role.key, "accountant");
+  assert.ok(status.me.grants.includes("finance.view"), "an accountant sees Finance");
+  assert.equal(status.me.grants.includes("users.manage"), false, "and does not manage people");
+
+  // change a role; the older `type` spelling still works; an unknown role is refused
+  const amalId = amal.body.id;
+  const toSales = await plat("PATCH", `/organisations/${S.org}/users/${amalId}`, { role: "sales" });
+  assert.equal(toSales.status, 200, JSON.stringify(toSales.data));
+  assert.equal(toSales.body.role, "sales");
+  const back = await plat("PATCH", `/organisations/${S.org}/users/${amalId}`, { type: "operator" });
+  assert.deepEqual([back.status, back.body.role], [200, "operator"]);
+  assert.deepEqual(await stored("amal@gulffresh.test"), { type: "operator", roleKey: null }, "moving back to an old type clears the role key");
+  assert.equal((await plat("PATCH", `/organisations/${S.org}/users/${amalId}`, { role: "wizard" })).code, "ROLE_NOT_FOUND");
+  assert.equal((await plat("POST", `/organisations/${S.org}/users`, { name: "No Role", email: "norole@gulffresh.test", password: "a-first-password-1", role: "" })).code, "ROLE_NOT_FOUND");
+
+  // a switched-off role is not offered to anyone new: the organisation switches it off once nobody holds it
+  const off = await call("PATCH", "/access/roles/yard_lead", { token: S.erpToken, body: { isActive: false } });
+  assert.equal(off.code, "ROLE_IN_USE", "yusuf still holds it");
+  assert.equal((await plat("PATCH", `/organisations/${S.org}/users/${yusuf.body.id}`, { role: "viewer" })).status, 200);
+  assert.equal((await call("PATCH", "/access/roles/yard_lead", { token: S.erpToken, body: { isActive: false } })).status, 200);
+  assert.equal((await plat("PATCH", `/organisations/${S.org}/users/${amalId}`, { role: "yard_lead" })).code, "ROLE_INACTIVE");
+  assert.equal((await roles()).find((r) => r.key === "yard_lead").isActive, false);
+
+  // another organisation's roles are not this one's: a role is looked up inside the organisation the console named
+  assert.equal((await plat("GET", "/organisations/no-such-org/roles")).status, 404);
 });
 
 test("a second branch needs the feature and the room, and the head office is always there", { skip }, async () => {
@@ -246,7 +317,7 @@ test("every change is recorded for the developers, and in the organisation's own
   assert.ok(theirs.length >= 5, "the organisation's own audit trail has them too");
   assert.ok(theirs.every((r) => /platform support/.test(r.username)), "named as the platform, not as one of their staff");
   const written = JSON.stringify(log) + JSON.stringify(theirs);
-  for (const secret of [DEV.password, "owner-password-1", "clerk-password-1", "clerk-password-2", "second-long-pass-2"]) {
+  for (const secret of [DEV.password, "owner-password-1", "clerk-password-1", "clerk-password-2", "second-long-pass-2", "a-first-password-1"]) {
     assert.equal(written.includes(secret), false, "no password value is written to the log");
   }
 });

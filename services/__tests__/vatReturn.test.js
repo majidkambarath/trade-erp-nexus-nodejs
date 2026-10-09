@@ -17,7 +17,7 @@ let customer;
 let vendor;
 let stock;
 let codes;
-const dubaiDay = (offset = 0) => new Date(Date.now() + 4 * 3600e3 + offset * 86400e3).toISOString().slice(0, 10);
+const orgDay = (offset = 0) => new Date(Date.now() + 4 * 3600e3 + offset * 86400e3).toISOString().slice(0, 10);
 
 test.before(async () => {
   if (skip) return;
@@ -76,7 +76,7 @@ test.after(async () => {
 const box = (r, id) => r.boxes.find((b) => b.box === id);
 
 test("the return puts each supply in the box of its tax treatment, nets returns and notes, and totals the boxes", { skip }, async () => {
-  const r = await svc.Vat.compute({ from: dubaiDay(-1), to: dubaiDay(1) });
+  const r = await svc.Vat.compute({ from: orgDay(-1), to: orgDay(1) });
   assert.equal(r.emirate, "Dubai");
   assert.deepEqual([box(r, "1b").amount, box(r, "1b").vat], [60, 3], "200 - 40 return - 100 credit note; VAT 10 - 2 - 5");
   assert.deepEqual([box(r, "4").amount, box(r, "4").vat], [100, 0], "zero-rated");
@@ -93,7 +93,7 @@ test("the return puts each supply in the box of its tax treatment, nets returns 
 });
 
 test("a 0% line with no tax code is listed for the user to classify, not guessed into a box", { skip }, async () => {
-  const r = await svc.Vat.compute({ from: dubaiDay(-1), to: dubaiDay(1) });
+  const r = await svc.Vat.compute({ from: orgDay(-1), to: orgDay(1) });
   assert.equal(r.unclassified.count, 1);
   assert.equal(r.unclassified.amount, 30);
   assert.ok(r.unclassified.lines[0].docNo.startsWith("SO-"));
@@ -101,7 +101,7 @@ test("a 0% line with no tax code is listed for the user to classify, not guessed
 });
 
 test("the VAT in the boxes agrees with the VAT accounts of the ledger", { skip }, async () => {
-  const r = await svc.Vat.compute({ from: dubaiDay(-1), to: dubaiDay(1) });
+  const r = await svc.Vat.compute({ from: orgDay(-1), to: orgDay(1) });
   const [out, inp] = r.reconciliation.rows;
   assert.equal(out.documents, 3);
   assert.equal(out.ledger, 3);
@@ -114,31 +114,31 @@ test("the VAT in the boxes agrees with the VAT accounts of the ledger", { skip }
   const vatId = await svc.Config.resolveAccount("vat-sales");
   const acc = await svc.LedgerAccount.findById(vatId);
   await svc.LedgerEntry.create({ voucherId: new mongoose.Types.ObjectId(), voucherNo: "X-1", voucherType: "journal", accountId: acc._id, accountName: acc.accountName, accountCode: acc.accountCode, date: new Date(), creditAmount: 7, createdBy: admin });
-  const after = await svc.Vat.compute({ from: dubaiDay(-1), to: dubaiDay(1) });
+  const after = await svc.Vat.compute({ from: orgDay(-1), to: orgDay(1) });
   assert.equal(after.reconciliation.rows[0].difference, -7);
   assert.equal(after.reconciliation.rows[0].agrees, false);
   await svc.LedgerEntry.deleteOne({ voucherNo: "X-1" });
 });
 
 test("a period with nothing in it is all zero, and a bad period is refused", { skip }, async () => {
-  const r = await svc.Vat.compute({ from: dubaiDay(-40), to: dubaiDay(-30) });
+  const r = await svc.Vat.compute({ from: orgDay(-40), to: orgDay(-30) });
   assert.equal(r.totals.netPayable, 0);
   assert.equal(r.unclassified.count, 0);
-  await assert.rejects(() => svc.Vat.compute({ from: dubaiDay(1), to: dubaiDay(-1) }), { code: "INVALID_PERIOD" });
-  await assert.rejects(() => svc.Vat.compute({ from: "", to: dubaiDay() }), { code: "PERIOD_REQUIRED" });
+  await assert.rejects(() => svc.Vat.compute({ from: orgDay(1), to: orgDay(-1) }), { code: "INVALID_PERIOD" });
+  await assert.rejects(() => svc.Vat.compute({ from: "", to: orgDay() }), { code: "PERIOD_REQUIRED" });
 });
 
 test("drafts, cancelled documents and opening invoices never reach the return", { skip }, async () => {
   const draft = await svc.Tx.createTransaction({ type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", items: [{ itemId: stock._id, description: "Rice", qty: 1, price: 1000, rate: 1000, vatPercent: 5 }] }, "tester");
-  const before = await svc.Vat.compute({ from: dubaiDay(-1), to: dubaiDay(1) });
+  const before = await svc.Vat.compute({ from: orgDay(-1), to: orgDay(1) });
   assert.equal(box(before, "1b").vat, 3, "a draft is not in the return");
   await svc.Tx.processTransaction(draft._id, "approve", "tester");
-  assert.equal(box(await svc.Vat.compute({ from: dubaiDay(-1), to: dubaiDay(1) }), "1b").vat, 53);
+  assert.equal(box(await svc.Vat.compute({ from: orgDay(-1), to: orgDay(1) }), "1b").vat, 53);
   await svc.Transaction.updateOne({ _id: draft._id }, { status: "CANCELLED" });
-  assert.equal(box(await svc.Vat.compute({ from: dubaiDay(-1), to: dubaiDay(1) }), "1b").vat, 3, "once cancelled it is out again");
+  assert.equal(box(await svc.Vat.compute({ from: orgDay(-1), to: orgDay(1) }), "1b").vat, 3, "once cancelled it is out again");
   // an opening invoice carried over from old books has no VAT and is not in the return either
   const opening = await svc.Transaction.create({ transactionNo: "OSI-T-1", type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", date: new Date(), status: "APPROVED", isOpening: true, totalAmount: 900, outstandingAmount: 900, createdBy: "tester", items: [] });
-  assert.equal(box(await svc.Vat.compute({ from: dubaiDay(-1), to: dubaiDay(1) }), "1b").vat, 3);
+  assert.equal(box(await svc.Vat.compute({ from: orgDay(-1), to: orgDay(1) }), "1b").vat, 3);
   await opening.deleteOne();
   await svc.Transaction.deleteOne({ _id: draft._id });
   await svc.LedgerEntry.deleteMany({ voucherId: draft._id });
@@ -149,7 +149,7 @@ test("reverse-charge purchases are reported in box 3 and box 10 with the VAT wor
     transactionNo: "PO-RCM-1", type: "purchase_order", partyId: vendor._id, partyType: "Vendor", partyTypeRef: "Vendor", date: new Date(), status: "APPROVED", totalAmount: 400, createdBy: "tester",
     items: [{ itemId: stock._id, description: "Imported spice", qty: 4, price: 100, rate: 100, vatPercent: 5, vatAmount: 0, taxableAmount: 400, grossAmount: 400, lineTotal: 400, taxKind: "reverse_charge" }],
   });
-  const r = await svc.Vat.compute({ from: dubaiDay(-1), to: dubaiDay(1) });
+  const r = await svc.Vat.compute({ from: orgDay(-1), to: orgDay(1) });
   assert.deepEqual([box(r, "3").amount, box(r, "3").vat], [400, 20]);
   assert.deepEqual([box(r, "10").amount, box(r, "10").vat], [400, 20]);
   assert.equal(box(r, "12").vat, 23, "the self-assessed VAT is due...");
@@ -158,21 +158,21 @@ test("reverse-charge purchases are reported in box 3 and box 10 with the VAT wor
 });
 
 test("the detail lists each document with its party, TRN, treatment and VAT, and filters", { skip }, async () => {
-  const d = await svc.Vat.detail({ from: dubaiDay(-1), to: dubaiDay(1) });
+  const d = await svc.Vat.detail({ from: orgDay(-1), to: orgDay(1) });
   assert.ok(d.total >= 8);
   const sale = d.rows.find((r) => r.docType === "sales_order" && r.vat === 10);
   assert.equal(sale.partyName, "Al Noor");
   assert.equal(sale.trn, "100999888700003");
   assert.deepEqual(sale.kinds, ["standard"]);
-  assert.equal((await svc.Vat.detail({ from: dubaiDay(-1), to: dubaiDay(1), direction: "input" })).rows.every((r) => r.direction === "input"), true);
-  assert.ok((await svc.Vat.detail({ from: dubaiDay(-1), to: dubaiDay(1), kind: "zero_rated" })).rows.length >= 1);
-  assert.equal((await svc.Vat.detail({ from: dubaiDay(-1), to: dubaiDay(1), search: "gulf" })).rows.every((r) => r.partyName === "Gulf Mills" || r.source !== "invoice"), true);
-  assert.equal((await svc.Vat.detail({ from: dubaiDay(-1), to: dubaiDay(1), limit: 3, page: 2 })).rows.length, 3);
+  assert.equal((await svc.Vat.detail({ from: orgDay(-1), to: orgDay(1), direction: "input" })).rows.every((r) => r.direction === "input"), true);
+  assert.ok((await svc.Vat.detail({ from: orgDay(-1), to: orgDay(1), kind: "zero_rated" })).rows.length >= 1);
+  assert.equal((await svc.Vat.detail({ from: orgDay(-1), to: orgDay(1), search: "gulf" })).rows.every((r) => r.partyName === "Gulf Mills" || r.source !== "invoice"), true);
+  assert.equal((await svc.Vat.detail({ from: orgDay(-1), to: orgDay(1), limit: 3, page: 2 })).rows.length, 3);
 });
 
 test("a return is saved as a draft, finalised only when every line has a treatment, and filed with the FTA reference", { skip }, async () => {
-  const from = dubaiDay(-1);
-  const to = dubaiDay(1);
+  const from = orgDay(-1);
+  const to = orgDay(1);
   const draft = await svc.Vat.createDraft({ from, to, notes: "Q3" }, admin);
   assert.equal(draft.status, "DRAFT");
   assert.equal(draft.returnNo, `VAT-${from}..${to}`);

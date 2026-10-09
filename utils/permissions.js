@@ -15,7 +15,8 @@ const MODULES = {
       create: "Add quotations, orders, delivery notes, returns and customers",
       edit: "Change a quotation, order, delivery note, return or customer that already exists",
       approve: "Approve, reject or cancel a sales document; dispatch and deliver goods",
-      delete: "Delete a sales document or a customer",
+      delete: "Delete a sales document that is not yet approved, or a customer",
+      deletePosted: "Delete an APPROVED sales document: its stock and ledger postings are reversed",
       send: "Send a document to a customer by email or WhatsApp",
       creditOverride: "Approve a sale for a customer over their credit limit",
     },
@@ -28,7 +29,8 @@ const MODULES = {
       create: "Add purchase orders, returns and vendors",
       edit: "Change a purchase order, return or vendor that already exists",
       approve: "Approve, reject or cancel a purchase document (receives the goods)",
-      delete: "Delete a purchase document or a vendor",
+      delete: "Delete a purchase document that is not yet approved, or a vendor",
+      deletePosted: "Delete an APPROVED purchase document: its stock and ledger postings are reversed",
     },
   },
   inventory: {
@@ -50,7 +52,8 @@ const MODULES = {
       create: "Add receipts, payments, journals, contra, expenses and notes",
       edit: "Change a voucher that already exists",
       approve: "Approve or reject a voucher; clear, bounce or cancel a cheque",
-      delete: "Delete a voucher",
+      delete: "Delete a voucher that is not yet approved",
+      deletePosted: "Delete an APPROVED voucher: its ledger entries are reversed",
     },
   },
   banking: {
@@ -88,6 +91,16 @@ const MODULES = {
       manage: "Add, change, switch off and reset the password of people with a lower role; create roles",
     },
   },
+  // The employee records (HR). Kept apart from "Users and roles" on purpose: the person who adds sign-in accounts is not
+  // thereby someone who should read or change an employee's file.
+  staff: {
+    label: "Staff records",
+    hint: "Employee records (HR)",
+    actions: {
+      view: "See the staff records",
+      manage: "Add, change and delete staff records",
+    },
+  },
   settings: {
     label: "Settings",
     hint: "Company profile, sending, e-invoicing and business rules",
@@ -123,6 +136,10 @@ const isKey = (k) => KEY_SET.has(k);
 // What a permission brings with it. `view` of the same module comes with every other action there (added in
 // expand()); these are the cross-module needs, found by asking what the screen reads to do its job.
 const IMPLIES = {
+  // reversing a posted document is a way of deleting it, so holding it never means holding less than plain Delete
+  "sales.deletePosted": ["sales.delete"],
+  "purchase.deletePosted": ["purchase.delete"],
+  "finance.deletePosted": ["finance.delete"],
   "sales.approve": ["inventory.view"],
   "purchase.approve": ["inventory.view"],
   "finance.create": ["sales.view", "purchase.view"], // a receipt is allocated against invoices, so they must be visible
@@ -184,7 +201,7 @@ const BUILT_IN = {
     description: "Approves sales, purchases and vouchers, and runs stock. Does not manage people, settings or the books' setup.",
     permissions: only(
       ...modules("sales", "purchase", "inventory"),
-      "finance.view", "finance.create", "finance.edit", "finance.approve", "finance.delete",
+      "finance.view", "finance.create", "finance.edit", "finance.approve", "finance.delete", "finance.deletePosted",
       "banking.view", "accounts.view", "reports.view", "reports.financial"
     ),
   },
@@ -244,10 +261,10 @@ const LEGACY_TYPES = ["super_admin", "admin", "manager", "operator", "viewer"];
 
 /** A role object (built-in, or a custom one from the database) as { key, name, rank, permissions, builtIn }. */
 function resolveRole(key, customRoles = []) {
-  if (isBuiltIn(key)) return { ...BUILT_IN[key], permissions: [...BUILT_IN[key].permissions], builtIn: true, isActive: true };
+  if (isBuiltIn(key)) return { ...BUILT_IN[key], permissions: [...BUILT_IN[key].permissions], builtIn: true, isActive: true, approvalLimit: null };
   const custom = (customRoles || []).find((r) => r && r.key === key);
   if (!custom) return null;
-  return { key: custom.key, name: custom.name, rank: Number(custom.rank) || 0, description: custom.description || "", permissions: expand(custom.permissions), builtIn: false, isActive: custom.isActive !== false };
+  return { key: custom.key, name: custom.name, rank: Number(custom.rank) || 0, description: custom.description || "", permissions: expand(custom.permissions), builtIn: false, isActive: custom.isActive !== false, approvalLimit: custom.approvalLimit === undefined || custom.approvalLimit === "" ? null : custom.approvalLimit };
 }
 
 /**
@@ -261,6 +278,16 @@ function grantsOf(role) {
 
 /** The role key of an account: its explicit role, else the type it has always had. */
 const roleKeyOf = (account) => account?.roleKey || account?.type || null;
+
+/**
+ * The role a person holds IN a branch: the one they were given for it, else their own. `account.branchRoles` is
+ * [{ branchId, roleKey }].
+ */
+const roleKeyAt = (account, branchCode) => {
+  const code = String(branchCode || "").toLowerCase();
+  const given = (account?.branchRoles || []).find((b) => b && String(b.branchId).toLowerCase() === code);
+  return given?.roleKey || roleKeyOf(account);
+};
 
 /** Does a set of granted keys include this one? `granted` is any array or Set of keys. */
 const can = (granted, key) => {
@@ -333,6 +360,25 @@ function validateCustomRole({ key, name, rank, permissions }, actor, { isNew = t
   return { ok: Object.keys(errors).length === 0, errors };
 }
 
+const APPROVE_KEYS = KEYS.filter((k) => k.endsWith(".approve"));
+
+/**
+ * Is this a limit a person may put on a role? -> an error sentence, or null when it is fine. Empty means no limit. A person
+ * who has a limit of their own cannot hand out more than it: a bigger limit, or none at all on a role that approves.
+ */
+function validateApprovalLimit(limit, permissions, actor) {
+  const actorRole = typeof actor === "string" ? resolveRole(actor) : actor;
+  const mine = actorRole && actorRole.approvalLimit !== undefined && actorRole.approvalLimit !== null && actorRole.approvalLimit !== "" ? Number(actorRole.approvalLimit) : null;
+  if (limit === undefined || limit === null || limit === "") {
+    const approves = expand(permissions).some((k) => APPROVE_KEYS.includes(k));
+    return approves && mine !== null ? `Set a limit: yours is ${mine}, and a role with no limit would be above it` : null;
+  }
+  const n = Number(limit);
+  if (!Number.isFinite(n) || n < 0) return "An approval limit is an amount of 0 or more, or empty for no limit";
+  if (mine !== null && n > mine) return `A limit cannot be above your own (${mine})`;
+  return null;
+}
+
 // One router serves all four trade documents, so what a person may do to one depends on its TYPE, not its address.
 const DOCUMENT_MODULE = { sales_order: "sales", sales_return: "sales", purchase_order: "purchase", purchase_return: "purchase" };
 
@@ -359,7 +405,7 @@ function legacyPermissions(grants, rank = 0) {
 
 // The name a checkbox carries in the role editor; the full sentence is its hint. An entry here for "module.action" wins.
 const SHORT = {
-  view: "View", create: "Add", edit: "Edit", approve: "Approve", delete: "Delete", send: "Send to customers", creditOverride: "Override credit limit",
+  view: "View", create: "Add", edit: "Edit", approve: "Approve", delete: "Delete", deletePosted: "Delete approved", send: "Send to customers", creditOverride: "Override credit limit",
   adjust: "Adjust stock", manage: "Manage", reconcile: "Reconcile", close: "Close periods", financial: "Financial reports", vat: "File VAT",
   "settings.manage": "Change settings", "users.manage": "Manage people and roles", "audit.view": "Read the trail", "lookups.view": "Pick lists",
 };
@@ -384,6 +430,6 @@ const catalogue = () =>
 
 module.exports = {
   MODULES, MODULE_KEYS, KEYS, ALL_KEYS, IMPLIES, BUILT_IN, BUILT_IN_KEYS, LEGACY_TYPES, TOP_RANK,
-  isKey, isRead, isBuiltIn, expand, unknownKeys, resolveRole, grantsOf, roleKeyOf, can, canAny, mayManage,
-  validateCustomRole, legacyPermissions, catalogue, DOCUMENT_MODULE, moduleOfType, viewableTypes,
+  isKey, isRead, isBuiltIn, expand, unknownKeys, resolveRole, grantsOf, roleKeyOf, roleKeyAt, can, canAny, mayManage,
+  validateCustomRole, validateApprovalLimit, legacyPermissions, catalogue, DOCUMENT_MODULE, moduleOfType, viewableTypes,
 };

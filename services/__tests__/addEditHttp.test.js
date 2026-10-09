@@ -57,6 +57,8 @@ async function roleAndPerson(key, permissions) {
   assert.equal(made.status, 201, JSON.stringify(made.data));
   const added = await api("owner", "POST", "/access/users", { name: key, email: `${key}@acc.test`, password: PASSWORD, role: key });
   assert.equal(added.status, 201, JSON.stringify(added.data));
+  // (an added person would first choose their own password: passwordPolicyHttp.test.js; here they already have)
+  await as("acc", () => M.Admin.updateOne({ email: `${key}@acc.test` }, { $set: { mustChangePassword: false } }));
   T[key] = await login(`${key}@acc.test`);
   assert.ok(T[key], `${key} signs in`);
 }

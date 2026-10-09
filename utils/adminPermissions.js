@@ -37,7 +37,7 @@ function mayManage({ actor, target, nextType, self = false, action = "update" })
 // the request names.
 // roleKey is the one that matters most: the role IS the account's power, so it is only ever set through the users API,
 // which checks the actor's rank. Left open here, "create an account" could name any role, owner included.
-const SYSTEM_FIELDS = ["permissions", "roleKey", "companyId", "createdBy", "updatedBy", "loginAttempts", "lockUntil", "lastLogin", "_id", "__v", "createdAt", "updatedAt"];
+const SYSTEM_FIELDS = ["permissions", "roleKey", "branchRoles", "companyId", "createdBy", "updatedBy", "loginAttempts", "lockUntil", "lastLogin", "_id", "__v", "createdAt", "updatedAt"];
 
 function withoutSystemFields(body) {
   const out = { ...(body || {}) };

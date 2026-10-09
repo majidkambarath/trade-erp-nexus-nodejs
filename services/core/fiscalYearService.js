@@ -1,13 +1,15 @@
 const FiscalYear = require("../../models/modules/financial/fiscalYearModel");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
+const tz = require("../../utils/tz");
+const orgLocale = require("../../utils/orgLocale");
 
-const TIMEZONE = "Asia/Dubai";
+// The zone a company's calendar runs in: the one named, else the organisation in scope.
+const zoneOf = (companyId) => (companyId ? orgLocale.forCompany(companyId).timezone : orgLocale.timezone());
 
-// Calendar year of an instant as seen in Dubai (a UTC read files 00:00-04:00 local into the
-// previous day, and on 1 Jan into the previous year).
-const dubaiYear = (date) =>
-  Number(new Intl.DateTimeFormat("en-GB", { timeZone: TIMEZONE, year: "numeric" }).format(new Date(date)));
+// Calendar year of an instant as seen in the organisation's zone (a UTC read files the first hours of a day into the
+// previous day in a zone ahead of UTC, and on 1 Jan into the previous year).
+const orgYear = (date, companyId) => tz.yearOf(new Date(date), zoneOf(companyId));
 
 class FiscalYearService {
   static async list(req) {
@@ -23,10 +25,10 @@ class FiscalYearService {
   }
 
   // The label that scopes a number series. The fiscal year's code when one is defined for the
-  // date, otherwise the Dubai calendar year, so numbering works before any year is configured.
+  // date, otherwise the organisation's calendar year, so numbering works before any year is configured.
   static async keyForDate(date, opts = {}) {
     const fy = await this.getForDate(date, opts);
-    return fy ? fy.code : String(dubaiYear(date));
+    return fy ? fy.code : String(orgYear(date, opts.companyId));
   }
 
   // The gate every create / update / delete / cancel path calls before it writes.
@@ -82,20 +84,21 @@ class FiscalYearService {
     return fy.save();
   }
 
-  // Creates the Dubai-calendar year containing `date` if the company has no years yet.
+  // Creates the calendar year (in the organisation's zone) containing `date` if the company has no years yet.
   static async ensureDefault(date = new Date(), companyId) {
     const company = companyId || getTenant().companyId;
     if (await FiscalYear.exists({ companyId: company })) return null;
-    const y = dubaiYear(date);
+    const zone = zoneOf(company);
+    const y = tz.yearOf(new Date(date), zone);
     return FiscalYear.create({
       companyId: company,
       code: String(y),
-      startDate: new Date(Date.UTC(y, 0, 1) - 4 * 3600 * 1000), // 00:00 Dubai
-      endDate: new Date(Date.UTC(y + 1, 0, 1) - 4 * 3600 * 1000 - 1),
+      startDate: tz.dayStart(`${y}-01-01`, zone), // 00:00 on 1 January there
+      endDate: new Date(tz.dayStart(`${y + 1}-01-01`, zone).getTime() - 1),
       status: "open",
     });
   }
 }
 
 module.exports = FiscalYearService;
-module.exports.dubaiYear = dubaiYear;
+module.exports.orgYear = orgYear;

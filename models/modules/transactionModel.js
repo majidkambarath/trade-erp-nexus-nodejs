@@ -171,6 +171,9 @@ const transactionSchema = new mongoose.Schema({
   // A sales order the customer will not take the rest of (utils/closeShort.js).
   closedShort: { type: closedShortSchema, default: undefined },
   lastSend: { type: lastSendSchema, default: undefined },
+  // Who has approved it so far. Always one entry once approved; two when the policy asked for a second approver, and
+  // then the first entry is the document waiting for its second (utils/approvalRules.js).
+  approvals: [{ _id: false, by: { type: String }, name: { type: String }, at: { type: Date }, step: { type: Number } }],
   createdBy: { type: String, required: true, trim: true },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

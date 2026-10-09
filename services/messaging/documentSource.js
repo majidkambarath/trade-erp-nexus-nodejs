@@ -6,14 +6,15 @@
 // Stage 1 covers the tax invoice. Each later document is another function here and nothing else in the
 // pipeline changes.
 //
-// The company block is read the way the printed invoice reads it: from the profile of the person who
-// is sending (the same profile their screen prints from), with the company settings filling any gap.
+// The company block is read the way the printed invoice reads it: the organisation's own letterhead
+// (services/core/companyProfileService.js), whoever is sending.
 // It is copied, not called, from EInvoiceService.build(): that also loads e-invoice settings and runs
 // e-invoice validation, which would let a customer missing an e-invoice ID block an ordinary email.
 const mongoose = require("mongoose");
 const Transaction = require("../../models/modules/transactionModel");
 const Customer = require("../../models/modules/customerModel");
-const Admin = require("../../models/core/adminModel");
+const CompanyProfileService = require("../core/companyProfileService");
+const orgLocale = require("../../utils/orgLocale");
 const CompanySettings = require("../../models/modules/financial/companySettingsModel");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
@@ -23,31 +24,29 @@ const notSendable = (reason) => new AppError(reason, 422, "DOCUMENT_NOT_SENDABLE
 const clean = (v) => String(v ?? "").trim();
 const uniq = (list) => [...new Set(list.map((e) => clean(e).toLowerCase()).filter(Boolean))];
 
-// The company as the invoice prints it. A value on the sender's own profile wins; the company
-// settings fill what that profile leaves empty.
+// The company as the invoice prints it: the ORGANISATION's letterhead (services/core/companyProfileService.js), the same one
+// the screens print from, whoever happens to be sending. (It used to be the sender's own copy of it.)
 async function companyFor(req) {
   const { companyId } = getTenant(req);
-  const [admin, cs] = await Promise.all([
-    req?.admin?.id && mongoose.isValidObjectId(req.admin.id) ? Admin.findById(req.admin.id).select("companyInfo").lean() : null,
-    CompanySettings.findOne({ companyId }).select("profile baseCurrency").lean(),
+  const [c, cs] = await Promise.all([
+    CompanyProfileService.get(),
+    CompanySettings.findOne({ companyId }).select("baseCurrency").lean(),
   ]);
-  const c = admin?.companyInfo || {};
   const bank = c.bankDetails || {};
-  const p = cs?.profile || {};
   const company = {
-    companyName: clean(c.companyName) || clean(p.legalName),
-    companyNameArabic: clean(c.companyNameArabic),
-    addressLine1: clean(c.addressLine1) || clean(p.addressLine1),
-    addressLine2: clean(c.addressLine2),
-    phoneNumber: clean(c.phoneNumber) || clean(p.phone),
-    email: clean(c.emailAddress) || clean(p.email),
-    website: clean(c.website),
-    vatNumber: clean(c.vatNumber) || clean(p.trn),
+    companyName: c.companyName,
+    companyNameArabic: c.companyNameArabic,
+    addressLine1: c.addressLine1,
+    addressLine2: c.addressLine2,
+    phoneNumber: c.phoneNumber,
+    email: c.emailAddress,
+    website: c.website,
+    vatNumber: c.vatNumber,
     logo: c.companyLogo?.url || null,
-    bankName: clean(bank.bankName), accountNumber: clean(bank.accountNumber), accountName: clean(bank.accountName),
-    ibanNumber: clean(bank.ibanNumber), swiftCode: clean(bank.swiftCode), branch: clean(c.branch),
+    bankName: bank.bankName, accountNumber: bank.accountNumber, accountName: bank.accountName,
+    ibanNumber: bank.ibanNumber, swiftCode: bank.swiftCode, branch: c.branch,
   };
-  return { company, currency: cs?.baseCurrency || "AED" };
+  return { company, currency: cs?.baseCurrency || orgLocale.baseCurrency() };
 }
 
 // Where a document could go: the customer's own address, then the primary contact, then the rest.

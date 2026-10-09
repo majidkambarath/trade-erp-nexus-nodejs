@@ -6,7 +6,8 @@ const { groupFamily } = require("./cardService");
 const ChequeService = require("./chequeService");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
-const { dubaiDay } = require("../../utils/documentExpiry");
+const { orgDay } = require("../../utils/documentExpiry");
+const orgLocale = require("../../utils/orgLocale");
 const { round2 } = require("../../utils/accounting");
 const M = require("../../utils/bankMatching");
 
@@ -16,8 +17,8 @@ const M = require("../../utils/bankMatching");
 const { cents, fromCents } = M;
 const toId = (v) => new mongoose.Types.ObjectId(String(v));
 const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
-const dayStart = (day) => new Date(`${day}T00:00:00.000+04:00`);
-const dayEnd = (day) => new Date(`${day}T23:59:59.999+04:00`);
+const dayStart = (day) => orgLocale.dayStart(day); // 00:00 on the organisation's wall clock
+const dayEnd = (day) => orgLocale.endOfDay(day); // 23:59:59.999 there
 const inSession = (query, session) => (session ? query.session(session) : query);
 
 // The ledger account must sit under the Bank group: reconciling a cash or customer account is not a thing.
@@ -41,7 +42,7 @@ function entryRow(e, v) {
     : null;
   return {
     id: String(e._id), type: "ledger", ledgerEntryId: e._id, voucherId: e.voucherId, voucherNo: e.voucherNo, voucherType: e.voucherType,
-    day: dubaiDay(e.date), amount: round2((e.debitAmount || 0) - (e.creditAmount || 0)),
+    day: orgDay(e.date), amount: round2((e.debitAmount || 0) - (e.creditAmount || 0)),
     narration: e.narration || "", party: v?.partyName || "",
     reference: v?.paymentDetails?.reference || "",
     chequeNo: e.referenceType === "cheque" ? String(e.referenceNo || "") : String(v?.paymentDetails?.chequeDetails?.chequeNumber || ""),
@@ -54,7 +55,7 @@ function entryRow(e, v) {
 function chequeRow(c) {
   return {
     id: `cheque:${c._id}`, type: "cheque", chequeId: c._id, voucherId: c.voucherId, voucherNo: c.voucherNo, voucherType: "cheque",
-    day: dubaiDay(c.chequeDate), amount: round2(c.direction === "receipt" ? c.amount : -c.amount),
+    day: orgDay(c.chequeDate), amount: round2(c.direction === "receipt" ? c.amount : -c.amount),
     narration: `Cheque ${c.chequeNo} ${c.direction === "receipt" ? "received" : "issued"}${c.isPDC ? " (post-dated)" : ""}`,
     party: c.partyName || "", reference: "", chequeNo: c.chequeNo, card: null, groupId: null, pending: true,
   };

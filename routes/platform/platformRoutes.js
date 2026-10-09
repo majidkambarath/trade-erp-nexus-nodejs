@@ -29,6 +29,7 @@ router.post("/organisations/:code/provision", c.provision);
 router.put("/organisations/:code/profile", c.profile);
 
 router.get("/organisations/:code/users", c.orgUsers);
+router.get("/organisations/:code/roles", c.orgRoles);
 router.post("/organisations/:code/users", c.orgCreateUser);
 router.patch("/organisations/:code/users/:id", c.orgUpdateUser);
 router.get("/organisations/:code/branches", c.branches);

@@ -17,7 +17,7 @@ const DAY = 86400000;
 const inDays = (n) => new Date(Date.now() + n * DAY);
 const ago = (n) => new Date(Date.now() - n * DAY);
 // Dubai calendar day, the way the reports read dates
-const dubaiDay = (offset = 0) => new Date(Date.now() + 4 * 3600e3 + offset * DAY).toISOString().slice(0, 10);
+const orgDay = (offset = 0) => new Date(Date.now() + 4 * 3600e3 + offset * DAY).toISOString().slice(0, 10);
 const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 const dubaiDayOf = (d) => new Date(new Date(d).getTime() + 4 * 3600e3).toISOString().slice(0, 10);
 
@@ -64,7 +64,7 @@ test.before(async () => {
   await require("../core/organisationService").ensureDefault(); // an account must belong to an organisation that exists, as the server arranges at start-up
 
   // one fiscal year spanning last year and this one, so back-dated documents are never refused
-  const year = Number(dubaiDay().slice(0, 4));
+  const year = Number(orgDay().slice(0, 4));
   await svc.FiscalYear.create({
     companyId: svc.tenant.getTenant().companyId, code: "TEST", status: "open",
     startDate: new Date(Date.UTC(year - 1, 0, 1) - 4 * 3600e3), endDate: new Date(Date.UTC(year + 1, 0, 1) - 4 * 3600e3 - 1),
@@ -124,7 +124,7 @@ async function ledgerBalance(upToDay) {
 // ---------------------------------------------------------------- 1. valuation
 
 test("valuation today: quantity, average cost and value per item agree with the item master and the ledger", { skip }, async () => {
-  const v = await svc.Reports.valuation({ asOn: dubaiDay() });
+  const v = await svc.Reports.valuation({ asOn: orgDay() });
   assert.deepEqual(v.rows.map((r) => r.itemId), ["RICE", "OIL"], "by item name");
   const ri = row(v, "RICE");
   const oi = row(v, "OIL");
@@ -152,7 +152,7 @@ test("valuation today: quantity, average cost and value per item agree with the 
   assert.equal(rec.unexplained, 0);
   assert.ok(rec.lines.every((l) => l.difference === 0), "every source agrees with its postings");
   assert.deepEqual(rec.lines.map((l) => l.key), ["purchases", "purchaseReturns", "sales", "salesReturns", "writeOffs"]);
-  assert.equal(await ledgerBalance(dubaiDay()), 2216.15);
+  assert.equal(await ledgerBalance(orgDay()), 2216.15);
   const inv = await inventoryAccount();
   assert.equal(rec.account.name, inv.accountName);
   const tb = await svc.Financial.getTrialBalance(undefined, "2099-01-01");
@@ -161,7 +161,7 @@ test("valuation today: quantity, average cost and value per item agree with the 
 
 test("valuation as on an earlier date counts only what had happened by then, and still reconciles", { skip }, async () => {
   // 25 days ago: both purchases and the first sale are in; the return, purchase return, oil purchase and sale B are not
-  const mid = await svc.Reports.valuation({ asOn: dubaiDay(-25) });
+  const mid = await svc.Reports.valuation({ asOn: orgDay(-25) });
   assert.deepEqual([row(mid, "RICE").qty, row(mid, "RICE").value], [140, 1680]);
   assert.deepEqual([row(mid, "OIL").qty, row(mid, "OIL").value], [40, 800]);
   assert.equal(mid.reconciliation.stockValue, 2480);
@@ -169,20 +169,20 @@ test("valuation as on an earlier date counts only what had happened by then, and
   assert.equal(mid.reconciliation.reconciles, true);
 
   // 50 days ago: only the first purchase
-  const early = await svc.Reports.valuation({ asOn: dubaiDay(-50) });
+  const early = await svc.Reports.valuation({ asOn: orgDay(-50) });
   assert.deepEqual([row(early, "RICE").qty, row(early, "RICE").value, row(early, "RICE").avgCost], [100, 1000, 10]);
   assert.deepEqual([row(early, "OIL").qty, row(early, "OIL").value], [50, 1000]);
   assert.equal(early.reconciliation.reconciles, true);
 
   // before anything happened there is nothing, on both sides
-  const none = await svc.Reports.valuation({ asOn: dubaiDay(-70) });
+  const none = await svc.Reports.valuation({ asOn: orgDay(-70) });
   assert.deepEqual(none.rows, []);
   assert.equal(none.totals.value, 0);
   assert.equal(none.reconciliation.ledgerBalance, 0);
   assert.equal(none.reconciliation.reconciles, true);
 
   // a date is a Dubai day: documents dated that day are included
-  const sameDay = await svc.Reports.valuation({ asOn: dubaiDay(-30) });
+  const sameDay = await svc.Reports.valuation({ asOn: orgDay(-30) });
   assert.equal(row(sameDay, "RICE").qty, 140);
 });
 
@@ -206,7 +206,7 @@ test("valuation by category, with the category / search filters narrowing the ro
 // ---------------------------------------------------------------- 2. movement
 
 test("movement: opening + in - out = closing, for quantity and for value, item by item and in total", { skip }, async () => {
-  const m = await svc.Reports.movement({ from: dubaiDay(-35), to: dubaiDay(-6) });
+  const m = await svc.Reports.movement({ from: orgDay(-35), to: orgDay(-6) });
   const ri = row(m, "RICE");
   const oi = row(m, "OIL");
   assert.deepEqual(ri.opening, { qty: 200, value: 2400 });
@@ -230,7 +230,7 @@ test("movement: opening + in - out = closing, for quantity and for value, item b
   assert.deepEqual(m.totals.closing, { qty: 190, value: 2760 });
 
   // the closing value is the valuation on the last day, and the ledger agrees
-  const val = await svc.Reports.valuation({ asOn: dubaiDay(-6) });
+  const val = await svc.Reports.valuation({ asOn: orgDay(-6) });
   assert.equal(val.totals.value, m.totals.closing.value);
   assert.equal(m.reconciliation.stockValue, 2760);
   assert.equal(m.reconciliation.ledgerBalance, 2760);
@@ -238,7 +238,7 @@ test("movement: opening + in - out = closing, for quantity and for value, item b
 });
 
 test("movement up to today shows the write-off, and an opening balance carries the earlier history", { skip }, async () => {
-  const m = await svc.Reports.movement({ from: dubaiDay(-6), to: dubaiDay() });
+  const m = await svc.Reports.movement({ from: orgDay(-6), to: orgDay() });
   const oi = row(m, "OIL");
   assert.deepEqual(oi.opening, { qty: 60, value: 1240 });
   assert.deepEqual(oi.writeOffs, { qty: 15, value: 310 });
@@ -248,7 +248,7 @@ test("movement up to today shows the write-off, and an opening balance carries t
   assert.equal(m.reconciliation.reconciles, true);
 
   // an item with nothing in the period but stock on hand still shows its opening and closing
-  const later = await svc.Reports.movement({ from: dubaiDay(-2), to: dubaiDay() });
+  const later = await svc.Reports.movement({ from: orgDay(-2), to: orgDay() });
   assert.deepEqual(row(later, "RICE").opening, row(later, "RICE").closing);
   assert.deepEqual(row(later, "RICE").sales, { qty: 0, value: 0 });
 });
@@ -256,7 +256,7 @@ test("movement up to today shows the write-off, and an opening balance carries t
 // ---------------------------------------------------------------- 3. item ledger
 
 test("item ledger: every movement with a running balance computed on the server", { skip }, async () => {
-  const l = await svc.Reports.itemLedger({ itemId: "RICE", from: dubaiDay(-35), to: dubaiDay() });
+  const l = await svc.Reports.itemLedger({ itemId: "RICE", from: orgDay(-35), to: orgDay() });
   assert.equal(l.item.itemName, "Basmati Rice");
   assert.deepEqual(l.opening, { qty: 200, value: 2400 });
   assert.deepEqual(l.rows.map((r) => r.typeLabel), ["Sale", "Sales return", "Purchase return", "Sale"]);
@@ -282,7 +282,7 @@ test("item ledger: every movement with a running balance computed on the server"
   assert.equal(all.closing.value, (await svc.Reports.valuation({})).rows.find((r) => r.itemId === "RICE").value);
 
   // a write-off shows with its batch
-  const o = await svc.Reports.itemLedger({ itemId: "OIL", from: dubaiDay() });
+  const o = await svc.Reports.itemLedger({ itemId: "OIL", from: orgDay() });
   const wo = o.rows.find((r) => r.typeLabel === "Write-off");
   assert.deepEqual([wo.qtyOut, wo.valueOut, wo.batchNo, wo.documentNo], [15, 310, "O-OLD", docs.writeOff.number]);
   assert.deepEqual(o.opening, { qty: 60, value: 1240 });
@@ -292,7 +292,7 @@ test("item ledger: every movement with a running balance computed on the server"
 // ---------------------------------------------------------------- 4. sales analysis
 
 test("sales analysis: net revenue without VAT, returns subtracted, cost of goods sold from the movements themselves", { skip }, async () => {
-  const period = { from: dubaiDay(-35), to: dubaiDay() };
+  const period = { from: orgDay(-35), to: orgDay() };
   const a = await svc.Reports.salesAnalysis({ ...period, groupBy: "item" });
   const ri = a.rows.find((r) => r.key === "RICE");
   const oi = a.rows.find((r) => r.key === "OIL");
@@ -323,13 +323,13 @@ test("sales analysis: net revenue without VAT, returns subtracted, cost of goods
   assert.equal(cust.rows[0].documents, 2, "the sale and its return");
 
   // a narrower period leaves out what is outside it
-  const late = await svc.Reports.salesAnalysis({ from: dubaiDay(-6), to: dubaiDay(), groupBy: "item" });
+  const late = await svc.Reports.salesAnalysis({ from: orgDay(-6), to: orgDay(), groupBy: "item" });
   assert.deepEqual(late.rows.map((r) => [r.key, r.netRevenue, r.cogs]), [["RICE", 380, 233.85]]);
-  assert.deepEqual((await svc.Reports.salesAnalysis({ from: dubaiDay(-3), to: dubaiDay(), groupBy: "item" })).rows, []);
+  assert.deepEqual((await svc.Reports.salesAnalysis({ from: orgDay(-3), to: orgDay(), groupBy: "item" })).rows, []);
 });
 
 test("purchase analysis: net purchase value, average price paid and vendor count", { skip }, async () => {
-  const p = await svc.Reports.salesAnalysis({ from: dubaiDay(-65), to: dubaiDay(), direction: "purchases", groupBy: "item" });
+  const p = await svc.Reports.salesAnalysis({ from: orgDay(-65), to: orgDay(), direction: "purchases", groupBy: "item" });
   const ri = p.rows.find((r) => r.key === "RICE");
   const oi = p.rows.find((r) => r.key === "OIL");
   assert.deepEqual([ri.purchasedQty, ri.returnedQty, ri.quantity], [200, 20, 180]);
@@ -340,11 +340,11 @@ test("purchase analysis: net purchase value, average price paid and vendor count
   assert.deepEqual([p.totals.netValue, p.totals.vendors], [3560, 2]);
   assert.equal(p.rows[0].key, "RICE", "largest first");
 
-  const byVendor = await svc.Reports.salesAnalysis({ from: dubaiDay(-65), to: dubaiDay(), direction: "purchases", groupBy: "customer" });
+  const byVendor = await svc.Reports.salesAnalysis({ from: orgDay(-65), to: orgDay(), direction: "purchases", groupBy: "customer" });
   assert.equal(byVendor.groupBy, "vendor");
   assert.deepEqual(byVendor.rows.map((r) => [r.name, r.netValue, r.vendors]), [["Gulf Mills", 2440, 1], ["Delta Foods", 1120, 1]]);
 
-  const none = await svc.Reports.salesAnalysis({ from: dubaiDay(-3), to: dubaiDay(), direction: "purchases" });
+  const none = await svc.Reports.salesAnalysis({ from: orgDay(-3), to: orgDay(), direction: "purchases" });
   assert.deepEqual(none.rows, []);
   assert.equal(none.totals.avgPrice, null);
 });
@@ -393,7 +393,7 @@ test("slow stock: stock on hand with no sale in N days, biggest value first; nev
   assert.deepEqual(s10.rows.map((r) => r.itemId), ["OIL", "SALT"], "ranked by value");
   const oi = s10.rows[0];
   assert.deepEqual([oi.qty, oi.value, oi.neverSold, oi.daysSince], [45, 930, false, 30]);
-  assert.equal(dubaiDayOf(oi.lastSaleDate), dubaiDay(-30));
+  assert.equal(dubaiDayOf(oi.lastSaleDate), orgDay(-30));
   assert.equal(s10.totals.value, 990);
   assert.equal(s10.totals.stockValue, 2276.15);
   assert.equal(s10.totals.pctOfStockValue, r2((990 / 2276.15) * 100));
@@ -445,7 +445,7 @@ test("a deleted (reversed) document disappears from every report, exactly as it 
   assert.equal(ledger.rows.length, beforeLedger.rows.length, "neither the original nor its reversal is listed");
   assert.ok(ledger.rows.every((r) => !/^REV-/.test(r.documentNo)));
   // a period spanning the day shows no purchase either
-  const m = await svc.Reports.movement({ from: dubaiDay(-4), to: dubaiDay(-2) });
+  const m = await svc.Reports.movement({ from: orgDay(-4), to: orgDay(-2) });
   assert.deepEqual(row(m, "RICE")?.purchases ?? { qty: 0, value: 0 }, { qty: 0, value: 0 });
   assert.equal((await svc.Reports.valuation({})).rows.find((r) => r.itemId === "RICE").outOfSync, undefined);
 });
@@ -472,7 +472,7 @@ test("stock that predates its history is carried as an implicit opening and list
   assert.equal(rec.unexplained, 0);
 
   // a period report keeps it in the opening balance, never in the period's movement
-  const m = await svc.Reports.movement({ from: dubaiDay(-1), to: dubaiDay() });
+  const m = await svc.Reports.movement({ from: orgDay(-1), to: orgDay() });
   assert.deepEqual(row(m, "GHEE").opening, { qty: 20, value: 608 });
   assert.deepEqual(row(m, "GHEE").purchases, { qty: 0, value: 0 });
   const l = await svc.Reports.itemLedger({ itemId: "GHEE" });
@@ -535,7 +535,7 @@ test("when stock and ledger disagree, the difference is split by source: unposte
   assert.equal(r2(rec.lines.reduce((t, l) => t + l.difference, 0)), rec.difference);
 
   // the same difference at the closing date of a movement report
-  const m = await svc.Reports.movement({ from: dubaiDay(-1), to: dubaiDay() });
+  const m = await svc.Reports.movement({ from: orgDay(-1), to: orgDay() });
   assert.equal(m.reconciliation.difference, rec.difference);
   assert.equal(m.totals.closing.value, rec.stockValue);
   assert.equal(row(m, "RICE").adjustments.qty, 5);
@@ -548,7 +548,7 @@ test("bad input is refused with a clear message", { skip }, async () => {
   await assert.rejects(() => Reports.valuation({ groupBy: "colour" }), { code: "INVALID_GROUP", statusCode: 400 });
   await assert.rejects(() => Reports.valuation({ asOn: "not-a-date" }), { code: "INVALID_DATE" });
   await assert.rejects(() => Reports.valuation({ categoryId: "nope" }), { code: "INVALID_ID" });
-  await assert.rejects(() => Reports.movement({ from: dubaiDay(), to: dubaiDay(-3) }), { code: "INVALID_RANGE" });
+  await assert.rejects(() => Reports.movement({ from: orgDay(), to: orgDay(-3) }), { code: "INVALID_RANGE" });
   await assert.rejects(() => Reports.itemLedger({}), { code: "ITEM_REQUIRED" });
   await assert.rejects(() => Reports.itemLedger({ itemId: "NO-SUCH-ITEM" }), { code: "ITEM_NOT_FOUND", statusCode: 404 });
   await assert.rejects(() => Reports.salesAnalysis({ direction: "sideways" }), { code: "INVALID_DIRECTION" });
@@ -586,15 +586,15 @@ test("over HTTP: the routes need a login and return { success, data }", { skip }
   try {
     assert.equal((await get("/valuation", null)).status, 401);
 
-    const val = await get(`/valuation?asOn=${dubaiDay()}&groupBy=item`);
+    const val = await get(`/valuation?asOn=${orgDay()}&groupBy=item`);
     assert.equal(val.status, 200);
     assert.equal(val.body.success, true);
     assert.ok(val.body.data.rows.length >= 2);
     assert.equal(typeof val.body.data.reconciliation.reconciles, "boolean");
 
     for (const [url, key] of [
-      [`/movement?from=${dubaiDay(-35)}&to=${dubaiDay()}`, "totals"], [`/item-ledger?itemId=RICE`, "closing"],
-      [`/sales-analysis?from=${dubaiDay(-35)}&to=${dubaiDay()}&groupBy=customer`, "rows"], [`/sales-analysis?direction=purchases&groupBy=category`, "rows"],
+      [`/movement?from=${orgDay(-35)}&to=${orgDay()}`, "totals"], [`/item-ledger?itemId=RICE`, "closing"],
+      [`/sales-analysis?from=${orgDay(-35)}&to=${orgDay()}&groupBy=customer`, "rows"], [`/sales-analysis?direction=purchases&groupBy=category`, "rows"],
       [`/expiry?withinDays=30`, "totals"], [`/slow-moving?days=90`, "totals"], [`/reorder`, "totals"], [`/lookups`, "items"],
     ]) {
       const res = await get(url);

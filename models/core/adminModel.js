@@ -53,6 +53,14 @@ const adminSchema = new mongoose.Schema(
     // Empty means "the role of my type", which is how every account made before roles existed keeps what it had. A person
     // with a custom role keeps type "viewer", the safest base, so anything still reading the type fails closed.
     roleKey: { type: String, default: null, lowercase: true, trim: true },
+    // Roles that differ by branch: in this branch the person holds this role INSTEAD of their own, and a person who belongs
+    // to another branch may work here only by being listed. A person with any of these works in one branch at a time (there
+    // is no "all branches" view for them, because their role is not the same in all of them). Set only through the users
+    // API (utils/adminPermissions SYSTEM_FIELDS), never from a request body.
+    branchRoles: {
+      type: [{ _id: false, branchId: { type: String, required: true, lowercase: true, trim: true }, roleKey: { type: String, required: true, lowercase: true, trim: true } }],
+      default: [],
+    },
     // LEGACY: the old coarse list, still written from the type and still carried in the token, but nothing trusts it.
     // What a person may do is their role (utils/permissions.js), resolved from the database on every request.
     permissions: {
@@ -170,6 +178,16 @@ const adminSchema = new mongoose.Schema(
       type: Date,
       default: null
     },
+    // True from the moment someone ELSE sets this person's password (an administrator adding or resetting them, the developer
+    // console) until they choose their own: until then the server refuses everything but changing it (PASSWORD_CHANGE_REQUIRED).
+    mustChangePassword: {
+      type: Boolean,
+      default: false
+    },
+    passwordChangedAt: {
+      type: Date,
+      default: null
+    },
     loginAttempts: {
       type: Number,
       default: 0
@@ -274,7 +292,8 @@ adminSchema.methods.incLoginAttempts = function () {
   const updates = { $inc: { loginAttempts: 1 } };
 
   if (this.loginAttempts + 1 >= 5 && !this.isLocked) {
-    updates.$set = { lockUntil: Date.now() + 2 * 60 * 60 * 1000 }; // lock for 2 hours
+    // 15 minutes, not hours: a lock-out is also a way to shut someone else out on purpose, so it should end soon on its own
+    updates.$set = { lockUntil: Date.now() + 15 * 60 * 1000 };
   }
 
   return this.updateOne(updates);

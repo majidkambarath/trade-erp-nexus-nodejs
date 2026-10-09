@@ -6,6 +6,15 @@ const UsageService = require("../../services/core/usageService");
 exports.status = catchAsync(async (req, res) => {
   const status = await UsageService.status(req.organisation, new Date(), { admin: req.admin, tenant: req.tenant });
   // And who is asking, so a screen knows what this person may do without a second request.
-  const me = { id: req.admin.id, name: req.admin.name, email: req.admin.email, role: req.admin.role, grants: req.admin.grants };
-  res.status(200).json({ success: true, data: { ...status, me } });
+  // role / grants are the ones for the branch being worked in; branchRoles says which branches differ and how
+  const RoleService = require("../../services/core/roleService");
+  const branchRoles = [];
+  for (const b of req.admin.branchRoles || []) {
+    const role = await RoleService.find(b.roleKey);
+    branchRoles.push({ branchId: b.branchId, roleKey: b.roleKey, roleName: role?.name || null });
+  }
+  const me = { id: req.admin.id, name: req.admin.name, email: req.admin.email, role: req.admin.role, grants: req.admin.grants, mustChangePassword: req.admin.mustChangePassword, homeBranch: req.admin.homeBranch, branchRoles };
+  // The organisation's rules about who may approve, so a screen can offer Confirm only to someone who could use it
+  const policy = { approvals: await require("../../services/core/approvalPolicyService").policy() };
+  res.status(200).json({ success: true, data: { ...status, me, policy } });
 });

@@ -13,7 +13,8 @@ const Links = require("./deliveryNoteLinks");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { getTenant } = require("../../utils/tenant");
 const { allBranches } = require("../../utils/tenantContext");
-const { todayInDubai, dubaiDay, diffDays, toExpiryDay } = require("../../utils/documentExpiry");
+const { todayInOrg, orgDay, diffDays, toExpiryDay } = require("../../utils/documentExpiry");
+const orgLocale = require("../../utils/orgLocale");
 const {
   DELIVERY_ACTIONS, DELIVERY_EDITABLE, INVOICE_STATE, QUOTATION_CONVERTIBLE,
   fulfilment, settleDelivery, invoiceClock, quotationExpiry,
@@ -345,7 +346,7 @@ class DeliveryNoteService {
     const partyId = order ? order.partyId : data.partyId;
     const customer = await S.loadCustomer(partyId, { session });
 
-    const date = S.dayToDate(data.date) || new Date(todayInDubai());
+    const date = S.dayToDate(data.date) || new Date(todayInOrg());
     const lines = await DeliveryNoteService.#buildLines(data, order, { session });
     const priced = await S.priceDocument(
       { items: lines, charges: order ? [] : data.charges, discount: order ? 0 : data.discount, date },
@@ -479,11 +480,11 @@ class DeliveryNoteService {
     const receivedBy = String(input?.receivedBy || "").trim();
     if (!receivedBy) throw fail("Enter the name of the person who received the goods", 400, "RECEIVED_BY_REQUIRED");
 
-    const today = todayInDubai();
+    const today = todayInOrg();
     const day = input?.deliveredAt ? toExpiryDay(input.deliveredAt) : today;
     if (!day) throw fail("Enter a valid delivery date", 400, "INVALID_DATE");
     if (diffDays(today, day) > 0) throw fail("The delivery date cannot be in the future", 400, "INVALID_DATE");
-    if (diffDays(dubaiDay(dn.date), day) < 0) throw fail("The goods cannot be delivered before the note's date", 400, "INVALID_DATE");
+    if (diffDays(orgDay(dn.date), day) < 0) throw fail("The goods cannot be delivered before the note's date", 400, "INVALID_DATE");
 
     const settled = settleDelivery(dn.items, input?.lines);
     if (settled.errors.length) throw fail(settled.errors[0].message, 400, "INVALID_DELIVERY", settled.errors);
@@ -510,7 +511,7 @@ class DeliveryNoteService {
     });
     dn.pricing = priced.pricing;
     dn.totalAmount = priced.totalAmount;
-    dn.deliveredAt = new Date(`${day}T12:00:00+04:00`); // midday Dubai: the calendar day is unambiguous in any timezone
+    dn.deliveredAt = orgLocale.noonOf(day); // midday in the organisation's zone: the calendar day is unambiguous
     if (!dn.dispatchedAt) dn.dispatchedAt = dn.deliveredAt;
     dn.receivedBy = receivedBy;
     dn.proofNote = String(input?.proofNote || "").trim();
@@ -551,7 +552,7 @@ class DeliveryNoteService {
     }
     notes.sort((a, b) => a.deliveredAt - b.deliveredAt);
 
-    const date = input?.date ? S.dayToDate(input.date) : new Date(todayInDubai());
+    const date = input?.date ? S.dayToDate(input.date) : new Date(todayInOrg());
     if (!date) throw fail("Enter a valid date", 400, "INVALID_DATE");
     const refs = [...new Set(notes.map((n) => n.reference).filter(Boolean))];
     const nos = notes.map((n) => n.deliveryNoteNo);

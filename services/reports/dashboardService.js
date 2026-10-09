@@ -9,15 +9,16 @@ const StockReports = require("./stockReportsService");
 const AgeingService = require("../financial/ageingService");
 const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
-const { dubaiDay } = require("../../utils/fx");
+const { orgDay } = require("../../utils/fx");
 const { getTenant } = require("../../utils/tenant");
+const orgLocale = require("../../utils/orgLocale");
 const Q = require("./dashboardQueries");
 
 // The home dashboard. Nothing is invented or sampled: every figure is read from the report that
 // owns it (profit and loss, cash book / flow, party balances, ageing, stock valuation / expiry /
 // reorder / sales analysis, the VAT return, the day book) or from a single grouped query in
 // dashboardQueries.js that uses the same definitions, so a card can never disagree with the page
-// it links to. All amounts are AED, the ledger currency; days are Dubai calendar days.
+// it links to. All amounts are in the organisation's base currency, the ledger currency; days are its calendar days.
 //
 // One part per tab, so the page can show the first screen quickly and fetch the rest when asked:
 //   summary()    header, ops status, collection rate, 8-month trend, top product, VAT, attention, recent
@@ -42,7 +43,7 @@ const change = (now, before) => (before > 0 ? round2(((now - before) / before) *
 
 // ---------------------------------------------------------------- the period
 
-function resolvePeriod({ period, month, from, to } = {}, today = dubaiDay()) {
+function resolvePeriod({ period, month, from, to } = {}, today = orgDay()) {
   const current = today.slice(0, 7);
   const monthPeriod = (m, id) => {
     if (m > current) throw new AppError("That month has not started yet", 400, "FUTURE_MONTH");
@@ -226,7 +227,7 @@ class DashboardService {
     }));
 
     return {
-      currency: "AED",
+      currency: orgLocale.baseCurrency(),
       generatedAt: new Date().toISOString(),
       company: profile,
       period: { id: p.id, from: p.from, to: p.to, previousFrom: p.previousFrom, previousTo: p.previousTo },
@@ -290,7 +291,7 @@ class DashboardService {
       Q.voucherTotal("payment", weekFrom, p.to),
       Q.voucherTotal("payment", lastWeekFrom, lastWeekTo),
       Q.pipeline(p.from, p.to),
-      AgeingService.openInvoices({ type: "receivable", asOf: LedgerReports.dayEnd(dubaiDay()) }), // where those invoices stand today
+      AgeingService.openInvoices({ type: "receivable", asOf: LedgerReports.dayEnd(orgDay()) }), // where those invoices stand today
       AgeingService.report({ type: "receivable", asOf }),
       AgeingService.report({ type: "payable", asOf }),
       Q.weeklyCollections(weeks, p.to),
@@ -358,7 +359,7 @@ class DashboardService {
     const settlement = await Q.settlement(p.from, p.to, open);
 
     return {
-      currency: "AED",
+      currency: orgLocale.baseCurrency(),
       period: { id: p.id, from: p.from, to: p.to, previousFrom: p.previousFrom, previousTo: p.previousTo },
       weekly: daily,
       customerMix: { total: mixTotal, rows: mixRows.map((r) => ({ ...r, sharePct: pct(r.value, mixTotal) })) },
@@ -420,7 +421,7 @@ class DashboardService {
     const ranked = withPrevious(items.rows.filter((r) => r.netRevenue > 0), previousItems.rows, "netRevenue").slice(0, 4);
     const top = ranked[0]?.value || 0;
     return {
-      currency: "AED",
+      currency: orgLocale.baseCurrency(),
       period: { id: p.id, from: p.from, to: p.to, previousFrom: p.previousFrom, previousTo: p.previousTo },
       orders: { count: invoices.invoices, previous: previousInvoices.invoices, changePct: change(invoices.invoices, previousInvoices.invoices) },
       averageOrder: { value: average(invoices), previous: average(previousInvoices), changePct: average(invoices) && average(previousInvoices) ? change(average(invoices), average(previousInvoices)) : null },
@@ -449,7 +450,7 @@ class DashboardService {
     }
     const rec = valuation.reconciliation;
     return {
-      currency: "AED",
+      currency: orgLocale.baseCurrency(),
       period: { id: p.id, from: p.from, to: p.to },
       totals: { value: valuation.totals.value, items: valuation.totals.items, reorderItems: reorder.totals.items, expiring: expiry.totals.expiring.batches, expired: expiry.totals.expired.batches, agreesWithLedger: rec.available ? rec.reconciles : null },
       categories: rows.slice(0, 4).map((r) => ({ key: r.categoryId || "none", name: r.categoryName, items: r.items, value: r.value, sharePct: r.sharePct })),
@@ -475,7 +476,7 @@ class DashboardService {
     const amountOf = (type) => dayBook.byType.find((t) => t.voucherType === type)?.amount || 0;
     const net = vat.totals.netPayable;
     return {
-      currency: "AED",
+      currency: orgLocale.baseCurrency(),
       period: { id: p.id, from: p.from, to: p.to },
       grossProfit: profit.grossProfit,
       netProfit: profit.netProfit,

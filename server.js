@@ -82,6 +82,8 @@ const organisationsReady = mongodb()
   // the organisation that existed before organisations did becomes a real one, with its head office
   .then(() => require("./services/core/organisationService").ensureDefault())
   .then((adopted) => { if (adopted) console.log("[organisations] adopted the original organisation:", adopted.code); })
+  // every organisation's base currency and time zone is known before the first request is served
+  .then(() => require("./services/core/organisationService").warmLocales())
   .catch((err) => console.error("[organisations] could not adopt the original organisation:", err.message));
 
 let organisationsSettled = false;
@@ -137,6 +139,8 @@ app.use("/api/v1/opening-balances", require("./routes/financial/openingBalanceRo
 app.use("/api/v1/document-types", require("./routes/masters/documentTypeRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/document-expiry", require("./routes/masters/documentExpiryRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/currencies", require("./routes/financial/currencyRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/branches", require("./routes/core/branchRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/company", require("./routes/core/companyRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/quotations", require("./routes/orderPurchase/quotationRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/delivery-notes", require("./routes/orderPurchase/deliveryNoteRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/document-flow", require("./routes/orderPurchase/documentFlowRoutes")); // before adminRouter, whose bare GET /:id would capture it

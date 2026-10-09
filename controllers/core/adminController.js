@@ -197,10 +197,17 @@ exports.changePassword = catchAsync(async (req, res) => {
     });
   }
 
-  if (newPassword.length < 6) {
+  if (newPassword.length < 8) {
     return res.status(400).json({
       success: false,
-      message: "New password must be at least 6 characters"
+      message: "New password must be at least 8 characters"
+    });
+  }
+  if (newPassword === currentPassword) {
+    return res.status(400).json({
+      success: false,
+      message: "Choose a password you have not used here",
+      error: "PASSWORD_UNCHANGED"
     });
   }
 
@@ -224,8 +231,12 @@ exports.changePassword = catchAsync(async (req, res) => {
     });
   }
 
-  // Update password
+  // Update password: from now on it is the person's own, and any lock-out from failed attempts is over
   admin.password = newPassword;
+  admin.mustChangePassword = false;
+  admin.passwordChangedAt = new Date();
+  admin.loginAttempts = 0;
+  admin.lockUntil = undefined;
   admin.$locals.updatedBy = adminId;
   await admin.save();
 
@@ -287,23 +298,3 @@ exports.uploadProfileImage = catchAsync(async (req, res) => {
   });
 });
 
-// Upload company logo only
-exports.uploadCompanyLogo = catchAsync(async (req, res) => {
-  const adminId = req.admin.id;
-  
-  if (!req.file) {
-    return res.status(400).json({
-      success: false,
-      message: "No logo file provided"
-    });
-  }
-
-  const files = { companyLogo: req.file };
-  const admin = await adminService.updateAdmin(adminId, {}, files, adminId, { selfService: true });
-  
-  res.status(200).json({
-    success: true,
-    message: "Company logo uploaded successfully",
-    data: admin
-  });
-});

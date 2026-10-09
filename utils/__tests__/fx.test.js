@@ -2,7 +2,7 @@
 // ledger legs, and Dubai calendar days. No database.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { convertToBase, decimalPlaces, deviationPercent, splitForeign, dubaiDay, dubaiDayStart, dubaiDayEnd, isCalendarDay, displayDay } = require("../fx");
+const { convertToBase, decimalPlaces, deviationPercent, splitForeign, orgDay, orgDayStart, orgDayEnd, isCalendarDay, displayDay } = require("../fx");
 
 test("convertToBase is exact and rounds half up to the cent", () => {
   assert.equal(convertToBase(1000, 3.6725), 3672.5);
@@ -44,13 +44,13 @@ test("splitForeign shares a foreign amount over legs and always adds back", () =
 });
 
 test("Dubai calendar days", () => {
-  assert.equal(dubaiDay(new Date("2026-10-03T19:59:00Z")), "2026-10-03", "23:59 Dubai");
-  assert.equal(dubaiDay(new Date("2026-10-03T20:00:00Z")), "2026-10-04", "midnight Dubai");
-  assert.equal(dubaiDay("2026-10-04"), "2026-10-04", "a plain day is that day");
-  assert.equal(dubaiDay(new Date("2026-12-31T21:30:00Z")), "2027-01-01", "across New Year");
-  assert.equal(dubaiDay("garbage"), null);
-  assert.equal(dubaiDayStart("2026-10-04").toISOString(), "2026-10-03T20:00:00.000Z");
-  assert.equal(dubaiDayEnd("2026-10-04").toISOString(), "2026-10-04T20:00:00.000Z");
+  assert.equal(orgDay(new Date("2026-10-03T19:59:00Z")), "2026-10-03", "23:59 Dubai");
+  assert.equal(orgDay(new Date("2026-10-03T20:00:00Z")), "2026-10-04", "midnight Dubai");
+  assert.equal(orgDay("2026-10-04"), "2026-10-04", "a plain day is that day");
+  assert.equal(orgDay(new Date("2026-12-31T21:30:00Z")), "2027-01-01", "across New Year");
+  assert.equal(orgDay("garbage"), null);
+  assert.equal(orgDayStart("2026-10-04").toISOString(), "2026-10-03T20:00:00.000Z");
+  assert.equal(orgDayEnd("2026-10-04").toISOString(), "2026-10-04T20:00:00.000Z");
   assert.equal(isCalendarDay("2026-02-29"), false);
   assert.equal(isCalendarDay("2028-02-29"), true);
   assert.equal(isCalendarDay("26-10-04"), false);

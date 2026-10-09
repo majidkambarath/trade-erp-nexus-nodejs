@@ -18,8 +18,8 @@ let svc;
 let Q;
 
 // Dubai calendar days, the way the reports read dates
-const dubaiDay = (offset = 0) => new Date(Date.now() + 4 * 3600e3 + offset * 86400e3).toISOString().slice(0, 10);
-const today = () => dubaiDay();
+const orgDay = (offset = 0) => new Date(Date.now() + 4 * 3600e3 + offset * 86400e3).toISOString().slice(0, 10);
+const today = () => orgDay();
 const thisMonth = () => today().slice(0, 7);
 const pad = (n) => String(n).padStart(2, "0");
 const shift = (month, delta) => {
@@ -419,7 +419,7 @@ describe("a small business", { skip }, () => {
   it("weekly pulse: approved sales orders and sales returns for each of the last seven days", async () => {
     const w = R.analytics.weekly;
     assert.equal(w.length, 7);
-    assert.deepEqual(keys(w, "date"), Array.from({ length: 7 }, (_, i) => dubaiDay(i - 6)));
+    assert.deepEqual(keys(w, "date"), Array.from({ length: 7 }, (_, i) => orgDay(i - 6)));
     assert.deepEqual([w.at(-1).orders, w.at(-1).returns], [3, 1]);
     assert.ok(w.slice(0, 6).every((d) => d.orders === 0 && d.returns === 0));
   });

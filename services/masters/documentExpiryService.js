@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 const AppError = require("../../utils/AppError");
-const { classify, STATUS, DEFAULT_WARNING_DAYS, MAX_WARNING_DAYS, todayInDubai, addDays } = require("../../utils/documentExpiry");
+const { classify, STATUS, DEFAULT_WARNING_DAYS, MAX_WARNING_DAYS, todayInOrg, addDays } = require("../../utils/documentExpiry");
 
 // Which customer / vendor documents have expired or expire soon. The documents live on the party
 // records (the single source of truth); this reads them and classifies each by Dubai calendar day.
@@ -28,7 +28,7 @@ class DocumentExpiryService {
     const wanted = String(partyType || "").toLowerCase();
     if (wanted && !PARTIES[wanted]) throw new AppError("partyType must be customer or vendor", 400, "INVALID_PARTY_TYPE");
     const kinds = wanted ? [wanted] : Object.keys(PARTIES);
-    const today = todayInDubai(now);
+    const today = todayInOrg(now);
     // two days of slack in the query, so the exact Dubai-day decision is made by classify() alone
     const horizon = new Date(`${addDays(today, within + 2)}T00:00:00.000Z`);
 

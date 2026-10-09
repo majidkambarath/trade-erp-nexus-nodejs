@@ -40,6 +40,11 @@ const companySettingsSchema = new mongoose.Schema(
     // Returns (services/orderPurchase/returnService.js).
     returnWindowDays: { type: Number, default: 0, min: 0 }, // 0 = no limit
     requireReturnLink: { type: Boolean, default: false },
+    // Who may approve what (utils/approvalRules.js, services/core/approvalPolicyService.js). Both are off until the organisation sets them.
+    approvals: {
+      separateApprover: { type: Boolean, default: false }, // the person who prepared a document may not approve it
+      secondApprovalAbove: { type: Number, min: 0, default: null }, // a document above this amount needs two different approvers; null = never
+    },
     profile: {
       legalName: { type: String, trim: true },
       trn: { type: String, trim: true },
@@ -50,6 +55,26 @@ const companySettingsSchema = new mongoose.Schema(
       countryCode: { type: String, trim: true, default: "AE" },
       email: { type: String, trim: true },
       phone: { type: String, trim: true },
+      // The rest of what a document's letterhead prints. This is the ORGANISATION's one copy: it used to be kept on each
+      // person's own record (Admin.companyInfo), so every person had their own company name, logo and bank details.
+      // services/core/companyProfileService.js owns it, and adopts the old per-person copy once.
+      legalNameArabic: { type: String, trim: true },
+      addressLine2: { type: String, trim: true },
+      postalCode: { type: String, trim: true },
+      website: { type: String, trim: true },
+      country: { type: String, trim: true }, // the country as printed ("United Arab Emirates"); countryCode is the code
+      logo: { url: { type: String, trim: true }, publicId: { type: String, trim: true } },
+      bank: {
+        bankName: { type: String, trim: true },
+        accountName: { type: String, trim: true },
+        accountNumber: { type: String, trim: true },
+        ibanNumber: { type: String, trim: true },
+        swiftCode: { type: String, trim: true },
+        currency: { type: String, trim: true, uppercase: true },
+        branch: { type: String, trim: true },
+      },
+      // Set once the old per-person letterhead has been looked at (adopted if there was one), so it is never adopted twice.
+      letterheadAdoptedAt: { type: Date, default: null },
     },
     // Go-live (conversion) date: every opening balance is dated this day. openingBalancesPostedAt is
     // when something was last posted (services/financial/openingBalanceService.js).

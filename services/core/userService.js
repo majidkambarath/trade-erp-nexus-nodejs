@@ -16,13 +16,18 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 // other role goes in roleKey over the safest type, "viewer", so anything still reading the type fails closed.
 const stored = (key) => (roles.LEGACY_TYPES.includes(key) ? { type: key, roleKey: null } : { type: "viewer", roleKey: key });
 
-const present = (account, role) => ({
+const roleCard = (key, role) => (role
+  ? { key: role.key, name: role.name, rank: role.rank, builtIn: role.builtIn, active: role.isActive !== false }
+  : { key, name: null, rank: 0, builtIn: false, active: false });
+
+// `found` maps role keys to the roles the screen needs named; the branch roles are looked up in it too
+const present = (account, role, found = new Map()) => ({
   id: String(account._id),
   name: account.name,
   email: account.email,
-  role: role
-    ? { key: role.key, name: role.name, rank: role.rank, builtIn: role.builtIn, active: role.isActive !== false }
-    : { key: roles.roleKeyOf(account), name: null, rank: 0, builtIn: false, active: false },
+  role: roleCard(roles.roleKeyOf(account), role),
+  // where this person holds a different role from their own, and which one
+  branchRoles: (account.branchRoles || []).map((b) => ({ branchId: b.branchId, role: roleCard(b.roleKey, found.get(b.roleKey)) })),
   branchId: account.branchId,
   status: account.status,
   isActive: account.isActive,
@@ -40,6 +45,39 @@ async function targetRole(key) {
   if (!role) throw new AppError("That role does not exist in this organisation", 400, "ROLE_NOT_FOUND");
   if (role.isActive === false) throw new AppError("That role has been switched off", 400, "ROLE_INACTIVE");
   return role;
+}
+
+// The roles a person is given for particular branches, checked: each branch real and switched on, each role real and switched on
+// and one the actor may hand out (nothing at or above their own rank), a branch named once.
+async function checkBranchRoles(list, actor) {
+  if (!Array.isArray(list)) throw new AppError("Branch roles must be a list", 400, "BRANCH_ROLES_INVALID");
+  if (list.length > 25) throw new AppError("That is more branch roles than a person can hold", 400, "BRANCH_ROLES_INVALID");
+  const seen = new Set();
+  const out = [];
+  for (const entry of list) {
+    const branchId = clean(entry?.branchId).toLowerCase();
+    const key = clean(entry?.role ?? entry?.roleKey).toLowerCase();
+    if (!branchId || !key) throw new AppError("Each branch role needs a branch and a role", 400, "BRANCH_ROLES_INVALID");
+    if (seen.has(branchId)) throw new AppError("A person has one role in a branch", 400, "DUPLICATE_BRANCH_ROLE");
+    seen.add(branchId);
+    await checkBranch(branchId);
+    const role = await targetRole(key);
+    guard(roles.mayManage({ actor, next: role, action: "update" }));
+    out.push({ branchId, roleKey: role.key });
+  }
+  return out;
+}
+
+// the roles named for a set of accounts, looked up once
+async function rolesNamedBy(accounts) {
+  const keys = new Set();
+  for (const a of accounts) {
+    keys.add(roles.roleKeyOf(a));
+    for (const b of a.branchRoles || []) keys.add(b.roleKey);
+  }
+  const found = new Map();
+  for (const k of keys) found.set(k, await RoleService.find(k));
+  return found;
 }
 
 async function checkBranch(code) {
@@ -65,11 +103,9 @@ class UserService {
       const r = new RegExp(clean(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       q.$and = [{ $or: [{ name: r }, { email: r }] }];
     }
-    const rows = await Admin.find(q).select("name email type roleKey branchId status isActive lastLogin createdAt").sort({ createdAt: 1 }).lean();
-    const keys = [...new Set(rows.map((a) => roles.roleKeyOf(a)))];
-    const found = new Map();
-    for (const k of keys) found.set(k, await RoleService.find(k));
-    return rows.map((a) => present(a, found.get(roles.roleKeyOf(a))));
+    const rows = await Admin.find(q).select("name email type roleKey branchRoles branchId status isActive lastLogin createdAt").sort({ createdAt: 1 }).lean();
+    const found = await rolesNamedBy(rows);
+    return rows.map((a) => present(a, found.get(roles.roleKeyOf(a)), found));
   }
 
   static async create(input, req) {
@@ -88,9 +124,10 @@ class UserService {
     }
     await UsageService.assertRoom("users");
     const branchId = await checkBranch(input.branchId);
+    const branchRoles = input.branchRoles === undefined ? [] : await checkBranchRoles(input.branchRoles, actor);
 
-    const account = await new Admin({ name, email, password: input.password, ...stored(role.key), branchId, status: "active", isActive: true, createdBy: req.admin?.id || null }).save();
-    return present(account, role);
+    const account = await new Admin({ name, email, password: input.password, mustChangePassword: true, ...stored(role.key), branchRoles, branchId, status: "active", isActive: true, createdBy: req.admin?.id || null }).save();
+    return present(account, role, await rolesNamedBy([account]));
   }
 
   static async update(id, patch, req) {
@@ -104,7 +141,7 @@ class UserService {
     const wantsOff = patch.status !== undefined && patch.status !== "active";
     // nobody changes their own role, or switches themselves off: the one way to lose access, or to gain it, by accident
     // (a person changes their own name here and their own password in Settings, where the current password is asked for)
-    if (self && (wantsRole || wantsOff || patch.branchId !== undefined || patch.password)) throw new AppError("You cannot change your own role, branch, status or password here. Ask another administrator.", 403, "CANNOT_CHANGE_SELF");
+    if (self && (wantsRole || wantsOff || patch.branchId !== undefined || patch.branchRoles !== undefined || patch.password)) throw new AppError("You cannot change your own role, branch, status or password here. Ask another administrator.", 403, "CANNOT_CHANGE_SELF");
 
     const next = wantsRole ? await targetRole(patch.role) : null;
     if (!self) guard(roles.mayManage({ actor, target: current || { rank: 0, permissions: [], isActive: false }, next: next || undefined, action: "update" }));
@@ -117,6 +154,14 @@ class UserService {
     }
     if (next) Object.assign(account, stored(next.key));
     if (patch.branchId !== undefined) account.branchId = await checkBranch(patch.branchId);
+    if (patch.branchRoles !== undefined) {
+      // changing where someone holds another role means being able to manage the roles they hold there now, too
+      for (const b of account.branchRoles || []) {
+        const held = await RoleService.find(b.roleKey);
+        if (held) guard(roles.mayManage({ actor, target: held, action: "update" }));
+      }
+      account.branchRoles = await checkBranchRoles(patch.branchRoles, actor);
+    }
     if (patch.status !== undefined) {
       if (!["active", "inactive"].includes(patch.status)) throw new AppError("Status must be active or inactive", 400, "STATUS_INVALID");
       if (patch.status === "active") await UsageService.assertRoom("users", account.isActive && account.status === "active" ? 0 : 1);
@@ -126,13 +171,15 @@ class UserService {
     if (patch.password !== undefined && patch.password !== "") {
       if (String(patch.password).length < 8) throw new AppError("A password needs at least 8 characters", 400, "WEAK_PASSWORD");
       account.password = patch.password; // hashed on save
+      account.mustChangePassword = true; // an administrator set it, so the person chooses their own at the next sign-in
+      account.lockUntil = undefined; // and a reset is also how a locked-out person is let back in
       account.loginAttempts = 0;
-      account.lockUntil = undefined;
     }
     account.$locals.updatedBy = req.admin?.id || null;
     await account.save();
-    return present(account, next || current);
+    return present(account, next || current, await rolesNamedBy([account]));
   }
 }
 
+UserService.storedFor = stored; // the developer console gives people roles by the same rule
 module.exports = UserService;

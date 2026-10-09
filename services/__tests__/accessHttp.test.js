@@ -32,6 +32,12 @@ async function call(method, url, { body, token } = {}) {
 const as = (code, fn) => ctx.runWithTenant({ companyId: code, branchId: "main" }, fn);
 const api = (who, method, url, body) => call(method, url, { token: T[who], body: method === "GET" || method === "DELETE" ? undefined : body });
 const login = async (email, password = PASSWORD) => (await call("POST", "/login", { body: { email, password } })).body?.tokens?.accessToken;
+// A person an administrator adds must choose their own password before anything else works (passwordPolicyHttp.test.js proves it).
+// These tests are about what the person may DO, so they sign in as someone who already has.
+const signInOwn = async (email) => {
+  await as("acc", () => M.Admin.updateOne({ email }, { $set: { mustChangePassword: false } }));
+  return login(email);
+};
 const me = async (who) => (await api(who, "GET", "/organisation/status")).body.me;
 const emailOf = (who) => `${who}@acc.test`;
 const newPerson = (over = {}) => ({ name: "New Person", email: "new@acc.test", password: PASSWORD, role: "viewer", ...over });
@@ -112,7 +118,9 @@ test("an administrator adds a person with a built-in role, and that person signs
   assert.equal(row.type, "viewer", "stored over the safest type");
   assert.equal(row.roleKey, "accountant");
   assert.equal(row.createdBy && String(row.createdBy), String((await me("admin")).id));
-  T.aisha = await login("aisha@acc.test");
+  const created = await as("acc", () => M.Admin.findOne({ email: "aisha@acc.test" }).lean());
+  assert.equal(created.mustChangePassword, true, "a person added by an administrator starts with a password someone else chose");
+  T.aisha = await signInOwn("aisha@acc.test");
   const who = await me("aisha");
   assert.equal(who.role.key, "accountant");
   assert.deepEqual(who.grants, perms.BUILT_IN.accountant.permissions);
@@ -163,7 +171,7 @@ test("a custom role: made, held, and the people holding it follow its edits at o
   const hire = await api("admin", "POST", "/access/users", newPerson({ name: "Sam Supervisor", email: "sam@acc.test", role: "supervisor" }));
   assert.equal(hire.status, 201, JSON.stringify(hire.data));
   assert.equal(hire.body.role.builtIn, false);
-  T.sam = await login("sam@acc.test");
+  T.sam = await signInOwn("sam@acc.test");
   assert.equal((await me("sam")).role.key, "supervisor");
   assert.notEqual((await api("sam", "PATCH", `/transactions/transactions/64b64b64b64b64b64b64b64b/process`, { action: "approve" })).code, "PERMISSION_DENIED");
 
@@ -220,7 +228,7 @@ test("nobody builds a role more powerful than themselves", { skip }, async () =>
   await as("acc", () => M.Role.create({ key: "hr", name: "HR", rank: 55, permissions: ["users.manage", "users.view"] }));
   const hr = await api("admin", "POST", "/access/users", newPerson({ name: "Hana HR", email: "hana@acc.test", role: "hr" }));
   assert.equal(hr.status, 201, JSON.stringify(hr.data));
-  T.hana = await login("hana@acc.test");
+  T.hana = await signInOwn("hana@acc.test");
   const grabs = await api("hana", "POST", "/access/roles", { key: "grabby", name: "Grabby", rank: 30, permissions: ["finance.approve"] });
   assert.equal(grabs.status, 400);
   assert.match(grabs.details.errors.permissions, /finance\.approve/, "names what was beyond her");

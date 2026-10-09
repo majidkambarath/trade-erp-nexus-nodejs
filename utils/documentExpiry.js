@@ -1,7 +1,7 @@
 // Document expiry rules, as pure functions (no Mongoose, no clock except the `today` you pass in).
 //
-// The business runs on the Dubai calendar (Asia/Dubai, UTC+4, no daylight saving), so "expired"
-// means the expiry DAY is before today's DAY in Dubai, whatever hour the server thinks it is.
+// The business runs on its organisation's calendar (its own time zone: utils/orgLocale.js, Asia/Dubai until an organisation
+// says otherwise), so "expired" means the expiry DAY is before today's DAY there, whatever hour the server thinks it is.
 // Calendar days travel as "YYYY-MM-DD" strings: comparing two of them is comparing the dates.
 //
 //   classify("2026-11-04", { today: "2026-10-05" })
@@ -10,7 +10,8 @@
 //   a document is EXPIRING_SOON from today (0 days left) up to and including `warningDays` days
 //   ahead (default 30); EXPIRED from the day after its expiry day.
 
-const TIMEZONE = "Asia/Dubai";
+const orgLocale = require("./orgLocale");
+
 const DEFAULT_WARNING_DAYS = 30;
 const MAX_WARNING_DAYS = 365;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -47,19 +48,17 @@ const dayMs = (day) => {
   return Date.UTC(Number(y), Number(m) - 1, Number(d));
 };
 
-const dubaiFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit" });
-
-// The Dubai calendar day an instant falls on.
-function dubaiDay(instant) {
+// The calendar day an instant falls on, in the organisation's zone.
+function orgDay(instant) {
   const date = instant instanceof Date ? instant : new Date(instant);
   if (Number.isNaN(date.getTime())) return null;
-  return dubaiFormatter.format(date);
+  return orgLocale.dayOf(date);
 }
 
-// Today in Dubai. `now` is a Date, a timestamp, or already a "YYYY-MM-DD" day.
-function todayInDubai(now = new Date()) {
+// Today in the organisation's zone. `now` is a Date, a timestamp, or already a "YYYY-MM-DD" day.
+function todayInOrg(now = new Date()) {
   if (typeof now === "string" && isCalendarDay(now)) return now;
-  return dubaiDay(now);
+  return orgDay(now);
 }
 
 function addDays(day, days) {
@@ -83,7 +82,7 @@ const isUtcMidnight = (d) => d.getUTCHours() === 0 && d.getUTCMinutes() === 0 &&
 //
 // A bare "YYYY-MM-DD" (what a date field sends) is that day. A Date at exactly UTC midnight is how
 // Mongoose stores such a day, so it is read by its UTC parts; any other instant is read on the
-// Dubai calendar.
+// organisation's calendar.
 function parseExpiry(value) {
   if (value === null || value === undefined) return { day: null, invalid: false };
   if (typeof value === "string") {
@@ -95,7 +94,7 @@ function parseExpiry(value) {
   }
   if (typeof value === "number") value = new Date(value);
   if (!(value instanceof Date) || Number.isNaN(value.getTime())) return { day: null, invalid: true };
-  const day = isUtcMidnight(value) ? calendarDay(value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate()) : dubaiDay(value);
+  const day = isUtcMidnight(value) ? calendarDay(value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate()) : orgDay(value);
   return day ? { day, invalid: false } : { day: null, invalid: true };
 }
 
@@ -106,12 +105,12 @@ function warningDaysOf(value) {
   return Number.isInteger(n) && n >= 0 && n <= MAX_WARNING_DAYS ? n : DEFAULT_WARNING_DAYS;
 }
 
-// Where an expiry stands today. `today` defaults to the current Dubai day.
+// Where an expiry stands today. `today` defaults to the current day in the organisation's zone.
 function classify(expiry, { today = new Date(), warningDays = DEFAULT_WARNING_DAYS } = {}) {
   const parsed = parseExpiry(expiry);
   if (parsed.invalid) return { status: STATUS.INVALID_DATE, expiryDay: null, daysLeft: null };
   if (!parsed.day) return { status: STATUS.NO_EXPIRY, expiryDay: null, daysLeft: null };
-  const todayDay = todayInDubai(today);
+  const todayDay = todayInOrg(today);
   const daysLeft = diffDays(todayDay, parsed.day);
   let status = STATUS.VALID;
   if (daysLeft < 0) status = STATUS.EXPIRED;
@@ -128,7 +127,7 @@ function daysLeftLabel(daysLeft) {
 }
 
 module.exports = {
-  TIMEZONE, DEFAULT_WARNING_DAYS, MAX_WARNING_DAYS, STATUS,
-  isCalendarDay, calendarDay, dubaiDay, todayInDubai, addDays, diffDays, parseExpiry, toExpiryDay, warningDaysOf,
+  DEFAULT_WARNING_DAYS, MAX_WARNING_DAYS, STATUS,
+  isCalendarDay, calendarDay, orgDay, todayInOrg, addDays, diffDays, parseExpiry, toExpiryDay, warningDaysOf,
   classify, daysLeftLabel,
 };

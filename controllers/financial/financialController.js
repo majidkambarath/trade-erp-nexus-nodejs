@@ -183,8 +183,19 @@ exports.processVoucherApproval = catchAsync(async (req, res) => {
     req.params.id,
     action,
     approvedBy,
-    comments
+    comments,
+    { req }
   );
+  if (voucher.awaitingSecondApproval) {
+    await AuditService.log({
+      req,
+      action: "VOUCHER_FIRST_APPROVAL",
+      entity: "Voucher",
+      entityId: req.params.id,
+      summary: `${VoucherAuditService.describe(voucher)} approved once; a second approver is needed`,
+    });
+    return res.status(200).json({ status: "success", data: { voucher, approval: { awaitingSecond: true, given: voucher.approvals?.length || 1 } } });
+  }
   await AuditService.log({
     req,
     action: action === "approve" ? "VOUCHER_APPROVED" : "VOUCHER_REJECTED",
@@ -248,12 +259,14 @@ exports.bulkProcessVouchers = catchAsync(async (req, res) => {
         id,
         action,
         processedBy,
-        comments
+        comments,
+        { req }
       );
       results.successful.push({
         id,
         voucherNo: voucher.voucherNo,
         status: voucher.status,
+        awaitingSecondApproval: voucher.awaitingSecondApproval === true,
       });
     } catch (error) {
       results.failed.push({

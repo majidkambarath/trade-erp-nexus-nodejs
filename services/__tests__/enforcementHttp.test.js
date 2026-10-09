@@ -141,6 +141,36 @@ test("the number of people stops at the plan's limit, and lifting the limit lets
   assert.equal((await add("acme", 2)).status, 201, "unlimited for this organisation");
 });
 
+test("switching a person back on takes a seat again: the limit is checked on the old admin routes too", { skip }, async () => {
+  const active = () => as("acme", () => M.Admin.countDocuments({ isActive: true, status: "active" }));
+  const u1 = await as("acme", () => M.Admin.findOne({ email: "u1-acme@test.uae" }).lean());
+  const before = await active();
+  assert.equal((await api("acme", "PATCH", `/${u1._id}/status`, { status: "inactive" })).status, 200, "switched off");
+  assert.equal(await active(), before - 1);
+
+  // the organisation is exactly full now: one seat is all it has
+  await setOrg("acme", { "limitOverrides.users": before - 1 });
+  const refused = await api("acme", "PATCH", `/${u1._id}/status`, { status: "active" });
+  assert.equal(refused.status, 403, JSON.stringify(refused.data));
+  assert.equal(refused.code, "LIMIT_REACHED");
+  assert.equal(refused.details.resource, "users");
+  assert.equal(refused.details.limit, before - 1);
+  assert.equal((await as("acme", () => M.Admin.findById(u1._id).lean())).status, "inactive", "still switched off");
+
+  // the same rule on the edit route, with the flag sent as a form would send it
+  const viaEdit = await api("acme", "PUT", `/${u1._id}`, { status: "active", isActive: "true" });
+  assert.equal(viaEdit.code, "LIMIT_REACHED", `${viaEdit.status} ${JSON.stringify(viaEdit.data).slice(0, 200)}`);
+
+  // switching someone OFF, or changing a name, is never refused for the limit
+  const bravoCheck = await api("acme", "PUT", `/${u1._id}`, { name: "User One (renamed)" });
+  assert.notEqual(bravoCheck.code, "LIMIT_REACHED", "an edit that does not switch anyone on is not a new seat");
+
+  await setOrg("acme", { "limitOverrides.users": before });
+  assert.equal((await api("acme", "PATCH", `/${u1._id}/status`, { status: "active" })).status, 200, "a seat is free again");
+  assert.equal(await active(), before);
+  await setOrg("acme", { "limitOverrides.users": null });
+});
+
 const order = (org, type = "sales_order") =>
   api(org, "POST", "/transactions/transactions", {
     type, partyId: T[org].customer, partyType: "Customer", partyTypeRef: "Customer", createdBy: "tester",

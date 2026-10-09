@@ -1,12 +1,13 @@
-// Pure rules for foreign-currency amounts and Dubai calendar days. No I/O, no Mongoose.
+// Pure rules for foreign-currency amounts and the organisation's calendar days. No I/O, no Mongoose.
 //
 // A rate is "base units per 1 foreign unit" (USD 1 = AED 3.6725), kept to at most 6 decimal places.
-// The base-currency (AED) equivalent of a foreign amount is the exact product, rounded half-up to
+// The base-currency equivalent of a foreign amount is the exact product, rounded half-up to
 // the base currency's cents. It is computed on integers (BigInt) so 0.1 + 0.2 style float noise can
 // never move a cent: the browser (src/lib/currencyForms.js) uses the same method and gets the same
 // answer.
 
-const TIMEZONE = "Asia/Dubai";
+const orgLocale = require("./orgLocale");
+
 const RATE_DECIMALS = 6;
 const BASE_DECIMALS = 2;
 
@@ -53,17 +54,11 @@ function splitForeign(foreignAmount, baseAmounts, { decimals = 2 } = {}) {
   });
 }
 
-// ----------------------------------------------------------------------------------- Dubai days
-const dayParts = new Intl.DateTimeFormat("en-GB", { timeZone: TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit" });
-
-// "YYYY-MM-DD" of an instant as seen in Dubai (UTC+4, no daylight saving). A plain "YYYY-MM-DD"
-// string is already a calendar day and is returned as it is.
-function dubaiDay(input = new Date()) {
-  if (typeof input === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.trim())) return input.trim();
-  const d = input instanceof Date ? input : new Date(input);
-  if (Number.isNaN(d.getTime())) return null;
-  const p = Object.fromEntries(dayParts.formatToParts(d).map((x) => [x.type, x.value]));
-  return `${p.year}-${p.month}-${p.day}`;
+// ----------------------------------------------------------------------------------- the organisation's days
+// "YYYY-MM-DD" of an instant as seen in the organisation's time zone (utils/orgLocale.js; Asia/Dubai until an organisation
+// says otherwise). A plain "YYYY-MM-DD" string is already a calendar day and is returned as it is.
+function orgDay(input = new Date()) {
+  return orgLocale.dayOf(input);
 }
 
 // True for a real calendar day written YYYY-MM-DD (no 31 February).
@@ -75,16 +70,16 @@ function isCalendarDay(ymd) {
   return y >= 1900 && y <= 2200 && probe.getUTCFullYear() === y && probe.getUTCMonth() === mo - 1 && probe.getUTCDate() === d;
 }
 
-// The instant a Dubai calendar day begins (00:00 +04:00). This is what an effective date is stored as.
-const dubaiDayStart = (ymd) => new Date(`${ymd}T00:00:00+04:00`);
+// The instant a calendar day begins on the organisation's wall clock (00:00 there). This is what an effective date is stored as.
+const orgDayStart = (ymd) => orgLocale.dayStart(ymd);
 // The instant after that day ends (the next day's start).
-const dubaiDayEnd = (ymd) => new Date(dubaiDayStart(ymd).getTime() + 86400000);
+const orgDayEnd = (ymd) => orgLocale.dayEnd(ymd);
 
-// "04/10/2026" for messages the server writes (the UAE convention).
+// "04/10/2026" for messages the server writes (day first).
 const displayDay = (ymd) => (ymd ? ymd.split("-").reverse().join("/") : "");
 
 module.exports = {
-  TIMEZONE, RATE_DECIMALS, BASE_DECIMALS,
+  RATE_DECIMALS, BASE_DECIMALS,
   decimalPlaces, convertToBase, roundTo, deviationPercent, splitForeign,
-  dubaiDay, isCalendarDay, dubaiDayStart, dubaiDayEnd, displayDay,
+  orgDay, isCalendarDay, orgDayStart, orgDayEnd, displayDay,
 };

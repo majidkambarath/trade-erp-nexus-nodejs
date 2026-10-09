@@ -17,6 +17,7 @@ const { EInvoiceSubmission } = require("../../models/modules/einvoiceModels");
 const ReturnService = require("./returnService");
 const BatchService = require("../stock/batchService");
 const CreditControlService = require("../financial/creditControlService");
+const ApprovalPolicyService = require("../core/approvalPolicyService");
 const fs = require("fs");
 const path = require("path");
 const DebitLog = require("../../models/modules/DebitLog");
@@ -319,6 +320,9 @@ class TransactionService {
       // closing an order short is its own action (orderCloseService), never a field of an edit
       delete data.closedShort;
       delete data.lastSend; // written only when a send settles (services/messaging)
+      delete data.approvals; // written only by an approval
+      // changing a document takes back an approval it was given: what was approved is no longer what is there
+      if (transaction.approvals?.length) transaction.approvals = [];
 
       // A draft sales order may already have delivery notes against its lines: keep each line's id so they stay
       // linked, and refuse an edit that would take away goods a note covers.
@@ -468,7 +472,20 @@ class TransactionService {
       // Store old status for reversal detection
       const wasApproved = transaction.status === "APPROVED";
 
+      let approval = null;
       if (action === "approve") {
+        // May THIS person approve THIS document - the organisation's limits, the separate approver, a second approver
+        // above an amount (utils/approvalRules.js). Before anything moves.
+        const verdict = await ApprovalPolicyService.judge({
+          amount: transaction.totalAmount, preparedBy: transaction.createdBy, approvals: transaction.approvals, req: options.req, session,
+        });
+        if (!verdict.final) {
+          // The first of two approvals: it is kept, and the document stays as it is until a different person gives the second.
+          transaction.approvals = [...(transaction.approvals || []), verdict.approval];
+          await transaction.save({ session });
+          return transaction;
+        }
+        approval = verdict.approval || null;
         // Credit limit / overdue check (sales only; off unless the company turns it on).
         await CreditControlService.assertSaleAllowed(transaction, {
           session, acknowledged: options.acknowledged === true, req: options.req,
@@ -530,6 +547,8 @@ class TransactionService {
 
       // Update status
       this.updateTransactionStatus(transaction, action);
+      if (approval) transaction.approvals = require("../../utils/approvalRules").addApproval(transaction.approvals, approval);
+      else if (action !== "approve" && !wasApproved) transaction.approvals = []; // turned down before it was approved: nothing stands
       await transaction.save({ session });
       // Delivery notes against this order learn whether it is now invoiced (approved), or no longer
       // (rejected, cancelled); a converted quotation is released if its order was rejected or cancelled.
@@ -880,6 +899,7 @@ const logAmount = balanceEffect;
             // a sales order the customer will not take the rest of (without its reopen copy, dropped above)
             closedShort: { $first: "$closedShort" },
             lastSend: { $first: "$lastSend" },
+            approvals: { $first: "$approvals" }, // who has approved it (a first of two shows as "awaiting a second approver")
 
             // keep the raw lookup arrays
             customerData: { $first: "$customerData" },

@@ -81,17 +81,20 @@ function publicRoute(reason) {
 
 // ---- trade documents: one router, four types
 
-const typeCache = new WeakMap();
+const headerCache = new WeakMap();
 
-/** The type of the trade document a request names by id, looked up once. Undefined when there is none or it is not found. */
-async function typeOfStored(req) {
+/** The type and status of the trade document a request names by id, looked up once. Undefined when there is none or it is not found. */
+async function storedHeader(req) {
   if (!req.params?.id) return undefined;
-  if (typeCache.has(req)) return typeCache.get(req);
+  if (headerCache.has(req)) return headerCache.get(req);
   const Transaction = require("../models/modules/transactionModel");
-  const found = await Transaction.findById(req.params.id).select("type").lean().catch(() => null);
-  typeCache.set(req, found?.type);
-  return found?.type;
+  const found = await Transaction.findById(req.params.id).select("type status").lean().catch(() => null);
+  headerCache.set(req, found || undefined);
+  return found || undefined;
 }
+
+/** The type of the trade document a request names by id. Undefined when there is none or it is not found. */
+const typeOfStored = async (req) => (await storedHeader(req))?.type;
 
 /**
  * The permission for `action` on a trade document, by its type: sales_order and sales_return answer to sales.<action>,
@@ -107,4 +110,23 @@ const byDocumentType = (action) => async (req) => {
   return [`sales.${action}`, `purchase.${action}`];
 };
 
-module.exports = { requirePermission, assertPermission, selfOr, signedIn, publicRoute, byDocumentType };
+/**
+ * Deleting a trade document. A draft (or a rejected or cancelled one) has booked nothing, so plain Delete is enough. An
+ * APPROVED one has moved stock and posted to the ledger, and deleting it reverses all of that: that is its own permission
+ * (sales.deletePosted / purchase.deletePosted), judged by the STORED status, never by anything in the request.
+ */
+const byDocumentDelete = async (req) => {
+  const stored = await storedHeader(req);
+  if (!stored) return byDocumentType("delete")(req); // nothing found: the handler answers 404; judged as a plain delete
+  const module = roles.moduleOfType(stored.type);
+  return stored.status === "APPROVED" ? `${module}.deletePosted` : `${module}.delete`;
+};
+
+/** Deleting a voucher: an approved one has posted to the ledger and is reversed (finance.deletePosted); any other needs finance.delete. */
+const byVoucherDelete = async (req) => {
+  const { Voucher } = require("../models/modules/financial/financialModels");
+  const found = req.params?.id ? await Voucher.findById(req.params.id).select("status").lean().catch(() => null) : null;
+  return found?.status === "approved" ? "finance.deletePosted" : "finance.delete";
+};
+
+module.exports = { requirePermission, assertPermission, selfOr, signedIn, publicRoute, byDocumentType, byDocumentDelete, byVoucherDelete };

@@ -11,7 +11,7 @@ const M = require("../../utils/bankMatching");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 const { round2 } = require("../../utils/accounting");
-const { todayInDubai, addDays } = require("../../utils/documentExpiry");
+const { todayInOrg, addDays } = require("../../utils/documentExpiry");
 
 // Card settlement. A card sale is booked on the day it is made, net of the processing fee the card
 // master says it costs: Dr bank (net) + Dr card processing fees (fee) against the sale. The acquirer
@@ -245,7 +245,7 @@ class CardSettlementService {
     await Core.bankAccount(accountId, { req });
     const setup = await Core.getSetup(accountId, { req });
     if (!setup) return { buckets: [], total: 0, count: 0, items: [], needsSetup: true };
-    const day = asOf || todayInDubai();
+    const day = asOf || todayInOrg();
     const { entries } = await Core.loadBook(accountId, setup, { req, upTo: day });
     const open = entries.filter((e) => !e.groupId && e.card && e.amount > 0);
     const defs = [["0-3 days", 0, 3], ["4-7 days", 4, 7], ["8-14 days", 8, 14], ["15+ days", 15, Infinity]];

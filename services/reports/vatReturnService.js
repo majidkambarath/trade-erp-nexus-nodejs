@@ -176,6 +176,8 @@ class VatReturnService {
     ];
 
     return {
+      // The UAE VAT 201 return is filed in dirhams by law, whatever currency the books are kept in: it is a UAE feature
+      // (the `vatReturn` plan feature), not part of the general reports that follow the organisation's base currency.
       from, to, emirate, currency: "AED", boxes, totals,
       unclassified: { ...unclassified, amount: round2(unclassified.amount), vat: round2(unclassified.vat) },
       notReported: { count: notReported.count, amount: round2(notReported.amount), note: "Out-of-scope lines and zero-rated or exempt purchases appear in no box." },

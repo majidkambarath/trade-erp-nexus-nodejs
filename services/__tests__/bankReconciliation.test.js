@@ -27,8 +27,8 @@ const round2 = (n) => Math.round(n * 100) / 100;
 test.before(async () => {
   if (skip) return;
   await mongoose.connect(process.env.MONGO_URI, { dbName: DB });
-  const { todayInDubai, addDays } = require("../../utils/documentExpiry");
-  day = (n = 0) => addDays(todayInDubai(), n);
+  const { todayInOrg, addDays } = require("../../utils/documentExpiry");
+  day = (n = 0) => addDays(todayInOrg(), n);
   svc = {
     seed: require("../../utils/seedAccounting").seedAccounting,
     Financial: require("../financial/financialService"),

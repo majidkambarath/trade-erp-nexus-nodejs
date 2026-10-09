@@ -18,12 +18,26 @@ const plans = require("../../utils/plans");
 const currencies = require("../../utils/currencyCatalog");
 const { runWithTenant, runUnscoped } = require("../../utils/tenantContext");
 const { permissionsFor } = require("../../utils/adminPermissions");
+const roles = require("../../utils/permissions");
+const RoleService = require("../core/roleService");
+const UserService = require("../core/userService");
 
 const HEAD_OFFICE = OrganisationService.HEAD_OFFICE;
 const inOrg = async (code, fn) => {
   const org = await OrganisationService.get(code);
   return runWithTenant({ companyId: org.code, branchId: HEAD_OFFICE }, () => fn(org));
 };
+
+// The role a developer names for a person: any switched-on role of THAT organisation, ready-made or its own. The console
+// is not ranked like the organisation's administrators (it is how the first owner gets in), so there is no "may hand it
+// out" check; the organisation's own rules still apply once the person is in. Must run inside inOrg.
+async function roleFor(key) {
+  const wanted = String(key ?? "").trim().toLowerCase();
+  const role = wanted ? await RoleService.find(wanted) : null;
+  if (!role) throw new AppError("Choose a valid role", 400, "ROLE_NOT_FOUND");
+  if (role.isActive === false) throw new AppError("That role has been switched off", 400, "ROLE_INACTIVE");
+  return role;
+}
 
 class PlatformOrganisationService {
   // ---- the record of what was done
@@ -175,22 +189,38 @@ class PlatformOrganisationService {
   // ---- the organisation's people
 
   static async listUsers(code) {
-    return inOrg(code, () => Admin.find().select("name email type status isActive branchId lastLogin createdAt").sort({ createdAt: 1 }).lean());
+    return inOrg(code, async () => {
+      const rows = await Admin.find().select("name email type roleKey status isActive branchId lastLogin createdAt").sort({ createdAt: 1 }).lean();
+      const found = new Map();
+      for (const key of new Set(rows.map((a) => roles.roleKeyOf(a)))) found.set(key, await RoleService.find(key));
+      return rows.map((a) => {
+        const key = roles.roleKeyOf(a);
+        const role = found.get(key);
+        return { ...a, role: { key, name: role?.name || null, rank: role?.rank ?? 0, active: role ? role.isActive !== false : false } };
+      });
+    });
+  }
+
+  // the roles an organisation can give a person: the ready-made ones and the ones it made for itself
+  static async listRoles(code) {
+    return inOrg(code, async () => {
+      const { roles: all } = await RoleService.list();
+      return all.map(({ key, name, rank, builtIn, isActive, people }) => ({ key, name, rank, builtIn, isActive, people }));
+    });
   }
 
   static async createUser(code, input = {}, ctx = null) {
     const user = await inOrg(code, async (org) => {
-      const type = input.type || "admin";
-      if (!["super_admin", "admin", "manager", "operator", "viewer"].includes(type)) throw new AppError("Choose a valid account type", 400, "TYPE_INVALID");
+      const role = await roleFor(input.role ?? input.type ?? "admin"); // `type` is the older spelling of the same thing
       if (await this.emailTaken(input.email)) throw new AppError("That email already belongs to a user of an organisation", 409, "EMAIL_EXISTS");
       const used = await Admin.countDocuments({ isActive: true, status: "active" });
       const room = plans.checkLimit(org, "users", used);
       if (!room.ok) throw new AppError(`This organisation is limited to ${room.limit} users and already has ${room.used}. Raise its limit first.`, 403, "LIMIT_REACHED", { resource: "users", ...room });
       const branchId = input.branchId || HEAD_OFFICE;
       if (!(await Branch.exists({ code: branchId, isActive: true }))) throw new AppError("That branch does not exist in this organisation", 400, "BRANCH_NOT_FOUND");
-      return new Admin({ name: input.name, email: input.email, password: input.password, type, status: "active", isActive: true, branchId }).save();
+      return new Admin({ name: input.name, email: input.email, password: input.password, mustChangePassword: true, ...UserService.storedFor(role.key), status: "active", isActive: true, branchId }).save();
     });
-    if (ctx) await this.record({ ...ctx, action: "USER_CREATED", organisation: code, summary: `Account created for ${user.email} (${user.type})` });
+    if (ctx) await this.record({ ...ctx, action: "USER_CREATED", organisation: code, summary: `Account created for ${user.email} (${roles.roleKeyOf(user)})` });
     return user;
   }
 
@@ -199,15 +229,13 @@ class PlatformOrganisationService {
     const user = await inOrg(code, async () => {
       const u = await Admin.findById(id).select("+password");
       if (!u) throw new AppError("That account was not found in this organisation", 404, "ADMIN_NOT_FOUND");
-      const losingAdmin = u.type === "super_admin" && u.isActive && ((patch.status && patch.status !== "active") || patch.isActive === false || (patch.type && patch.type !== "super_admin"));
+      const wanted = patch.role ?? patch.type; // `type` is the older spelling of the same thing
+      const losingAdmin = u.type === "super_admin" && u.isActive && ((patch.status && patch.status !== "active") || patch.isActive === false || (wanted !== undefined && String(wanted).trim().toLowerCase() !== "super_admin"));
       if (losingAdmin && (await Admin.countDocuments({ type: "super_admin", isActive: true, status: "active", _id: { $ne: u._id } })) === 0) {
         throw new AppError("That is the organisation's last active super administrator", 409, "LAST_ADMIN");
       }
       if (patch.name !== undefined) u.name = String(patch.name).trim();
-      if (patch.type !== undefined) {
-        if (!["super_admin", "admin", "manager", "operator", "viewer"].includes(patch.type)) throw new AppError("Choose a valid account type", 400, "TYPE_INVALID");
-        u.type = patch.type;
-      }
+      if (wanted !== undefined) Object.assign(u, UserService.storedFor((await roleFor(wanted)).key));
       if (patch.status !== undefined) {
         if (!["active", "inactive", "suspended"].includes(patch.status)) throw new AppError("Choose a valid status", 400, "STATUS_INVALID");
         u.status = patch.status;
@@ -216,8 +244,9 @@ class PlatformOrganisationService {
       if (patch.password !== undefined) {
         if (String(patch.password).length < 8) throw new AppError("A password needs at least 8 characters", 400, "WEAK_PASSWORD");
         u.password = patch.password;
-        u.loginAttempts = 0;
+        u.mustChangePassword = true; // the developer set it, so the person chooses their own at the next sign-in
         u.lockUntil = undefined;
+        u.loginAttempts = 0;
       }
       await u.save();
       return u;

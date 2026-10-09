@@ -10,6 +10,7 @@ const Vendor = require("../../models/modules/vendorModel");
 const { LedgerAccount, LedgerEntry } = require("../../models/modules/financial/financialModels");
 const AccountConfigService = require("../financial/accountConfigService");
 const LedgerReportsService = require("./ledgerReportsService");
+const orgLocale = require("../../utils/orgLocale");
 const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
@@ -21,7 +22,7 @@ const { getTenant } = require("../../utils/tenant");
 //
 // HOW QUANTITY AND VALUE ARE DERIVED (the choice every figure here rests on)
 //   A position "as on" a date is the SUM of the signed effect of every live movement dated up to
-//   the end of that Dubai day - not the `newStock` / `costPoolAfter` of the last movement.
+//   the end of that day in the organisation's zone - not the `newStock` / `costPoolAfter` of the last movement.
 //   `newStock` and the pool snapshots are a running chain in the order movements were CREATED:
 //   a back-dated document, a reversal or a recost makes the "last movement by date" a different
 //   row from the "last movement written", so reading the chain at a date is wrong whenever
@@ -45,7 +46,6 @@ const { getTenant } = require("../../utils/tenant");
 //               period movement and, having no ledger posting, is listed in the reconciliation.
 
 const DAY = 86400000;
-const DUBAI_OFFSET_MS = 4 * 3600e3;
 const QTY_EPS = 0.0005;
 const MAX_LEDGER_ROWS = 5000;
 
@@ -83,8 +83,8 @@ const r5 = (n) => Math.round((Number(n) + Number.EPSILON) * 1e5) / 1e5 || 0;
 const r6 = (n) => Math.round((Number(n) + Number.EPSILON) * 1e6) / 1e6 || 0;
 const signedValue = (m) => Math.sign(m.quantity) * Math.abs(Number(m.totalValue) || 0);
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const dubaiToday = (now = new Date()) => new Date(now.getTime() + DUBAI_OFFSET_MS).toISOString().slice(0, 10);
-const monthStart = () => `${dubaiToday().slice(0, 7)}-01`;
+const orgToday = (now = new Date()) => orgLocale.today(now);
+const monthStart = () => `${orgToday().slice(0, 7)}-01`;
 const isObjectIdText = (v) => /^[0-9a-f]{24}$/i.test(String(v));
 
 function objectId(value, label) {
@@ -93,10 +93,10 @@ function objectId(value, label) {
   return new mongoose.Types.ObjectId(String(value));
 }
 
-// { start, end } as Dubai days. `to` defaults to today; a missing `from` leaves the start open.
+// { start, end } as the organisation's days. `to` defaults to today; a missing `from` leaves the start open.
 function span({ from, to, defaultFrom } = {}) {
   const f = from || defaultFrom || null;
-  const t = to || dubaiToday();
+  const t = to || orgToday();
   const start = f ? LedgerReportsService.dayStart(f) : null;
   const end = LedgerReportsService.dayEnd(t);
   if (start && start > end) throw new AppError("The start date is after the end date", 400, "INVALID_RANGE");
@@ -283,7 +283,7 @@ async function reconcile({ pos, stockValue }) {
   return {
     available: true,
     account: { id: String(accountId), code: account?.accountCode || "", name: account?.accountName || "Inventory" },
-    postingEnabled, asOn: dubaiToday(pos.end),
+    postingEnabled, asOn: orgToday(pos.end),
     stockValue, ledgerBalance, difference,
     reconciles: Math.abs(difference) < 0.005,
     lines: lines.filter((l) => l.stock || l.ledger),
@@ -668,7 +668,7 @@ class StockReportsService {
     const expired = rows.filter((r) => r.expired);
     const expiring = rows.filter((r) => !r.expired);
     return {
-      withinDays: days, asOn: dubaiToday(now), rows,
+      withinDays: days, asOn: orgToday(now), rows,
       totals: { ...part(rows), items: new Set(rows.map((r) => r.stockId)).size, expired: part(expired), expiring: part(expiring) },
     };
   }
@@ -717,7 +717,7 @@ class StockReportsService {
     rows.sort((x, y) => y.value - x.value || x.itemName.localeCompare(y.itemName));
     const value = r2(rows.reduce((t, r) => t + r.value, 0));
     return {
-      days: n, asOn: dubaiToday(now), rows,
+      days: n, asOn: orgToday(now), rows,
       totals: { items: rows.length, value, neverSold: rows.filter((r) => r.neverSold).length, pctOfStockValue: stockValue > 0 ? r2((value / stockValue) * 100) : null, stockValue },
     };
   }

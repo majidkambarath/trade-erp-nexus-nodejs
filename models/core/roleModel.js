@@ -33,6 +33,9 @@ const roleSchema = new mongoose.Schema(
     // Who may manage whom is decided by rank: a person manages only those below their own. A custom role sits between
     // the viewer and the administrator (10 to 90); the owner's 100 is not available.
     rank: { type: Number, required: true, min: 10, max: 90, validate: { validator: Number.isInteger, message: "A rank is a whole number" } },
+    // The largest document a person in this role may approve, in the organisation's base currency. Empty (null) = no limit.
+    // Built-in roles have none. Only the Approve actions are affected (utils/approvalRules.js).
+    approvalLimit: { type: Number, min: 0, default: null },
     isActive: { type: Boolean, default: true },
     createdBy: { type: String, default: null },
     updatedBy: { type: String, default: null },

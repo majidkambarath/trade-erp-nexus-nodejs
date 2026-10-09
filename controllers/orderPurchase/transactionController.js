@@ -142,6 +142,18 @@ exports.processTransaction = catchAsync(async (req, res) => {
     // Each risk warning has its own acknowledgement field, so one cannot acknowledge another.
     { acknowledged, req }
   );
+  // The first of two approvals leaves the document where it was: say so, plainly, to the person and in the trail
+  if (action === "approve" && transaction.status !== "APPROVED") {
+    await AuditService.log({
+      req,
+      action: "TRANSACTION_FIRST_APPROVAL",
+      entity: "Transaction",
+      entityId: transaction._id,
+      summary: `${DocumentAuditService.describe(transaction)} approved once; a second approver is needed`,
+      after: DocumentAuditService.snapshot(transaction),
+    });
+    return res.status(200).json({ status: "success", data: { transaction, approval: { awaitingSecond: true, given: transaction.approvals?.length || 1 } } });
+  }
   await logProcessed(req, transaction, action);
   res.status(200).json({ status: "success", data: { transaction } });
 });

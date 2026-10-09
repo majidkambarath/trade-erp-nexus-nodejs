@@ -8,7 +8,8 @@ const holds = (role, ...keys) => keys.every((k) => p.can(p.resolveRole(role).per
 const lacks = (role, ...keys) => keys.every((k) => !p.can(p.resolveRole(role).permissions, k));
 
 test("the catalogue is consistent: every key is module.action, every implied key exists, no module is empty", () => {
-  assert.ok(p.KEYS.length >= 30 && p.KEYS.length <= 40, `a size an administrator can read: ${p.KEYS.length}`);
+  // 37 keys at first; "delete an approved document" (three modules) and the staff records (two) make 42
+  assert.ok(p.KEYS.length >= 30 && p.KEYS.length <= 45, `a size an administrator can read: ${p.KEYS.length}`);
   for (const k of p.KEYS) assert.match(k, /^[a-z]+\.[A-Za-z]+$/, k);
   for (const [key, implied] of Object.entries(p.IMPLIES)) {
     assert.ok(p.isKey(key), `${key} is a real permission`);
@@ -16,6 +17,37 @@ test("the catalogue is consistent: every key is module.action, every implied key
   }
   for (const m of p.MODULE_KEYS) assert.ok(Object.keys(p.MODULES[m].actions).length > 0, m);
   for (const m of p.MODULE_KEYS.filter((x) => x !== "lookups")) assert.ok(p.isKey(`${m}.view`), `${m} can be looked at`);
+});
+
+test("deleting an APPROVED document is its own permission: it brings plain Delete with it, and no role gets it by accident", () => {
+  for (const m of ["sales", "purchase", "finance"]) {
+    const got = p.expand([`${m}.deletePosted`]);
+    assert.ok(got.includes(`${m}.delete`) && got.includes(`${m}.view`), `${m}.deletePosted brings Delete and View`);
+    assert.equal(p.expand([`${m}.delete`]).includes(`${m}.deletePosted`), false, `plain Delete is not enough to reverse a posted ${m} document`);
+  }
+  assert.equal(p.isKey("inventory.deletePosted"), false, "stock items post nothing, so there is nothing to reverse");
+  // the people who run the business keep what they could do before
+  assert.ok(holds("super_admin", "sales.deletePosted", "purchase.deletePosted", "finance.deletePosted"));
+  assert.ok(holds("admin", "sales.deletePosted", "purchase.deletePosted", "finance.deletePosted"));
+  assert.ok(holds("manager", "sales.deletePosted", "purchase.deletePosted", "finance.deletePosted"));
+  assert.ok(holds("accountant", "finance.deletePosted"), "the books are theirs");
+  assert.ok(lacks("accountant", "sales.deletePosted", "purchase.deletePosted"));
+  // everyone else enters or looks; none of them reverses a posted document
+  for (const role of ["operator", "sales", "purchase", "storekeeper", "viewer"]) assert.ok(lacks(role, "sales.deletePosted", "purchase.deletePosted", "finance.deletePosted"), role);
+  // the editor is told what ticking it brings, so it can draw the lock
+  const sales = p.catalogue().find((m) => m.key === "sales").actions.find((a) => a.action === "deletePosted");
+  assert.deepEqual(sales.implies.filter((k) => k !== "lookups.view").sort(), ["sales.delete", "sales.view"]);
+  assert.equal(sales.short, "Delete approved");
+});
+
+test("the staff records are their own module, apart from the people who sign in", () => {
+  assert.ok(p.isKey("staff.view") && p.isKey("staff.manage"));
+  const people = p.expand(["users.view", "users.manage"]);
+  assert.equal(people.some((k) => k.startsWith("staff.")), false, "managing sign-in accounts gives no access to employee files");
+  assert.equal(p.expand(["staff.manage"]).some((k) => k.startsWith("users.")), false, "and the other way round");
+  assert.ok(p.expand(["staff.manage"]).includes("staff.view"), "changing records means seeing them");
+  assert.ok(holds("super_admin", "staff.view", "staff.manage") && holds("admin", "staff.view", "staff.manage"));
+  for (const role of ["manager", "accountant", "operator", "sales", "purchase", "storekeeper", "viewer"]) assert.ok(lacks(role, "staff.view", "staff.manage"), role);
 });
 
 test("expand: view comes with every other action, pick lists come with doing anything, and it is idempotent", () => {

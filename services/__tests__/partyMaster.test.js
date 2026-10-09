@@ -548,7 +548,7 @@ test("expiry classification: today, +30 and -1 are the edges; Dubai's day, not t
 
 test("the expiry list holds expired and soon-to-expire documents of customers and vendors, soonest first", { skip }, async () => {
   const now = new Date();
-  const today = svc.expiry.todayInDubai(now);
+  const today = svc.expiry.todayInOrg(now);
   const day = (n) => svc.expiry.addDays(today, n);
   const doc = (n, number) => ({ typeName: "Trade licence", number, expiryDate: day(n) });
   const c = await svc.Customers.createCustomer(customer("Expiry Customer", { documents: [doc(-1, "E-1"), doc(0, "E0"), doc(30, "E30"), doc(31, "E31"), { typeName: "Bank letter", number: "NOEXP" }] }));

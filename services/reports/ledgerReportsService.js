@@ -15,17 +15,18 @@ const { getTenant } = require("../../utils/tenant");
 // Party balances. A reversed entry never counts. Amounts are signed "net = debit - credit" unless a
 // field says otherwise; the screens show them as Dr / Cr.
 //
-// Dates are calendar days in Dubai (UTC+4, no daylight saving): `from` starts at 00:00 and `to`
+// Dates are calendar days in the organisation's own time zone (utils/orgLocale.js): `from` starts at 00:00 and `to`
 // ends at 23:59:59.999 of that day there, the same days people see on screen.
+const orgLocale = require("../../utils/orgLocale");
 
 const CATEGORY_ORDER = ["ASSET", "LIABILITY", "EQUITY", "INCOME", "EXPENSE"];
-const DUBAI = "+04:00";
 const ymd = /^\d{4}-\d{2}-\d{2}$/;
 
 function bound(value, edge) {
   if (!value) return null;
   const text = String(value);
-  const d = ymd.test(text.slice(0, 10)) ? new Date(`${text.slice(0, 10)}T${edge === "end" ? "23:59:59.999" : "00:00:00.000"}${DUBAI}`) : new Date(text);
+  const day = text.slice(0, 10);
+  const d = ymd.test(day) ? (edge === "end" ? orgLocale.endOfDay(day) : orgLocale.dayStart(day)) : new Date(text);
   if (Number.isNaN(d.getTime())) throw new AppError(`"${value}" is not a date`, 400, "INVALID_DATE");
   return d;
 }
