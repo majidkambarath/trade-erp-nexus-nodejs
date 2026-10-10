@@ -5,6 +5,18 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "..", ".env") });
 
 const mongoose = require("mongoose");
+const { planSeed } = require("./seedPlan");
+
+// Decided from the environment alone, before anything connects: in production this refuses the old built-in password and takes
+// the account from ADMIN_EMAIL / ADMIN_PASSWORD (or generates a strong password and prints it once). See utils/seedPlan.js.
+let PLAN;
+try {
+  PLAN = planSeed(process.env);
+} catch (err) {
+  console.error(`❌ seed refused: ${err.message}`);
+  process.exit(1);
+}
+
 const Admin = require("../models/core/adminModel");
 const { DEFAULT_TENANT, runWithTenant } = require("./tenantContext");
 
@@ -17,12 +29,11 @@ if (!process.env.MONGO_URI) {
 const MONGO_URI = process.env.MONGO_URI;
 
 // Seeded super admins. The password is hashed by the Admin pre-save hook, so it is passed
-// in plain text here. Every run is idempotent: an existing account is brought back to this
-// definition rather than duplicated.
-const SEED_ADMINS = [
-  { name: "Super Admin", email: "admin@test.com", password: "12312312" },
-  { name: "Super Admin", email: "admin@test.uae", password: "12312312" },
-];
+// in plain text here. Every run is idempotent: an existing account is not duplicated, and in
+// development it is brought back to this definition (in production it is left alone unless
+// ADMIN_RESET=1). The list is the PLAN: the known test accounts in development, the one account
+// named by ADMIN_EMAIL in production.
+const SEED_ADMINS = PLAN.accounts;
 
 // Connect to MongoDB
 mongoose
@@ -40,16 +51,34 @@ mongoose
     process.exit(1);
   });
 
-async function upsertAdmin({ name, email, password }) {
+// The sign-in details of a generated password are printed ONCE, here, and kept nowhere: the account holds only a hash.
+function announce({ email, password, generated }) {
+  if (!generated) return;
+  console.log(`
+  Sign in as ${email}
+  Generated password (shown once, not stored anywhere): ${password}
+  You will be asked to choose your own at the first sign-in.
+`);
+}
+
+async function upsertAdmin({ name, email, password, mustChangePassword, generated }) {
   const existing = await Admin.findOne({ email }).select("+password");
   if (existing) {
+    if (!PLAN.replaceExisting) {
+      console.log(`ℹ️ ${email}: already exists, left as it is (set ADMIN_RESET=1 to replace its password)`);
+      return;
+    }
     existing.name = name;
     existing.password = password;
     existing.type = "super_admin";
     existing.status = "active";
     existing.isActive = true;
+    if (mustChangePassword) existing.mustChangePassword = true;
+    existing.lockUntil = undefined;
+    existing.loginAttempts = 0;
     await existing.save();
     console.log(`ℹ️ ${email}: already exists, updated`);
+    announce({ email, password, generated });
     return;
   }
 
@@ -60,8 +89,10 @@ async function upsertAdmin({ name, email, password }) {
     type: "super_admin",
     status: "active",
     isActive: true,
+    ...(mustChangePassword ? { mustChangePassword: true } : {}),
   }).save();
   console.log(`✅ ${email}: super admin created`);
+  announce({ email, password, generated });
 }
 
 async function setupAdmins() {

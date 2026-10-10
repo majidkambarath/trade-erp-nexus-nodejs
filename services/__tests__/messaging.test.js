@@ -376,7 +376,7 @@ test("the background pass does nothing while sending is switched off", { skip },
 // ===================================== the public link =====================================
 
 const tokenOf = (r) => r.share.url.split("/d/")[1];
-const visitor = (ip = "203.0.113.9") => ({ headers: { "x-forwarded-for": ip }, ip: "10.0.0.1", get: () => "Mozilla/5.0 test" });
+const visitor = (ip = "203.0.113.9") => ({ headers: {}, ip, get: () => "Mozilla/5.0 test" }); // req.ip: Express has already worked the address out
 
 test("the link shows the invoice and nothing internal, and counts a person, not a scanner", { skip }, async () => {
   await reset();

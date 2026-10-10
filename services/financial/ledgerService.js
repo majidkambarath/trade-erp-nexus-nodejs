@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const LedgerEntry = require("../../models/modules/financial/financialModels").LedgerEntry;
 const AppError = require("../../utils/AppError");
+const { searchRegex } = require("../../utils/regex");
 
 class LedgerService {
   // Get all ledger entries with filters and pagination
@@ -53,7 +54,7 @@ class LedgerService {
 
     // Search by voucherNo, accountName, or narration
     if (search) {
-      const regex = new RegExp(search, "i");
+      const regex = searchRegex(search);
       query.$or = [
         { voucherNo: regex },
         { accountName: regex },

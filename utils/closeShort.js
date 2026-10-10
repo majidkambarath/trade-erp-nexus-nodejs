@@ -10,6 +10,7 @@
 //             (goods back into stock, customer credited).
 
 const { fulfilment } = require("./salesDocuments");
+const { isService } = require("./itemKinds");
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const round3 = (n) => Math.round((Number(n) || 0) * 1000) / 1000;
@@ -39,6 +40,8 @@ function planCloseShort(order, notes = []) {
   const rows = (order.items || []).map((l) => {
     const r = f[String(l._id)];
     const ordered = r.ordered;
+    // a service line is rendered, not delivered: it can never fall short, and it stays on the order whatever was delivered
+    if (isService(l)) return { lineId: l._id, itemId: l.itemId, description: l.description || "", ordered, delivered: ordered, short: 0, valueShort: 0, service: true };
     const delivered = round3(r.delivered);
     const short = round3(Math.max(0, ordered - delivered));
     // the share of the line's own total (discount and VAT included) that was never delivered
@@ -46,7 +49,8 @@ function planCloseShort(order, notes = []) {
     return { lineId: l._id, itemId: l.itemId, description: l.description || "", ordered, delivered, short, valueShort };
   });
 
-  if (!rows.some((r) => r.delivered > EPS)) {
+  // only goods count as delivered: an order of services alone has nothing to close short
+  if (!rows.some((r) => !r.service && r.delivered > EPS)) {
     return block(409, "NOTHING_DELIVERED", `Nothing has been delivered against ${no}. Reject or cancel the order instead of closing it short`);
   }
   if (!rows.some((r) => r.short > EPS)) {

@@ -5,6 +5,7 @@ const Customer = require("../../models/modules/customerModel");
 const TransactionService = require("./transactionService");
 const { roundTo } = require("../../utils/pricing");
 const { toExpiryDay } = require("../../utils/documentExpiry");
+const kinds = require("../../utils/itemKinds");
 
 // What a quotation and a delivery note have in common: checking the customer and the lines, pricing
 // the document with the same code that prices the invoice it can become, and attaching the stock
@@ -98,6 +99,7 @@ function storedLine(i) {
   return {
     itemId: i.itemId,
     itemCode: i.itemCode,
+    itemType: i.itemType, // stamped by buildPricing from the item master; absent = goods
     description: i.description,
     qty: i.qty,
     price: i.price,
@@ -109,6 +111,7 @@ function storedLine(i) {
     taxKind: i.taxKind || null,
     vatPercent: i.vatPercent || 0,
     vatAmount: i.vatAmount,
+    ...(i.rcmVat != null ? { rcmVat: i.rcmVat } : {}), // a reverse-charge line: the VAT the recipient assesses (absent on every other line)
     lineTotal: i.lineTotal,
     ...(i.sourceLineId ? { sourceLineId: i.sourceLineId } : {}),
   };
@@ -141,7 +144,7 @@ async function attachStockDetails(lines) {
   const ids = [...new Set(lines.map((l) => String(l.itemId?._id || l.itemId)))].filter(isId);
   if (!ids.length) return lines.map((l) => ({ ...l, stockDetails: null }));
   const stocks = await Stock.find({ _id: { $in: ids } })
-    .select("itemId itemName barcodeQrCode brand origin currentStock unitOfMeasure")
+    .select("itemId itemName itemType barcodeQrCode brand origin currentStock unitOfMeasure")
     .populate("unitOfMeasure", "unitName shortCode")
     .lean();
   const byId = new Map(stocks.map((s) => [String(s._id), s]));
@@ -151,7 +154,12 @@ async function attachStockDetails(lines) {
       ...l,
       itemId: String(l.itemId?._id || l.itemId),
       stockDetails: s
-        ? { itemId: s.itemId, itemName: s.itemName, barcode: s.barcodeQrCode || "", brand: s.brand || "", origin: s.origin || "", currentStock: s.currentStock ?? 0, unit: s.unitOfMeasure?.shortCode || s.unitOfMeasure?.unitName || "" }
+        ? {
+            itemId: s.itemId, itemName: s.itemName, itemType: kinds.itemTypeOf(s), barcode: s.barcodeQrCode || "", brand: s.brand || "", origin: s.origin || "",
+            // a service has no quantity on hand: null, so a screen shows a dash rather than "0 in stock"
+            currentStock: kinds.isService(s) ? null : s.currentStock ?? 0,
+            unit: s.unitOfMeasure?.shortCode || s.unitOfMeasure?.unitName || "",
+          }
         : null,
     };
   });

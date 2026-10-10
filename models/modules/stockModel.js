@@ -6,6 +6,13 @@ const stockSchema = new mongoose.Schema({
   itemId: { type: String, required: true }, // unique within an organisation: see below
   sku: { type: String, required: true }, // unique within an organisation: see below
   itemName: { type: String, required: true },
+  // goods (the default: a missing value reads as goods) or service. A service has no quantity, reorder level, batch,
+  // expiry or costing and never moves stock (utils/itemKinds.js); it is sold and bought like any other line.
+  itemType: { type: String, enum: ["goods", "service"], default: "goods" },
+  // Optional overrides for a service: the income account its sales post to (else Sales revenue) and the expense account
+  // its purchases post to (else the service-expense posting key). Goods always use the company defaults.
+  incomeAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "LedgerAccount", default: null, set: (v) => (v === "" ? null : v) },
+  expenseAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "LedgerAccount", default: null, set: (v) => (v === "" ? null : v) },
   category: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Category",

@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const VATReport = require("../../models/modules/financial/VATReport");
 const AppError = require("../../utils/AppError");
+const { searchRegex } = require("../../utils/regex");
 
 class VATReportService {
   // ──────────────────────────────────────────────────────────────
@@ -19,7 +20,7 @@ class VATReportService {
 
     const query = {};
     if (status) query.status = status;
-    if (generatedBy) query.generatedBy = new RegExp(generatedBy, "i");
+    if (generatedBy) query.generatedBy = searchRegex(generatedBy);
     if (periodStart || periodEnd) {
       query.periodStart = {};
       if (periodStart) query.periodStart.$gte = new Date(periodStart);

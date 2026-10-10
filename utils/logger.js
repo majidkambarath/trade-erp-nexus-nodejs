@@ -25,6 +25,9 @@ function ts() {
 }
 
 function format(message, args) {
+  // A message that is not text (logger.debug(req.query): Express 5 gives a query with NO prototype, which a template string cannot
+  // turn into text) is shown the way every other argument is, instead of throwing inside the request that tried to log it.
+  if (typeof message !== "string") message = util.inspect(message, { depth: 4, colors: false });
   if (args.length === 0) return message;
   return `${message} ${args.map(a => (typeof a === 'string' ? a : util.inspect(a, { depth: 4, colors: false }))).join(" ")}`;
 }

@@ -263,6 +263,12 @@ async function vatFor(taxCodeId, net, date, { session, req } = {}) {
   const q = TaxCode.findOne({ _id: taxCodeId, companyId });
   const code = await (session ? q.session(session) : q);
   if (!code || !code.isActive) throw new AppError("Tax code not found or inactive", 400, "INVALID_TAX_CODE");
+  // Reverse charge is assessed on a purchase document (utils/pricing.js): the supplier's invoice has no VAT, the buyer works it out and posts
+  // Dr Input VAT / Cr Reverse-charge VAT beside what it pays. An expense or a debit / credit note takes the VAT as the supplier charged it, so
+  // this code here would book VAT nobody was paid and leave it out of the return. Refused until these vouchers assess it themselves.
+  if (code.kind === "reverse_charge") {
+    throw new AppError("A reverse-charge tax code belongs on a purchase invoice, where the VAT is assessed and posted. Record this as a purchase of a service item, or choose another tax code.", 400, "REVERSE_CHARGE_NOT_SUPPORTED");
+  }
   const pct = TaxCodeService.rateOn(code, date);
   return { taxCodeId: code._id, vatPercent: pct, vatAmount: round2((net * pct) / 100) };
 }

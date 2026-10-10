@@ -1,3 +1,4 @@
+const logger = require("../../utils/logger");
 const Stock = require("../../models/modules/stockModel");
 const Category = require("../../models/modules/categoryModel");
 const Vendor = require("../../models/modules/vendorModel");
@@ -6,6 +7,31 @@ const InventoryMovement = require("../../models/modules/inventoryMovementModel")
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
 const StockAdjustmentService = require("./stockAdjustmentService");
+const ItemKindService = require("./itemKindService");
+const kinds = require("../../utils/itemKinds");
+const { searchRegex } = require("../../utils/regex");
+
+// The item type a request names, or goods when it names none. Anything else is refused with a code the screen can show.
+function requestedType(value, ...rest) {
+  const fallback = rest.length ? rest[0] : kinds.GOODS; // pass undefined to learn that nothing was asked for
+  const type = kinds.parseItemType(value);
+  if (type === null) throw new AppError("Item type must be goods or service", 400, "INVALID_ITEM_TYPE");
+  return type === undefined ? fallback : type;
+}
+
+// A service has no quantity, reorder level, batch, expiry or barcode: a request that gives it one is refused, not trimmed,
+// so nobody believes a reorder level on a service is being watched.
+function assertNoStockFields(data) {
+  const given = kinds.stockFieldsOnService(data);
+  if (given.length) {
+    throw new AppError(
+      `A service item has no ${given.join(", ")}. Leave stock fields blank for services.`,
+      400,
+      "SERVICE_HAS_NO_STOCK",
+      { fields: given }
+    );
+  }
+}
 
 class StockService {
   static async createStock(data, createdBy) {
@@ -30,7 +56,15 @@ class StockService {
         status,
         origin,
         brand,
+        incomeAccountId,
+        expenseAccountId,
       } = data;
+
+      // goods (the default) or service; a service keeps none of the stock fields and may name its own accounts
+      const itemType = requestedType(data.itemType);
+      const isService = itemType === kinds.SERVICE;
+      if (isService) assertNoStockFields(data);
+      await ItemKindService.checkAccounts({ itemType, incomeAccountId, expenseAccountId }, { session });
 
       // Validate category exists
       const categoryExists = await Category.findById(categoryId).session(
@@ -74,14 +108,21 @@ class StockService {
             itemName,
             category: categoryId,
             vendorId,
+            itemType,
+            ...(isService ? { incomeAccountId: incomeAccountId || null, expenseAccountId: expenseAccountId || null } : {}),
             unitOfMeasure,
-            barcodeQrCode: sku,
-            reorderLevel: Number(reorderLevel) || 0,
-            batchNumber,
-            expiryDate: expiryDate ? new Date(expiryDate) : undefined,
+            // a service has no barcode, reorder level, batch or expiry: the model leaves them at their blanks
+            ...(isService
+              ? { reorderLevel: 0, currentStock: 0 }
+              : {
+                  barcodeQrCode: sku,
+                  reorderLevel: Number(reorderLevel) || 0,
+                  batchNumber,
+                  expiryDate: expiryDate ? new Date(expiryDate) : undefined,
+                  currentStock: Number(currentStock) || 0,
+                }),
             purchasePrice: Number(purchasePrice) || 0,
             salesPrice: Number(salesPrice) || 0,
-            currentStock: Number(currentStock) || 0,
             status,
             origin,
             brand,
@@ -90,8 +131,8 @@ class StockService {
         { session }
       );
 
-      // Create initial inventory movement if stock > 0
-      const initialStock = Number(currentStock) || 0;
+      // Create initial inventory movement if stock > 0 (a service never has any)
+      const initialStock = isService ? 0 : Number(currentStock) || 0;
       if (initialStock > 0) {
         await this.createInventoryMovement(
           {
@@ -167,6 +208,20 @@ class StockService {
         }
       }
 
+      // goods or service. The type can change only while nothing is built on the item, and a service keeps no stock fields.
+      const currentType = kinds.itemTypeOf(currentStock);
+      const nextType = requestedType(data.itemType, currentType);
+      if (nextType !== currentType) await ItemKindService.assertTypeChange(currentStock, nextType, { session });
+      if (nextType === kinds.SERVICE) assertNoStockFields(data);
+      await ItemKindService.checkAccounts(
+        {
+          itemType: nextType,
+          incomeAccountId: data.incomeAccountId === undefined ? undefined : data.incomeAccountId,
+          expenseAccountId: data.expenseAccountId === undefined ? undefined : data.expenseAccountId,
+        },
+        { session }
+      );
+
       // Handle stock quantity update
       const oldQuantity = currentStock.currentStock;
       const newQuantity =
@@ -179,8 +234,11 @@ class StockService {
         throw new AppError("Stock quantity cannot be negative", 400);
       }
 
-      // Convert numeric fields
-      const updateData = { ...data };
+      // Convert numeric fields. What an edit may write: not the system's own fields (the cost pool moves only through the costing
+      // engine, the id and the organisation never change) and not an update operator ($set ...) smuggled in as a key.
+      const updateData = Object.fromEntries(
+        Object.entries(data).filter(([k]) => !["_id", "__v", "companyId", "costValue", "createdAt", "updatedAt"].includes(k) && !k.startsWith("$"))
+      );
       if (data.reorderLevel)
         updateData.reorderLevel = Number(data.reorderLevel);
       if (data.purchasePrice)
@@ -189,12 +247,24 @@ class StockService {
       if (data.currentStock)
         updateData.currentStock = Number(data.currentStock);
       if (data.expiryDate) updateData.expiryDate = new Date(data.expiryDate);
+      if (data.itemType !== undefined) updateData.itemType = nextType;
+      // goods name no accounts of their own; a service that becomes goods (only possible while unused) forgets them
+      if (nextType === kinds.GOODS && currentType === kinds.SERVICE) Object.assign(updateData, { incomeAccountId: null, expenseAccountId: null });
 
       const updatedStock = await Stock.findByIdAndUpdate(id, updateData, {
         new: true,
         runValidators: true,
         session,
       });
+      // an unused goods item that becomes a service leaves nothing of the stock side behind
+      const becameService = nextType === kinds.SERVICE && currentType === kinds.GOODS;
+      if (becameService) {
+        await Stock.updateOne(
+          { _id: id },
+          { $set: { reorderLevel: 0, currentStock: 0, costValue: null }, $unset: { batchNumber: 1, expiryDate: 1, barcodeQrCode: 1 } },
+          { session }
+        );
+      }
 
       // A changed quantity is a stock event: costed, batched, written to the movement ledger and,
       // when posting is on, booked against Inventory / Stock adjustment.
@@ -208,7 +278,7 @@ class StockService {
 
       await session.commitTransaction();
       // the adjustment moved the cost pool after the edit was written: return what is stored now
-      const result = adjustment ? await Stock.findById(id) : updatedStock;
+      const result = adjustment || becameService ? await Stock.findById(id) : updatedStock;
       if (adjustment) result.$locals.adjustment = adjustment;
       return result;
     } catch (error) {
@@ -239,6 +309,7 @@ class StockService {
         if (!stock) {
           throw new AppError(`Stock item ${item.itemId} not found`, 404);
         }
+        if (kinds.isService(stock)) continue; // a service line moves no stock
 
         const quantityChange = this.getQuantityChange(type, item.qty);
         const newStock = stock.currentStock + quantityChange;
@@ -332,7 +403,7 @@ class StockService {
       })
       .lean();
 
-    console.log("Raw purchase logs:", purchaseLogs);
+    logger.debug("Raw purchase logs:", purchaseLogs);
 
     // Format the response to include only relevant item details
     const formattedLogs = purchaseLogs.map((log) => ({
@@ -501,6 +572,7 @@ class StockService {
     return Stock.find({
       $expr: { $lte: ["$currentStock", "$reorderLevel"] },
       status: "Active",
+      ...kinds.STOCKED_ONLY, // a service has 0 on hand and a 0 reorder level: it would always read as low
     })
       .populate("category")
       .populate("vendorId")
@@ -510,7 +582,7 @@ class StockService {
   static async getStockValuation() {
     return Stock.aggregate([
       {
-        $match: { status: "Active" },
+        $match: { status: "Active", ...kinds.STOCKED_ONLY },
       },
       {
         $group: {
@@ -533,21 +605,34 @@ class StockService {
 
     if (filters.search) {
       query.$or = [
-        { itemId: new RegExp(filters.search, "i") },
-        { sku: new RegExp(filters.search, "i") },
-        { itemName: new RegExp(filters.search, "i") },
-        { batchNumber: new RegExp(filters.search, "i") },
+        { itemId: searchRegex(filters.search) },
+        { sku: searchRegex(filters.search) },
+        { itemName: searchRegex(filters.search) },
+        { batchNumber: searchRegex(filters.search) },
       ];
     }
 
     if (filters.status) query.status = filters.status;
 
+    // (`new` is required: without it Mongoose 8 throws, so these two filters answered 500 whenever they were used)
     if (filters.category) {
-      query.category = mongoose.Types.ObjectId(filters.category);
+      if (!mongoose.isValidObjectId(filters.category)) throw new AppError("Invalid category id", 400, "INVALID_ID");
+      query.category = new mongoose.Types.ObjectId(String(filters.category));
     }
 
     if (filters.vendorId) {
-      query.vendorId = mongoose.Types.ObjectId(filters.vendorId);
+      if (!mongoose.isValidObjectId(filters.vendorId)) throw new AppError("Invalid vendor id", 400, "INVALID_ID");
+      query.vendorId = new mongoose.Types.ObjectId(String(filters.vendorId));
+    }
+
+    // ?itemType=goods|service narrows the list; anything about quantity on hand is about goods only
+    const wantType = requestedType(filters.itemType, undefined);
+    const aboutQuantity = filters.lowStock === "true" || filters.minStock || filters.maxStock;
+    if (wantType === kinds.SERVICE) {
+      if (aboutQuantity) return []; // a service has no quantity to be low, high or between
+      query.itemType = kinds.SERVICE;
+    } else if (wantType === kinds.GOODS || aboutQuantity) {
+      Object.assign(query, kinds.STOCKED_ONLY);
     }
 
     if (filters.lowStock === "true") {
@@ -581,18 +666,22 @@ class StockService {
     const stock = await Stock.findById(id)
       .populate("category")
       .populate("vendorId")
-      .populate("unitOfMeasure");
+      .populate("unitOfMeasure")
+      .populate("incomeAccountId", "accountName accountCode") // a service's own accounts, named for the item screen
+      .populate("expenseAccountId", "accountName accountCode");
     if (!stock) throw new AppError("Stock item not found", 404);
     return stock;
   }
 
   static async getStockByItemId(itemId) {
+    // an item is looked up by its id: anything else is "no such item", not a database error
+    if (!mongoose.isValidObjectId(itemId)) throw new AppError("Stock item not found", 404);
     const stock = await Stock.findOne({
       _id: itemId,
     })
       .populate("category")
       .populate("vendorId");
-    console.log(stock);
+    logger.debug(stock);
     if (!stock) throw new AppError("Stock item not found", 404);
     return stock;
   }
@@ -639,9 +728,17 @@ class StockService {
           inactiveItems: {
             $sum: { $cond: [{ $eq: ["$status", "Inactive"] }, 1, 0] },
           },
+          // services are counted as items but never as low stock (0 on hand, 0 reorder level)
+          serviceItems: {
+            $sum: { $cond: [{ $eq: ["$itemType", kinds.SERVICE] }, 1, 0] },
+          },
           lowStockItems: {
             $sum: {
-              $cond: [{ $lte: ["$currentStock", "$reorderLevel"] }, 1, 0],
+              $cond: [
+                { $and: [{ $ne: ["$itemType", kinds.SERVICE] }, { $lte: ["$currentStock", "$reorderLevel"] }] },
+                1,
+                0,
+              ],
             },
           },
           totalStockValue: {
@@ -660,6 +757,7 @@ class StockService {
         totalItems: 0,
         activeItems: 0,
         inactiveItems: 0,
+        serviceItems: 0,
         lowStockItems: 0,
         totalStockValue: 0,
         totalSalesValue: 0,

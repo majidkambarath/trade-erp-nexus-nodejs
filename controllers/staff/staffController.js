@@ -13,7 +13,7 @@ exports.createStaff = catchAsync(async (req, res, next) => {
     if (err) return next(err);
 
     try {
-      const createdBy = req.user?.id || req.body.createdBy || "system";
+      const createdBy = req.admin?.id || "system"; // the signed-in person; a body never names its own author
       const staff = await StaffService.createStaff(
         req.body,
         req.files,
@@ -76,7 +76,7 @@ exports.updateStaff = catchAsync(async (req, res, next) => {
     if (err) return next(err);
 
     try {
-      const createdBy = req.user?.id || req.body.createdBy || "system";
+      const createdBy = req.admin?.id || "system"; // the signed-in person; a body never names its own author
       const staff = await StaffService.updateStaff(
         req.params.id,
         req.body,

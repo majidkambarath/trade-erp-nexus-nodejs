@@ -7,6 +7,7 @@ const FiscalYearService = require("../core/fiscalYearService");
 const AccountConfigService = require("../financial/accountConfigService");
 const PostingService = require("../financial/postingService");
 const BatchService = require("./batchService");
+const ItemKindService = require("./itemKindService");
 const { getTenant } = require("../../utils/tenant");
 
 // A manual change to the quantity on hand (a stock count, a correction, a movement typed in on the
@@ -22,6 +23,8 @@ class StockAdjustmentService {
     { stock, newQuantity, unitCost, eventType = "STOCK_ADJUSTMENT", referenceNumber, notes, batchNumber, expiryDate, location, createdBy, date = new Date() },
     { session }
   ) {
+    // a service has no quantity: refuse before the "no change" shortcut, so nothing slips through as a no-op
+    ItemKindService.assertStocked(stock, "be adjusted");
     if (Math.abs(Number(newQuantity) - Number(stock.currentStock)) < 1e-9) return null;
     await FiscalYearService.assertPostingAllowed(date, { session });
 

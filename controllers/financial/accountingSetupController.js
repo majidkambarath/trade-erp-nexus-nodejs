@@ -4,6 +4,7 @@ const AccountGroupService = require("../../services/financial/accountGroupServic
 const AccountConfigService = require("../../services/financial/accountConfigService");
 const FiscalYearService = require("../../services/core/fiscalYearService");
 const YearEndService = require("../../services/financial/yearEndService");
+const PeriodCloseService = require("../../services/financial/periodCloseService");
 const NumberSeriesService = require("../../services/core/numberSeriesService");
 const PostingService = require("../../services/financial/postingService");
 const AuditService = require("../../services/core/auditService");
@@ -56,6 +57,11 @@ exports.createFiscalYear = catchAsync(async (req, res) => {
 exports.yearEnd = catchAsync(async (req, res) => ok(res, await YearEndService.preview(req.params.id, req)));
 exports.closeFiscalYear = catchAsync(async (req, res) => ok(res, await YearEndService.close(req.params.id, { acknowledge: req.body?.acknowledge }, req)));
 exports.reopenFiscalYear = catchAsync(async (req, res) => ok(res, await YearEndService.reopen(req.params.id, req)));
+// Months inside an open year (services/financial/periodCloseService.js): a lock, with its own checks, audit rows and order.
+exports.fiscalYearMonths = catchAsync(async (req, res) => ok(res, await PeriodCloseService.months(req.params.id)));
+exports.monthEnd = catchAsync(async (req, res) => ok(res, await PeriodCloseService.preview(req.params.id, req.params.month)));
+exports.closeMonth = catchAsync(async (req, res) => ok(res, await PeriodCloseService.close(req.params.id, req.params.month, { acknowledge: req.body?.acknowledge }, req)));
+exports.reopenMonth = catchAsync(async (req, res) => ok(res, await PeriodCloseService.reopen(req.params.id, req.params.month, req)));
 
 // --- number series ---
 exports.listNumberSeries = catchAsync(async (req, res) => ok(res, await NumberSeriesService.list(req)));

@@ -151,7 +151,7 @@ class ReconciliationPostingService {
         };
       }
 
-      const voucher = await FinancialService.createVoucher(data, by, session);
+      const voucher = await FinancialService.createVoucher(data, by, session, { req }); // (a person over their approval limit is refused: this cannot wait for an approver)
       const entry = await Core.bankEntryOf(voucher._id, account._id, { session });
       const match = await Core.createMatch({
         accountId, lines: [line], entries: [entry], kind: "created", method: "created", by: by ? String(by) : null, session, req,

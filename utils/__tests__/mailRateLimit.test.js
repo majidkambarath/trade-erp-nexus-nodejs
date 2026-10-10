@@ -44,7 +44,7 @@ test("a refusal carries the provider's own detail so a person can act on it", ()
 
 // ---- rate limit ----
 const run = (mw, req) => new Promise((resolve) => mw(req, {}, (err) => resolve(err || null)));
-const from = (ip) => ({ headers: { "x-forwarded-for": ip }, ip: "10.0.0.1" });
+const from = (ip) => ({ headers: {}, ip }); // req.ip: what Express made of the connection and the (trusted) proxy chain
 
 test("a client is let through up to the limit, then told to wait, with a code the screen can use", async () => {
   const mw = rateLimit({ windowMs: 60000, max: 3, code: "SHARE_RATE_LIMIT", message: "Slow down" });
@@ -71,8 +71,11 @@ test("the key can be anything: per link, per company, per person", async () => {
   assert.equal(await run(mw, { ...from("1.1.1.1"), params: { publicId: "B" } }), null);
 });
 
-test("behind a proxy the left-most forwarded address is the client, not the proxy", () => {
-  assert.equal(clientIp({ headers: { "x-forwarded-for": "198.51.100.4, 10.0.0.1" }, ip: "10.0.0.9" }), "198.51.100.4");
+test("the address is what Express worked out (req.ip), never the left-most forwarded entry, which the client writes", () => {
+  // Express counts our own proxies in from the right of X-Forwarded-For (server.js: trust proxy) and puts the result in req.ip.
+  // The header on its own is whatever the caller sent, so a rotating value must not change the address.
+  assert.equal(clientIp({ headers: { "x-forwarded-for": "198.51.100.4, 10.0.0.1" }, ip: "10.0.0.9" }), "10.0.0.9");
+  assert.equal(clientIp({ headers: { "x-forwarded-for": "6.6.6.6" }, ip: "10.0.0.9" }), "10.0.0.9");
   assert.equal(clientIp({ headers: {}, ip: "10.0.0.9" }), "10.0.0.9");
   assert.equal(clientIp({ headers: {}, socket: { remoteAddress: "10.0.0.8" } }), "10.0.0.8");
 });

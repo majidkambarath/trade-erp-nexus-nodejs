@@ -233,7 +233,12 @@ class AccountConfigService {
     }
     if (data.profile) {
       for (const k of ["legalName", "trn", "addressLine1", "city", "emirate", "countryCode", "email", "phone"]) {
-        if (data.profile[k] !== undefined) set[`profile.${k}`] = String(data.profile[k]).trim();
+        const v = data.profile[k];
+        if (v === undefined) continue;
+        // String(v) on an object (e.g. a stray {$ne: null}) silently turns it into the text "[object Object]"
+        // instead of being refused; only a real string/number/boolean belongs in a text field.
+        if (v !== null && typeof v === "object") throw new AppError(`profile.${k} must be text`, 400);
+        set[`profile.${k}`] = String(v).trim();
       }
       if (data.profile.vatRegistered !== undefined) set["profile.vatRegistered"] = Boolean(data.profile.vatRegistered);
       const trn = set["profile.trn"];

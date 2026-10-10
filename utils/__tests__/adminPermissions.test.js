@@ -79,3 +79,12 @@ test("a request body can never set the system's own fields", () => {
   assert.deepEqual(clean, { name: "Ali", type: "viewer" });
   assert.deepEqual(withoutSystemFields(undefined), {});
 });
+
+test("nor a person's two-factor or the end of their sign-ins: those have their own routes, with the password and a code", () => {
+  const body = { name: "Ali", twoFactor: { enabled: false, secretEnc: "x" }, "twoFactor.enabled": false, sessionsRevokedAt: new Date() };
+  const clean = withoutSystemFields(body);
+  assert.equal(clean.twoFactor, undefined);
+  assert.equal(clean.sessionsRevokedAt, undefined);
+  assert.equal(clean["twoFactor.enabled"], undefined, "a path into it too");
+  assert.deepEqual(Object.keys(clean), ["name"]);
+});

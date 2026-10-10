@@ -98,12 +98,17 @@ test("the routes that need no permission are few, and each says why", () => {
     "routes/core/adminRouter.js  POST /login",
     "routes/core/adminRouter.js  POST /logout",
     "routes/core/adminRouter.js  POST /refresh-token",
+    "routes/core/authRoutes.js  POST /forgot-password",
+    "routes/core/authRoutes.js  POST /login/2fa",
+    "routes/core/authRoutes.js  POST /reset-password",
     "routes/einvoice/einvoiceRoutes.js  POST /inbound/webhook",
     "routes/einvoice/einvoiceRoutes.js  POST /inbound/webhook/:org",
     "routes/messaging/shareRoutes.js  GET /:token",
     "routes/messaging/shareRoutes.js  POST /:token/viewed",
   ], "the whole list of routes anyone may call without signing in: adding one is a decision, made here");
-  assert.ok(exempt.length - open.length <= 8, "a person's own profile and the status route; anything more should be a permission");
+  // a person's own profile and the status route (8), and the five routes of a person's own two-factor (routes/core/authRoutes.js:
+  // the account is the signed-in one and the password is asked for again); anything more should be a permission
+  assert.ok(exempt.length - open.length <= 13, "a person's own profile, the status route and their own two-factor; anything more should be a permission");
 });
 
 test("what a person may do to a document is decided by its type, and a stored document by its stored type", async () => {

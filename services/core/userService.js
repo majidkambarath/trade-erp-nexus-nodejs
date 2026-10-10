@@ -8,6 +8,8 @@ const roles = require("../../utils/permissions");
 const { runUnscoped } = require("../../utils/tenantContext");
 const UsageService = require("./usageService");
 const RoleService = require("./roleService");
+const TwoFactorService = require("./twoFactorService");
+const AuthSession = require("../../models/core/authSessionModel");
 
 const clean = (v) => String(v ?? "").trim();
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -31,6 +33,7 @@ const present = (account, role, found = new Map()) => ({
   branchId: account.branchId,
   status: account.status,
   isActive: account.isActive,
+  twoFactorEnabled: Boolean(account.twoFactor?.enabled), // on or off, so an administrator can see who has it; nothing about the secret
   lastLogin: account.lastLogin || null,
   createdAt: account.createdAt,
 });
@@ -103,7 +106,7 @@ class UserService {
       const r = new RegExp(clean(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       q.$and = [{ $or: [{ name: r }, { email: r }] }];
     }
-    const rows = await Admin.find(q).select("name email type roleKey branchRoles branchId status isActive lastLogin createdAt").sort({ createdAt: 1 }).lean();
+    const rows = await Admin.find(q).select("name email type roleKey branchRoles branchId status isActive lastLogin createdAt twoFactor.enabled").sort({ createdAt: 1 }).lean();
     const found = await rolesNamedBy(rows);
     return rows.map((a) => present(a, found.get(roles.roleKeyOf(a)), found));
   }
@@ -136,6 +139,7 @@ class UserService {
     const actor = RoleService.actorOf(req);
     const self = String(account._id) === String(req.admin?.id);
     const current = await RoleService.ofAccount(account);
+    let endSessions = false; // a password set by someone else, or a person switched off, ends the sign-ins they hold
 
     const wantsRole = patch.role !== undefined && clean(patch.role).toLowerCase() !== roles.roleKeyOf(account);
     const wantsOff = patch.status !== undefined && patch.status !== "active";
@@ -167,9 +171,12 @@ class UserService {
       if (patch.status === "active") await UsageService.assertRoom("users", account.isActive && account.status === "active" ? 0 : 1);
       account.status = patch.status;
       account.isActive = patch.status === "active";
+      if (patch.status !== "active") endSessions = true;
     }
     if (patch.password !== undefined && patch.password !== "") {
-      if (String(patch.password).length < 8) throw new AppError("A password needs at least 8 characters", 400, "WEAK_PASSWORD");
+      if (typeof patch.password !== "string" || patch.password.length < 8) throw new AppError("A password needs at least 8 characters", 400, "WEAK_PASSWORD");
+      if (patch.password.length > 200) throw new AppError("That password is too long", 400, "WEAK_PASSWORD");
+      endSessions = true;
       account.password = patch.password; // hashed on save
       account.mustChangePassword = true; // an administrator set it, so the person chooses their own at the next sign-in
       account.lockUntil = undefined; // and a reset is also how a locked-out person is let back in
@@ -177,9 +184,29 @@ class UserService {
     }
     account.$locals.updatedBy = req.admin?.id || null;
     await account.save();
+    if (endSessions) await AuthSession.updateMany({ adminId: account._id, revokedAt: null }, { $set: { revokedAt: new Date() } });
     return present(account, next || current, await rolesNamedBy([account]));
   }
 }
+
+// An administrator clears someone else's two-factor (a lost phone, with no recovery codes left). It ends every sign-in the person holds,
+// and they must set it up again if the organisation requires it. Never one's own: that is Settings, with the password and a code.
+UserService.resetTwoFactor = async (id, req) => {
+  const account = await Admin.findById(id).select("name email type roleKey branchRoles branchId status isActive lastLogin createdAt twoFactor.enabled");
+  if (!account) throw new AppError("That person was not found", 404, "ADMIN_NOT_FOUND");
+  if (String(account._id) === String(req.admin?.id)) {
+    throw new AppError("You cannot reset your own two-factor here. Turn it off in Settings, with your password and a code.", 403, "CANNOT_CHANGE_SELF");
+  }
+  const current = await RoleService.ofAccount(account);
+  guard(roles.mayManage({ actor: RoleService.actorOf(req), target: current || { rank: 0, permissions: [], isActive: false }, action: "update" }));
+  if (!TwoFactorService.isEnabled(account)) throw new AppError("Two-factor is not on for that person.", 409, "TWO_FACTOR_NOT_ON");
+  await TwoFactorService.disable(account);
+  const now = new Date();
+  await Admin.updateOne({ _id: account._id }, { $set: { sessionsRevokedAt: now } });
+  await AuthSession.updateMany({ adminId: account._id, revokedAt: null }, { $set: { revokedAt: now } });
+  require("./accountSecurityService").notice(account, "Your two-factor sign-in was reset by an administrator", "Signing in no longer asks for a code until you set it up again. You were signed out everywhere.");
+  return { ...present(account, current, await rolesNamedBy([account])), twoFactorEnabled: false };
+};
 
 UserService.storedFor = stored; // the developer console gives people roles by the same rule
 module.exports = UserService;

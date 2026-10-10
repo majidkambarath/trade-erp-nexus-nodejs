@@ -10,6 +10,7 @@
 // a note's `source` (what it was made from) and `invoice` (the order that invoices it).
 
 const { invoiceClock, quotationExpiry, fulfilment } = require("./salesDocuments");
+const { isService } = require("./itemKinds");
 
 const STAGE = Object.freeze({
   QUOTED: "quoted", // an offer is out, or waiting for an answer
@@ -64,8 +65,9 @@ function deliveryOf(order, notes) {
   if (!order || !Array.isArray(order.items) || !order.items.length) return null;
   const lines = notes.flatMap((n) => (n.items || []).map((l) => ({ sourceLineId: l.sourceLineId, status: n.status, qty: l.qty, deliveredQty: l.deliveredQty })));
   const names = new Map(order.items.map((l) => [id(l._id), l.description || ""]));
+  const services = new Set(order.items.filter(isService).map((l) => id(l._id))); // rendered, not delivered: never "left to deliver"
   const remaining = Object.entries(fulfilment(order.items, lines))
-    .filter(([, r]) => r.remaining > 0)
+    .filter(([lineId, r]) => r.remaining > 0 && !services.has(lineId))
     .map(([lineId, r]) => ({ description: names.get(lineId), qty: r.remaining }));
   // closed short: whatever is left will never be delivered, so the delivery is finished
   if (order.closedShort?.at) return { started: notes.length > 0, complete: true, remaining: [] };

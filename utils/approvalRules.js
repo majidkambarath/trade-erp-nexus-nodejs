@@ -75,6 +75,54 @@ function decide({ policy, amount, preparedBy, approver, approvals = [], currency
   return { ok: true, final: true, step: 2, of: 2 };
 }
 
+/**
+ * Must a document that would take effect the moment it is SAVED (a journal, a contra, a ledger expense, a note, a receipt, a
+ * payment) wait for an approver instead? It must when the person saving it has an approval limit the amount is above (they
+ * could not approve it themselves, so they cannot just post it), or when the organisation asks for a second approver at this
+ * amount (one person cannot post what two must approve). Below both, and for a person with no limit, it posts at once as
+ * before. -> null | { reason: "limit", amount, limit } | { reason: "second", amount, above }
+ *
+ *   maker  { limit }   the person saving it (limit: their role's approval limit, null for none)
+ */
+function holdOnSave({ policy, amount, maker }) {
+  const pol = normalisePolicy(policy);
+  const total = round2(amount);
+  const limit = limitOf(maker?.limit);
+  if (limit !== null && total > limit) return { reason: "limit", amount: total, limit };
+  if (needsSecondApproval(pol, total)) return { reason: "second", amount: total, above: pol.secondApprovalAbove };
+  return null;
+}
+
+/** The sentence for a hold, in the words a person saving the voucher reads. */
+function holdMessage(hold, currency = "") {
+  if (!hold) return "";
+  if (hold.reason === "limit") {
+    return `This is ${money(hold.amount, currency)}, above your approval limit of ${money(hold.limit, currency)}, so it has been saved but not posted. Someone with a higher limit has to approve it.`;
+  }
+  return `This is ${money(hold.amount, currency)}, above ${money(hold.above, currency)}, so it needs two approvers. It has been saved but not posted.`;
+}
+
+/**
+ * May `approver` change the posted figures of a voucher that is already approved? Changing them takes the old postings back and
+ * posts new ones, which is a deletion plus an approval, so it is judged as BOTH: the holder of deletePosted (checked by the
+ * caller) and an approval of the NEW amount that stands on its own. It stands on its own only when no second approver is needed:
+ * an edit is one person's act, so an amount that needs two is refused (delete the voucher and enter a new one, which waits
+ * for both). The people who approved the old figures do not count towards the new ones.
+ * -> the verdict of decide(), with `final: false` turned into a refusal.
+ */
+function decideRepost({ policy, amount, preparedBy, approver, currency = "" }) {
+  const verdict = decide({ policy, amount, preparedBy, approver, approvals: [], currency });
+  if (verdict.ok && !verdict.final) {
+    return {
+      ok: false,
+      code: "SECOND_APPROVER_REQUIRED",
+      message: `This voucher is ${money(amount, currency)}, so a change to it needs two approvers, and an edit is one person's act. Delete the voucher and enter it again; the new one will wait for both approvals.`,
+      details: { amount: round2(amount) },
+    };
+  }
+  return verdict;
+}
+
 /** Where a document stands, for a list or a badge: nothing given, or the first of two given and the second awaited. */
 function standing({ policy, amount, status, approvals = [] }) {
   const given = (approvals || []).length;
@@ -90,4 +138,4 @@ const addApproval = (list, approval) => {
   return have;
 };
 
-module.exports = { normalisePolicy, needsSecondApproval, limitOf, decide, standing, addApproval };
+module.exports = { normalisePolicy, needsSecondApproval, limitOf, decide, decideRepost, holdOnSave, holdMessage, standing, addApproval };

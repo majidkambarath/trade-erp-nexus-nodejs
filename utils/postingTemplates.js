@@ -48,6 +48,10 @@ const TEMPLATES = {
     { account: { key: "round-off-purchase" }, side: "credit", amount: "roundDown" },
     { account: { key: "discount-purchase" }, side: "credit", amount: "headerDiscount" },
     { account: { party: true }, side: "credit", amount: "total" },
+    // Reverse charge: the supplier charged no VAT, so the vendor is owed the net and the VAT we assess on it is booked
+    // as input tax (recoverable) against a liability (payable to the FTA). A pair that balances on its own, outside the party total.
+    { account: { key: "vat-purchase" }, side: "debit", amount: "rcmVat" },
+    { account: { key: "rcm-purchase" }, side: "credit", amount: "rcmVat" },
   ],
   purchase_return: [
     { account: { party: true }, side: "debit", amount: "total" },
@@ -57,6 +61,9 @@ const TEMPLATES = {
     { account: { key: "round-off-purchase" }, side: "credit", amount: "roundUp" },
     { account: { key: "round-off-purchase" }, side: "debit", amount: "roundDown" },
     { account: { key: "discount-purchase" }, side: "debit", amount: "headerDiscount" },
+    // the mirror of the reverse-charge pair on a purchase
+    { account: { key: "rcm-purchase" }, side: "debit", amount: "rcmVat" },
+    { account: { key: "vat-purchase" }, side: "credit", amount: "rcmVat" },
   ],
 };
 
@@ -68,6 +75,8 @@ const TEMPLATES = {
 //   total        what the party is charged (header total)
 //   roundUp / roundDown   explicit round-off, so the posting always agrees with the party balance
 //   cogs         cost of goods issued / restored, from the costing engine
+//   rcmVat       VAT the recipient assesses on reverse-charge lines. NOT part of vat or total: the supplier did not charge it, so the
+//                party is not owed it. Only the purchase templates have legs for it; a sale (the supplier side) posts no VAT for it.
 // Documents saved before server-side pricing carry no `pricing`; they fall back to the lines.
 function figuresFor(transaction, cogs = 0) {
   const items = transaction.items || [];
@@ -81,6 +90,7 @@ function figuresFor(transaction, cogs = 0) {
       netLines: round2(p.net), headerDiscount: round2(p.headerDiscount),
       charges: round2(p.chargesNet), vat: round2(p.lineVat + p.chargesVat), total,
       roundUp: roundOff > 0 ? roundOff : 0, roundDown: roundOff < 0 ? -roundOff : 0, cogs: round2(cogs),
+      rcmVat: round2(p.rcmVat || 0), // absent on a document priced before reverse charge was posted
     };
   }
 
@@ -92,6 +102,8 @@ function figuresFor(transaction, cogs = 0) {
     gross: net, discount: 0, netLines: net, headerDiscount: 0, charges: 0, vat,
     total: Number.isFinite(total) ? total : lineTotal,
     roundUp: diff > 0 ? diff : 0, roundDown: diff < 0 ? -diff : 0, cogs: round2(cogs),
+    // lines that carry the assessed VAT (written with it, never by hand); a line from before it existed has none
+    rcmVat: round2(items.reduce((t, i) => t + (Number(i.rcmVat) || 0), 0)),
   };
 }
 

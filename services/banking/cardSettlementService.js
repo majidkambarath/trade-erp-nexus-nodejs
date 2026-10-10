@@ -160,7 +160,7 @@ class CardSettlementService {
           description: `Card settlement ${settlementRef || line.reference || line.day}: commission and VAT beyond what was booked at the sale`,
           narration: `Card settlement ${line.day}: ${String(line.description || "").slice(0, 100)}`,
           paymentMode: "bank", paymentDetails: { accountId: account._id, reference: settlementRef || line.reference || `STMT-${line.lineNo}` },
-        }, by, session);
+        }, by, session, { req });
       } else if (diff < 0) {
         // the acquirer kept LESS than the books carried: the fee booked at the sale was too high
         if (extra !== 0 || vatAmount !== 0) throw new AppError("The bank paid more than the books expected, so there is no extra commission or VAT", 409, "DIFFERENCE_NOT_EXPLAINED");
@@ -171,7 +171,7 @@ class CardSettlementService {
             { accountId: account._id, debit: back, narration: "Card settlement: commission returned" },
             { accountId: await configured("card-charges", { session, req }), credit: back, narration: "Card settlement: commission returned" },
           ],
-        }, by, session);
+        }, by, session, { req });
       } else if (extra !== 0 || vatAmount !== 0) {
         throw new AppError("The bank paid exactly what the books expected, so there is no extra commission or VAT", 409, "DIFFERENCE_NOT_EXPLAINED");
       }

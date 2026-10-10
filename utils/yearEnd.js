@@ -162,10 +162,36 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const money = (n, currency) => `${currency ? `${currency} ` : ""}${r2(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const check = (code, level, title, detail = "", extra = {}) => ({ code, level, title, detail, ...extra });
 
+// Does the stock agree with the Inventory account of the ledger at the closing day? A WARNING the person ticks by name,
+// shared by the month close and the year close. `f.stock` is what StockReportsService.ledgerCheck reports (absent: no check).
+// While ledger posting is off the POSTING_OFF warning already says the ledger is not receiving anything, so the
+// difference would only repeat it. A company with no stock and nothing on the Inventory account has nothing to compare.
+function stockCheck(f, atDay) {
+  const s = f.stock;
+  if (!s || f.postingEnabled === false) return null;
+  const cur = f.currency;
+  const past = s.basis === "history";
+  const how = past ? " It is worked out from the stock movements dated up to that day, as the books stand now: a document reversed or changed since is counted as it is today." : "";
+  if (s.error || s.available === false) {
+    if (!s.error && Math.abs(s.stockValue || 0) < 0.005) return null;
+    return check("STOCK_NOT_RECONCILED", "warning", "Stock could not be compared with the ledger", s.reason || "The Inventory account is not mapped under Accounting setup, Posting accounts.", { difference: null, basis: s.basis || null });
+  }
+  if (s.reconciles) {
+    if (Math.abs(s.stockValue || 0) < 0.005 && Math.abs(s.ledgerBalance || 0) < 0.005) return null;
+    return check("STOCK_AGREES", "ok", `Stock agrees with the Inventory ledger (${money(s.stockValue, cur)})`, `At ${longDay(atDay)}.${how}`, { basis: s.basis || null });
+  }
+  const largest = (s.sources || []).slice(0, 3).map((x) => `${x.label} (stock ${money(x.stock)}, ledger ${money(x.ledger)})`).join("; ");
+  return check(
+    "STOCK_NOT_RECONCILED", "warning", `Stock differs from the Inventory ledger by ${money(Math.abs(s.difference), cur)}`,
+    `At ${longDay(atDay)} the stock is worth ${money(s.stockValue, cur)} and ${s.accountName || "Inventory"} shows ${money(s.ledgerBalance, cur)}.${largest ? ` Largest: ${largest}.` : ""}${how}`,
+    { difference: s.difference, stockValue: s.stockValue, ledgerBalance: s.ledgerBalance, basis: s.basis || null, sources: s.sources || [] }
+  );
+}
+
 // facts (all gathered by the service):
 //   year { code, status, startDay, endDay }, today, allBranches, earlierOpen [code], unfinished { documents, vouchers },
 //   outOfBalance [{ branchId, difference }], retained { mapped, accountName }, postingEnabled, banks [{ accountName, reconciledTo }],
-//   next { code, exists }, currency
+//   stock (see stockCheck), next { code, exists }, currency
 // Returns the checks in the order the screen lists them. A BLOCKER can never be set aside; a WARNING must be
 // acknowledged by name (the caller passes the codes it was shown).
 function assessClose(facts) {
@@ -225,6 +251,9 @@ function assessClose(facts) {
     ));
   }
 
+  const stock = stockCheck(f, year.endDay);
+  if (stock) checks.push(stock);
+
   const next = f.next || {};
   if (next.conflict) {
     checks.push(check("NEXT_YEAR_CONFLICT", "blocker", `A year that overlaps ${next.code || "the next year"} already exists`, "Add the missing year in Fiscal years (starting the day after this one ends), then close this one."));
@@ -258,6 +287,10 @@ function assessReopen(facts) {
   if (later.length) {
     return finish([check("LATER_YEAR_CLOSED", "blocker", `Reopen ${later.join(", ")} first`, "Years are reopened newest first: a later year was closed on the figures of this one.")]);
   }
+  const lockedLater = f.laterMonthLocked || [];
+  if (lockedLater.length) {
+    return finish([check("LATER_MONTHS_CLOSED", "blocker", `Reopen the months of ${lockedLater.join(", ")} first`, "A later year has months closed on the figures of this one, so those are reopened first.")]);
+  }
   return finish([check("CAN_REOPEN", "ok", `${year.code} can be reopened`)]);
 }
 
@@ -266,4 +299,6 @@ module.exports = {
   addDays, addMonths, daysBetween, longDay, nextYearRange, nextYearCode,
   planClosing, closingEntries, unbalancedBranches,
   assessClose, assessReopen, unacknowledged,
+  // shared with the month close (utils/periodClose.js)
+  check, finish, money, plural, stockCheck,
 };

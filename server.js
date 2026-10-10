@@ -29,15 +29,27 @@ const vatReturnRouter = require("./routes/reports/vatReturnRoutes");
 const einvoiceRouter = require("./routes/einvoice/einvoiceRoutes");
 dotenv.config();
 
+// In production a missing or weak signing key stops the server here, before it opens a port or touches the database
+// (utils/productionConfig.js). Elsewhere this only warns about settings worth a look.
+require("./utils/productionConfig").assertProductionConfig();
+
 const app = express();
 const port = process.env.PORT || 4444;
 
+// No "X-Powered-By: Express", and Express told how many proxies of ours stand in front of it, so req.ip - which every per-address limit,
+// session and audit row uses - is the address our own proxy saw, not a header the client wrote (utils/trustProxy.js).
+app.disable("x-powered-by");
+const proxyHops = require("./utils/trustProxy").trustProxyHops();
+app.set("trust proxy", proxyHops);
+if (process.env.NODE_ENV === "production") console.log(`[security] trusting ${proxyHops} proxy hop(s) for the client address; check GET /api/v1/health -> yourAddress`);
+
 // Middleware
+app.use(require("./middleware/securityHeaders"));
 app.use(express.static("public"));
-// rawBody is kept so signed webhooks (e-invoice inbound) can be verified byte for byte. Only for those:
-// keeping a copy of every JSON body of every request would hold a large upload in memory twice.
-app.use(express.json({ limit: "50mb", verify: (req, _res, buf) => { if (req.originalUrl.includes("/webhook")) req.rawBody = buf; } }));
-app.use(express.urlencoded({ limit: "50mb", extended: true }));
+// Body sizes: 1 MB of JSON for anyone, a larger one only for the few routes that need it and only with a valid access token
+// (middleware/bodyLimits.js). rawBody is kept only for the signed webhooks (e-invoice inbound), so they can be verified byte for byte.
+app.use(require("./middleware/bodyLimits").bodyParsers({ verifyToken: require("./services/core/adminService").verifyToken }));
+app.use(require("./middleware/sanitizeInput")); // drops __proto__ / constructor / prototype / $operator keys from every body (see the file)
 app.use(cookieParser()); // the session cookie (controllers/core/adminController.js)
 
 // CORS configuration
@@ -121,6 +133,9 @@ app.get("/api/v1/health", (req, res) => {
     // is still building a fresh database, and a sign-in in that window would be refused. Health checks may ignore it.
     ready: organisationsSettled,
     timestamp: new Date().toISOString(),
+    // The address the server believes this request came from. It is YOUR address, told back to you: a deployment checks its proxy setting
+    // with it (TRUST_PROXY_HOPS) from outside, and a forged X-Forwarded-For must not change it.
+    yourAddress: String(req.ip || "").replace(/^::ffff:/, ""),
   });
 });
 
@@ -147,6 +162,8 @@ app.use("/api/v1/document-flow", require("./routes/orderPurchase/documentFlowRou
 app.use("/api/v1/messaging", require("./routes/messaging/messagingRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/access", require("./routes/core/accessRoutes")); // people and roles; before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/organisation", require("./routes/core/organisationRoutes")); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/approvals", require("./routes/core/approvalRoutes")); // what waits for the signed-in person's approval; before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/auth", require("./routes/core/authRoutes")); // forgot / reset password, the second sign-in step, two-factor; before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/platform", require("./routes/platform/platformRoutes")); // the developer console: its own people and its own tokens, never a customer's
 app.use("/api/v1/share", require("./routes/messaging/shareRoutes")); // PUBLIC (no login): the document link a customer opens
 app.use("/api/v1", adminRouter);

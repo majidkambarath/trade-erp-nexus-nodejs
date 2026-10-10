@@ -73,7 +73,8 @@ exports.updateAccountVoucher = catchAsync(async (req, res) => {
   const result = await AccountService.updateAccountVoucher(
     req.params.id,
     bodyData,
-    updatedBy
+    updatedBy,
+    { req }
   );
 
   res.status(200).json({

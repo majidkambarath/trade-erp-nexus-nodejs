@@ -12,6 +12,7 @@ router.use(authenticateToken);
 router.get("/users", requirePermission("users.view"), c.users);
 router.post("/users", requirePermission("users.manage"), c.createUser);
 router.patch("/users/:id", requirePermission("users.manage"), c.updateUser);
+router.post("/users/:id/2fa/reset", requirePermission("users.manage"), c.resetTwoFactor);
 
 router.get("/roles", requirePermission("users.view"), c.roles);
 router.post("/roles", requirePermission("users.manage"), c.createRole);

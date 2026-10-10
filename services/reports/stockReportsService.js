@@ -14,6 +14,7 @@ const orgLocale = require("../../utils/orgLocale");
 const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
+const { itemTypeOf, isService } = require("../../utils/itemKinds");
 
 // Stock reports: valuation, movement summary, item ledger, sales / purchase analysis, expiry, slow
 // stock and reorder. They read InventoryMovement (the stock audit trail), Stock, StockBatch and
@@ -115,7 +116,7 @@ function wholeNumber(value, fallback, { min, max, label }) {
 async function itemMaster() {
   const [stocks, categories] = await Promise.all([
     Stock.find({})
-      .select("itemId sku itemName category status reorderLevel purchasePrice costValue currentStock vendorId unitOfMeasure")
+      .select("itemId sku itemName itemType category status reorderLevel purchasePrice costValue currentStock vendorId unitOfMeasure")
       .populate("unitOfMeasure", "shortCode")
       .lean(),
     Category.find({}).select("name").lean(),
@@ -126,6 +127,8 @@ async function itemMaster() {
   for (const s of stocks) {
     const meta = {
       stockId: String(s._id), itemId: s.itemId, sku: s.sku, itemName: s.itemName,
+      // services are in the master so sales analysis can name them; every stock report skips them (they have no movements)
+      itemType: itemTypeOf(s),
       categoryId: s.category ? String(s.category) : null,
       categoryName: categoryName.get(String(s.category)) || "Uncategorised",
       unit: s.unitOfMeasure?.shortCode || "", status: s.status,
@@ -248,13 +251,16 @@ const SOURCES = [
 // round2 total, and the difference is split by source so it can be explained, not just reported.
 async function reconcile({ pos, stockValue }) {
   const postingEnabled = await AccountConfigService.isPostingEnabled();
+  // "today": the position is everything known now. "history": a past day, worked out from the movements dated up to it
+  // as they stand now (see ledgerCheck for what that can and cannot prove).
+  const basis = isCurrent(pos.end) ? "today" : "history";
   let accountId;
   try {
     accountId = await AccountConfigService.resolveAccount("inventory-asset");
   } catch (err) {
     if (err.code !== "ACCOUNT_NOT_CONFIGURED") throw err;
     return {
-      available: false, postingEnabled, stockValue,
+      available: false, postingEnabled, stockValue, basis,
       reason: "The Inventory account is not mapped under Accounting > Account configuration, so stock cannot be compared with the ledger.",
     };
   }
@@ -283,7 +289,7 @@ async function reconcile({ pos, stockValue }) {
   return {
     available: true,
     account: { id: String(accountId), code: account?.accountCode || "", name: account?.accountName || "Inventory" },
-    postingEnabled, asOn: orgToday(pos.end),
+    postingEnabled, asOn: orgToday(pos.end), basis,
     stockValue, ledgerBalance, difference,
     reconciles: Math.abs(difference) < 0.005,
     lines: lines.filter((l) => l.stock || l.ledger),
@@ -302,6 +308,7 @@ class StockReportsService {
     const master = await itemMaster();
     return {
       items: [...master.byCode.values()]
+        .filter((m) => !isService(m)) // the report filters and the item ledger are about stock; a service has none
         .sort((a, b) => a.itemName.localeCompare(b.itemName))
         .map((m) => ({ id: m.stockId, code: m.itemId, name: m.itemName, sku: m.sku, unit: m.unit, categoryId: m.categoryId, status: m.status })),
       categories: [...master.categoryName.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
@@ -321,7 +328,7 @@ class StockReportsService {
     // Today's quantity is also on the item master. Where the two disagree the history is
     // incomplete (stock written straight to the item without a movement), and the row says so.
     const current = isCurrent(end);
-    if (current) for (const m of master.byCode.values()) if (Math.abs(m.currentStock) >= QTY_EPS && !pos.items.has(m.itemId)) pos.items.set(m.itemId, finalise(emptyPosition(m.itemId)));
+    if (current) for (const m of master.byCode.values()) if (!isService(m) && Math.abs(m.currentStock) >= QTY_EPS && !pos.items.has(m.itemId)) pos.items.set(m.itemId, finalise(emptyPosition(m.itemId)));
 
     const rows = [];
     for (const p of pos.items.values()) {
@@ -365,6 +372,41 @@ class StockReportsService {
     return {
       asOn: to, groupBy, rows: out, totals,
       reconciliation: { ...reconciliation, filtered: Boolean(categoryId || String(search || "").trim()) },
+    };
+  }
+
+  // The valuation's comparison with the Inventory account at the end of a day, without the item rows: what the month and
+  // year close ask (GET /stock-reports/ledger-check). It is the same reconciliation (reconcile()) the valuation screen
+  // shows, so the two cannot disagree.
+  //
+  // WHAT IT CAN AND CANNOT PROVE. Both sides are sums of dated rows - live stock movements, live ledger entries - up to
+  // the end of the day, so any day can be computed and the ledger side is exactly what the books hold. The stock side is
+  // exact for TODAY: it adds up to the item records (outOfSyncItems counts the items where it does not). For a past day
+  // it is "as far as the movements show": a movement reversed or changed since then is counted as it stands today, not as
+  // it stood that day (the ledger side has the same property, so the two stay comparable), and a quantity written straight
+  // to an item with no movement can only be seen today. Service items have no movements and never appear.
+  static async ledgerCheck({ asOn } = {}) {
+    const v = await StockReportsService.valuation({ asOn });
+    const rec = v.reconciliation;
+    const today = rec.basis === "today";
+    const outOfSync = v.totals.outOfSyncItems || 0;
+    const lines = rec.available ? rec.lines || [] : [];
+    return {
+      asOn: v.asOn,
+      basis: rec.basis,
+      exact: Boolean(rec.available && today && outOfSync === 0),
+      note: today
+        ? `Worked out from every live stock movement up to now, valued at the cost that moved with it.${outOfSync ? ` ${outOfSync === 1 ? "One item shows" : `${outOfSync} items show`} a quantity on the item record that the movements do not add up to (stock written without a movement), so this figure is not exact.` : " The item records agree with it, so it is exact."}`
+        : "Worked out from the live stock movements dated up to that day, as the books stand now. A document reversed, changed or back-dated since is counted as it is today, not as it was that day, and a quantity written to an item without a movement can only be seen for today.",
+      available: rec.available, reason: rec.reason || null, postingEnabled: rec.postingEnabled,
+      account: rec.account || null, stockValue: rec.stockValue, ledgerBalance: rec.available ? rec.ledgerBalance : null,
+      difference: rec.available ? rec.difference : null, reconciles: Boolean(rec.available && rec.reconciles),
+      unexplained: rec.available ? rec.unexplained : null,
+      // where the difference comes from, biggest first
+      sources: lines.filter((l) => l.difference !== 0).sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference)).slice(0, 5),
+      lines,
+      items: { counted: v.totals.items, negative: v.totals.negativeItems || 0, outOfSync },
+      ...(rec.warning ? { warning: rec.warning } : {}),
     };
   }
 
@@ -413,6 +455,7 @@ class StockReportsService {
     if (!stock) stock = await Stock.findOne({ itemId: String(itemId) }).populate("unitOfMeasure", "shortCode").populate("category", "name").lean();
     const code = stock?.itemId || String(itemId);
     if (!stock && !(await InventoryMovement.exists({ stockId: code }))) throw new AppError("Stock item not found", 404, "ITEM_NOT_FOUND");
+    if (stock && isService(stock)) throw new AppError(`${stock.itemName} is a service item: it has no stock ledger`, 409, "SERVICE_HAS_NO_STOCK");
 
     const w = span({ from, to });
     const [moves, first] = await Promise.all([
@@ -554,6 +597,8 @@ class StockReportsService {
       if (!groups.has(key)) {
         groups.set(key, {
           key, name: by === "item" ? meta.itemName : by === "category" ? meta.categoryName : "", code: by === "item" ? meta.sku || meta.itemId : "",
+          // revenue from services IS counted here (its cost of goods is simply nil); the row says it is a service
+          service: by === "item" && meta.itemType === "service",
           out: 0, back: 0, outValue: 0, backValue: 0, outCost: 0, backCost: 0, docs: new Set(), suppliers: new Set(), partyId: by === "party" ? String(party) : null,
         });
       }
@@ -594,7 +639,7 @@ class StockReportsService {
       g.docs.forEach((d) => allDocs.add(d));
       const quantity = r6(g.out - g.back);
       const netValue = r2(g.outValue - g.backValue);
-      const base = { key: g.key, name: g.name, code: g.code, quantity, documents: g.docs.size };
+      const base = { key: g.key, name: g.name, code: g.code, quantity, documents: g.docs.size, ...(g.service ? { itemType: "service" } : {}) };
       if (!sales) {
         return {
           ...base, purchasedQty: r6(g.out), returnedQty: r6(g.back), purchased: r2(g.outValue), returned: r2(g.backValue), netValue,
@@ -732,7 +777,7 @@ class StockReportsService {
     const vendorName = new Map(vendors.map((v) => [String(v._id), v.vendorName]));
 
     const rows = [...master.byCode.values()]
-      .filter((m) => m.status === "Active" && m.reorderLevel > 0 && m.currentStock <= m.reorderLevel && keep(m))
+      .filter((m) => !isService(m) && m.status === "Active" && m.reorderLevel > 0 && m.currentStock <= m.reorderLevel && keep(m))
       .map((m) => {
         const shortfall = r6(m.reorderLevel - m.currentStock);
         return {

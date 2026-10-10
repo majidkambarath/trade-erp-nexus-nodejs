@@ -20,6 +20,7 @@ const {
   fulfilment, settleDelivery, invoiceClock, quotationExpiry,
 } = require("../../utils/salesDocuments");
 const S = require("./salesDocumentSupport");
+const kinds = require("../../utils/itemKinds");
 
 // A delivery note is the paper that goes with the goods. It posts nothing and moves no stock: stock
 // leaves, cost of sales is booked and the receivable raised when the SALES ORDER that invoices the
@@ -237,7 +238,8 @@ class DeliveryNoteService {
     const oid = ids.map((i) => new mongoose.Types.ObjectId(i));
     // Stock is held by the organisation, so what other branches' notes have promised from it counts against this one too
     const [stocks, committed] = await allBranches(() => Promise.all([
-      Stock.find({ _id: { $in: oid } }).select("currentStock").lean(),
+      // a service has nothing on hand to promise twice: it gets no availability row at all
+      Stock.find({ _id: { $in: oid }, ...kinds.STOCKED_ONLY }).select("currentStock").lean(),
       DeliveryNote.aggregate([
         { $match: { companyId, status: { $ne: "CANCELLED" }, invoiceStatus: { $ne: INVOICE_STATE.INVOICED }, ...(excludeId && S.isId(excludeId) && { _id: { $ne: new mongoose.Types.ObjectId(excludeId) } }) } },
         { $unwind: "$items" },
@@ -277,6 +279,7 @@ class DeliveryNoteService {
 
     const lines = [];
     for (const l of items) {
+      if (kinds.isService(l.stockDetails)) continue; // nothing to pick for a service (it is on the note, not on the shelf)
       let batches = [];
       let unallocated = 0;
       let basis = "suggested";
@@ -508,6 +511,9 @@ class DeliveryNoteService {
       for (const k of ["discountAmount", "grossAmount", "taxableAmount", "vatAmount", "lineTotal", "vatPercent", "taxKind"]) {
         l[k] = p ? p[k] : k === "vatPercent" || k === "taxKind" ? l[k] : 0;
       }
+      // a reverse-charge line's assessed VAT follows the quantity accepted (nothing accepted: nothing assessed)
+      if (p) l.rcmVat = p.rcmVat;
+      else if (l.rcmVat != null) l.rcmVat = 0;
     });
     dn.pricing = priced.pricing;
     dn.totalAmount = priced.totalAmount;

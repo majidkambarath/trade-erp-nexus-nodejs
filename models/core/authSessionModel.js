@@ -15,6 +15,13 @@ const authSessionSchema = new mongoose.Schema(
     lastSeenAt: { type: Date, default: Date.now },
     expiresAt: { type: Date, required: true, index: { expires: 0 } },
     revokedAt: { type: Date, default: null },
+    // Rotation of the refresh cookie: every refresh replaces the token with a new one (a new `jti`). `refreshJti` is the one that is
+    // current; `prevRefreshJti` the one before it, still honoured for a few seconds (`rotatedAt`) because two tabs may refresh together.
+    // A refresh token that is neither is a copy somebody kept: presenting it ends the whole session. Empty on a session that began
+    // before rotation existed: its first refresh adopts it.
+    refreshJti: { type: String, default: null },
+    prevRefreshJti: { type: String, default: null },
+    rotatedAt: { type: Date, default: null },
   },
   { versionKey: false }
 );

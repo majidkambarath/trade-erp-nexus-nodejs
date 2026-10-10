@@ -4,6 +4,7 @@ const AppError = require("../../utils/AppError");
 const Sequence = require("../../models/modules/sequenceModel");
 const PartyAccounts = require("../financial/partyAccounts");
 const PartyMaster = require("../masters/partyMasterService");
+const { searchRegex } = require("../../utils/regex");
 
 const tidyName = (v) => (v ? v.toString().trim().replace(/\s+/g, " ") : null); // "Omar  Ali" -> "Omar Ali"
 
@@ -157,10 +158,10 @@ exports.getAllVendors = async (filters) => {
   const query = {};
   if (filters.search) {
     query.$or = [
-      { vendorId: new RegExp(filters.search, "i") },
-      { vendorName: new RegExp(filters.search, "i") },
-      { contactPerson: new RegExp(filters.search, "i") },
-      { email: new RegExp(filters.search, "i") },
+      { vendorId: searchRegex(filters.search) },
+      { vendorName: searchRegex(filters.search) },
+      { contactPerson: searchRegex(filters.search) },
+      { email: searchRegex(filters.search) },
     ];
   }
   if (filters.status) query.status = filters.status;
@@ -178,6 +179,8 @@ exports.getVendorById = async (id) => {
 exports.updateVendor = async (id, data) => {
   const existing = mongoose.isValidObjectId(id) ? await Vendor.findById(id).lean() : null;
   if (!existing) throw new AppError("Vendor not found", 404);
+  // What an edit may not write: the vendor's code, the running balance and the record's own bookkeeping belong to the system.
+  for (const key of ["_id", "__v", "companyId", "vendorId", "cashBalance", "enrollDate", "createdAt", "updatedAt"]) delete data[key];
   // VAT/TRN, terms, contacts, bank accounts and documents: checked and merged in with the legacy
   // fields kept in step (trnNO, paymentTerms)
   const master = await PartyMaster.prepare("vendor", data, { existing });

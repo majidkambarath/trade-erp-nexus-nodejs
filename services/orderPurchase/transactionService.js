@@ -1,3 +1,4 @@
+const logger = require("../../utils/logger");
 const mongoose = require("mongoose");
 const Transaction = require("../../models/modules/transactionModel");
 const UsageService = require("../core/usageService");
@@ -25,6 +26,8 @@ const CreditLog = require("../../models/modules/CreditLog");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const DocumentLinks = require("./deliveryNoteLinks");
 const ShareService = require("../messaging/shareService");
+const ItemKindService = require("../stock/itemKindService");
+const kinds = require("../../utils/itemKinds");
 
 function logInbound(tag, payload) {
   try {
@@ -61,11 +64,28 @@ function assertStatusNotForced(status) {
   }
 }
 
+// A body can name any id as the party. It must be one of THIS organisation's customers or vendors (the tenant scope makes another
+// organisation's simply not exist): otherwise a draft is saved against a record the organisation cannot see, and approving it fails later.
+async function assertPartyExists(partyId, partyType, session, docType) {
+  const name = partyType === "Vendor" ? "Vendor" : "Customer";
+  // sales documents are raised against customers and purchase documents against vendors: a body cannot cross them
+  const expected = String(docType || "").startsWith("purchase") ? "Vendor" : String(docType || "") ? "Customer" : name;
+  if (expected !== name) throw new AppError(`A ${String(docType).replace("_", " ")} is raised against a ${expected.toLowerCase()}`, 400, "PARTY_TYPE_MISMATCH");
+  if (!mongoose.isValidObjectId(partyId) || !(await mongoose.model(name).exists({ _id: partyId }).session(session))) {
+    throw new AppError(`${name} not found`, 404, "PARTY_NOT_FOUND");
+  }
+}
+
 // Document numbers come from NumberSeriesService (atomic counter per series and fiscal year).
 // The previous random 3-digit generator collided against the unique transactionNo index.
 
 function calculateItems(items) {
-  return items.map((item) => {
+  return items.map((rawItem) => {
+    // rcmVat is the server's figure on a reverse-charge line and absent everywhere else: whatever a request (or an earlier
+    // pricing of this line) carried is dropped, so a line that stops being reverse charge cannot keep a stale amount.
+    // allocations are the batches a dispatch really took (written at approval, and undone from the document on a reversal): a line
+    // in a request does not get to name them.
+    const { rcmVat: _staleRcm, allocations: _forgedAllocations, ...item } = rawItem;
     // Round each money column, then sum (utils/pricing.js): a discount reduces the taxable base.
     const priced = priceLine(item);
 
@@ -88,6 +108,9 @@ function calculateItems(items) {
       vatAmount: priced.vat,
       lineTotal: priced.lineTotal,
       grandTotal: priced.lineTotal,
+      // Reverse charge: no VAT in the line (the supplier charged none); the VAT the recipient assesses is its own column, at the
+      // rate the line was priced with (the code's, else 5).
+      ...(priced.reverseCharge ? { vatPercent: priced.vatPercent, rcmVat: priced.rcmVat } : {}),
     };
   });
 }
@@ -97,7 +120,9 @@ function calculateItems(items) {
 // anything further from the computed total is ignored.
 async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date }, session) {
   const withTax = await TaxCodeService.applyToItems(items, date, { session });
-  const processedItems = calculateItems(withTax);
+  // each line learns from the item master whether it is goods or a service (never from the request): a service line
+  // is priced and taxed like any other but moves no stock (utils/itemKinds.js)
+  const processedItems = await ItemKindService.stamp(calculateItems(withTax), { session });
   const pricedCharges = (charges || [])
     .filter((c) => Number(c.amount) > 0)
     .map((c) => {
@@ -106,7 +131,7 @@ async function buildPricing({ items, charges = [], discount = 0, incomingTotal, 
     });
   const pricing = priceDocument(
     processedItems.map((i) => ({
-      gross: i.grossAmount, discount: i.discountAmount, taxable: i.taxableAmount, vat: i.vatAmount,
+      gross: i.grossAmount, discount: i.discountAmount, taxable: i.taxableAmount, vat: i.vatAmount, rcmVat: i.rcmVat,
     })),
     pricedCharges.map((c) => ({ net: c.amount, vat: c.vatAmount })),
     { headerDiscount: discount, incomingTotal }
@@ -166,11 +191,12 @@ class TransactionService {
       if (!type || !partyId || !partyType)
         throw new AppError("Missing required fields", 400);
       assertStatusNotForced(status);
+      await assertPartyExists(partyId, partyType, session, type);
 
       await FiscalYearService.assertPostingAllowed(date || new Date(), { session });
       if (!items?.length) throw new AppError("Items are required", 400);
 
-      console.log("Service: Incoming transactionNo:", transactionNo); // TEMP LOG: Track incoming
+      logger.debug("Service: Incoming transactionNo:", transactionNo); // TEMP LOG: Track incoming
 
       // FIX: Conditionally set transactionNo - use incoming if provided, else auto-generate
       let finalTransactionNo = transactionNo?.trim();
@@ -180,12 +206,12 @@ class TransactionService {
           date || new Date(),
           { session }
         );
-        console.log(
+        logger.debug(
           "Service: Auto-generated transactionNo:",
           finalTransactionNo
         ); // TEMP LOG
       } else {
-        console.log(
+        logger.debug(
           "Service: Using incoming transactionNo:",
           finalTransactionNo
         ); // TEMP LOG
@@ -210,9 +236,11 @@ class TransactionService {
         // Do not block order creation due to stock levels
       }
 
+      // a return of a reverse-charge line is reverse charge too (the form sends no tax code on a return line)
+      const pricedInput = await ReturnService.inheritReverseCharge({ type, returnOf: data.returnOf, items }, { session });
       const built = await buildPricing(
         // a line id sent with a new document belongs to some other document: every line here gets its own
-        { items: items.map(({ _id, ...line }) => line), charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date() },
+        { items: pricedInput.map(({ _id, ...line }) => line), charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date() },
         session
       );
       // Returns: validated against the original (quantities and value), then the line links are kept.
@@ -225,7 +253,7 @@ class TransactionService {
       const returnOf = checked.original
         ? { transactionId: checked.original._id, transactionNo: checked.original.transactionNo }
         : undefined;
-      console.log(
+      logger.debug(
         "Service: Final totalAmount (incoming/calculated):",
         finalTotalAmount
       ); // TEMP LOG
@@ -261,11 +289,6 @@ class TransactionService {
         linkedRef: type === "sales_order" ? data.linkedRef || undefined : undefined,
       };
 
-      console.log(
-        "Service: Final transactionData before save:",
-        JSON.stringify(transactionData, null, 2)
-      ); // TEMP LOG
-
       const [newTransaction] = await Transaction.create([transactionData], {
         session,
       });
@@ -297,11 +320,6 @@ class TransactionService {
         await StockPurchaseLog.create([purchaseLogData], { session });
       }
 
-      console.log(
-        "Service: Created transaction:",
-        JSON.stringify(newTransaction, null, 2)
-      ); // TEMP LOG
-
       return newTransaction;
     }
   );
@@ -317,10 +335,22 @@ class TransactionService {
       if (this.isProcessed(transaction.status))
         throw new AppError("Cannot edit processed transactions", 400);
       assertStatusNotForced(data.status);
+      if (data.partyId !== undefined && String(data.partyId) !== String(transaction.partyId)) {
+        await assertPartyExists(data.partyId, data.partyType || transaction.partyType, session, transaction.type);
+        data.partyType = data.partyType === "Vendor" ? "Vendor" : "Customer";
+        data.partyTypeRef = data.partyType;
+      } else {
+        delete data.partyType; // the party is not changing, so neither is what kind of party it is
+        delete data.partyTypeRef;
+      }
       // closing an order short is its own action (orderCloseService), never a field of an edit
       delete data.closedShort;
       delete data.lastSend; // written only when a send settles (services/messaging)
       delete data.approvals; // written only by an approval
+      // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
+      // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
+      // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef"]) delete data[key];
       // changing a document takes back an approval it was given: what was approved is no longer what is there
       if (transaction.approvals?.length) transaction.approvals = [];
 
@@ -331,7 +361,10 @@ class TransactionService {
       if (data.items || data.charges || data.discount !== undefined) {
         const built = await buildPricing(
           {
-            items: data.items || transaction.items.map((i) => i.toObject()),
+            items: await ReturnService.inheritReverseCharge(
+              { type: transaction.type, returnOf: transaction.returnOf?.transactionId ? transaction.returnOf : data.returnOf, items: data.items || transaction.items.map((i) => i.toObject()) },
+              { session }
+            ),
             charges: data.charges ?? transaction.charges,
             discount: data.discount ?? transaction.discount,
             incomingTotal: data.totalAmount,
@@ -356,6 +389,10 @@ class TransactionService {
         data.charges = built.charges;
         data.pricing = built.pricing;
         data.totalAmount = built.totalAmount;
+      } else {
+        // nothing was repriced, so no total or pricing block of the body's can stand: a total is only ever what the lines come to
+        delete data.totalAmount;
+        delete data.pricing;
       }
 
       // Update StockPurchaseLog for purchase orders
@@ -972,6 +1009,10 @@ const logAmount = balanceEffect;
       // Order lines carry the stock document's _id (Transaction.items.itemId refs "Stock").
       const stock = await Stock.findById(item.itemId).session(session);
       if (!stock) throw new AppError(`Stock item ${item.itemId} not found`, 404);
+      // A service line moves nothing: no quantity, cost pool, movement, batch or allocation. Its revenue / expense, VAT and
+      // party balance are posted by PostingService like any other line's. Decided from the item as it is NOW, not from the
+      // line's saved itemType, so a line written by some other path can never move stock for a service.
+      if (kinds.isService(stock)) continue;
 
       const qty = Number(item.qty) || 0;
       const quantityChange = this.getQuantityChange(type, qty);

@@ -188,6 +188,26 @@ const adminSchema = new mongoose.Schema(
       type: Date,
       default: null
     },
+    // Set when every sign-in this person holds is ended at once (a password reset by email, an administrator resetting their
+    // two-factor). An access token issued before it is refused (middleware/authMiddleware.js); the refresh sessions are revoked.
+    sessionsRevokedAt: {
+      type: Date,
+      default: null
+    },
+    // Two-factor sign-in (utils/totp.js; services/core/twoFactorService.js). The secret is encrypted at rest (utils/secretBox.js)
+    // and, with the recovery code hashes, is never selected unless a sign-in or an enrolment asks for it.
+    twoFactor: {
+      enabled: { type: Boolean, default: false },
+      enabledAt: { type: Date, default: null },
+      secretEnc: { type: String, default: null, select: false },
+      pendingSecretEnc: { type: String, default: null, select: false }, // an enrolment begun and not yet proved with a code
+      lastStep: { type: Number, default: -1 }, // the last time step accepted: a code for it, or an earlier one, is a replay
+      recoveryCodes: {
+        type: [{ _id: false, hash: { type: String, required: true }, usedAt: { type: Date, default: null } }],
+        default: undefined,
+        select: false
+      }
+    },
     loginAttempts: {
       type: Number,
       default: 0
@@ -280,23 +300,50 @@ adminSchema.methods.hasAnyPermission = function (permissions) {
   return permissions.some((perm) => this.permissions.includes(perm));
 };
 
-// Instance method: increment login attempts
-adminSchema.methods.incLoginAttempts = function () {
-  if (this.lockUntil && this.lockUntil < Date.now()) {
-    return this.updateOne({
-      $unset: { lockUntil: 1 },
-      $set: { loginAttempts: 1 }
-    });
-  }
+// The lock-out: five attempts, then fifteen minutes (a lock-out is also a way to shut someone else out on purpose, so it
+// ends soon on its own).
+//
+// An attempt is COUNTED BEFORE the secret is weighed, in ONE atomic statement that also starts the lock. Counting after a failure
+// (read the count, then add one) let any number of requests sent together all pass the check, all be weighed against the
+// password, and only then be counted: forty parallel guesses were forty guesses. Now request number six and everything after it is
+// refused without being weighed, however they arrive. A caller whose secret turns out right gives its attempt back
+// (`giveBackAttempt`) or clears the count (`resetLoginAttempts`).
+const MAX_ATTEMPTS = 5;
+const LOCK_MS = 15 * 60 * 1000;
+adminSchema.statics.MAX_ATTEMPTS = MAX_ATTEMPTS;
 
-  const updates = { $inc: { loginAttempts: 1 } };
+// -> { n, locked, lockUntil }: this attempt's number, and whether it may be weighed at all (the sixth and later may not).
+adminSchema.methods.reserveAttempt = async function () {
+  const now = new Date();
+  // a lock that has run out starts the count again, in the same statement
+  const expired = { $and: [{ $ne: [{ $ifNull: ["$lockUntil", null] }, null] }, { $lte: ["$lockUntil", now] }] };
+  const after = await this.constructor
+    .findOneAndUpdate(
+      { _id: this._id },
+      [
+        { $set: { loginAttempts: { $cond: [expired, 1, { $add: [{ $ifNull: ["$loginAttempts", 0] }, 1] }] }, lockUntil: { $cond: [expired, "$$REMOVE", "$lockUntil"] } } },
+        { $set: { lockUntil: { $cond: [{ $and: [{ $gte: ["$loginAttempts", MAX_ATTEMPTS] }, { $eq: [{ $ifNull: ["$lockUntil", null] }, null] }] }, new Date(now.getTime() + LOCK_MS), "$lockUntil"] } } },
+      ],
+      { new: true }
+    )
+    .select("loginAttempts lockUntil")
+    .lean();
+  const n = after?.loginAttempts ?? MAX_ATTEMPTS + 1; // an account that vanished mid-request is refused
+  return { n, locked: n > MAX_ATTEMPTS, lockUntil: after?.lockUntil || new Date(now.getTime() + LOCK_MS) };
+};
 
-  if (this.loginAttempts + 1 >= 5 && !this.isLocked) {
-    // 15 minutes, not hours: a lock-out is also a way to shut someone else out on purpose, so it should end soon on its own
-    updates.$set = { lockUntil: Date.now() + 15 * 60 * 1000 };
-  }
+// The secret was right but the sign-in is not finished (the second factor is still to come): this attempt does not count against the
+// person. If reserving it is what started the lock, the lock goes with it.
+adminSchema.methods.giveBackAttempt = function () {
+  return this.constructor.updateOne({ _id: this._id }, [
+    { $set: { loginAttempts: { $max: [0, { $subtract: [{ $ifNull: ["$loginAttempts", 0] }, 1] }] } } },
+    { $set: { lockUntil: { $cond: [{ $lt: ["$loginAttempts", MAX_ATTEMPTS] }, "$$REMOVE", "$lockUntil"] } } },
+  ]);
+};
 
-  return this.updateOne(updates);
+// A failed attempt is simply one that was reserved and not given back; this stays for callers that fail without having reserved.
+adminSchema.methods.incLoginAttempts = async function () {
+  await this.reserveAttempt();
 };
 
 // Instance method: reset login attempts
@@ -322,6 +369,8 @@ adminSchema.methods.toJSON = function () {
   delete admin.password;
   delete admin.loginAttempts;
   delete admin.lockUntil;
+  // Two-factor: whether it is on and since when. Never the secret, the pending secret or a recovery code hash.
+  admin.twoFactor = { enabled: Boolean(admin.twoFactor?.enabled), enabledAt: admin.twoFactor?.enabledAt || null };
   return admin;
 };
 

@@ -14,12 +14,14 @@ const pricingFields = {
   taxKind: { type: String, default: null },
   vatPercent: { type: Number, default: 0, min: 0 },
   vatAmount: { type: Number, default: 0, min: 0 },
+  rcmVat: { type: Number, min: 0 }, // reverse charge only: the VAT the recipient assesses (see Transaction.items.rcmVat); absent otherwise
   lineTotal: { type: Number, default: 0, min: 0 }, // VAT-inclusive
 };
 
 const baseLineFields = {
   itemId: { type: mongoose.Schema.Types.ObjectId, ref: "Stock", required: true },
   itemCode: { type: String, default: "" },
+  itemType: { type: String, enum: ["goods", "service"] }, // see Transaction.items.itemType: stamped from the item master, absent = goods
   description: { type: String, required: true, trim: true },
   qty: { type: Number, required: true, min: 0 },
   ...pricingFields,
@@ -40,7 +42,7 @@ const chargeSchema = new mongoose.Schema(
 // Server-computed totals (utils/pricing.js priceDocument).
 const pricingSchema = new mongoose.Schema(
   {
-    gross: Number, lineDiscount: Number, net: Number, lineVat: Number, chargesNet: Number,
+    gross: Number, lineDiscount: Number, net: Number, lineVat: Number, rcmVat: Number, chargesNet: Number,
     chargesVat: Number, headerDiscount: Number, roundOff: Number, grandTotal: Number,
   },
   { _id: false }

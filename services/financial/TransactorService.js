@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const Transactor = require("../../models/modules/financial/transactorModel");
 const AppError = require("../../utils/AppError");
+const { searchRegex } = require("../../utils/regex");
 
 class TransactorService {
   // Create a new transactor
@@ -105,7 +106,7 @@ class TransactorService {
       query.accountType = filters.accountType.toLowerCase();
     }
     if (filters.search) {
-      const regex = new RegExp(filters.search, "i");
+      const regex = searchRegex(filters.search);
       query.$or = [{ accountName: regex }, { accountCode: regex }];
     }
 

@@ -3,7 +3,7 @@ const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
 
 exports.createCategory = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || req.body.createdBy || "system";
+  const createdBy = req.admin?.id || "system"; // the signed-in person; a body never names its own author
   const category = await CategoryService.createCategory(req.body, createdBy);
 
   res.status(201).json({
@@ -39,7 +39,7 @@ exports.getCategoryById = catchAsync(async (req, res) => {
 });
 
 exports.updateCategory = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || req.body.createdBy || "system";
+  const createdBy = req.admin?.id || "system"; // the signed-in person; a body never names its own author
   const category = await CategoryService.updateCategory(req.params.id, req.body, createdBy);
 
   res.status(200).json({

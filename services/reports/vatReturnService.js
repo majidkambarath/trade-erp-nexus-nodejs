@@ -24,12 +24,18 @@ const { dayStart, dayEnd } = require("./ledgerReportsService");
 // 12 output VAT due, 13 input VAT recoverable, 14 net VAT payable (box 12 - box 13).
 // Boxes 2 (tourist refunds), 6 (goods imported) and 7 (adjustments) are not tracked yet and are
 // listed as such rather than shown as zero.
+//
+// Reverse charge (FTA VAT Returns User Guide, boxes 3 and 10): the RECIPIENT declares the net value and the VAT it assesses in box 3
+// (output) and, if recoverable, the same in box 10 (input); the two cancel in box 14. A purchase or purchase return line of that
+// kind does so, with the VAT taken from the line's own stored figure (utils/pricing.js `rcmVat`, the figure that was posted to the
+// ledger). A SALE of that kind is the supplier's: it charges no VAT and declares none, so it is in no box and is listed apart
+// (`customerAccounts`). Box 9 never includes reverse-charge purchases ("should be recovered in Box 10, not Box 9").
 
 const EMIRATES = [
   ["1a", "Abu Dhabi"], ["1b", "Dubai"], ["1c", "Sharjah"], ["1d", "Ajman"], ["1e", "Umm Al Quwain"], ["1f", "Ras Al Khaimah"], ["1g", "Fujairah"],
 ];
 const BOX_OF_EMIRATE = Object.fromEntries(EMIRATES.map(([box, name]) => [name.toLowerCase(), box]));
-const DEFAULT_RCM_PERCENT = 5;
+const { DEFAULT_RCM_PERCENT } = require("../../utils/pricing"); // the rate an older reverse-charge line with none is worked out at
 
 const num = (v) => Number(v) || 0;
 
@@ -74,8 +80,17 @@ class VatReturnService {
         const kind = treatmentOf(it.taxKind, it.vatPercent, it.vatAmount);
         const taxable = taxableOf(it) * sign;
         const vat = num(it.vatAmount) * sign;
-        const rcmVat = kind === "reverse_charge" ? round2(Math.abs(taxable) * (num(it.vatPercent) || DEFAULT_RCM_PERCENT) / 100) * (taxable < 0 ? -1 : 1) : 0;
-        lines.push({ ...base, kind, taxable, vat: kind === "reverse_charge" ? 0 : vat, rcmVat });
+        // A reverse-charge line is declared by the RECIPIENT (FTA VAT Returns User Guide: box 3 is "supplies of goods and services
+        // received", box 10 recovers the VAT declared there). So only a purchase or a purchase return carries a self-assessed
+        // amount; the supplier's own sale of the same kind charges no VAT and owes none (see compute()).
+        //   - a line priced since reverse charge was posted carries its own figure (`rcmVat`), the one the ledger was posted with;
+        //   - an older line has none and is worked out from the line as it always was (taxable x rate, 5% when it names none).
+        const stored = kind === "reverse_charge" && it.rcmVat != null;
+        let rcmVat = 0;
+        if (kind === "reverse_charge" && direction === "input") {
+          rcmVat = stored ? num(it.rcmVat) * sign : round2(Math.abs(taxable) * (num(it.vatPercent) || DEFAULT_RCM_PERCENT) / 100) * (taxable < 0 ? -1 : 1);
+        }
+        lines.push({ ...base, kind, taxable, vat: kind === "reverse_charge" ? 0 : vat, rcmVat, rcmStored: stored && direction === "input" });
       }
       for (const c of d.charges || []) {
         const kind = treatmentOf(null, c.vatPercent, c.vatAmount);
@@ -135,6 +150,8 @@ class VatReturnService {
     };
     const unclassified = { count: 0, amount: 0, vat: 0, lines: [] };
     const notReported = { amount: 0, count: 0 };
+    // Our own sales on which the CUSTOMER accounts for the VAT (reverse charge, supplier side): no output VAT, and not box 3
+    const customerAccounts = { amount: 0, count: 0 };
 
     for (const l of lines) {
       if (l.kind === "unclassified") {
@@ -148,8 +165,13 @@ class VatReturnService {
         if (l.kind === "standard") add(emirateBox, `Standard-rated supplies in ${emirate}`, l.taxable, l.vat);
         else if (l.kind === "zero_rated") add("4", "Zero-rated supplies", l.taxable, 0);
         else if (l.kind === "exempt") add("5", "Exempt supplies", l.taxable, 0);
-        else if (l.kind === "reverse_charge") add("3", "Supplies subject to the reverse charge", l.taxable, l.rcmVat);
-        else { notReported.amount += l.taxable; notReported.count += 1; }
+        else if (l.kind === "reverse_charge") {
+          // Box 3 is the RECIPIENT's declaration of supplies received (FTA VAT Returns User Guide, box 3). A supplier whose customer
+          // accounts for the VAT charges none and declares no output tax on it; it used to be added to box 3 with 5% of its value,
+          // which made the supplier pay VAT the customer is already paying. Listed beside the return, in no box.
+          customerAccounts.amount += l.taxable; customerAccounts.count += 1;
+          notReported.amount += l.taxable; notReported.count += 1;
+        } else { notReported.amount += l.taxable; notReported.count += 1; }
       } else if (l.kind === "standard") add("9", "Standard-rated expenses", l.taxable, l.vat);
       else if (l.kind === "reverse_charge") {
         add("10", "Expenses subject to the reverse charge", l.taxable, l.rcmVat);
@@ -180,7 +202,8 @@ class VatReturnService {
       // (the `vatReturn` plan feature), not part of the general reports that follow the organisation's base currency.
       from, to, emirate, currency: "AED", boxes, totals,
       unclassified: { ...unclassified, amount: round2(unclassified.amount), vat: round2(unclassified.vat) },
-      notReported: { count: notReported.count, amount: round2(notReported.amount), note: "Out-of-scope lines and zero-rated or exempt purchases appear in no box." },
+      notReported: { count: notReported.count, amount: round2(notReported.amount), note: "Out-of-scope lines, zero-rated or exempt purchases and sales on which the customer accounts for the VAT (reverse charge) appear in no box." },
+      customerAccounts: { count: customerAccounts.count, amount: round2(customerAccounts.amount), note: "Sales on which the customer accounts for the VAT under the reverse charge. You charge no VAT and declare no output tax on them; the customer declares them in box 3." },
       notTracked: [
         { box: "2", label: "Tax refunds provided to tourists" },
         { box: "6", label: "Goods imported into the UAE" },
@@ -191,12 +214,19 @@ class VatReturnService {
   }
 
   // The VAT the documents say against the VAT accounts of the ledger. Differences are reported, not
-  // hidden: ledger posting off, VAT on a document edited by hand, or a reverse-charge amount (which
-  // is not posted) will all show here.
+  // hidden: ledger posting off, or VAT on a document edited by hand, will show here.
+  //
+  // Reverse charge is posted (a purchase: Dr Input VAT / Cr Reverse-charge VAT, a return the reverse), so it is reconciled too:
+  //   Output VAT   standard output VAT of the documents  vs  credits on vat-sales
+  //   Input VAT    standard input VAT + the reverse-charge input vs  debits on vat-purchase
+  //   Reverse-charge VAT   the self-assessed VAT of the documents vs  credits on rcm-purchase
+  // Only lines priced since reverse charge was posted (`rcmStored`) are counted: an older reverse-charge line was posted as if the
+  // supplier had charged the VAT, so it is left out of the documents' side as it always was and shows as a difference, honestly.
   static async reconcile({ from, to, lines }) {
     const start = dayStart(from);
     const end = dayEnd(to);
     const docVat = (dir) => round2(lines.filter((l) => l.direction === dir && l.kind !== "reverse_charge").reduce((t, l) => t + l.vat, 0));
+    const docRcm = round2(lines.filter((l) => l.direction === "input" && l.kind === "reverse_charge" && l.rcmStored).reduce((t, l) => t + l.rcmVat, 0));
     const ledgerNet = async (key, side) => {
       let accountId;
       try {
@@ -213,11 +243,15 @@ class VatReturnService {
       const credit = row?.credit || 0;
       return round2(side === "credit" ? credit - debit : debit - credit);
     };
-    const [ledgerOutput, ledgerInput] = await Promise.all([ledgerNet("vat-sales", "credit"), ledgerNet("vat-purchase", "debit")]);
+    const [ledgerOutput, ledgerInput, ledgerRcm] = await Promise.all([ledgerNet("vat-sales", "credit"), ledgerNet("vat-purchase", "debit"), ledgerNet("rcm-purchase", "credit")]);
     const out = docVat("output");
-    const inp = docVat("input");
+    const inp = round2(docVat("input") + docRcm); // the reverse-charge input is posted to the same Input VAT account
     const row = (label, documents, ledger) => ({ label, documents, ledger, difference: ledger == null ? null : round2(documents - ledger), agrees: ledger != null && Math.abs(documents - ledger) < 0.01 });
-    return { rows: [row("Output VAT", out, ledgerOutput), row("Input VAT", inp, ledgerInput)] };
+    const rows = [row("Output VAT", out, ledgerOutput), row("Input VAT", inp, ledgerInput)];
+    // The reverse-charge row appears when there is something to say about it (an account unmapped on a company that never used reverse
+    // charge would only be noise), but always when a document or the ledger holds an amount, so a mismatch cannot hide.
+    if (docRcm || ledgerRcm) rows.push(row("Reverse-charge VAT (self-assessed)", docRcm, ledgerRcm));
+    return { rows };
   }
 
   // Document-level detail behind the boxes.

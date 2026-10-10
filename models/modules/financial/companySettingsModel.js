@@ -45,6 +45,10 @@ const companySettingsSchema = new mongoose.Schema(
       separateApprover: { type: Boolean, default: false }, // the person who prepared a document may not approve it
       secondApprovalAbove: { type: Number, min: 0, default: null }, // a document above this amount needs two different approvers; null = never
     },
+    // How people sign in to this organisation (services/core/securityPolicyService.js). Off until the organisation chooses.
+    security: {
+      requireTwoFactor: { type: Boolean, default: false }, // everyone who signs in must have two-factor on; until they do, the server allows only enrolling
+    },
     profile: {
       legalName: { type: String, trim: true },
       trn: { type: String, trim: true },

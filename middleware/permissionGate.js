@@ -14,12 +14,12 @@ const AuditService = require("../services/core/auditService");
 
 const asList = (need) => (Array.isArray(need) ? need : [need]).filter(Boolean);
 
-function denied(req, wanted) {
+function denied(req, wanted, why) {
   const role = req.admin?.role;
   const who = role?.name || role?.key || "Your role";
   const message = role?.active === false
     ? "Your role has been switched off, so you cannot do this. Please contact your administrator."
-    : `${who === "Your role" ? who : `Your role (${who})`} does not allow this. Ask your administrator if you need it.`;
+    : `${who === "Your role" ? who : `Your role (${who})`} does not allow this.${why ? ` ${why}` : " Ask your administrator if you need it."}`;
   // Said once, in the organisation's own trail, so an administrator can see who keeps hitting a wall. Never waited for:
   // a failure to write the note must not change the answer.
   AuditService.log({ req, action: "PERMISSION_DENIED", entity: "Route", summary: `${req.method} ${req.baseUrl || ""}${req.path} needs ${wanted.join(" or ")}` });
@@ -49,9 +49,9 @@ function requirePermission(need) {
  * For the rare handler that learns, only once it has read the record, that the request needs MORE than the route asked
  * (editing an item is one permission; editing it so that its quantity on hand changes is another). Throws the same 403.
  */
-function assertPermission(req, key) {
+function assertPermission(req, key, why) {
   if (!req.admin) throw new AppError("Authentication required", 401, "AUTH_REQUIRED");
-  if (!roles.can(req.admin.grants, key)) throw denied(req, [key]);
+  if (!roles.can(req.admin.grants, key)) throw denied(req, [key], why);
 }
 
 /** A person's own record, or - for anyone else's - the permission. */
@@ -122,11 +122,12 @@ const byDocumentDelete = async (req) => {
   return stored.status === "APPROVED" ? `${module}.deletePosted` : `${module}.delete`;
 };
 
-/** Deleting a voucher: an approved one has posted to the ledger and is reversed (finance.deletePosted); any other needs finance.delete. */
+/** Deleting a voucher: an approved one has posted to the ledger and is reversed (finance.deletePosted); any other needs finance.delete.
+ *  ("settled" is how the older account vouchers say posted.) */
 const byVoucherDelete = async (req) => {
   const { Voucher } = require("../models/modules/financial/financialModels");
   const found = req.params?.id ? await Voucher.findById(req.params.id).select("status").lean().catch(() => null) : null;
-  return found?.status === "approved" ? "finance.deletePosted" : "finance.delete";
+  return ["approved", "settled"].includes(found?.status) ? "finance.deletePosted" : "finance.delete";
 };
 
 module.exports = { requirePermission, assertPermission, selfOr, signedIn, publicRoute, byDocumentType, byDocumentDelete, byVoucherDelete };

@@ -203,7 +203,8 @@ test("create an account with an opening balance, then attach, download and remov
 
 test("tax codes and settings through the API", { skip }, async () => {
   const list = await call("GET", "/accounting/tax-codes");
-  assert.deepEqual(list.body.map((t) => t.kind).sort(), ["exempt", "out_of_scope", "standard", "zero_rated"]);
+  // "reverse_charge" joined the UAE starter codes with the reverse-charge VAT work (foodERP/CLAUDE.md "Reverse-charge VAT")
+  assert.deepEqual(list.body.map((t) => t.kind).sort(), ["exempt", "out_of_scope", "reverse_charge", "standard", "zero_rated"]);
   S.std = list.body.find((t) => t.kind === "standard");
   S.zero = list.body.find((t) => t.kind === "zero_rated");
   const created = await call("POST", "/accounting/tax-codes", { body: { name: "Phased", kind: "standard", ratePercent: 5, rateHistory: [{ date: "2099-01-01", ratePercent: 6 }] } });

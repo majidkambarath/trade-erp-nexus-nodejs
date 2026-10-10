@@ -2,9 +2,11 @@ const Category = require("../../models/modules/categoryModel");
 const Stock = require("../../models/modules/stockModel");
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
+const { searchRegex } = require("../../utils/regex");
+const { retryTransientTransaction } = require("../../utils/withTransactionSession");
 
 class CategoryService {
-  static async createCategory(data, createdBy) {
+  static createCategory = retryTransientTransaction(async (data, createdBy) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -36,7 +38,7 @@ class CategoryService {
     } finally {
       session.endSession();
     }
-  }
+  });
 
   static async getAllCategories(filters) {
     const query = {};
@@ -47,8 +49,8 @@ class CategoryService {
     // Search functionality
     if (filters.search) {
       query.$or = [
-        { name: new RegExp(filters.search, "i") },
-        { description: new RegExp(filters.search, "i") },
+        { name: searchRegex(filters.search) },
+        { description: searchRegex(filters.search) },
       ];
       if (filters.search.toUpperCase().includes("STATUS:ACTIVE")) {
         query.status = "ACTIVE";
@@ -79,7 +81,7 @@ class CategoryService {
     return category;
   }
 
-  static async updateCategory(id, data, createdBy) {
+  static updateCategory = retryTransientTransaction(async (id, data, createdBy) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -114,7 +116,7 @@ class CategoryService {
     } finally {
       session.endSession();
     }
-  }
+  });
 
   static async deleteCategory(id) {
     const session = await mongoose.startSession();

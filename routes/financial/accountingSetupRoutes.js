@@ -36,6 +36,11 @@ router.post("/fiscal-years", requirePermission("accounts.manage"), c.createFisca
 router.get("/fiscal-years/:id/year-end", requirePermission("accounts.close"), c.yearEnd);
 router.post("/fiscal-years/:id/close", requirePermission("accounts.close"), c.closeFiscalYear);
 router.post("/fiscal-years/:id/reopen", requirePermission("accounts.close"), c.reopenFiscalYear);
+// months inside an open year: the list is as open as the years themselves; reading what closing would do, closing and reopening are accounts.close
+router.get("/fiscal-years/:id/months", requirePermission(["accounts.view","lookups.view"]), c.fiscalYearMonths);
+router.get("/fiscal-years/:id/months/:month", requirePermission("accounts.close"), c.monthEnd);
+router.post("/fiscal-years/:id/months/:month/close", requirePermission("accounts.close"), c.closeMonth);
+router.post("/fiscal-years/:id/months/:month/reopen", requirePermission("accounts.close"), c.reopenMonth);
 
 router.get("/number-series", requirePermission("accounts.view"), c.listNumberSeries);
 

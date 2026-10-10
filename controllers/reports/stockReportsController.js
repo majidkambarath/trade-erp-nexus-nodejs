@@ -12,6 +12,9 @@ exports.valuation = catchAsync(async (req, res) =>
     groupBy: req.query.groupBy, includeZero: flag(req.query.includeZero),
   })));
 
+// Stock value against the Inventory account at the end of a day (what the month and year close ask).
+exports.ledgerCheck = catchAsync(async (req, res) => ok(res, await StockReports.ledgerCheck({ asOn: req.query.asOn })));
+
 exports.movement = catchAsync(async (req, res) =>
   ok(res, await StockReports.movement({
     from: req.query.from, to: req.query.to, categoryId: req.query.categoryId, search: req.query.search, includeZero: flag(req.query.includeZero),

@@ -168,8 +168,8 @@ test("the account pickers get a flat list of postable accounts with their group 
 
 test("requests that arrive together wait for the same readiness run, so none reads before posting is on", { skip }, async () => {
   await svc.CompanySettings.updateMany({}, { ledgerPostingEnabled: false, ledgerPostingTouched: false });
-  svc.DefaultChart._lastOpen = 0;
-  svc.DefaultChart._opening = null;
+  svc.DefaultChart._lastOpen.clear();
+  svc.DefaultChart._opening.clear();
   const [first, second] = await Promise.all([svc.DefaultChart.onOpenThrottled({}), svc.DefaultChart.onOpenThrottled({})]);
   assert.strictEqual(first, second, "the second caller received the first run's result");
   assert.equal(first.postingEnabled, true);
@@ -200,11 +200,11 @@ test("an opening balance entered while posting was off reaches the ledger once p
 
 test("a run before the company has a chart does not hold off the first real open", { skip }, async () => {
   await svc.CompanySettings.deleteMany({});
-  svc.DefaultChart._lastOpen = 0;
-  svc.DefaultChart._opening = null;
+  svc.DefaultChart._lastOpen.clear();
+  svc.DefaultChart._opening.clear();
   const early = await svc.DefaultChart.onOpenThrottled({});
   assert.equal(early.settled, false, "no settings yet: nothing decided");
-  assert.equal(svc.DefaultChart._lastOpen, 0, "so no minute has started");
+  assert.equal(svc.DefaultChart._lastOpen.size, 0, "so no minute has started");
   await svc.seed({ log: () => {} });
   await svc.CompanySettings.updateMany({}, { ledgerPostingEnabled: false, ledgerPostingTouched: false });
   const real = await svc.DefaultChart.onOpenThrottled({});

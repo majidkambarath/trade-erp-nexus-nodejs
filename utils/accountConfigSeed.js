@@ -51,6 +51,9 @@ const SEED = [
   k("freight-purchase", "Freight & handling on purchases", "EXPENSE", "account", "purchase-group"),
   k("round-off-purchase", "Round-off (purchases)", "EXPENSE", "account", "purchase-group"),
   k("purchase-variance", "Purchase price / quality variance", "EXPENSE", "account", "purchase-group"),
+  // a service item bought (a subcontractor, a freight forwarder's fee): expensed, never put into Inventory. An item may name
+  // an expense account of its own instead; this is the default for the ones that do not.
+  k("service-expense", "Services purchased (expensed, no stock)", "EXPENSE", "account", "purchase-group"),
 
   // --- sales side ---
   k("sales-group", "Sales postings", null, "none"),

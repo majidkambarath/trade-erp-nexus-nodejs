@@ -1,6 +1,7 @@
 const ExpenseCategory = require("../../models/modules/financial/expenseTypeModel");
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
+const { searchRegex } = require("../../utils/regex");
 
 class ExpenseCategoryService {
   /* --------------------------------------------------------------
@@ -11,7 +12,7 @@ class ExpenseCategoryService {
     session.startTransaction();
     try {
       const { name, parentCategoryId } = data;
-      if (!name?.trim()) throw new AppError("Category name is required", 400);
+      if (typeof name !== "string" || !name.trim()) throw new AppError("Category name is required", 400);
 
       const trimmedName = name.trim();
       const parent = parentCategoryId ?? null;
@@ -64,7 +65,7 @@ class ExpenseCategoryService {
     const skip = (page - 1) * limit;
 
     const match = {};
-    if (search) match.name = new RegExp(search.trim(), "i");
+    if (search) match.name = searchRegex(search);
 
     const [result] = await ExpenseCategory.aggregate([
       { $match: match },
@@ -146,7 +147,7 @@ class ExpenseCategoryService {
       if (!cat) throw new AppError("Category not found", 404);
 
       const { name, parentCategoryId } = data;
-      const newName = name?.trim();
+      const newName = typeof name === "string" ? name.trim() : undefined; // (an object or a number is not a name)
       const newParent =
         parentCategoryId !== undefined ? (parentCategoryId || null) : cat.parentCategory;
 

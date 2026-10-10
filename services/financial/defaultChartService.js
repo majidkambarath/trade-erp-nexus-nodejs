@@ -5,6 +5,7 @@ const CompanySettings = require("../../models/modules/financial/companySettingsM
 const AccountGroupService = require("./accountGroupService");
 const AccountConfigService = require("./accountConfigService");
 const TaxCodeService = require("./taxCodeService");
+const TaxCode = require("../../models/modules/financial/taxCodeModel");
 const Organisation = require("../../models/core/organisationModel");
 const PostingService = require("./postingService");
 const AuditService = require("../core/auditService");
@@ -108,24 +109,30 @@ class DefaultChartService {
     return created;
   }
 
-  // onOpen, but not more than once a minute per server process: it is a safety net, not something to
-  // pay for on every request.
+  // onOpen, but not more than once a minute per server process PER ORGANISATION: it is a safety net, not
+  // something to pay for on every request. Keyed by companyId (two Maps, not two plain fields) - with a
+  // single shared guard, organisation B's request could return organisation A's in-flight promise (and
+  // A's result), silently skipping B's own provisioning under concurrent first-opens.
+  static _opening = new Map();
+  static _lastOpen = new Map();
   static async onOpenThrottled(req) {
+    const { companyId } = getTenant(req);
     // A page that fires several requests at once must not let the later ones read before the first
     // has finished: callers that arrive while a run is in flight wait for that same run.
-    if (this._opening) return this._opening;
-    if (Date.now() - (this._lastOpen || 0) < 60_000) return null;
+    if (this._opening.has(companyId)) return this._opening.get(companyId);
+    if (Date.now() - (this._lastOpen.get(companyId) || 0) < 60_000) return null;
     // The minute only starts once the company's posting choice is settled: a run before the chart
     // exists (the one at server start on a new database) must not hold off the first real open.
-    this._opening = this.onOpen(req)
+    const run = this.onOpen(req)
       .then((out) => {
-        if (out.settled) this._lastOpen = Date.now();
+        if (out.settled) this._lastOpen.set(companyId, Date.now());
         return out;
       })
       .finally(() => {
-        this._opening = null;
+        this._opening.delete(companyId);
       });
-    return this._opening;
+    this._opening.set(companyId, run);
+    return run;
   }
 
   // Run whenever the chart is opened. A company's customers and vendors each get their ledger
@@ -164,6 +171,19 @@ class DefaultChartService {
     // settled: the company has a posting choice (on, or deliberately off), so there is nothing left to wait for
     out.settled = Boolean(out.postingEnabled || (settings && (settings.ledgerPostingEnabled || settings.ledgerPostingTouched)));
     return out;
+  }
+
+  // A company set up before the reverse-charge starter tax code existed is given it the next time its tax codes are read, so
+  // a buyer under the reverse charge finds it in the list without anyone having to "restore defaults". Only a UAE company that
+  // already has tax codes and none of that kind (the common case is one cheap indexed read); a company with no codes at all
+  // is left to the first-time provisioning, and another country adds its own.
+  static async topUpTaxCodes(req) {
+    const { companyId } = getTenant(req);
+    if (await TaxCode.exists({ companyId, kind: "reverse_charge" })) return 0;
+    if (!(await TaxCode.exists({ companyId }))) return 0;
+    const organisation = await Organisation.findOne({ code: companyId }).select("country").lean();
+    if (organisation && organisation.country !== "AE") return 0;
+    return TaxCodeService.ensureStarter(companyId);
   }
 
   // Called when the chart is first opened: a company with no groups at all gets the defaults, so

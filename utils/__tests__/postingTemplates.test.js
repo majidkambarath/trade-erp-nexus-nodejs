@@ -18,7 +18,7 @@ const side = (entries, account, s) =>
 test("figures: legacy documents (no pricing block) fall back to the lines", () => {
   assert.deepEqual(figuresFor(tx("sales_order"), 400), {
     gross: 1000, discount: 0, netLines: 1000, headerDiscount: 0, charges: 0, vat: 50,
-    total: 1050, roundUp: 0, roundDown: 0, cogs: 400,
+    total: 1050, roundUp: 0, roundDown: 0, cogs: 400, rcmVat: 0, // no reverse-charge line: nothing assessed
   });
 });
 
@@ -103,4 +103,92 @@ test("every document type has a template", () => {
   for (const t of ["sales_order", "sales_return", "purchase_order", "purchase_return"]) {
     assert.ok(TEMPLATES[t], t);
   }
+});
+
+// ================================= reverse charge =================================
+// A purchase on which the supplier charged no VAT and we assess it ourselves: the party is owed the NET, and a pair of legs
+// (Dr Input VAT / Cr Reverse-charge VAT) books the assessed amount without touching the party. See utils/pricing.js.
+const { itemKinds } = { itemKinds: require("../itemKinds") };
+
+// 4 x 100 reverse-charge goods + 200 standard: the vendor is owed 400 + 200 + 10 = 610; we assess 20 on the first line
+const rcmTx = (type = "purchase_order", over = {}) => ({
+  type,
+  totalAmount: 610,
+  items: [
+    { lineTotal: 400, vatAmount: 0, taxKind: "reverse_charge", rcmVat: 20 },
+    { lineTotal: 210, vatAmount: 10 },
+  ],
+  pricing: { gross: 600, lineDiscount: 0, net: 600, lineVat: 10, rcmVat: 20, chargesNet: 0, chargesVat: 0, headerDiscount: 0, roundOff: 0, grandTotal: 610 },
+  ...over,
+});
+
+test("figures: the assessed VAT is its own figure, outside vat and total, with and without a pricing block", () => {
+  const priced = figuresFor(rcmTx());
+  assert.equal(priced.rcmVat, 20);
+  assert.equal(priced.vat, 10, "the VAT the supplier charged does not include it");
+  assert.equal(priced.total, 610, "nor does what the party is owed");
+
+  // a document with no pricing block (saved before server-side pricing): the lines carry it
+  const { pricing, ...bare } = rcmTx();
+  const fromLines = figuresFor(bare);
+  assert.equal(fromLines.rcmVat, 20);
+  assert.equal(fromLines.vat, 10);
+  assert.equal(fromLines.netLines, 600, "net = line totals less the supplier's VAT (the assessed VAT is in neither)");
+
+  // a priced document from before reverse charge was posted has no rcmVat in pricing: nothing assessed
+  const { rcmVat, ...oldPricing } = rcmTx().pricing;
+  assert.equal(figuresFor(rcmTx("purchase_order", { pricing: oldPricing })).rcmVat, 0);
+});
+
+test("a purchase books Dr Input VAT / Cr Reverse-charge VAT beside the ordinary legs, and balances", () => {
+  const e = buildEntries("purchase_order", figuresFor(rcmTx()), resolve);
+  assert.equal(side(e, "inventory-asset", "debit"), 600);
+  assert.equal(side(e, "PARTY", "credit"), 610, "the vendor is owed the net plus the VAT it charged, not the assessed VAT");
+  assert.equal(side(e, "vat-purchase", "debit"), 30, "10 charged + 20 assessed, both recoverable");
+  assert.equal(side(e, "rcm-purchase", "credit"), 20);
+  assert.equal(e.reduce((t, x) => t + x.debitAmount, 0), e.reduce((t, x) => t + x.creditAmount, 0));
+});
+
+test("a purchase return is the exact mirror, so the assessed VAT is reversed with it", () => {
+  const buy = buildEntries("purchase_order", figuresFor(rcmTx()), resolve);
+  const ret = buildEntries("purchase_return", figuresFor(rcmTx("purchase_return")), resolve);
+  for (const acc of ["PARTY", "inventory-asset", "vat-purchase", "rcm-purchase"]) {
+    assert.equal(side(ret, acc, "debit"), side(buy, acc, "credit"), acc);
+    assert.equal(side(ret, acc, "credit"), side(buy, acc, "debit"), acc);
+  }
+});
+
+test("a purchase with no reverse-charge line has no reverse-charge leg", () => {
+  const e = buildEntries("purchase_order", figuresFor(tx("purchase_order")), resolve);
+  assert.equal(e.some((x) => x.accountId === "rcm-purchase"), false);
+  assert.equal(side(e, "vat-purchase", "debit"), 50);
+});
+
+test("a SALE posts no reverse-charge leg: the supplier charges no VAT and the customer assesses it", () => {
+  // the sale's lines carry the same assessed figure (pricing is the same code), but no sales template has a leg for it
+  const sale = rcmTx("sales_order", { totalAmount: 600, pricing: { ...rcmTx().pricing, lineVat: 0, grandTotal: 600 }, items: [{ lineTotal: 600, vatAmount: 0, taxKind: "reverse_charge", rcmVat: 30 }] });
+  const e = buildEntries("sales_order", figuresFor(sale, 0), resolve);
+  assert.equal(e.some((x) => x.accountId === "rcm-purchase"), false);
+  assert.equal(e.some((x) => x.accountId === "vat-sales"), false, "no output VAT either");
+  assert.equal(side(e, "PARTY", "debit"), 600);
+  assert.equal(side(e, "sales-revenue", "credit"), 600);
+  const back = buildEntries("sales_return", figuresFor({ ...sale, type: "sales_return" }, 0), resolve);
+  assert.equal(back.some((x) => x.accountId === "rcm-purchase" || x.accountId === "vat-sales"), false);
+});
+
+test("a service bought under the reverse charge: expense for the net, assessed VAT as input and liability, no inventory leg", () => {
+  // 500 of consulting, reverse charge 5%: the vendor is owed 500; we assess 25
+  const service = {
+    type: "purchase_order", totalAmount: 500,
+    items: [{ itemId: "S1", lineTotal: 500, vatAmount: 0, taxKind: "reverse_charge", rcmVat: 25, taxableAmount: 500, grossAmount: 500 }],
+    pricing: { gross: 500, lineDiscount: 0, net: 500, lineVat: 0, rcmVat: 25, chargesNet: 0, chargesVat: 0, headerDiscount: 0, roundOff: 0, grandTotal: 500 },
+  };
+  const plan = itemKinds.servicePlan(service.items, () => ({ service: true }));
+  const e = itemKinds.routeServiceLegs(buildEntries("purchase_order", figuresFor(service), resolve), "purchase_order", plan, { defaultExpenseAccountId: "service-expense" });
+  assert.equal(side(e, "service-expense", "debit"), 500);
+  assert.equal(side(e, "inventory-asset", "debit"), 0, "a service is never stock");
+  assert.equal(side(e, "PARTY", "credit"), 500);
+  assert.equal(side(e, "vat-purchase", "debit"), 25);
+  assert.equal(side(e, "rcm-purchase", "credit"), 25);
+  assert.equal(e.reduce((t, x) => t + x.debitAmount, 0), e.reduce((t, x) => t + x.creditAmount, 0));
 });

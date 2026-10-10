@@ -18,6 +18,19 @@ const platformUserSchema = new mongoose.Schema(
     lastLogin: { type: Date, default: null },
     loginAttempts: { type: Number, default: 0, select: false },
     lockUntil: { type: Date, default: null, select: false },
+    // Two-factor sign-in, the same block and the same service as a customer's account (services/core/twoFactorService.js).
+    twoFactor: {
+      enabled: { type: Boolean, default: false },
+      enabledAt: { type: Date, default: null },
+      secretEnc: { type: String, default: null, select: false },
+      pendingSecretEnc: { type: String, default: null, select: false },
+      lastStep: { type: Number, default: -1 },
+      recoveryCodes: {
+        type: [{ _id: false, hash: { type: String, required: true }, usedAt: { type: Date, default: null } }],
+        default: undefined,
+        select: false,
+      },
+    },
   },
   { timestamps: true }
 );
@@ -39,15 +52,24 @@ platformUserSchema.methods.comparePassword = function comparePassword(candidate)
   return bcrypt.compare(String(candidate || ""), this.password);
 };
 // Five wrong passwords lock the account for two hours, as for a customer's staff.
+// (Counting is atomic: a read-then-write count let any number of guesses sent together all be weighed before the lock was set.)
 platformUserSchema.methods.recordFailure = function recordFailure() {
-  if (this.lockUntil && this.lockUntil < Date.now()) return this.updateOne({ $unset: { lockUntil: 1 }, $set: { loginAttempts: 1 } });
-  const update = { $inc: { loginAttempts: 1 } };
-  if ((this.loginAttempts || 0) + 1 >= 5 && !this.isLocked) update.$set = { lockUntil: new Date(Date.now() + 2 * 3600 * 1000) };
-  return this.updateOne(update);
+  const now = new Date();
+  const expired = { $and: [{ $ne: [{ $ifNull: ["$lockUntil", null] }, null] }, { $lte: ["$lockUntil", now] }] };
+  return this.constructor.updateOne({ _id: this._id }, [
+    { $set: { loginAttempts: { $cond: [expired, 1, { $add: [{ $ifNull: ["$loginAttempts", 0] }, 1] }] }, lockUntil: { $cond: [expired, "$$REMOVE", "$lockUntil"] } } },
+    { $set: { lockUntil: { $cond: [{ $and: [{ $gte: ["$loginAttempts", 5] }, { $eq: [{ $ifNull: ["$lockUntil", null] }, null] }] }, new Date(now.getTime() + 2 * 3600 * 1000), "$lockUntil"] } } },
+  ]);
 };
 platformUserSchema.methods.recordSuccess = function recordSuccess() {
   return this.updateOne({ $unset: { loginAttempts: 1, lockUntil: 1 }, $set: { lastLogin: new Date() } });
 };
-platformUserSchema.set("toJSON", { transform: (_doc, ret) => { delete ret.password; delete ret.loginAttempts; delete ret.lockUntil; delete ret.__v; return ret; } });
+platformUserSchema.set("toJSON", {
+  transform: (_doc, ret) => {
+    delete ret.password; delete ret.loginAttempts; delete ret.lockUntil; delete ret.__v;
+    ret.twoFactor = { enabled: Boolean(ret.twoFactor?.enabled), enabledAt: ret.twoFactor?.enabledAt || null }; // on or off, never the secret
+    return ret;
+  },
+});
 
 module.exports = mongoose.models.PlatformUser || mongoose.model("PlatformUser", platformUserSchema);

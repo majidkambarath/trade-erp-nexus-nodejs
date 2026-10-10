@@ -52,6 +52,7 @@ test.before(async () => {
     Admin: require("../../models/core/adminModel"),
     Organisation: require("../../models/core/organisationModel"),
     Customer: require("../../models/modules/customerModel"),
+    Vendor: require("../../models/modules/vendorModel"),
     Stock: require("../../models/modules/stockModel"),
     Transaction: require("../../models/modules/transactionModel"),
   };
@@ -88,6 +89,7 @@ test("two organisations on the standard plan, each with a signed-in owner and so
     T[code].std = (await api(code, "GET", "/accounting/tax-codes")).body.find((c) => c.kind === "standard");
     await as(code, async () => {
       T[code].customer = String((await new M.Customer({ customerId: "C1", customerName: "Al Noor", contactPerson: "x", paymentTerms: "Net 30", creditLimit: 100000, trnNumber: "100999888700003", billingAddress: "Deira" }).save())._id);
+      T[code].vendor = String((await new M.Vendor({ vendorId: "V1", vendorName: "Gulf Mills", contactPerson: "x", address: "y", trnNO: "100555444300003", paymentTerms: "Net 30" }).save())._id);
       T[code].stock = String((await new M.Stock({ itemId: "RICE5", sku: "RICE5", itemName: "Rice 5kg", category: new mongoose.Types.ObjectId() }).save())._id);
     });
   }
@@ -171,11 +173,14 @@ test("switching a person back on takes a seat again: the limit is checked on the
   await setOrg("acme", { "limitOverrides.users": null });
 });
 
-const order = (org, type = "sales_order") =>
-  api(org, "POST", "/transactions/transactions", {
-    type, partyId: T[org].customer, partyType: "Customer", partyTypeRef: "Customer", createdBy: "tester",
+// A purchase order is raised against a vendor, a sales order against a customer (PARTY_TYPE_MISMATCH otherwise).
+const order = (org, type = "sales_order") => {
+  const buying = type === "purchase_order" || type === "purchase_return";
+  return api(org, "POST", "/transactions/transactions", {
+    type, partyId: buying ? T[org].vendor : T[org].customer, partyType: buying ? "Vendor" : "Customer", partyTypeRef: buying ? "Vendor" : "Customer", createdBy: "tester",
     items: [{ itemId: T[org].stock, description: "Rice 5kg", qty: 1, price: 10, rate: 10, vatPercent: 5, taxCodeId: T[org].std._id }],
   });
+};
 
 test("trade documents stop at the month's limit, counted on the organisation's own calendar month", { skip }, async () => {
   // an old document and an opening balance must not use up this month

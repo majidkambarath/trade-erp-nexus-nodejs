@@ -8,6 +8,8 @@ const ok = (res, data, status = 200) => res.status(status).json({ success: true,
 const ctx = (req) => ({ by: req.platformUser, ip: req.ip });
 
 exports.login = catchAsync(async (req, res) => ok(res, await Auth.login(req.body?.email, req.body?.password)));
+// sign-in, step two
+exports.loginTwoFactor = catchAsync(async (req, res) => ok(res, await Auth.loginTwoFactor(req.body || {})));
 exports.me = catchAsync(async (req, res) => ok(res, req.platformUser.toJSON()));
 exports.catalog = catchAsync(async (_req, res) => ok(res, Orgs.catalog()));
 
@@ -21,6 +23,33 @@ exports.createUser = catchAsync(async (req, res) => {
 exports.updateUser = catchAsync(async (req, res) => {
   const user = await Auth.update(req.params.id, req.body || {}, req.platformUser._id);
   await Orgs.record({ ...ctx(req), action: "PLATFORM_USER_UPDATED", summary: `Platform account ${user.email} changed: ${Object.keys(req.body || {}).map((k) => (k === "password" ? "password reset" : k)).join(", ")}` });
+  ok(res, user.toJSON());
+});
+
+// the signed-in person's own two-factor, and clearing a colleague's. Secrets ride only on the response that shows them.
+const noStore = (res) => res.set("Cache-Control", "no-store");
+exports.twoFactorStatus = catchAsync(async (req, res) => ok(res, await Auth.twoFactorStatus(req.platformUser)));
+exports.beginTwoFactor = catchAsync(async (req, res) => { const out = await Auth.beginTwoFactor(req.platformUser, req.body || {}); noStore(res); ok(res, out); });
+exports.enableTwoFactor = catchAsync(async (req, res) => {
+  const out = await Auth.enableTwoFactor(req.platformUser, req.body || {});
+  await Orgs.record({ ...ctx(req), action: "PLATFORM_TWO_FACTOR_ENABLED", summary: `${req.platformUser.email} turned on two-factor sign-in` });
+  noStore(res);
+  ok(res, out);
+});
+exports.disableTwoFactor = catchAsync(async (req, res) => {
+  const out = await Auth.disableTwoFactor(req.platformUser, req.body || {});
+  await Orgs.record({ ...ctx(req), action: "PLATFORM_TWO_FACTOR_DISABLED", summary: `${req.platformUser.email} turned off two-factor sign-in` });
+  ok(res, out);
+});
+exports.regenerateRecoveryCodes = catchAsync(async (req, res) => {
+  const out = await Auth.regenerateRecoveryCodes(req.platformUser, req.body || {});
+  await Orgs.record({ ...ctx(req), action: "PLATFORM_TWO_FACTOR_RECOVERY_CODES_REPLACED", summary: `${req.platformUser.email} replaced their recovery codes` });
+  noStore(res);
+  ok(res, out);
+});
+exports.resetUserTwoFactor = catchAsync(async (req, res) => {
+  const user = await Auth.resetTwoFactor(req.params.id, req.platformUser._id);
+  await Orgs.record({ ...ctx(req), action: "PLATFORM_TWO_FACTOR_RESET", summary: `Two-factor sign-in of ${user.email} was cleared by ${req.platformUser.email}` });
   ok(res, user.toJSON());
 });
 

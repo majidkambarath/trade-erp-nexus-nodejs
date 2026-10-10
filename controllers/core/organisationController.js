@@ -13,8 +13,10 @@ exports.status = catchAsync(async (req, res) => {
     const role = await RoleService.find(b.roleKey);
     branchRoles.push({ branchId: b.branchId, roleKey: b.roleKey, roleName: role?.name || null });
   }
-  const me = { id: req.admin.id, name: req.admin.name, email: req.admin.email, role: req.admin.role, grants: req.admin.grants, mustChangePassword: req.admin.mustChangePassword, homeBranch: req.admin.homeBranch, branchRoles };
+  // How people sign in here: whether the organisation requires two-factor, and so whether THIS person must set it up before anything else works
+  const security = await require("../../services/core/securityPolicyService").policy();
+  const me = { id: req.admin.id, name: req.admin.name, email: req.admin.email, role: req.admin.role, grants: req.admin.grants, mustChangePassword: req.admin.mustChangePassword, twoFactorEnabled: req.admin.twoFactorEnabled, twoFactorRequired: security.requireTwoFactor && !req.admin.twoFactorEnabled, homeBranch: req.admin.homeBranch, branchRoles };
   // The organisation's rules about who may approve, so a screen can offer Confirm only to someone who could use it
-  const policy = { approvals: await require("../../services/core/approvalPolicyService").policy() };
+  const policy = { approvals: await require("../../services/core/approvalPolicyService").policy(), security };
   res.status(200).json({ success: true, data: { ...status, me, policy } });
 });

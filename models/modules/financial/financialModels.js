@@ -169,6 +169,9 @@ const voucherSchema = new mongoose.Schema({
   // Who has approved it so far. Always one entry once approved; two when the policy asked for a second approver, and
   // then the first entry is the document waiting for its second (utils/approvalRules.js).
   approvals: [{ _id: false, by: { type: String }, name: { type: String }, at: { type: Date }, step: { type: Number } }],
+  // The cheque behind a receipt, payment or expense that was saved WAITING for approval. It enters the cheque register only
+  // when the voucher is approved (a pending voucher has posted nothing, so there is nothing yet to clear or bounce); never sent to a screen.
+  heldCheque: { type: mongoose.Schema.Types.Mixed, select: false },
   totalAmount: {
     type: Number,
     required: true,

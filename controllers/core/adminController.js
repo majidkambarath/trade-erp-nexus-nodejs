@@ -1,6 +1,8 @@
 const catchAsync = require("../../utils/catchAsync");
 const adminService = require("../../services/core/adminService");
 const { extractFileInfo } = require("../../middleware/upload");
+const AuditService = require("../../services/core/auditService");
+const { runWithTenant } = require("../../utils/tenantContext");
 
 // Login admin
 // The refresh token lives in an httpOnly cookie, so page scripts never see it. It is scoped to the
@@ -28,6 +30,19 @@ exports.login = catchAsync(async (req, res) => {
   const result = await adminService.loginAdmin(email, password, ipAddress, {
     userAgent: req.get("user-agent"),
   });
+  // Two-factor is on: the password was right, nobody is signed in yet. No cookie, no tokens - a challenge for the second step.
+  if (result.twoFactorRequired) {
+    return res.status(200).json({
+      success: true,
+      message: "Enter the code from your authenticator app",
+      data: { twoFactorRequired: true, challengeToken: result.challengeToken, expiresIn: result.challengeExpiresIn },
+    });
+  }
+  sendSession(res, result);
+});
+
+// The session a successful sign-in opens: the refresh token in its httpOnly cookie, the access token in the body.
+function sendSession(res, result) {
   const { refreshToken, refreshExpiresAt, ...tokens } = result.tokens;
   res.cookie(SESSION_COOKIE, refreshToken, sessionCookieOptions(refreshExpiresAt));
   res.status(200).json({
@@ -35,6 +50,21 @@ exports.login = catchAsync(async (req, res) => {
     message: "Login successful",
     data: { ...result, tokens },
   });
+}
+
+// Sign-in, step two (POST /auth/login/2fa): the challenge from step one plus a code or a recovery code.
+exports.loginTwoFactor = catchAsync(async (req, res) => {
+  const { challengeToken, code, recoveryCode } = req.body || {};
+  const result = await adminService.completeTwoFactorLogin({ challengeToken, code, recoveryCode }, req.ip, { userAgent: req.get("user-agent") });
+  // A recovery code is the way in when the phone is gone: say so in the organisation's trail and to the person, who may not have used it.
+  if (result.signIn?.method === "recovery") {
+    const who = result.admin;
+    await runWithTenant({ companyId: who.companyId, branchId: who.branchId }, async () => {
+      await AuditService.log({ req: { admin: { id: String(who._id || who.id), email: who.email }, ip: req.ip }, action: "TWO_FACTOR_RECOVERY_CODE_USED", entity: "Admin", entityId: who._id || who.id, summary: `${who.email} signed in with a recovery code (${result.signIn.recoveryCodesLeft} left)` });
+    });
+    require("../../services/core/accountSecurityService").notice(who, "A recovery code was used to sign in", `${result.signIn.recoveryCodesLeft} recovery code(s) are left. Replace them in Settings -> Security if you are running low.`);
+  }
+  sendSession(res, result);
 });
 
 // Create new admin
@@ -165,9 +195,11 @@ exports.updateProfile = catchAsync(async (req, res) => {
     });
   } catch (error) {
     console.error("Update Profile Error:", error);
-    res.status(error.statusCode || 500).json({
+    // what we raised ourselves is told in its own words; anything else (a database error) is not told at all
+    res.status(error.isOperational ? error.statusCode || 400 : 500).json({
       success: false,
-      message: error.message || "Failed to update profile",
+      message: error.isOperational ? error.message : "Failed to update profile",
+      errorCode: error.isOperational ? error.code : "INTERNAL_ERROR",
       error: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
@@ -186,11 +218,14 @@ exports.deleteAdmin = catchAsync(async (req, res) => {
 });
 
 // Change password
+// The current password is asked for, and a wrong one is COUNTED toward the account's lock like a wrong password at the sign-in door:
+// a stolen session must not be able to guess it here, without limit, and then replace it. (400 and not 401: a 401 makes the browser
+// think the session ended and sign the person out.) On success every OTHER sign-in of the person ends; this one carries on.
 exports.changePassword = catchAsync(async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
+  const { currentPassword, newPassword } = req.body || {};
   const adminId = req.admin.id;
 
-  if (!currentPassword || !newPassword) {
+  if (typeof currentPassword !== "string" || typeof newPassword !== "string" || !currentPassword || !newPassword) {
     return res.status(400).json({
       success: false,
       message: "Current password and new password are required"
@@ -203,6 +238,13 @@ exports.changePassword = catchAsync(async (req, res) => {
       message: "New password must be at least 8 characters"
     });
   }
+  if (newPassword.length > 200 || currentPassword.length > 1000) {
+    return res.status(400).json({
+      success: false,
+      message: "That password is too long",
+      error: "WEAK_PASSWORD"
+    });
+  }
   if (newPassword === currentPassword) {
     return res.status(400).json({
       success: false,
@@ -213,8 +255,8 @@ exports.changePassword = catchAsync(async (req, res) => {
 
   // Get admin with password
   const Admin = require("../../models/core/adminModel");
-  const admin = await Admin.findById(adminId).select("+password");
-  
+  const admin = await Admin.findById(adminId).select("+password +loginAttempts +lockUntil");
+
   if (!admin) {
     return res.status(404).json({
       success: false,
@@ -222,23 +264,30 @@ exports.changePassword = catchAsync(async (req, res) => {
     });
   }
 
+  if (admin.isLocked) throw adminService.lockedError(admin.lockUntil);
+  const attempt = await admin.reserveAttempt(); // counted before the password is weighed: parallel guesses get no extra
+  if (attempt.locked) throw adminService.lockedError(attempt.lockUntil);
+
   // Verify current password
   const isCurrentPasswordValid = await admin.comparePassword(currentPassword);
   if (!isCurrentPasswordValid) {
     return res.status(400).json({
       success: false,
-      message: "Current password is incorrect"
+      message: "Current password is incorrect",
+      error: "PASSWORD_INCORRECT",
+      errorCode: "PASSWORD_INCORRECT"
     });
   }
 
-  // Update password: from now on it is the person's own, and any lock-out from failed attempts is over
+  // Update password: from now on it is the person's own
   admin.password = newPassword;
   admin.mustChangePassword = false;
   admin.passwordChangedAt = new Date();
-  admin.loginAttempts = 0;
-  admin.lockUntil = undefined;
   admin.$locals.updatedBy = adminId;
   await admin.save();
+  await admin.resetLoginAttempts(); // any lock-out from failed attempts is over
+  // whoever else holds a sign-in of this person (a thief with an old password, a forgotten browser) is out; this browser stays in
+  await adminService.endSessionsOf(admin._id, req.sessionId);
 
   res.status(200).json({
     success: true,
@@ -262,7 +311,9 @@ exports.getProfile = catchAsync(async (req, res) => {
 // Renews the access token from the session cookie. The cookie is the only source: a refresh token
 // sent in the body is not accepted, so script code cannot supply one.
 exports.refreshToken = catchAsync(async (req, res) => {
-  const token = await adminService.refreshAccessToken(req.cookies?.[SESSION_COOKIE]);
+  const { refreshToken, refreshExpiresAt, ...token } = await adminService.refreshAccessToken(req.cookies?.[SESSION_COOKIE]);
+  // Every refresh replaces the cookie (a stolen copy of an old one is then recognisable). The new token is in the cookie and nowhere else.
+  if (refreshToken) res.cookie(SESSION_COOKIE, refreshToken, sessionCookieOptions(refreshExpiresAt));
   res.status(200).json({
     success: true,
     message: "Token refreshed",

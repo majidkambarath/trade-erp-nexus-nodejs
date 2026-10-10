@@ -81,8 +81,13 @@ function buildPayload({ transaction, customer, seller, sellerParticipantId }) {
       unitPrice = net;
       priceBaseQty = qty || 1;
     }
+    // Reverse charge (category AE), priced since the VAT stopped being charged on such a line: the supplier's invoice carries NO
+    // VAT, so the line says 0 tax at a 0 rate (EN 16931 BR-AE-05, which PINT AE builds on) and the recipient assesses the VAT itself.
+    // The line's own stored rate (5, the recipient's) is not an invoice rate. A line saved before that (it has no `rcmVat`; it did
+    // charge the VAT) is sent as it always was.
+    const reverseCharge = item.taxKind === "reverse_charge" && item.rcmVat != null;
     lines.push({
-      itemTypeGoodsServices: "G",
+      itemTypeGoodsServices: item.itemType === "service" ? "S" : "G", // the line's type is stamped from the item master when the document is priced
       itemName: item.description,
       sellerItemId: item.itemCode || String(item.itemId || ""),
       quantity: qty,
@@ -93,9 +98,9 @@ function buildPayload({ transaction, customer, seller, sellerParticipantId }) {
       lineNetAmount: net,
       taxScheme: "VAT",
       taxCategory: taxCategoryFor(item),
-      taxRatePercent: Number(item.vatPercent) || 0,
-      lineTaxAmount: round2(item.vatAmount ?? p.vat),
-      inclVatamount: round2(net + (item.vatAmount ?? p.vat)),
+      taxRatePercent: reverseCharge ? 0 : Number(item.vatPercent) || 0,
+      lineTaxAmount: reverseCharge ? 0 : round2(item.vatAmount ?? p.vat),
+      inclVatamount: reverseCharge ? net : round2(net + (item.vatAmount ?? p.vat)),
     });
   });
 

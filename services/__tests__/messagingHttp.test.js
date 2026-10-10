@@ -44,7 +44,7 @@ test.before(async () => {
   if (skip) return;
   const uri = process.env.MONGO_URI.replace(/\/([^/?]*)\?/, `/${DB}?`);
   assert.ok(uri.includes(DB), "could not point the server at the throwaway database");
-  child = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, MONGO_URI: uri, PORT: String(PORT), LOG_SILENT: "1", TENANT_LEGACY_DEFAULT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+  child = spawn(process.execPath, ["server.js"], { cwd: ROOT, env: { ...process.env, MONGO_URI: uri, PORT: String(PORT), LOG_SILENT: "1", TENANT_LEGACY_DEFAULT: "0", TRUST_PROXY_HOPS: "1" /* the tests play the proxy: the address it appends is the visitor's */ }, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout.on("data", (d) => (logs += d));
   child.stderr.on("data", (d) => (logs += d));
   await mongoose.connect(uri);

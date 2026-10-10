@@ -3,6 +3,7 @@ const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 const tz = require("../../utils/tz");
 const orgLocale = require("../../utils/orgLocale");
+const P = require("../../utils/periodClose");
 
 // The zone a company's calendar runs in: the one named, else the organisation in scope.
 const zoneOf = (companyId) => (companyId ? orgLocale.forCompany(companyId).timezone : orgLocale.timezone());
@@ -14,7 +15,24 @@ const orgYear = (date, companyId) => tz.yearOf(new Date(date), zoneOf(companyId)
 class FiscalYearService {
   static async list(req) {
     const { companyId } = getTenant(req);
-    return FiscalYear.find({ companyId }).sort({ startDate: -1 }).lean();
+    const rows = await FiscalYear.find({ companyId }).sort({ startDate: -1 }).lean();
+    return rows.map((y) => this.withMonths(y, companyId));
+  }
+
+  // A year as the month close reads it: its days in the organisation's zone, and the month lock.
+  static periodView(y, companyId) {
+    const zone = zoneOf(companyId);
+    return {
+      code: y.code, status: y.status, startDay: tz.dayOf(y.startDate, zone), endDay: tz.dayOf(y.endDate, zone),
+      lockedThroughDay: y.lockedThrough || null, monthCloses: y.monthCloses || [],
+    };
+  }
+
+  // The year with its months and where each stands (open / closed / locked with the year). Read-only: the month close
+  // itself is services/financial/periodCloseService.js.
+  static withMonths(y, companyId) {
+    const v = this.periodView(y, companyId);
+    return { ...y, startDay: v.startDay, endDay: v.endDay, lockedThrough: v.lockedThroughDay, months: P.monthStates(v) };
   }
 
   static async getForDate(date, { session, companyId } = {}) {
@@ -37,6 +55,13 @@ class FiscalYearService {
   // year is defined, a date outside every year is rejected, and a date in a closed year is
   // rejected. This is what makes the period lock real: a fiscal-year master on its own
   // restricts nothing unless every posting path consults it, and every one here does.
+  //
+  // Inside an OPEN year a second lock applies: the month lock (`lockedThrough`, utils/periodClose.js). A date on or before
+  // that day is refused with PERIOD_CLOSED and the message names the day. The two locks are independent fields, so a closed
+  // year is locked whatever its month lock says, and reopening the year gives back exactly the months closed before.
+  // The year-end closing entry and PostingService.catchUp's document postings write their rows directly and do not come
+  // through here (the closing entry is dated inside the month it closes). A reversal comes through with the DOCUMENT's date,
+  // so undoing something dated in a locked month is refused, while a payment dated today settling an old invoice is not.
   static async assertPostingAllowed(date, { session, companyId } = {}) {
     const company = companyId || getTenant().companyId;
     const anyQ = FiscalYear.exists({ companyId: company });
@@ -53,6 +78,9 @@ class FiscalYearService {
     }
     if (fy.status === "closed") {
       throw new AppError(`Fiscal year ${fy.code} is closed`, 422, "PERIOD_CLOSED");
+    }
+    if (fy.lockedThrough && tz.dayOf(new Date(date), zoneOf(company)) <= fy.lockedThrough) {
+      throw new AppError(P.lockedMessage(fy.lockedThrough), 422, "PERIOD_CLOSED");
     }
     return fy;
   }

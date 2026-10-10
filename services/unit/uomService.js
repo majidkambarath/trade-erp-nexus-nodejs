@@ -1,16 +1,29 @@
 const UOM = require("../../models/modules/uomModel");
 const UOMConversion = require("../../models/modules/uomConversionModel");
 const AppError = require("../../utils/AppError");
+const { searchRegex, escapeRegex } = require("../../utils/regex");
+
+// What a request may set on a unit and on a conversion: everything else in a body (an id, the organisation, an update operator) is
+// not the client's to write, and a name that is not text is refused here rather than crashing further down.
+const UOM_FIELDS = ["unitName", "shortCode", "type", "category", "status"];
+const CONVERSION_FIELDS = ["fromUOM", "toUOM", "conversionRatio", "category", "status"];
+const pick = (data, fields) => Object.fromEntries(fields.filter((k) => data && data[k] !== undefined).map((k) => [k, data[k]]));
+const needText = (value, label) => {
+  if (typeof value !== "string" || !value.trim()) throw new AppError(`${label} is required`, 400, "VALIDATION_ERROR");
+  return value.trim();
+};
 
 // UOM CRUD Operations
 exports.createUOM = async (data) => {
-  const { unitName, shortCode, type, category, status } = data;
+  const { type, category, status } = data;
+  const unitName = needText(data.unitName, "Unit name");
+  const shortCode = needText(data.shortCode, "Short code");
   
   // Check for existing UOM with same name or shortCode
   const existingUOM = await UOM.findOne({
     $or: [
-      { unitName: { $regex: new RegExp(`^${unitName}$`, 'i') } },
-      { shortCode: { $regex: new RegExp(`^${shortCode}$`, 'i') } }
+      { unitName: { $regex: new RegExp(`^${escapeRegex(unitName)}$`, 'i') } },
+      { shortCode: { $regex: new RegExp(`^${escapeRegex(shortCode)}$`, 'i') } }
     ]
   });
   
@@ -35,9 +48,9 @@ exports.getAllUOMs = async (filters) => {
   // Search functionality
   if (filters.search) {
     query.$or = [
-      { unitName: new RegExp(filters.search, "i") },
-      { shortCode: new RegExp(filters.search, "i") },
-      { category: new RegExp(filters.search, "i") },
+      { unitName: searchRegex(filters.search) },
+      { shortCode: searchRegex(filters.search) },
+      { category: searchRegex(filters.search) },
     ];
   }
   
@@ -60,13 +73,16 @@ exports.getUOMById = async (id) => {
 };
 
 exports.updateUOM = async (id, data) => {
+  data = pick(data, UOM_FIELDS);
+  if (data.unitName !== undefined) data.unitName = needText(data.unitName, "Unit name");
+  if (data.shortCode !== undefined) data.shortCode = needText(data.shortCode, "Short code");
   // Check if updating to existing name/shortCode
   if (data.unitName || data.shortCode) {
     const existingUOM = await UOM.findOne({
       _id: { $ne: id },
       $or: [
-        ...(data.unitName ? [{ unitName: { $regex: new RegExp(`^${data.unitName}$`, 'i') } }] : []),
-        ...(data.shortCode ? [{ shortCode: { $regex: new RegExp(`^${data.shortCode}$`, 'i') } }] : [])
+        ...(data.unitName ? [{ unitName: { $regex: new RegExp(`^${escapeRegex(data.unitName)}$`, 'i') } }] : []),
+        ...(data.shortCode ? [{ shortCode: { $regex: new RegExp(`^${escapeRegex(data.shortCode)}$`, 'i') } }] : [])
       ]
     });
     
@@ -173,6 +189,7 @@ exports.getUOMConversionById = async (id) => {
 };
 
 exports.updateUOMConversion = async (id, data) => {
+  data = pick(data, CONVERSION_FIELDS);
   // Validate that fromUOM and toUOM are different if both provided
   if (data.fromUOM && data.toUOM && data.fromUOM === data.toUOM) {
     throw new AppError("From UOM and To UOM cannot be the same", 400);

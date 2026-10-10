@@ -63,9 +63,32 @@ class ReturnService {
           lineId: l._id, itemId: l.itemId, itemCode: l.itemCode, description: l.description,
           originalQty: l.qty, returnedQty: r.qty, remainingQty: round2(l.qty - r.qty),
           price: l.price ?? l.rate, vatPercent: l.vatPercent, discountPercent: l.discountPercent || 0,
+          // a reverse-charge line is returned as reverse charge: the form needs to know which tax code to put on the return
+          ...(l.taxKind === "reverse_charge" ? { taxCodeId: l.taxCodeId || null, taxKind: l.taxKind } : {}),
         };
       }),
     };
+  }
+
+  // A return of a reverse-charge line is itself reverse charge: the supplier charged no VAT on the way in, so none comes back,
+  // and the VAT the recipient assessed is reversed. The return form sends a line with no tax code (it never carried one), which
+  // would price it as ordinary VAT-bearing goods; this gives such a line the original line's tax code BEFORE it is priced. Only
+  // reverse-charge lines are touched (any other return is priced exactly as before), and a code the form did send is respected.
+  static async inheritReverseCharge({ type, returnOf, items }, { session } = {}) {
+    if (!(type in ORIGINAL_TYPE) || !returnOf?.transactionId || !Array.isArray(items)) return items;
+    const q = Transaction.findById(returnOf.transactionId).select("items._id items.itemId items.taxCodeId items.taxKind"); // a sub-document's _id is a field like another in a projection
+    const original = await (session ? q.session(session) : q).lean();
+    const reverse = (original?.items || []).filter((l) => l.taxKind === "reverse_charge" && l.taxCodeId);
+    if (!reverse.length) return items;
+    return items.map((item) => {
+      if (item.taxCodeId) return item;
+      const source = item.returnOfLineId
+        ? reverse.find((l) => String(l._id) === String(item.returnOfLineId))
+        : reverse.filter((l) => String(l.itemId) === String(item.itemId)).length === 1
+          ? reverse.find((l) => String(l.itemId) === String(item.itemId))
+          : null;
+      return source ? { ...item, taxCodeId: source.taxCodeId } : item;
+    });
   }
 
   // Validates a return before it is saved. Returns the items with returnOfLineId filled in.

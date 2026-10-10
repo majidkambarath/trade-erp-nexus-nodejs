@@ -738,7 +738,10 @@ class AccountService {
     };
   }
 
-  static async updateAccountVoucher(id, data, updatedBy) {
+  // `options.req`: the person editing. Changing what a POSTED (approved or settled) voucher allocated takes its postings back
+  // and posts new ones - a deletion and an approval in one act - so it needs finance.deletePosted (by the STORED status) and
+  // an approval of the new amount that stands on its own (FinancialService.updateVoucher says why). No req, nobody judged.
+  static async updateAccountVoucher(id, data, updatedBy, options = {}) {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -752,6 +755,8 @@ class AccountService {
       }
 
       if (data.invoiceBalances || data.paidAmount) {
+        const wasPosted = [this.PAYMENT_VOUCHER_STATUS.APPROVED, this.PAYMENT_VOUCHER_STATUS.SETTLED].includes(voucher.status);
+        if (wasPosted && options.req) require("../../middleware/permissionGate").assertPermission(options.req, "finance.deletePosted");
         await this.reverseLedgerEntries(id, session);
         await this.reverseAllocations(voucher, session);
 
@@ -779,6 +784,11 @@ class AccountService {
           validatedInvoices,
           session
         );
+
+        // the new figures are judged like an approval of the new amount (a refusal rolls the whole edit back)
+        if (wasPosted) {
+          await require("../core/approvalPolicyService").judgeRepost({ amount: totalAllocated, preparedBy: voucher.createdBy, req: options.req, session });
+        }
 
         voucher.linkedInvoices = validatedInvoices;
         voucher.entries = entries;

@@ -3,6 +3,7 @@ const {
   LedgerAccount,
   LedgerEntry,
 } = require("../../models/modules/financial/financialModels");
+const logger = require("../../utils/logger");
 const Customer = require("../../models/modules/customerModel");
 const ExpenseType = require("../../models/modules/financial/expenseTypeModel");
 const Vendor = require("../../models/modules/vendorModel");
@@ -19,6 +20,7 @@ const { ensurePartyAccount } = require("./partyAccounts");
 const LedgerVoucherService = require("./ledgerVoucherService");
 const FxVoucherService = require("./fxVoucherService");
 const ReconciliationGuard = require("../banking/reconciliationGuard");
+const TxRetry = require("../../utils/withTransactionSession"); // isTransient / conflictError / backoff, shared with every other transaction wrapper
 const DebitLog = require("../../models/modules/DebitLog"); // ADD THIS
 const CreditLog = require("../../models/modules/CreditLog"); // ADD THIS
 
@@ -50,31 +52,32 @@ class FinancialService {
     }
 
     const delta = operation === "add" ? amount : -amount;
-    party.cashBalance = Math.max(0, (party.cashBalance || 0) + delta);
+    // Signed, like the order postings that share this field (a sale takes it below zero: the party owes). It used to be
+    // clamped at 0 here, which erased what a customer owed the moment an on-account receipt was entered (owed 315, paid 50
+    // on account -> 0, not -265), and made "add" then "subtract" (a receipt, then deleting it) lose the balance for good.
+    party.cashBalance = (party.cashBalance || 0) + delta;
     await party.save({ session });
-    console.log(
+    logger.debug(
       `[CashBalance] ${partyType} ${partyId}: Adjusted by ${delta} (new: ${party.cashBalance})`
     );
   }
 
-  // Retry wrapper for transactions to handle TransientTransactionError
-  static async withTransactionRetry(fn, maxRetries = 3) {
+  // Retry wrapper for transactions to handle a transient conflict with another writer. 251 (NoSuchTransaction,
+  // the original check) only covers one shape of this; under real concurrency the far more common one is 112
+  // (WriteConflict) or the generic TransientTransactionError label MongoDB attaches to either - two vouchers
+  // racing each other used to surface the loser as a raw 500 instead of a quiet retry (found via the data-bleed
+  // sweep firing several voucher creations at once; utils/withTransactionSession.js's retryTransientTransaction
+  // is the same check, shared, for callers that do not manage a voucher's own session plumbing).
+  static async withTransactionRetry(fn, maxRetries = TxRetry.RETRY_ATTEMPTS) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         return await fn();
       } catch (error) {
-        if (
-          error.name === "MongoServerError" &&
-          error.code === 251 &&
-          attempt < maxRetries
-        ) {
-          console.log(
-            `[Retry] Transaction attempt ${attempt} failed: ${error.message}. Retrying...`
-          );
-          await new Promise((resolve) => setTimeout(resolve, 100 * attempt)); // Exponential backoff
-          continue;
-        }
-        throw error;
+        if (!TxRetry.isTransient(error)) throw error;
+        // a transient conflict that still cannot get its turn is said in words (409, nothing was written), not a bare 500
+        if (attempt >= maxRetries) throw TxRetry.conflictError(error);
+        logger.debug(`[Retry] Transaction attempt ${attempt} failed: ${error.message}. Retrying...`);
+        await TxRetry.backoff(attempt);
       }
     }
   }
@@ -82,7 +85,13 @@ class FinancialService {
   // Create any type of voucher (with retry and optimized session). Pass a session as the third
   // argument to post INSIDE the caller's transaction: the voucher then commits or rolls back with
   // whatever else the caller writes (a bank statement match), and the caller does the committing.
-  static async createVoucher(data, createdBy, outerSession) {
+  //
+  // `options.req` is the request of the person saving it (the voucher routes and the bank-statement screens pass it; a job
+  // does not). With it, a voucher that would post the moment it is saved is held instead - saved PENDING, nothing posted -
+  // when the person's approval limit is below its amount or the organisation wants a second approver at that amount.
+  // Someone who may approve it then does, through processVoucherApproval, which posts it. See ApprovalPolicyService.holdOnSave.
+  // Inside a caller's transaction (`outerSession`) it cannot wait: a person over their limit is refused instead.
+  static async createVoucher(data, createdBy, outerSession, options = {}) {
     const run = async () => {
       const session = outerSession || (await mongoose.startSession({
         defaultTransactionOptions: { maxTimeMS: 120000 }, // 120s timeout
@@ -102,7 +111,7 @@ class FinancialService {
         const postingDate = voucherData.date || new Date();
         await FiscalYearService.assertPostingAllowed(postingDate, { session });
         const voucherNo = await this.generateVoucherNo(voucherType, postingDate, session);
-        console.log(
+        logger.debug(
           `[Transaction] Started for voucher ${voucherNo} with session ${session.id}`
         );
 
@@ -148,6 +157,33 @@ class FinancialService {
         const { _cheque, _vatPercent, ...storable } = processedData;
         processedData = storable;
 
+        // Held for approval: it is saved, numbered and audited like any voucher, but posts nothing until someone who may
+        // approve it does. The cheque behind it is kept on the voucher and enters the register at that point.
+        let hold = processedData.status === "approved" && options.req
+          ? await require("../core/approvalPolicyService").holdOnSave({ amount: processedData.totalAmount, req: options.req, session })
+          : null;
+        if (hold && outerSession) {
+          // Part of a larger act that cannot wait (posting the entry for a bank statement line and matching the line, in one
+          // transaction). A person over their own limit may not post it; where the organisation wants two approvers at this
+          // amount the statement line itself is the second pair of eyes, and it posts as ever.
+          if (hold.reason === "limit") {
+            throw new AppError(
+              `This is ${hold.amount.toFixed(2)}, above your approval limit of ${hold.limit.toFixed(2)}, and it is posted as part of the bank match, which cannot wait for approval. Ask someone with a higher limit to do this one.`,
+              403, "APPROVAL_LIMIT_EXCEEDED", { amount: hold.amount, limit: hold.limit }
+            );
+          }
+          hold = null;
+        }
+        // The older contra / expense vouchers moved the cash & bank list's balances while they were being worked out, and nothing
+        // puts those back when one is turned down, so they cannot wait: refused instead (enter it as a chart voucher).
+        if (hold && !(processedData.ledgerBased === true || ["receipt", "payment", "debit_note", "credit_note"].includes(voucherType))) {
+          throw new AppError(
+            `${hold.reason === "limit" ? `This is ${hold.amount.toFixed(2)}, above your approval limit of ${hold.limit.toFixed(2)}` : `This is ${hold.amount.toFixed(2)}, an amount that needs two approvers`}, and a voucher in the older format (posted to the cash & bank accounts list) cannot wait for approval. Enter it as a chart voucher instead.`,
+            403, hold.reason === "limit" ? "APPROVAL_LIMIT_EXCEEDED" : "SECOND_APPROVER_REQUIRED", { amount: hold.amount, ...(hold.reason === "limit" ? { limit: hold.limit } : { above: hold.above }) }
+          );
+        }
+        if (hold) processedData = { ...processedData, status: "pending", approvalStatus: "pending", approvals: [], ...(_cheque ? { heldCheque: _cheque } : {}) };
+
         const voucherDoc = {
           voucherNo,
           voucherType,
@@ -158,9 +194,10 @@ class FinancialService {
 
         const voucher = await Voucher.create([voucherDoc], { session });
         const newVoucher = voucher[0];
+        if (hold) newVoucher.$locals.hold = hold; // read by the controller, for the audit row and the reply
 
         // A cheque is recorded in the cheque register; it waits there until it clears.
-        if (_cheque) await this.registerCheque(newVoucher, _cheque, voucherType === "receipt" ? "receipt" : "payment", createdBy, session);
+        if (_cheque && !hold) await this.registerCheque(newVoucher, _cheque, voucherType === "receipt" ? "receipt" : "payment", createdBy, session);
 
         // Create ledger entries only if approved
         if (newVoucher.status === "approved") {
@@ -169,7 +206,7 @@ class FinancialService {
         }
 
         if (!outerSession) await session.commitTransaction();
-        console.log(`[Transaction] Committed for voucher ${voucherNo}`);
+        logger.debug(`[Transaction] Committed for voucher ${voucherNo}`);
         return newVoucher;
       } catch (error) {
         if (!outerSession) await session.abortTransaction();
@@ -566,6 +603,18 @@ class FinancialService {
     }
   }
 
+  // A voucher that is WAITING (pending, or draft) has posted no ledger entries, but saving it already did the rest: it settled
+  // invoices, moved the party's balance on account and (older vouchers) the cash & bank balances. Turning it down or deleting
+  // it puts those back, by the same undo as a posted one (which finds no ledger rows to reverse). Any other state is left
+  // alone: a rejected, cancelled or bounced voucher was undone when it got there.
+  static async undoUnpostedEffects(voucher, session, by, { cheque = true } = {}) {
+    if (!["pending", "draft"].includes(voucher.status)) return;
+    if (cheque && voucher.paymentMode === "cheque") {
+      await require("../banking/chequeService").onVoucherRemoved(voucher, { session, req: {}, adminId: by, forEdit: false });
+    }
+    await this.reverseVoucherEffects(voucher, session);
+  }
+
   // Process Journal Voucher - Updated to handle debitAccount and creditAccount from Transactor
   static async processJournalVoucher(data, session) {
     const {
@@ -650,7 +699,7 @@ class FinancialService {
       creditAccountDoc.save({ session }),
     ]);
 
-    console.log(
+    logger.debug(
       `[Journal] Debit ${totalAmount} to ${debitAccountDoc.accountName} (${debitAccountDoc.accountCode}), Credit ${totalAmount} from ${creditAccountDoc.accountName} (${creditAccountDoc.accountCode})`
     );
 
@@ -780,7 +829,7 @@ class FinancialService {
       toAccountDoc.save({ session }),
     ]);
 
-    console.log(
+    logger.debug(
       `[Contra] Transfer ${totalAmount} from ${fromAccountDoc.accountName} (${fromAccountDoc.accountCode}) to ${toAccountDoc.accountName} (${toAccountDoc.accountCode})`
     );
 
@@ -990,7 +1039,7 @@ class FinancialService {
       expenseTransactor.save({ session }),
     ]);
 
-    console.log(
+    logger.debug(
       `[Expense] Type: ${expenseType.name}, Amount: ${totalAmount}, From: ${transactor.accountName} (${transactor.accountCode}), To: ${expenseTransactor.accountName}`
     );
 
@@ -1172,7 +1221,7 @@ class FinancialService {
         { session }
       );
       account = account[0];
-      console.log(`[Account] Created system account: ${accountName}`);
+      logger.debug(`[Account] Created system account: ${accountName}`);
     }
 
     // Optional: In-memory cache for high-frequency access (implement with Redis for prod)
@@ -1342,8 +1391,62 @@ class FinancialService {
     };
   }
 
+  // Does this edit change what the voucher POSTED (its amount, accounts, party, allocations...)? Then the old postings are
+  // taken back and new ones made. A narration, a note or an attachment does not.
+  static changesPosting(oldVoucher, data) {
+    return Boolean(
+      data.totalAmount ||
+        data.foreignAmount ||
+        data.currency ||
+        data.exchangeRate ||
+        (data.date && oldVoucher.foreignAmount > 0) || // a foreign voucher's rate follows its day
+        data.entries ||
+        data.debitAccount ||
+        data.creditAccount ||
+        data.linkedInvoices ||
+        data.paymentMode ||
+        data.paymentDetails ||
+        data.fromAccount ||
+        data.toAccount ||
+        data.lines ||
+        data.amount ||
+        data.expenseAccountId ||
+        data.referenceInvoiceId ||
+        data.voucherType === "receipt" ||
+        data.voucherType === "payment" ||
+        data.voucherType === "contra" ||
+        data.voucherType === "journal" ||
+        data.voucherType === "expense" ||
+        data.voucherType === "debit_note" ||
+        data.voucherType === "credit_note"
+    );
+  }
+
+  // A voucher as a screen gets it: the cheque kept on a voucher that waits for approval is not for a screen.
+  static shown(doc) {
+    const { heldCheque, ...rest } = doc.toObject(); // eslint-disable-line no-unused-vars
+    return rest;
+  }
+
+  // What an edit may never write itself: where the voucher stands in its approval, who made it, what it is called. A plain
+  // edit used to copy the whole request body onto the voucher, so a person who could only Edit could send
+  // { status: "approved" } or { createdBy: <someone else> } and skip every approval rule.
+  static withoutSystemFields(data) {
+    const out = { ...data };
+    for (const key of ["_id", "voucherNo", "voucherType", "companyId", "branchId", "status", "approvalStatus", "approvals", "approvedBy", "approvedAt", "createdBy", "createdAt", "heldCheque", "ledgerBased"]) delete out[key];
+    return out;
+  }
+
   // Update voucher - With retry and reversal handling
-  static async updateVoucher(id, data, updatedBy) {
+  //
+  // `options.req` is the request of the person editing (the voucher route passes it). Changing the posted figures of an
+  // APPROVED voucher takes its postings back and posts new ones - a deletion and an approval in one act - so it needs what
+  // each of those needs: finance.deletePosted (judged by the STORED status, never by the request), and an approval of the NEW
+  // amount that stands on its own (the editor's role limit, the separate-approver rule, and no second approver: an edit is
+  // one person's act, so an amount that needs two is refused with SECOND_APPROVER_REQUIRED - delete the voucher and enter it
+  // again, which then waits for both). The editor's approval replaces the old approvals. A voucher that is NOT approved is
+  // only ever changed, never approved, by an edit: it stays where it was. Without `req` (a job, a test) nobody is judged.
+  static async updateVoucher(id, data, updatedBy, options = {}) {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       throw new AppError("Invalid voucher ID", 400);
     }
@@ -1362,6 +1465,8 @@ class FinancialService {
 
         // Period lock: nothing may change inside a closed fiscal year.
         await FiscalYearService.assertPostingAllowed(oldVoucher.date, { session });
+        // ... and nothing may be moved INTO a closed period or month by changing its date: the edit posts there.
+        if (data.date) await FiscalYearService.assertPostingAllowed(data.date, { session });
 
         if (["bounced", "cancelled"].includes(oldVoucher.status)) {
           throw new AppError(`A ${oldVoucher.status} voucher cannot be edited`, 400, "VOUCHER_VOIDED");
@@ -1373,33 +1478,18 @@ class FinancialService {
         if (oldVoucher.status !== "approved" && oldVoucher.approvals?.length) oldVoucher.approvals = [];
         if (!["receipt", "payment"].includes(oldVoucher.voucherType)) await FxVoucherService.assertBaseCurrencyOnly(data, { session });
 
+        const wasApproved = oldVoucher.status === "approved";
+        const repost = this.changesPosting(oldVoucher, data);
+        // The right to take postings back is judged by the STORED status, before anything is touched.
+        if (wasApproved && repost && options.req) {
+          require("../../middleware/permissionGate").assertPermission(
+            options.req, "finance.deletePosted",
+            "Changing the amount, accounts or party of a posted voucher takes its postings back and posts new ones, so it needs the right to delete posted vouchers (finance.deletePosted). You can still change its narration or notes."
+          );
+        }
+
         let needReprocess = false;
-        if (
-          data.totalAmount ||
-          data.foreignAmount ||
-          data.currency ||
-          data.exchangeRate ||
-          (data.date && oldVoucher.foreignAmount > 0) || // a foreign voucher's rate follows its day
-          data.entries ||
-          data.debitAccount ||
-          data.creditAccount ||
-          data.linkedInvoices ||
-          data.paymentMode ||
-          data.paymentDetails ||
-          data.fromAccount ||
-          data.toAccount ||
-          data.lines ||
-          data.amount ||
-          data.expenseAccountId ||
-          data.referenceInvoiceId ||
-          data.voucherType === "receipt" ||
-          data.voucherType === "payment" ||
-          data.voucherType === "contra" ||
-          data.voucherType === "journal" ||
-          data.voucherType === "expense" ||
-          data.voucherType === "debit_note" ||
-          data.voucherType === "credit_note"
-        ) {
+        if (repost) {
           // a cheque that has cleared cannot be edited away; one that has not is withdrawn and
           // recorded again below
           if (oldVoucher.paymentMode === "cheque") {
@@ -1496,10 +1586,32 @@ class FinancialService {
           }
           const { _cheque, _vatPercent, ...storable } = processedData;
           processedData = storable;
-          updatedCheque = _cheque;
+          if (wasApproved) {
+            // The new figures are approved by the person changing them, on their own, or not at all (see the note above).
+            const judged = await require("../core/approvalPolicyService").judgeRepost({
+              amount: processedData.totalAmount, preparedBy: oldVoucher.createdBy, req: options.req, session,
+            });
+            if (judged.approval) {
+              processedData.approvals = [judged.approval];
+              processedData.approvalStatus = "approved";
+              if (mongoose.isValidObjectId(updatedBy)) processedData.approvedBy = updatedBy;
+              processedData.approvedAt = new Date();
+            }
+          } else {
+            // An edit never approves a voucher that was waiting (or turned down): it stays as it was.
+            processedData.status = oldVoucher.status;
+            processedData.approvalStatus = oldVoucher.approvalStatus;
+          }
+          // The cheque of a voucher that is not posted waits on the voucher; it enters the register when the voucher is approved.
+          if (processedData.status === "approved") {
+            updatedCheque = _cheque;
+            processedData.heldCheque = undefined;
+          } else {
+            processedData.heldCheque = _cheque || undefined;
+          }
           Object.assign(oldVoucher, processedData);
         } else {
-          Object.assign(oldVoucher, data);
+          Object.assign(oldVoucher, this.withoutSystemFields(data));
         }
 
         oldVoucher.updatedBy = updatedBy;
@@ -1514,7 +1626,7 @@ class FinancialService {
 
         await session.commitTransaction();
         return {
-          ...oldVoucher.toObject(),
+          ...this.shown(oldVoucher),
           linkedInvoices: oldVoucher.linkedInvoices
             ? oldVoucher.linkedInvoices.map((inv) => ({
                 invoiceId: inv.invoiceId,
@@ -1554,7 +1666,7 @@ class FinancialService {
     });
 
     await Promise.all(reversalPromises);
-    console.log(
+    logger.debug(
       `[Journal Reversal] Reversed balances for voucher ${voucher.voucherNo}`
     );
   }
@@ -1597,7 +1709,7 @@ class FinancialService {
       await toAccount.save({ session });
     }
 
-    console.log(
+    logger.debug(
       `[Contra Reversal] Reversed ${voucher.totalAmount} between accounts`
     );
   }
@@ -1615,7 +1727,7 @@ class FinancialService {
       session.startTransaction();
 
       try {
-        const voucher = await Voucher.findById(id).session(session);
+        const voucher = await Voucher.findById(id).select("+heldCheque").session(session);
         if (!voucher) {
           throw new AppError("Voucher not found", 404);
         }
@@ -1645,10 +1757,14 @@ class FinancialService {
             voucher.approvals = [...(voucher.approvals || []), verdict.approval];
             await voucher.save({ session });
             await session.commitTransaction();
-            return { ...voucher.toObject(), linkedInvoices: [], awaitingSecondApproval: true };
+            return { ...this.shown(voucher), linkedInvoices: [], awaitingSecondApproval: true };
           }
           approval = verdict.approval || null;
         }
+
+        // Turned down: a voucher that waited has posted nothing, but saving it settled invoices and moved the party's balance
+        // on account (and older ones moved cash & bank balances). Those are put back, as when it is deleted.
+        if (action === "reject") await this.undoUnpostedEffects(voucher, session, approvedBy);
 
         // Update voucher status
         voucher.status = action === "approve" ? "approved" : "rejected";
@@ -1675,11 +1791,17 @@ class FinancialService {
             await this.createLedgerEntries(voucher, approvedBy, session);
           }
           await this.createPaymentLogEntries(voucher, session);
+          // A cheque that waited with the voucher is recorded now that the voucher is posted.
+          if (voucher.heldCheque) {
+            const cheque = voucher.heldCheque;
+            voucher.heldCheque = undefined;
+            await this.registerCheque(voucher, cheque, voucher.voucherType === "receipt" ? "receipt" : "payment", approvedBy, session);
+          }
         }
 
         await session.commitTransaction();
         return {
-          ...voucher.toObject(),
+          ...this.shown(voucher),
           linkedInvoices: voucher.linkedInvoices
             ? voucher.linkedInvoices.map((inv) => ({
                 invoiceId: inv.invoiceId,
@@ -1735,6 +1857,8 @@ class FinancialService {
         }
         if (voucher.status === "approved") {
           await this.reverseVoucherEffects(voucher, session);
+        } else {
+          await this.undoUnpostedEffects(voucher, session, deletedBy, { cheque: false });
         }
 
         // Mark as cancelled instead of hard delete

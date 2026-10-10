@@ -1,3 +1,4 @@
+const logger = require("../../utils/logger");
 const FinancialService = require("../../services/financial/financialService");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
@@ -9,7 +10,7 @@ const VoucherAuditService = require("../../services/financial/voucherAuditServic
 // Create any type of voucher (receipt, payment, journal, contra, expense)
 exports.createVoucher = catchAsync(async (req, res) => {
   const createdBy = req.admin?.id || req.body.createdBy || "system";
-  console.log(req.body)
+  logger.debug(req.body)
   // Parse payload if coming from multipart/form-data
   const bodyData = req.body.data ? JSON.parse(req.body.data) : req.body;
   // Handle uploaded file
@@ -26,28 +27,34 @@ exports.createVoucher = catchAsync(async (req, res) => {
   }
 
   // console.log(bodyData);
-  const voucher = await FinancialService.createVoucher(bodyData, createdBy);
+  // `{ req }` lets the service hold a voucher the person may not post on their own (over their approval limit, or an amount
+  // the organisation wants two approvers for): it is saved pending, posts nothing, and waits in the approvals list.
+  const voucher = await FinancialService.createVoucher(bodyData, createdBy, undefined, { req });
+  const hold = voucher.$locals?.hold || null;
   await AuditService.log({
     req,
     action: "VOUCHER_CREATED",
     entity: "Voucher",
     entityId: voucher._id,
-    summary: `${VoucherAuditService.describe(voucher)} saved`,
+    summary: `${VoucherAuditService.describe(voucher)} saved${hold ? ` and held for approval: ${hold.reason === "limit" ? "over the approval limit of the person who saved it" : "it needs two approvers at this amount"}` : ""}`,
     after: { ...VoucherAuditService.snapshot(voucher), effects: await VoucherAuditService.effects(voucher._id) },
   });
 
+  // (the cheque kept on a held voucher is not for a screen)
+  const shown = hold ? FinancialService.shown(voucher) : voucher;
   res.status(201).json({
     status: "success",
-    data: voucher,
+    data: shown,
+    ...(hold ? { approval: { held: true, reason: hold.reason, amount: hold.amount, limit: hold.limit ?? null, above: hold.above ?? null, message: hold.message } } : {}),
   });
 });
 
 // Get all vouchers with filters and pagination
 exports.getAllVouchers = catchAsync(async (req, res) => {
-  console.log("object");
-  console.log(req.query);
+  logger.debug("object");
+  logger.debug(req.query);
   const result = await FinancialService.getAllVouchers(req.query);
-  console.log(result.vouchers.length);
+  logger.debug(result.vouchers.length);
   res.status(200).json({
     status: "success",
     results: result.vouchers.length,
@@ -95,10 +102,12 @@ exports.updateVoucher = catchAsync(async (req, res) => {
 
   // read before the write, so the audit row can show what the edit changed
   const before = await VoucherAuditService.snapshotOf(req.params.id);
+  // `{ req }`: changing what an APPROVED voucher posted needs finance.deletePosted and an approval of the new figures
   const voucher = await FinancialService.updateVoucher(
     req.params.id,
     bodyData,
-    updatedBy
+    updatedBy,
+    { req }
   );
   await AuditService.log({
     req,
@@ -318,10 +327,10 @@ exports.exportVouchers = catchAsync(async (req, res) => {
 // Duplicate voucher
 exports.duplicateVoucher = catchAsync(async (req, res) => {
   const originalVoucher = await FinancialService.getVoucherById(req.params.id);
-  const createdBy = req.admin?.id || req.body.createdBy || "system";
+  const createdBy = req.admin?.id || "system"; // the signed-in person; a body never names its own author
 
   const duplicateData = {
-    ...originalVoucher.voucher.toObject(),
+    ...originalVoucher.voucher, // getVoucherById returns a lean (plain) object, not a Mongoose document
     _id: undefined,
     voucherNo: undefined,
     status: "draft",
@@ -333,7 +342,9 @@ exports.duplicateVoucher = catchAsync(async (req, res) => {
 
   const voucher = await FinancialService.createVoucher(
     duplicateData,
-    createdBy
+    createdBy,
+    undefined,
+    { req }
   );
 
   res.status(201).json({

@@ -22,6 +22,12 @@ exports.updateUser = catchAsync(async (req, res) => {
   ok(res, user);
 });
 
+exports.resetTwoFactor = catchAsync(async (req, res) => {
+  const user = await UserService.resetTwoFactor(req.params.id, req);
+  await AuditService.log({ req, action: "TWO_FACTOR_RESET_BY_ADMIN", entity: "Admin", entityId: user.id, summary: `${user.email}'s two-factor sign-in was reset by ${req.admin.email}; their sign-ins were ended` });
+  ok(res, user);
+});
+
 exports.roles = catchAsync(async (req, res) => ok(res, await RoleService.list()));
 
 exports.createRole = catchAsync(async (req, res) => {

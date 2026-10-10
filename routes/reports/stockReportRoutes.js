@@ -10,6 +10,7 @@ router.use(require("../../middleware/ledgerReady"));
 
 router.get("/lookups", requirePermission(["reports.view","inventory.view"]), C.lookups); // items and categories for the filters
 router.get("/valuation", requirePermission("reports.view"), C.valuation); // ?asOn=&categoryId=&search=&groupBy=item|category&includeZero=
+router.get("/ledger-check", requirePermission("reports.view"), C.ledgerCheck); // ?asOn= - the valuation's comparison with the Inventory account, as at a day
 router.get("/movement", requirePermission("reports.view"), C.movement); // ?from=&to=&categoryId=&search=&includeZero=
 router.get("/item-ledger", requirePermission("reports.view"), C.itemLedger); // ?itemId=&from=&to=
 router.get("/sales-analysis", requirePermission("reports.view"), C.salesAnalysis); // ?from=&to=&groupBy=item|category|customer&direction=sales|purchases

@@ -11,6 +11,27 @@ const fiscalYearSchema = new mongoose.Schema(
     status: { type: String, enum: ["open", "closed"], default: "open" },
     closedAt: { type: Date },
     closedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
+    // The month lock inside an OPEN year: the last locked calendar day ("YYYY-MM-DD", the organisation's zone), absent when
+    // no month is closed. Nothing dated on or before it can be posted. It composes with `status`: a closed year is locked as
+    // a whole whatever this says, and closing or reopening the year never touches this field, so reopening the year gives
+    // back exactly the months that were closed before. See services/financial/periodCloseService.js, utils/periodClose.js.
+    lockedThrough: { type: String, match: /^\d{4}-\d{2}-\d{2}$/ },
+    // Who closed each month still closed, oldest first (the audit log keeps the ones since reopened).
+    monthCloses: {
+      type: [
+        new mongoose.Schema(
+          {
+            month: { type: String, required: true }, // "2026-08"
+            closedAt: { type: Date },
+            closedBy: { type: mongoose.Schema.Types.ObjectId },
+            closedByName: { type: String },
+            acknowledged: [{ type: String }], // the warnings the person accepted
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     // What closing the year did (services/financial/yearEndService.js). Absent on a year that is open, and on one closed
     // before year-end closing existed, which was only a lock: it moved no profit to equity.
     closing: {

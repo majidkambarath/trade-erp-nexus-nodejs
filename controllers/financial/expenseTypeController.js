@@ -3,10 +3,10 @@ const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
 
 exports.createCategory = catchAsync(async (req, res) => {
-  const createdBy = req.user?.id || req.body.createdBy || "system";
+  const createdBy = req.admin?.id || "system"; // the signed-in person; a body never names its own author
 // console.log(req.body)
   const { name, parentCategoryId } = req.body;
-  if (!name?.trim()) {
+  if (typeof name !== "string" || !name.trim()) {
     throw new AppError("Category name is required", 400);
   }
 
@@ -51,10 +51,10 @@ exports.getCategoryById = catchAsync(async (req, res) => {
  * UPDATE
  */
 exports.updateCategory = catchAsync(async (req, res) => {
-  const updatedBy = req.user?.id || req.body.updatedBy || "system";
+  const updatedBy = req.admin?.id || "system"; // the signed-in person; a body never names its own author
 
   const { name, parentCategoryId } = req.body;
-  if (name !== undefined && !name?.trim()) {
+  if (name !== undefined && (typeof name !== "string" || !name.trim())) {
     throw new AppError("Category name cannot be empty", 400);
   }
 

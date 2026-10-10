@@ -42,6 +42,31 @@ class ApprovalPolicyService {
     if (!verdict.ok) throw new AppError(verdict.message, 403, verdict.code, verdict.details);
     return { ...verdict, approval: { by: actor.id, name: actor.name, at: new Date(), step: verdict.step } };
   }
+
+  /**
+   * A document that would take effect the moment it is saved (a journal, a receipt, a ledger expense...): must it wait for
+   * an approver? null when it may post at once (no signed-in person behind the save, no limit hit, no second approver asked
+   * for at this amount). Otherwise { reason, amount, limit | above, message } - the caller saves it pending and says so.
+   */
+  static async holdOnSave({ amount, req, session }) {
+    const actor = this.actorOf(req);
+    if (!actor) return null;
+    const hold = rules.holdOnSave({ policy: await this.policy(session), amount, maker: actor });
+    return hold ? { ...hold, message: rules.holdMessage(hold, orgLocale.baseCurrency()) } : null;
+  }
+
+  /**
+   * Judge a CHANGE to the posted figures of an approved voucher as an approval of the new amount that stands on its own (see
+   * rules.decideRepost). Throws the 403 with the reason; returns the approval to record against the new figures. Nobody
+   * behind the request (an internal job) is not judged.
+   */
+  static async judgeRepost({ amount, preparedBy, req, session }) {
+    const actor = this.actorOf(req);
+    if (!actor) return { skipped: true };
+    const verdict = rules.decideRepost({ policy: await this.policy(session), amount, preparedBy, approver: actor, currency: orgLocale.baseCurrency() });
+    if (!verdict.ok) throw new AppError(verdict.message, 403, verdict.code, verdict.details);
+    return { approval: { by: actor.id, name: actor.name, at: new Date(), step: 1 } };
+  }
 }
 
 module.exports = ApprovalPolicyService;

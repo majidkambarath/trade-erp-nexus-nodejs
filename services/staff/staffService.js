@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Staff = require("../../models/modules/staffModel");
 const AppError = require("../../utils/AppError");
 const { extractFileInfo, deleteFromCloudinary } = require("../../middleware/upload");
+const { searchRegex } = require("../../utils/regex");
 
 class StaffService {
   static async createStaff(data, files, createdBy) {
@@ -18,6 +19,11 @@ class StaffService {
         status,
       } = data;
 
+      // what a staff record cannot be without (text, not an object or a missing field: that used to end in a 500)
+      for (const [label, value] of [["Name", name], ["Designation", designation], ["Contact number", contactNo], ["ID/Passport number", idNo]]) {
+        if (typeof value !== "string" || !value.trim()) throw new AppError(`${label} is required`, 400, "VALIDATION_ERROR");
+      }
+
       // Check if idNo already exists
       const existingIdNo = await Staff.findOne({ idNo }).session(session);
       if (existingIdNo) {
@@ -28,8 +34,9 @@ class StaffService {
       const staffId = `STF${new Date().toISOString().slice(0, 4).replace(/-/g, "")}-${Math.floor(Math.random() * 1000) + 100}`;
 
       // Process file uploads
-      const idProofInfo = files.idProof ? extractFileInfo(files.idProof) : null;
-      const addressProofInfo = files.addressProof ? extractFileInfo(files.addressProof) : null;
+      // (a plain JSON request carries no files at all: req.files is then undefined)
+      const idProofInfo = files?.idProof ? extractFileInfo(files.idProof) : null;
+      const addressProofInfo = files?.addressProof ? extractFileInfo(files.addressProof) : null;
 
       // Create staff record
       const staff = await Staff.create(
@@ -84,8 +91,8 @@ class StaffService {
       }
 
       // Process file uploads
-      const idProofInfo = files.idProof ? extractFileInfo(files.idProof) : null;
-      const addressProofInfo = files.addressProof ? extractFileInfo(files.addressProof) : null;
+      const idProofInfo = files?.idProof ? extractFileInfo(files.idProof) : null;
+      const addressProofInfo = files?.addressProof ? extractFileInfo(files.addressProof) : null;
 
       // Delete old files from Cloudinary if new files are uploaded
       const filesToDelete = [];
@@ -163,10 +170,10 @@ class StaffService {
 
     if (filters.search) {
       query.$or = [
-        { name: new RegExp(filters.search, "i") },
-        { designation: new RegExp(filters.search, "i") },
-        { idNo: new RegExp(filters.search, "i") },
-        { staffId: new RegExp(filters.search, "i") },
+        { name: searchRegex(filters.search) },
+        { designation: searchRegex(filters.search) },
+        { idNo: searchRegex(filters.search) },
+        { staffId: searchRegex(filters.search) },
       ];
     }
 

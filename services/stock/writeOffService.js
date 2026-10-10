@@ -8,6 +8,7 @@ const FiscalYearService = require("../core/fiscalYearService");
 const AccountConfigService = require("../financial/accountConfigService");
 const PostingService = require("../financial/postingService");
 const AppError = require("../../utils/AppError");
+const ItemKindService = require("./itemKindService");
 
 const REASONS = {
   expiry: { configKey: "write-off-expiry", label: "Expired stock" },
@@ -39,6 +40,7 @@ class WriteOffService {
         }
         const stock = await Stock.findById(batch.stockId).session(session);
         if (!stock) throw new AppError("Stock item not found", 404);
+        ItemKindService.assertStocked(stock, "be written off"); // a service has no batches, so this cannot happen by the screen
 
         const pool = {
           quantity: stock.currentStock,

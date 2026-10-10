@@ -10,22 +10,53 @@ const orgLocale = require("../utils/orgLocale");
 // do (so the screen can show that), change the password, and sign out. Everything else is refused, the same way on every
 // route, here where the person is identified.
 const ONLY_WHEN_CHANGING_PASSWORD = [["PUT", "/api/v1/profile/change-password"], ["GET", "/api/v1/organisation/status"], ["GET", "/api/v1/profile/me"]];
-const mayContinue = (req) => {
+const requestIs = (list, req) => {
   const url = String(req.originalUrl || "").split("?")[0].replace(/\/+$/, "");
-  return ONLY_WHEN_CHANGING_PASSWORD.some(([method, path]) => req.method === method && url === path);
+  return list.some(([method, path]) => req.method === method && url === path);
 };
+const mayContinue = (req) => requestIs(ONLY_WHEN_CHANGING_PASSWORD, req);
+
+// The same idea for an organisation that requires two-factor sign-in (Settings -> Security): until the person has set it up they
+// may read who they are, and set it up - nothing else. Judged on every request from the database, like everything about identity.
+const ONLY_WHEN_ENROLLING = [["POST", "/api/v1/auth/2fa/setup"], ["POST", "/api/v1/auth/2fa/enable"], ["GET", "/api/v1/organisation/status"], ["GET", "/api/v1/profile/me"]];
+const mayEnrol = (req) => requestIs(ONLY_WHEN_ENROLLING, req);
 const Branch = require("../models/core/branchModel");
 const AppError = require("../utils/AppError");
 const { runWithTenant, runUnscoped } = require("../utils/tenantContext");
 const { requestRefusal, warningHeaders } = require("../utils/subscriptionGate");
+const SecurityPolicyService = require("../services/core/securityPolicyService");
+const AuthSession = require("../models/core/authSessionModel");
 
 // Who a token belongs to is decided by the DATABASE, not by what the token says. The account row names its
 // organisation, its role and so its permissions, so a token cannot choose its organisation, and an
 // administrator who is demoted or switched off loses that at once rather than when the token runs out.
 // (The organisation in the token is only checked against the row.)
+const OBJECT_ID = /^[0-9a-f]{24}$/i;
 async function accountFor(decoded) {
-  const admin = await runUnscoped("authentication: the account row names the organisation the token is checked against", () => Admin.findById(decoded.id));
+  // A refresh token is signed with the same key and names the same session, and lives thirty days: it renews a session and opens nothing.
+  // (Access tokens issued before tokens said what they are for carry no `use` and are accepted until they expire.)
+  if (decoded.type === "refresh" || decoded.use === "refresh") return { failure: "INVALID_TOKEN_TYPE", message: "A refresh token cannot open the API" };
+  // The account id is a plain id and nothing else: an object here ({ $ne: null }) would be handed to the query as an operator.
+  if (typeof decoded.id !== "string" || !OBJECT_ID.test(decoded.id)) return { failure: "INVALID_TOKEN", message: "Invalid token" };
+  const sessionId = decoded.sid === undefined ? null : decoded.sid;
+  if (sessionId !== null && typeof sessionId !== "string") return { failure: "INVALID_TOKEN", message: "Invalid token" };
+  const [admin, session] = await runUnscoped("authentication: the account row names the organisation the token is checked against", () =>
+    Promise.all([Admin.findById(decoded.id), sessionId ? AuthSession.findById(sessionId).select("adminId companyId revokedAt expiresAt").lean() : null])
+  );
   if (!admin || !admin.isActive || admin.status !== "active") return { failure: "ADMIN_INACTIVE", message: "Admin not found or inactive" };
+  // The session the token belongs to must still be open: signing out, a password change, an administrator's reset and a detected copy of
+  // the refresh cookie all end it, and the access token they leave behind (good for minutes) ends with it. A token with no session at all is
+  // one from before sessions existed; it can only be minted by the code that names none, so it cannot appear now, and it is still judged
+  // by the account's own row above.
+  if (sessionId !== null && (!session || session.revokedAt || session.expiresAt <= new Date() || String(session.adminId) !== String(admin._id) || session.companyId !== admin.companyId)) {
+    return { failure: "SESSION_REVOKED", message: "Your session has ended. Please sign in again." };
+  }
+  // A password reset by email, or an administrator resetting someone's two-factor, ended every sign-in the person held: a token
+  // issued in an earlier second than that moment is over, whatever time it had left. (Second precision: a token is stamped in whole
+  // seconds, and one issued in the same second as the reset is the sign-in that came right after it.)
+  if (admin.sessionsRevokedAt && decoded.iat && decoded.iat < Math.floor(admin.sessionsRevokedAt.getTime() / 1000)) {
+    return { failure: "SESSION_REVOKED", message: "Your session has ended. Please sign in again." };
+  }
   if (decoded.companyId && decoded.companyId !== admin.companyId) return { failure: "TOKEN_ORGANISATION_MISMATCH", message: "This token does not belong to this account's organisation" };
   const organisation = await Organisation.findOne({ code: admin.companyId });
   if (!organisation) return { failure: "ORGANISATION_NOT_FOUND", message: "This account's organisation could not be found" };
@@ -82,6 +113,7 @@ const identityOf = (admin, role) => {
     companyId: admin.companyId,
     branchId: admin.branchId,
     mustChangePassword: Boolean(admin.mustChangePassword),
+    twoFactorEnabled: Boolean(admin.twoFactor?.enabled),
     // where they belong, and the branches they were given a role in (the role above is the one for the branch they are in)
     homeBranch: admin.branchId || HEAD_OFFICE,
     branchRoles: (admin.branchRoles || []).map((b) => ({ branchId: b.branchId, roleKey: b.roleKey })),
@@ -122,18 +154,29 @@ const makeAuthenticator = ({ allowBlocked = false } = {}) => async (req, res, ne
     req.admin = identityOf(admin, await roleOf(admin, roles.roleKeyAt(admin, branch.branchId)));
     req.organisation = organisation;
     req.tenant = { companyId: admin.companyId, branchId: branch.branchId, branchView: branch.branchView };
+    req.sessionId = decoded.sid || null; // the sign-in this request belongs to (turning two-factor on ends all the OTHERS)
     if (admin.mustChangePassword && !mayContinue(req)) {
       return next(new AppError("Please choose a new password of your own before you continue.", 403, "PASSWORD_CHANGE_REQUIRED"));
+    }
+    // An organisation may require two-factor of everyone. Someone who has not set it up may only set it up.
+    // (not while the password gate above is closing - it already allows only choosing a password, which must stay possible)
+    if (!admin.mustChangePassword && !admin.twoFactor?.enabled && !mayEnrol(req) && (await runWithTenant({ companyId: admin.companyId }, () => SecurityPolicyService.policy())).requireTwoFactor) {
+      return next(new AppError("Your organisation requires two-factor sign-in. Set it up before you continue.", 403, "TWO_FACTOR_ENROLMENT_REQUIRED"));
     }
 
     // Everything downstream - the route, the services, every query - runs as this organisation, in this branch.
     return runWithTenant(req.tenant, next);
   } catch (error) {
-    console.error("Authentication error:", error);
+    // A token problem we raised ourselves (expired, malformed, wrong kind) is told by its code. Anything else - a database error, a bug - is
+    // logged here and told to nobody: the answer used to carry the error's own text (a cast error naming the query it choked on).
+    const known = error instanceof AppError && error.statusCode === 401;
+    if (!known) console.error("Authentication error:", error);
+    const code = known ? error.code || "INVALID_TOKEN" : "INVALID_TOKEN";
     return res.status(401).json({
       success: false,
-      message: "Invalid token",
-      error: error.message,
+      message: code === "TOKEN_EXPIRED" ? "Token has expired" : "Invalid token",
+      error: code,
+      errorCode: code,
     });
   }
 };
@@ -232,48 +275,6 @@ const requireSuperAdmin = (req, res, next) => {
   }
 };
 
-// Simple in-memory rate limiter for auth routes (per IP)
-const authRateLimit = (windowMs = 15 * 60 * 1000, maxAttempts = 2) => {
-  const attempts = new Map();
-
-  return (req, res, next) => {
-    const clientId = req.ip || req.connection.remoteAddress;
-    const now = Date.now();
-
-    // Clean up expired entries
-    for (const [key, data] of attempts.entries()) {
-      if (now - data.firstAttempt > windowMs) {
-        attempts.delete(key);
-      }
-    }
-
-    const clientAttempts = attempts.get(clientId);
-
-    if (!clientAttempts) {
-      attempts.set(clientId, { firstAttempt: now, count: 1 });
-      return next();
-    }
-
-    if (now - clientAttempts.firstAttempt > windowMs) {
-      attempts.set(clientId, { firstAttempt: now, count: 1 });
-      return next();
-    }
-
-    if (clientAttempts.count >= maxAttempts) {
-      const resetTime = new Date(clientAttempts.firstAttempt + windowMs);
-      const err = createAppError(
-        `Too many login attempts. Try again after ${resetTime.toLocaleTimeString()}`,
-        429,
-        "RATE_LIMIT_EXCEEDED"
-      );
-      return next(err);
-    }
-
-    clientAttempts.count++;
-    next();
-  };
-};
-
 module.exports = {
   authenticateToken,
   authenticateTokenAllowingBlocked,
@@ -281,5 +282,4 @@ module.exports = {
   requirePermission,
   requireRole,
   requireSuperAdmin,
-  authRateLimit,
 };

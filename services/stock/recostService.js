@@ -4,6 +4,7 @@ const Transaction = require("../../models/modules/transactionModel");
 const FiscalYear = require("../../models/modules/financial/fiscalYearModel");
 const costing = require("../../utils/inventoryCosting");
 const { getTenant } = require("../../utils/tenant");
+const { isService } = require("../../utils/itemKinds");
 
 // Basis for movements that predate the cost audit fields.
 const BASIS_BY_EVENT = {
@@ -23,7 +24,7 @@ class RecostService {
     const touched = [];
     for (const item of transaction.items || []) {
       const stock = await Stock.findById(item.itemId).session(session);
-      if (!stock) continue;
+      if (!stock || isService(stock)) continue; // a service has no cost pool to replay
       const later = await InventoryMovement.exists({
         stockId: stock.itemId,
         referenceType: "Transaction",

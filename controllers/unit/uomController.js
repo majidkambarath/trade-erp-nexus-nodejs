@@ -1,3 +1,4 @@
+const logger = require("../../utils/logger");
 const UOMService = require("../../services/unit/uomService");
 const catchAsync = require("../../utils/catchAsync");
 
@@ -14,7 +15,7 @@ exports.createUOM = catchAsync(async (req, res) => {
 exports.getAllUOMs = catchAsync(async (req, res) => {
   const { search, status, type, category } = req.query;
   const uoms = await UOMService.getAllUOMs({ search, status, type, category });
-  console.log(uoms)
+  logger.debug(uoms)
   res.json({ 
     success: true, 
     count: uoms.length,
@@ -49,7 +50,7 @@ exports.deleteUOM = catchAsync(async (req, res) => {
 
 // UOM Conversion Controllers
 exports.createUOMConversion = catchAsync(async (req, res) => {
-  console.log(req.body)
+  logger.debug(req.body)
   const conversion = await UOMService.createUOMConversion(req.body);
   res.status(201).json({ 
     success: true, 

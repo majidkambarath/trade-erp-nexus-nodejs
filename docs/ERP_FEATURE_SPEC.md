@@ -23,7 +23,7 @@ Audience: an engineer who knows this codebase but has not seen BullionPro. Paths
 | Per-location pools | **Not done.** One pool per item; there is no location entity |
 | §3 – §9 | Not started |
 
-Known limits of what shipped: `Stock.costValue` is seeded lazily from `currentStock × purchasePrice` on an item's first movement; the stock page's own edit path can still overwrite `currentStock` without adjusting `costValue`; `companyId` / `branchId` resolve to one default scope (`utils/tenant.js`) until real tenancy exists; the existing `forceUpdate` path on approved vouchers is gated by the period lock but is otherwise unchanged.
+Known limits of what shipped: `Stock.costValue` is seeded lazily from `currentStock × purchasePrice` on an item's first movement; the stock page's own edit path can still overwrite `currentStock` without adjusting `costValue`; `companyId` / `branchId` resolve to one default scope (`utils/tenant.js`) until real tenancy exists; the existing `forceUpdate` path on approved vouchers is gated by the period lock and, since the approval work, by `finance.deletePosted` and an approval-style judgement of the new amount whenever it changes what the voucher posted (see CLAUDE.md, "Approval limits and a second approver").
 
 Decisions already taken:
 

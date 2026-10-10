@@ -132,3 +132,40 @@ test("status machine: a rejected or reported invoice is final; a failed one can 
   assert.ok(!canTransition("REJECTED", "QUEUED"));
   assert.ok(!canTransition("REPORTED", "FAILED"));
 });
+
+// ================================= reverse charge (the supplier's invoice) =================================
+// A sale on which the customer accounts for the VAT carries NO VAT: category AE, tax 0 at a 0 rate. The line's stored vatPercent (5) is the
+// rate the customer assesses at, not an invoice rate. Priced since reverse charge was posted, the line has an `rcmVat`.
+test("a reverse-charge sale line goes out as category AE with no tax at a 0 rate, and validates clean", () => {
+  const rc = item({ taxKind: "reverse_charge", vatPercent: 5, vatAmount: 0, rcmVat: 45, discountAmount: 100, taxableAmount: 900, lineTotal: 900 });
+  const p = build(tx({ items: [rc] }));
+  const [line] = p.lines;
+  assert.equal(line.taxCategory, "AE");
+  assert.equal(line.taxRatePercent, 0, "the invoice charges no VAT, so there is no invoice rate");
+  assert.equal(line.lineTaxAmount, 0);
+  assert.equal(line.lineNetAmount, 900);
+  assert.equal(line.inclVatamount, 900);
+  assert.equal(p.taxAmount, 0);
+  assert.equal(p.totalIncludingTax, 900);
+  assert.equal(p.payableAmount, 900, "the customer pays the net");
+  assert.deepEqual(p.taxBreakdown, [{ taxCategory: "AE", taxRatePercent: 0, taxableAmount: 900, taxAmount: 0 }]);
+  assert.deepEqual(validatePayload(p), []);
+});
+
+test("a mixed invoice keeps a standard line standard and splits the breakdown by category", () => {
+  const rc = item({ description: "Imported spice", taxKind: "reverse_charge", vatPercent: 5, vatAmount: 0, rcmVat: 10, discountAmount: 0, taxableAmount: 200, lineTotal: 200, price: 20 });
+  const p = build(tx({ items: [item(), rc] }));
+  assert.deepEqual(p.lines.map((l) => [l.taxCategory, l.taxRatePercent, l.lineTaxAmount]), [["S", 5, 45], ["AE", 0, 0]]);
+  assert.equal(p.taxAmount, 45, "only the standard line carries VAT");
+  assert.equal(p.totalIncludingTax, 1145, "900 + 45 + 200: the reverse-charge line adds no VAT");
+  assert.deepEqual(p.taxBreakdown.map((g) => g.taxCategory).sort(), ["AE", "S"]);
+  assert.deepEqual(validatePayload(p), []);
+});
+
+test("a reverse-charge line saved before it stopped charging VAT is sent as it always was", () => {
+  const old = item({ taxKind: "reverse_charge", vatPercent: 5, vatAmount: 45, discountAmount: 100, taxableAmount: 900, lineTotal: 945 }); // no rcmVat
+  const [line] = build(tx({ items: [old] })).lines;
+  assert.equal(line.taxCategory, "AE");
+  assert.equal(line.taxRatePercent, 5);
+  assert.equal(line.lineTaxAmount, 45);
+});

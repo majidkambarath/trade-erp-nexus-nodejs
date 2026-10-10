@@ -2,7 +2,7 @@ const express = require("express");
 const { authenticateToken } = require("../../middleware/authMiddleware");
 const AccountController = require("../../controllers/financial/accountController");
 const { uploadSingle } = require("../../middleware/upload");
-const { requirePermission } = require("../../middleware/permissionGate");
+const { requirePermission, byVoucherDelete } = require("../../middleware/permissionGate");
 const router = express.Router();
 
 router.use(authenticateToken);
@@ -19,7 +19,7 @@ router.put(
   uploadSingle("attachedProof"),
   AccountController.updateAccountVoucher
 );
-router.delete("/account-vouchers/:id", requirePermission("finance.delete"), AccountController.deleteAccountVoucher);
+router.delete("/account-vouchers/:id", requirePermission(byVoucherDelete), AccountController.deleteAccountVoucher); // a posted (approved or settled) one needs deletePosted
 
 router.patch(
   "/account-vouchers/:id/approve", requirePermission("finance.approve"),

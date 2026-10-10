@@ -66,6 +66,7 @@ const ACCOUNTS = [
   ["Stock Write-off - Damage", "Cost of Goods Sold", "damage-loss"],
   ["Sales Discounts Given", "Operating Expenses", "discount-sales"],
   ["Freight on Purchases", "Operating Expenses", "freight-purchase"],
+  ["Purchased Services", "Operating Expenses", "service-expense"],
   ["Round-off Expense (Purchases)", "Operating Expenses", "round-off-purchase"],
   ["Round-off Expense (Sales)", "Operating Expenses", "round-off-sales"],
   ["Salaries & Wages", "Operating Expenses", null],

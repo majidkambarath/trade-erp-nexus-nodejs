@@ -124,3 +124,47 @@ test("roles carry their limit: built-in ones have none, and a custom one reports
   assert.equal(p.resolveRole("junior", [{ key: "junior", name: "Junior", rank: 30, permissions: ["sales.approve"], approvalLimit: 2500 }]).approvalLimit, 2500);
   assert.equal(p.resolveRole("junior", [{ key: "junior", name: "Junior", rank: 30, permissions: ["sales.approve"] }]).approvalLimit, null, "a role saved before limits existed has none");
 });
+
+// ---- a document that would take effect the moment it is saved (a journal, a receipt...)
+test("held on save: only when the person saving it is over their own limit, or the organisation wants two approvers at this amount", () => {
+  const maker = (limit) => ({ limit });
+  const second = { ...none, secondApprovalAbove: 10000 };
+  // nobody set anything: it posts at once, whatever the amount and whoever the person
+  assert.equal(r.holdOnSave({ policy: none, amount: 1e9, maker: maker(null) }), null);
+  assert.equal(r.holdOnSave({ policy: undefined, amount: 1e9, maker: maker(null) }), null);
+  // a limit: at it is fine, a fils over is held
+  assert.equal(r.holdOnSave({ policy: none, amount: 5000, maker: maker(5000) }), null);
+  assert.deepEqual(r.holdOnSave({ policy: none, amount: 5000.01, maker: maker(5000) }), { reason: "limit", amount: 5000.01, limit: 5000 });
+  assert.deepEqual(r.holdOnSave({ policy: none, amount: 1, maker: maker(0) }), { reason: "limit", amount: 1, limit: 0 }, "a limit of 0 posts nothing on its own");
+  // two approvers above an amount: held for everyone, a person with no limit included
+  assert.equal(r.holdOnSave({ policy: second, amount: 10000, maker: maker(null) }), null, "exactly the amount is not above it");
+  assert.deepEqual(r.holdOnSave({ policy: second, amount: 10000.01, maker: maker(null) }), { reason: "second", amount: 10000.01, above: 10000 });
+  // both apply: the person's own limit is the first thing they hit
+  assert.equal(r.holdOnSave({ policy: second, amount: 20000, maker: maker(15000) }).reason, "limit");
+  assert.equal(r.holdOnSave({ policy: second, amount: 12000, maker: maker(15000) }).reason, "second");
+  // the separate-approver rule alone holds nothing: a voucher that posts on save has no approval step to separate
+  assert.equal(r.holdOnSave({ policy: { ...none, separateApprover: true }, amount: 1e6, maker: maker(null) }), null);
+  assert.equal(r.holdOnSave({ policy: none, amount: 100 }), null, "no maker named: no limit to hit");
+});
+
+test("the words for a hold name the amount and what it is over", () => {
+  assert.equal(r.holdMessage(null), "");
+  assert.match(r.holdMessage({ reason: "limit", amount: 800, limit: 500 }, "AED"), /800\.00 AED, above your approval limit of 500\.00 AED.*saved but not posted/);
+  assert.match(r.holdMessage({ reason: "second", amount: 1500, above: 1000 }, "AED"), /1500\.00 AED, above 1000\.00 AED.*two approvers/);
+});
+
+test("changing the posted figures of an approved voucher is an approval of the new amount that stands on its own", () => {
+  const policy = { ...none, separateApprover: true, secondApprovalAbove: 1000 };
+  const clerk = { id: "u-clerk", limit: 500 };
+  // the approvers of the OLD figures do not count towards the new ones: an amount that needs two is refused, not waved through
+  const refused = r.decideRepost({ policy, amount: 1500, preparedBy: "someone", approver: BOSS, currency: "AED" });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.code, "SECOND_APPROVER_REQUIRED");
+  assert.match(refused.message, /1500\.00 AED.*two approvers.*Delete the voucher and enter it again/);
+  assert.equal(r.decideRepost({ policy, amount: 900, preparedBy: "someone", approver: BOSS }).ok, true, "under the threshold one person's act is enough");
+  assert.deepEqual(r.decideRepost({ policy: none, amount: 1e6, preparedBy: "someone", approver: BOSS }), { ok: true, final: true, step: 1, of: 1 });
+  // the other rules are the approval's own
+  assert.equal(r.decideRepost({ policy: none, amount: 700, preparedBy: "x", approver: clerk }).code, "APPROVAL_LIMIT_EXCEEDED");
+  assert.equal(r.decideRepost({ policy, amount: 100, preparedBy: "u-boss", approver: BOSS }).code, "SELF_APPROVAL_NOT_ALLOWED", "whoever prepared the voucher does not correct their own figures");
+  assert.equal(r.decideRepost({ policy: none, amount: 100, preparedBy: "u-boss", approver: BOSS }).ok, true);
+});

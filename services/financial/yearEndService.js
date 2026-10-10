@@ -9,6 +9,7 @@ const DefaultChartService = require("./defaultChartService");
 const FinancialService = require("./financialService");
 const NumberSeriesService = require("../core/numberSeriesService");
 const AuditService = require("../core/auditService");
+const StockReportsService = require("../reports/stockReportsService");
 const { writeEntries } = require("./ledgerBalances");
 const Y = require("../../utils/yearEnd");
 const orgLocale = require("../../utils/orgLocale");
@@ -101,9 +102,42 @@ class YearEndService {
     }));
   }
 
+  // Bank accounts that are reconciled at all, and how far: [{ accountName, reconciledTo: "YYYY-MM-DD" | null }]. Shared with
+  // the month close (periodCloseService.js).
+  static async banks({ session } = {}) {
+    const setups = await sessionOf(BankReconSetup.find({}).select("accountId").lean(), session);
+    if (!setups.length) return [];
+    const ids = setups.map((s) => s.accountId);
+    const [accounts, latest] = await Promise.all([
+      sessionOf(LedgerAccount.find({ _id: { $in: ids } }).select("accountName").lean(), session),
+      sessionOf(BankReconciliation.aggregate([{ $match: { accountId: { $in: ids }, status: "completed" } }, { $group: { _id: "$accountId", asOf: { $max: "$asOf" } } }]), session),
+    ]);
+    const doneTo = new Map(latest.map((l) => [String(l._id), l.asOf]));
+    return accounts.map((a) => ({ accountName: a.accountName, reconciledTo: doneTo.get(String(a._id)) || null }));
+  }
+
+  // Stock against the Inventory account of the ledger at the end of `day`, in the shape the close checks read
+  // (utils/yearEnd.js stockCheck). The same reconciliation the stock valuation screen shows, so the two cannot disagree
+  // (StockReportsService.ledgerCheck says what it can and cannot prove for a past day). A failure here must not stop a
+  // close: it becomes a warning the person ticks, with the reason.
+  static async stockFacts(day) {
+    try {
+      const c = await StockReportsService.ledgerCheck({ asOn: day });
+      return {
+        available: c.available, reason: c.reason, reconciles: c.reconciles, stockValue: c.stockValue, ledgerBalance: c.ledgerBalance,
+        difference: c.difference, accountName: c.account?.name || "Inventory", basis: c.basis, exact: c.exact, note: c.note, asOn: c.asOn,
+        sources: (c.sources || []).map(({ key, label, stock, ledger, difference }) => ({ key, label, stock, ledger, difference })),
+        outOfSyncItems: c.items?.outOfSync || 0,
+      };
+    } catch (err) {
+      return { available: false, error: true, reason: `Stock could not be checked: ${err.message}` };
+    }
+  }
+
   // Everything the checks and the screen need, read in one place (inside the transaction when closing, so what was
-  // judged is what is posted).
-  static async gather(fy, { session, req, view } = {}) {
+  // judged is what is posted). `stock` is the stock check when the caller already has it (it is read before the transaction
+  // starts: a long aggregate has no business inside one).
+  static async gather(fy, { session, req, view, stock } = {}) {
     const actorView = view !== undefined ? view : viewOf();
     const startDay = orgLocale.dayOf(fy.startDate);
     const endDay = orgLocale.dayOf(fy.endDate);
@@ -112,6 +146,8 @@ class YearEndService {
       const years = await sessionOf(FiscalYear.find({}).sort({ startDate: 1 }).lean(), session);
       const earlierOpen = years.filter((y) => y.endDate < fy.startDate && y.status !== "closed").map((y) => y.code);
       const laterClosed = years.filter((y) => y.startDate > fy.endDate && y.status === "closed").map((y) => y.code);
+      // a later year with months closed (not the whole year): its figures were locked on the premise that this one stays as it is
+      const laterMonthLocked = years.filter((y) => y.startDate > fy.endDate && y.status !== "closed" && y.lockedThrough).map((y) => y.code);
 
       // the year that follows: the one that already covers the day after this ends, else the one to create
       const range = Y.nextYearRange(startDay, endDay);
@@ -130,26 +166,15 @@ class YearEndService {
       }
 
       const within = { $gte: fy.startDate, $lte: fy.endDate };
-      const [documents, vouchers, rows, postingEnabled, retained, setups] = await Promise.all([
+      const [documents, vouchers, rows, postingEnabled, retained, banks, stockFacts] = await Promise.all([
         sessionOf(Transaction.countDocuments({ status: "DRAFT", isOpening: { $ne: true }, date: within }), session),
         sessionOf(Voucher.countDocuments({ status: { $in: ["draft", "pending"] }, date: within }), session),
         this.balances(fy, { session }),
         AccountConfigService.isPostingEnabled({ session }),
         this.retainedAccount({ session, req }),
-        sessionOf(BankReconSetup.find({}).select("accountId").lean(), session),
+        this.banks({ session }),
+        stock !== undefined ? stock : this.stockFacts(endDay),
       ]);
-
-      // bank accounts that are reconciled at all, and how far
-      let banks = [];
-      if (setups.length) {
-        const ids = setups.map((s) => s.accountId);
-        const [accounts, latest] = await Promise.all([
-          sessionOf(LedgerAccount.find({ _id: { $in: ids } }).select("accountName").lean(), session),
-          sessionOf(BankReconciliation.aggregate([{ $match: { accountId: { $in: ids }, status: "completed" } }, { $group: { _id: "$accountId", asOf: { $max: "$asOf" } } }]), session),
-        ]);
-        const doneTo = new Map(latest.map((l) => [String(l._id), l.asOf]));
-        banks = accounts.map((a) => ({ accountName: a.accountName, reconciledTo: doneTo.get(String(a._id)) || null }));
-      }
 
       // the books balance inside every branch (a posting that does not would carry into equity unseen)
       const sums = new Map();
@@ -165,8 +190,8 @@ class YearEndService {
       const facts = {
         year: { code: fy.code, status: fy.status, startDay, endDay },
         today: orgLocale.today(), allBranches: !actorView,
-        earlierOpen, laterClosed, unfinished: { documents, vouchers }, outOfBalance,
-        retained, postingEnabled, banks, next, currency: orgLocale.baseCurrency(),
+        earlierOpen, laterClosed, laterMonthLocked, unfinished: { documents, vouchers }, outOfBalance,
+        retained, postingEnabled, banks, stock: stockFacts, next, currency: orgLocale.baseCurrency(),
       };
       return { facts, plan, rows };
     });
@@ -209,7 +234,7 @@ class YearEndService {
     const fy = await this.load(id);
     const { facts, plan, rows } = await this.gather(fy, { req });
     const close = Y.assessClose(facts);
-    const reopen = Y.assessReopen({ year: facts.year, laterClosed: facts.laterClosed });
+    const reopen = Y.assessReopen({ year: facts.year, laterClosed: facts.laterClosed, laterMonthLocked: facts.laterMonthLocked });
     const branches = await Branch.find({}).select("code name").lean();
     const nameOf = new Map(branches.map((b) => [b.code, b.name]));
     const figures = this.figures(plan, rows, { closed: fy.status === "closed" });
@@ -223,6 +248,7 @@ class YearEndService {
       retained: facts.retained.mapped ? { accountName: facts.retained.accountName } : null,
       next: { code: facts.next.code, exists: facts.next.exists, startDay: facts.next.startDay, endDay: facts.next.endDay },
       willPost: Boolean(facts.postingEnabled && plan.lines > 0),
+      stock: facts.stock || null,
       closing: fy.closing || null,
     };
   }
@@ -236,10 +262,12 @@ class YearEndService {
     // The posting map is topped up BEFORE the transaction: a transaction reads the data as it stood when it began, so a
     // mapping made inside the run would stay invisible to it.
     await this.retainedAccount({ req });
+    // The stock check is read before the transaction too: it is a long aggregate and only ever a warning.
+    const stock = await this.stockFacts(orgLocale.dayOf((await this.load(id)).endDate));
     const result = await inTransaction(async (session) => {
       const fy = await this.load(id, { session });
       // judged against the actor's own view: a person looking at one branch cannot close the whole organisation
-      const { facts, plan } = await this.gather(fy, { session, req, view: branchView });
+      const { facts, plan } = await this.gather(fy, { session, req, view: branchView, stock });
       const assessment = Y.assessClose(facts);
       if (!assessment.canClose) {
         const first = assessment.blockers[0];
@@ -310,7 +338,7 @@ class YearEndService {
     const result = await inTransaction(async (session) => {
       const fy = await this.load(id, { session });
       const { facts } = await this.gather(fy, { session, req, view: branchView });
-      const assessment = Y.assessReopen({ year: facts.year, laterClosed: facts.laterClosed });
+      const assessment = Y.assessReopen({ year: facts.year, laterClosed: facts.laterClosed, laterMonthLocked: facts.laterMonthLocked });
       if (!assessment.canClose) {
         const first = assessment.blockers[0];
         throw new AppError(first.title, 409, first.code === "NOT_CLOSED" ? "NOT_CLOSED" : "YEAR_REOPEN_BLOCKED", { blockers: assessment.blockers });

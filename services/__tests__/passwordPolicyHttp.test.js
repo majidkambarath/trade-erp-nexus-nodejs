@@ -125,13 +125,18 @@ test("choosing a new password has rules, and once chosen everything opens on the
   assert.equal((await signIn("nadia@pol.test", "a-new-password-1")).status, 200);
 });
 
-test("an administrator resetting a password puts the person back to choosing their own - at once, on the token they hold", { skip }, async () => {
+test("an administrator resetting a password ends the person's sign-ins and puts the next one back to choosing their own", { skip }, async () => {
   const nadia = await admin("nadia@pol.test");
   const reset = await api("owner", "PATCH", `/access/users/${nadia._id}`, { password: "reset-by-admin-1" });
   assert.equal(reset.status, 200, JSON.stringify(reset.data));
   assert.equal((await admin("nadia@pol.test")).mustChangePassword, true);
-  assert.equal((await api("nadia", "GET", "/customers/customers")).code, "PASSWORD_CHANGE_REQUIRED", "the token she already holds is refused straight away");
-  assert.equal((await signIn("nadia@pol.test", "reset-by-admin-1")).status, 200);
+  // (a password someone else chose ends every sign-in the person holds: the reset is often made because the old one is not safe. Until 10 Oct 2026
+  // the token she held stayed open, limited to choosing a new password.)
+  assert.equal((await api("nadia", "GET", "/customers/customers")).code, "SESSION_REVOKED", "the token she already holds is over straight away");
+  const again = await signIn("nadia@pol.test", "reset-by-admin-1");
+  assert.equal(again.status, 200);
+  T.nadia = again.body.tokens.accessToken;
+  assert.equal((await api("nadia", "GET", "/customers/customers")).code, "PASSWORD_CHANGE_REQUIRED", "and the new sign-in is held to choosing her own");
   const ok = await api("nadia", "PUT", "/profile/change-password", { currentPassword: "reset-by-admin-1", newPassword: "hers-again-pass-1", confirmPassword: "hers-again-pass-1" });
   assert.equal(ok.status, 200);
 });
@@ -167,16 +172,21 @@ test("five wrong passwords lock an account for minutes, not hours, and a reset l
   assert.equal((await signIn(email, "let-back-in-pass-1")).status, 200, "and she is let in at once");
 });
 
-test("a person who changes their own password is also let out of a lock", { skip }, async () => {
+test("a lock stops password checks everywhere: a held session cannot change its password to get past it, and the way out is a reset", { skip }, async () => {
   const email = "nadia@pol.test";
   const s = await signIn(email, "let-back-in-pass-1");
   const token = s.body.tokens.accessToken;
   for (let i = 0; i < 5; i++) await signIn(email, "wrong-password-y");
   assert.equal((await signIn(email, "let-back-in-pass-1")).status, 423);
-  // the token she already holds still works (a lock stops signing IN), and choosing a new password clears it
+  // the token she already holds still works for everything else, but "change password" is a place to check a password and so it is shut too:
+  // were it not, a stolen session could guess the password there without limit, locked or not (it is counted like a sign-in now)
   const ch = await call("PUT", "/profile/change-password", { token, body: { currentPassword: "let-back-in-pass-1", newPassword: "her-own-now-pass-1", confirmPassword: "her-own-now-pass-1" } });
-  assert.equal(ch.status, 200, JSON.stringify(ch.data));
-  assert.equal((await signIn(email, "her-own-now-pass-1")).status, 200);
+  assert.equal(ch.status, 423, JSON.stringify(ch.data));
+  assert.equal(ch.data.errorCode, "ACCOUNT_LOCKED");
+  assert.equal((await call("GET", "/organisation/status", { token })).status, 200, "she is not signed out by it");
+  // an administrator's reset (above) or the emailed one (accountSecurityHttp) lets her back in; so does the lock running out
+  await as("pol", () => M.Admin.updateOne({ email }, { $set: { loginAttempts: 0 }, $unset: { lockUntil: 1 } }));
+  assert.equal((await signIn(email, "let-back-in-pass-1")).status, 200);
 });
 
 test("an address that keeps failing is slowed - failures only, and the right password is not exempt - on a server with a small limit", { skip }, async () => {

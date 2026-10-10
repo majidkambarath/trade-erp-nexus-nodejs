@@ -16,7 +16,7 @@ const transaction = () => ({
   returnOf: { transactionNo: "LEAK-return" },
   items: [{
     _id: "LEAK-line", itemId: "LEAK-item", itemCode: "RICE5", description: "Basmati Rice 5kg", qty: 10, rate: 200,
-    vatPercent: 5, vatAmount: 10, lineTotal: 210,
+    vatPercent: 5, vatAmount: 10, taxKind: "standard", lineTotal: 210,
     price: 20, currentPurchasePrice: "LEAK-buy", purchasePrice: "LEAK-buy2", unitCost: "LEAK-cost", cogsAmount: "LEAK-cogs",
     batchNumber: "LEAK-batch", allocations: [{ batchId: "LEAK" }], taxCodeId: "LEAK-tax", brand: "LEAK-brand", grandTotal: 210,
     discountPercent: 0, grossAmount: 200, taxableAmount: 200,

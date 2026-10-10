@@ -49,7 +49,10 @@ exports.getAccountLedger = catchAsync(async (req, res) =>
 );
 
 // --- tax codes ---
-exports.listTaxCodes = catchAsync(async (req, res) => ok(res, await TaxCodeService.list(req)));
+exports.listTaxCodes = catchAsync(async (req, res) => {
+  await DefaultChartService.topUpTaxCodes(req); // an older company gets the reverse-charge starter once
+  ok(res, await TaxCodeService.list(req));
+});
 exports.createTaxCode = catchAsync(async (req, res) => {
   if (!req.body.name || req.body.ratePercent === undefined) throw new AppError("name and ratePercent are required", 400);
   const code = await TaxCodeService.create(req.body, req);

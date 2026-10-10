@@ -8,6 +8,10 @@ const itemSchema = new mongoose.Schema({
     ref: "Stock",
   },
   itemCode: { type: String, default: "" },
+  // What kind of item this line sold or bought: "service" lines never move stock (utils/itemKinds.js). Stamped from the item
+  // master when the document is priced, never taken from the request, and deliberately with no default: a line written before
+  // services existed has none and reads as goods.
+  itemType: { type: String, enum: ["goods", "service"] },
   description: { type: String, required: true, trim: true },
   qty: { type: Number, required: true, min: 0 },
   price: { type: Number, default: 0, min: 0 },
@@ -29,6 +33,11 @@ const itemSchema = new mongoose.Schema({
   taxableAmount: { type: Number, default: 0, min: 0 },
   taxCodeId: { type: mongoose.Schema.Types.ObjectId, ref: "TaxCode", default: null },
   taxKind: { type: String, default: null }, // snapshot of the tax code's kind at posting
+  // Reverse charge (taxKind "reverse_charge"): the VAT the RECIPIENT assesses on this line. The supplier charged none, so vatAmount is
+  // 0 and lineTotal is the net; this is the self-assessed amount (taxable x the code's rate), posted by a purchase and reported in boxes
+  // 3 and 10 (utils/pricing.js). Written only on a reverse-charge line, with no default: a line saved before this existed (priced as
+  // if the supplier had charged VAT) has none, and the VAT return keeps reading those exactly as it always did.
+  rcmVat: { type: Number, min: 0 },
   // Batch / expiry for perishables (a batch belongs to a receipt, not to the product).
   batchNumber: { type: String, trim: true, default: null },
   expiryDate: { type: Date, default: null },
@@ -139,6 +148,7 @@ const transactionSchema = new mongoose.Schema({
     lineDiscount: Number,
     net: Number,
     lineVat: Number,
+    rcmVat: Number, // self-assessed reverse-charge VAT: beside the total, never in it (absent on a document saved before it existed)
     chargesNet: Number,
     chargesVat: Number,
     headerDiscount: Number,

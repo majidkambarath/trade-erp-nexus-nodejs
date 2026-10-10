@@ -4,6 +4,7 @@ const AppError = require("../../utils/AppError");
 const Sequence = require("../../models/modules/sequenceModel");
 const PartyAccounts = require("../financial/partyAccounts");
 const PartyMaster = require("../masters/partyMasterService");
+const { searchRegex } = require("../../utils/regex");
 
 // Customer-only fields the model has always had; the create path used to drop them.
 const cleanEInvoice = (v) =>
@@ -165,11 +166,11 @@ exports.getAllCustomers = async (filters) => {
 
   if (filters.search) {
     query.$or = [
-      { customerId: new RegExp(filters.search, "i") },
-      { customerName: new RegExp(filters.search, "i") },
-      { contactPerson: new RegExp(filters.search, "i") },
-      { email: new RegExp(filters.search, "i") },
-       { trnNumber: new RegExp(filters.search, "i") }, // <-- include TRN in search
+      { customerId: searchRegex(filters.search) },
+      { customerName: searchRegex(filters.search) },
+      { contactPerson: searchRegex(filters.search) },
+      { email: searchRegex(filters.search) },
+       { trnNumber: searchRegex(filters.search) }, // <-- include TRN in search
     ];
   }
 
@@ -204,6 +205,9 @@ exports.getCustomerByCustomerId = async (customerId) => {
   if (!existing) {
     throw new AppError("Customer not found", 404);
   }
+  // What an edit may not write: the customer's code, the running figures (balance, orders, spend) and the record's own bookkeeping belong
+  // to the system. A person who may edit a customer must not be able to set what the customer owes.
+  for (const key of ["_id", "__v", "companyId", "customerId", "cashBalance", "totalOrders", "totalSpent", "lastOrder", "joinDate", "createdAt", "updatedAt"]) delete data[key];
   // VAT/TRN, terms, contacts, bank accounts and documents: checked and merged in with the legacy
   // fields kept in step (trnNumber, paymentTerms)
   const master = await PartyMaster.prepare("customer", data, { existing });

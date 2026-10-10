@@ -37,11 +37,16 @@ function mayManage({ actor, target, nextType, self = false, action = "update" })
 // the request names.
 // roleKey is the one that matters most: the role IS the account's power, so it is only ever set through the users API,
 // which checks the actor's rank. Left open here, "create an account" could name any role, owner included.
-const SYSTEM_FIELDS = ["permissions", "roleKey", "branchRoles", "companyId", "createdBy", "updatedBy", "loginAttempts", "lockUntil", "lastLogin", "_id", "__v", "createdAt", "updatedAt"];
+// twoFactor and sessionsRevokedAt are the account's own security: switching two-factor off needs the password and a code (POST
+// /auth/2fa/disable), and ending every sign-in is a reset's doing. Left open here, a profile update with { twoFactor: { enabled: false } }
+// would switch it off with neither.
+const SYSTEM_FIELDS = ["permissions", "roleKey", "branchRoles", "twoFactor", "sessionsRevokedAt", "companyId", "createdBy", "updatedBy", "loginAttempts", "lockUntil", "lastLogin", "_id", "__v", "createdAt", "updatedAt"];
 
 function withoutSystemFields(body) {
   const out = { ...(body || {}) };
   for (const k of SYSTEM_FIELDS) delete out[k];
+  // ...and a path into one of them ("twoFactor.enabled"), which a document would also take as an assignment
+  for (const k of Object.keys(out)) if (SYSTEM_FIELDS.some((f) => k.startsWith(`${f}.`))) delete out[k];
   return out;
 }
 

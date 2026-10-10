@@ -20,7 +20,9 @@ const pick = (src, keys) => {
 };
 
 // ---- the tax invoice ---------------------------------------------------------------------
-const LINE_KEYS = ["itemCode", "description", "qty", "rate", "vatPercent", "vatAmount", "lineTotal"];
+// taxKind is there so the page and the PDF can say "reverse charge applies" on a line the customer accounts for the VAT on
+// (UAE VAT Executive Regulation Art. 59(1)(l)): it is a treatment label, not a cost or a margin.
+const LINE_KEYS = ["itemCode", "description", "qty", "rate", "vatPercent", "vatAmount", "taxKind", "lineTotal"];
 const CHARGE_KEYS = ["code", "description", "amount", "vatPercent", "vatAmount"];
 const PRICING_KEYS = ["gross", "lineDiscount", "net", "lineVat", "chargesNet", "chargesVat", "headerDiscount", "roundOff", "grandTotal"];
 const DOCUMENT_KEYS = ["transactionNo", "invoiceNumber", "status", "date", "deliveryDate", "dueDate", "lpono", "docno", "discount", "totalAmount"];

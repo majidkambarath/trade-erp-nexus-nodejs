@@ -1,3 +1,4 @@
+const logger = require("../../utils/logger");
 const StockService = require("../../services/stock/stockService");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
@@ -29,7 +30,7 @@ exports.getAllStock = catchAsync(async (req, res) => {
 
 exports.getPurchaseLogsByItemId = catchAsync(async (req, res) => {
   const { id } = req.params;
-console.log(id)
+logger.debug(id)
   const purchaseLogs = await StockService.getPurchaseLogsByItemId(id);
 
   res.status(200).json({
@@ -60,6 +61,7 @@ exports.getCurrentStockById = catchAsync(async (req, res) => {
     itemId: stock.itemId,
     itemCode: stock.sku || stock.itemId,
     itemName: stock.itemName,
+    itemType: stock.itemType || "goods",
     currentStock: stock.currentStock,
     purchasePrice: stock.purchasePrice,
     salesPrice: stock.salesPrice,
@@ -337,6 +339,7 @@ exports.exportStock = catchAsync(async (req, res) => {
     ItemID: stock.itemId,
     SKU: stock.sku,
     ItemName: stock.itemName,
+    ItemType: stock.itemType || "goods",
     Category: stock.category?.name || "N/A",
     Vendor: stock.vendorId?.name || "N/A",
     UnitOfMeasure: stock.unitOfMeasure,

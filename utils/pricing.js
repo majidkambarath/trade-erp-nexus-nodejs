@@ -8,12 +8,22 @@
 //   taxable   = gross - discount          (a trade discount REDUCES the taxable base)
 //   vat       = taxable x vat% / 100
 //   lineTotal = taxable + vat             (VAT-inclusive)
+//
+// REVERSE CHARGE (line.taxKind === "reverse_charge"): the supplier charged no VAT, so the line carries
+// vat = 0 and lineTotal = taxable (what the party is owed is the net). The recipient self-assesses:
+//   rcmVat = taxable x rate / 100         (the rate is the tax code's, 5 when none is given)
+// which is a separate figure, never part of the line total or of the party's balance. It is posted by the
+// purchase templates (utils/postingTemplates.js) and reported in boxes 3 and 10 of the VAT 201 return.
 
 const roundTo = (n, dp = 2) => {
   const f = 10 ** dp;
   const v = Number(n) || 0;
   return Math.sign(v) * (Math.round(Math.abs(v) * f + 1e-9) / f);
 };
+
+// The self-assessment rate when a reverse-charge line names none (a code's rate is always given: this is the safety net).
+const DEFAULT_RCM_PERCENT = 5;
+const REVERSE_CHARGE = "reverse_charge";
 
 function priceLine(line, { dp = 2 } = {}) {
   const qty = Number(line.qty) || 0;
@@ -26,6 +36,17 @@ function priceLine(line, { dp = 2 } = {}) {
   const discount = Math.min(gross, fixed > 0 ? roundTo(fixed, dp) : roundTo((gross * pct) / 100, dp));
 
   const taxable = roundTo(gross - discount, dp);
+
+  if (line.taxKind === REVERSE_CHARGE) {
+    // An explicit 0 stays 0 (a zero-rated service bought from abroad is still declared, with nil VAT); only a missing rate gets the default.
+    const given = line.vatPercent === undefined || line.vatPercent === null || line.vatPercent === "" ? NaN : Number(line.vatPercent);
+    const vatPercent = Number.isFinite(given) && given >= 0 ? given : DEFAULT_RCM_PERCENT;
+    return {
+      gross, discount, taxable, vatPercent, vat: 0, lineTotal: taxable,
+      reverseCharge: true, rcmVat: roundTo((taxable * vatPercent) / 100, dp),
+    };
+  }
+
   const vatPercent = Number(line.vatPercent) || 0;
   const vat = roundTo((taxable * vatPercent) / 100, dp);
   return { gross, discount, taxable, vatPercent, vat, lineTotal: roundTo(taxable + vat, dp) };
@@ -55,6 +76,8 @@ function priceDocument(
   const lineDiscount = sum(lines, "discount");
   const net = sum(lines, "taxable");
   const lineVat = sum(lines, "vat");
+  // VAT the recipient assesses on reverse-charge lines: reported beside the document, never inside its total
+  const rcmVat = sum(lines, "rcmVat");
   const chargesNet = sum(charges, "net");
   const chargesVat = sum(charges, "vat");
   const hd = roundTo(Math.min(Number(headerDiscount) || 0, net + lineVat + chargesNet + chargesVat), dp);
@@ -70,6 +93,7 @@ function priceDocument(
     lineDiscount,
     net,
     lineVat,
+    rcmVat,
     chargesNet,
     chargesVat,
     headerDiscount: hd,
@@ -78,4 +102,4 @@ function priceDocument(
   };
 }
 
-module.exports = { roundTo, priceLine, priceCharge, priceDocument };
+module.exports = { roundTo, priceLine, priceCharge, priceDocument, DEFAULT_RCM_PERCENT, REVERSE_CHARGE };

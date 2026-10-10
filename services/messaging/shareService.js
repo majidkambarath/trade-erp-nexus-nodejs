@@ -90,7 +90,7 @@ class ShareService {
 
   static async _recordView(link, req) {
     const now = new Date();
-    const view = { at: now, ip: coarseIp(req.headers?.["x-forwarded-for"]?.split(",")[0].trim() || req.ip), ua: String(req.get?.("user-agent") || "").slice(0, 120) };
+    const view = { at: now, ip: coarseIp(req.ip) /* what Express made of the proxy chain (server.js: trust proxy), not a header the visitor wrote */, ua: String(req.get?.("user-agent") || "").slice(0, 120) };
     await ShareLink.updateOne(
       { _id: link._id },
       { $inc: { viewCount: 1 }, $set: { lastViewedAt: now }, $push: { views: { $each: [view], $slice: -20 } } }

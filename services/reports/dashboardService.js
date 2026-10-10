@@ -13,6 +13,7 @@ const { orgDay } = require("../../utils/fx");
 const { getTenant } = require("../../utils/tenant");
 const orgLocale = require("../../utils/orgLocale");
 const Q = require("./dashboardQueries");
+const { STOCKED_ONLY } = require("../../utils/itemKinds");
 
 // The home dashboard. Nothing is invented or sampled: every figure is read from the report that
 // owns it (profit and loss, cash book / flow, party balances, ageing, stock valuation / expiry /
@@ -145,7 +146,7 @@ class DashboardService {
 
     const [
       profit, previousProfit, invoices, receipts, orders, reorder, activeItems, newCustomers, customers,
-      profits, trade, items, previousItems, vat, vatSpark, valuation, expiry, balances, draftSales, draftPurchases, dayBook, profile,
+      profits, trade, items, previousItems, vat, vatSpark, rcmSpark, valuation, expiry, balances, draftSales, draftPurchases, dayBook, profile,
     ] = await Promise.all([
       LedgerReports.profitAndLoss({ from: p.from, to: p.to }),
       LedgerReports.profitAndLoss({ from: p.previousFrom, to: p.previousTo }),
@@ -153,7 +154,7 @@ class DashboardService {
       Q.voucherTotal("receipt", p.from, p.to),
       Q.orderStatuses(p.from, p.to),
       StockReports.reorder(),
-      Stock.countDocuments({ status: "Active" }),
+      Stock.countDocuments({ status: "Active", ...STOCKED_ONLY }), // a service is not an inventory line
       Customer.countDocuments({ createdAt: { $gte: LedgerReports.dayStart(p.from), $lte: asOf } }),
       Customer.countDocuments({}),
       Q.monthlyProfit(p.months, p.to),
@@ -162,6 +163,7 @@ class DashboardService {
       analysis(p, "item", { previous: true }),
       VatReturn.compute({ from: quarterFrom, to: p.to }),
       Q.accountMonthly("vat-sales", vatMonths, p.to, "credit"),
+      Q.accountMonthly("rcm-purchase", vatMonths, p.to, "credit"), // VAT assessed on reverse-charge purchases is output tax too (box 3)
       StockReports.valuation({ asOn: p.to }),
       StockReports.expiry({ withinDays: EXPIRY_DAYS }),
       LedgerReports.partyBalances({ type: "customer", asOn: p.to }),
@@ -213,7 +215,7 @@ class DashboardService {
       outputVat: vat.totals.outputVat, recoverableVat: vat.totals.recoverableVat, net,
       position: net > 0 ? "payable" : net < 0 ? "refundable" : "nil",
       unclassifiedLines: vat.unclassified.count,
-      spark: vatMonths.map((month, i) => ({ month, outputVat: vatSpark.values[i] })),
+      spark: vatMonths.map((month, i) => ({ month, outputVat: round2(vatSpark.values[i] + rcmSpark.values[i]) })),
     };
 
     // ---- the latest vouchers, with where each invoice stands
@@ -282,8 +284,8 @@ class DashboardService {
       LedgerReports.profitAndLoss({ from: p.from, to: p.to }),
       Q.voucherTotal("receipt", p.from, p.to),
       Q.invoiceStats(p.from, p.to),
-      Stock.countDocuments({ status: "Active" }),
-      Stock.countDocuments({ status: "Active", currentStock: { $gt: 0 } }),
+      Stock.countDocuments({ status: "Active", ...STOCKED_ONLY }),
+      Stock.countDocuments({ status: "Active", currentStock: { $gt: 0 }, ...STOCKED_ONLY }),
       Q.drafts("sales_order"),
       Q.drafts("purchase_order"),
       Q.voucherTotal("receipt", weekFrom, p.to),

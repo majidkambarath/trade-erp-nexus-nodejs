@@ -1,7 +1,7 @@
 const express = require("express");
 const adminController = require("../../controllers/core/adminController");
 const { authenticateToken } = require("../../middleware/authMiddleware");
-const { loginThrottle } = require("../../middleware/loginThrottle");
+const { sharedLoginThrottle, refreshFailureThrottle } = require("../../middleware/loginThrottle");
 const { requirePermission, selfOr, signedIn, publicRoute } = require("../../middleware/permissionGate");
 const {
   uploadSingle,
@@ -23,9 +23,9 @@ const router = express.Router();
 // Managing other people's accounts needs users.manage (seeing them, users.view). Whether this person may touch THIS
 // account - one of a lower rank than their own - is decided in the service, which knows the target.
 // =================== PUBLIC ROUTES ===================
-router.post("/login", publicRoute("signing in: there is no one to check yet"), loginThrottle(), validateLogin, adminController.login);
+router.post("/login", publicRoute("signing in: there is no one to check yet"), sharedLoginThrottle(), validateLogin, adminController.login);
 
-router.post("/refresh-token", publicRoute("renewing a session: the session cookie is the credential"), adminController.refreshToken);
+router.post("/refresh-token", publicRoute("renewing a session: the session cookie is the credential"), refreshFailureThrottle(), adminController.refreshToken);
 
 router.post("/logout", publicRoute("ending a session: the session cookie names it"), adminController.logout);
 

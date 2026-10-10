@@ -1,9 +1,10 @@
+const logger = require("../../utils/logger");
 const TransactorService = require("../../services/financial/TransactorService");
 const catchAsync = require("../../utils/catchAsync");
 
 exports.createTransactor = catchAsync(async (req, res) => {
   const createdBy = req.admin?.id || req.body.createdBy || "system";
-  console.log(req.body)
+  logger.debug(req.body)
   const transactor = await TransactorService.createTransactor(req.body, createdBy);
 
   res.status(201).json({
@@ -14,7 +15,7 @@ exports.createTransactor = catchAsync(async (req, res) => {
 
 exports.getAllTransactors = catchAsync(async (req, res) => {
   const result = await TransactorService.getAllTransactors(req.query);
-console.log(result.transactors)
+logger.debug(result.transactors)
   res.status(200).json({
     status: "success",
     results: result.transactors.length,
@@ -34,8 +35,8 @@ exports.getTransactorById = catchAsync(async (req, res) => {
 
 exports.updateTransactor = catchAsync(async (req, res) => {
   const updatedBy = req.admin?.id || req.body.updatedBy || "system";
-  console.log(req.body)
-  console.log(req.params.id)
+  logger.debug(req.body)
+  logger.debug(req.params.id)
   const transactor = await TransactorService.updateTransactor(req.params.id, req.body, updatedBy);
 
   res.status(200).json({

@@ -6,6 +6,8 @@ const AccountConfigService = require("./accountConfigService");
 const FinancialService = require("./financialService");
 const AppError = require("../../utils/AppError");
 const { TEMPLATES, figuresFor, buildEntries, round2 } = require("../../utils/postingTemplates");
+const ItemKindService = require("../stock/itemKindService");
+const kinds = require("../../utils/itemKinds");
 
 // Ledger entries need an Admin ObjectId; order documents carry the creator as a free string.
 const SYSTEM_USER = new mongoose.Types.ObjectId("000000000000000000000000");
@@ -36,6 +38,48 @@ class PostingService {
     return account._id;
   }
 
+  // The company's account for services it buys when the item names none ("service-expense"). A company whose posting map
+  // was made before the key existed has it unmapped: the defaults are added once and we try again, like bank-charges.
+  static async serviceExpenseAccount({ session } = {}) {
+    try {
+      return await AccountConfigService.resolveAccount("service-expense", { session });
+    } catch (err) {
+      if (err.code !== "ACCOUNT_NOT_CONFIGURED") throw err;
+      await require("./defaultChartService").provision(); // avoids a require cycle; commits on its own
+      // read outside the session: the top-up above is not part of this transaction's snapshot
+      return AccountConfigService.resolveAccount("service-expense");
+    }
+  }
+
+  // The Reverse-charge VAT liability ("rcm-purchase"), needed only by a purchase that has a reverse-charge line. The key has been
+  // in the posting map from the start, but a company whose map was made before it was mapped to an account gets the defaults
+  // added once and tries again, as for the service-expense account above.
+  static async rcmAccount({ session } = {}) {
+    try {
+      return await AccountConfigService.resolveAccount("rcm-purchase", { session });
+    } catch (err) {
+      if (err.code !== "ACCOUNT_NOT_CONFIGURED") throw err;
+      await require("./defaultChartService").provision(); // avoids a require cycle; commits on its own
+      return AccountConfigService.resolveAccount("rcm-purchase"); // outside the session: the top-up is not in its snapshot
+    }
+  }
+
+  // Service lines post revenue / expense, VAT and the party balance like any other line, but never an Inventory or cost
+  // of goods leg. The templates book revenue to sales-revenue and purchases to inventory-asset; this moves the service
+  // lines' share to the item's own account (else, for a sale, nothing: sales-revenue is right; for a purchase, the
+  // service-expense account). A document with no service line comes back untouched and costs no query beyond one read.
+  static async routeServiceLines(transaction, entries, session) {
+    const map = await ItemKindService.load(transaction.items, { session });
+    const plan = kinds.servicePlan(transaction.items, ItemKindService.kindOf(map));
+    if (!plan.hasServices) return entries;
+    const defaultExpenseAccountId = kinds.needsDefaultExpense(plan) && transaction.type.startsWith("purchase")
+      ? await this.serviceExpenseAccount({ session })
+      : undefined;
+    return kinds
+      .routeServiceLegs(entries, transaction.type, plan, { defaultExpenseAccountId: defaultExpenseAccountId && String(defaultExpenseAccountId) })
+      .map((e) => ({ ...e, accountId: new mongoose.Types.ObjectId(String(e.accountId)) }));
+  }
+
   // Posts the accounting entries for an approved order. No-op while ledger posting is off.
   // `stockUpdates` carries the cost each line moved, which gives the cost of goods sold.
   static async postTransaction(transaction, { stockUpdates = [], createdBy, session } = {}) {
@@ -54,10 +98,17 @@ class PostingService {
     for (const leg of TEMPLATES[transaction.type]) {
       if (!leg.account.key || cache.has(leg.account.key)) continue;
       if (!(figures[leg.amount] > 0)) continue; // a leg that carries nothing needs no account
-      cache.set(leg.account.key, await AccountConfigService.resolveAccount(leg.account.key, { session }));
+      cache.set(
+        leg.account.key,
+        leg.account.key === "rcm-purchase"
+          ? await this.rcmAccount({ session })
+          : await AccountConfigService.resolveAccount(leg.account.key, { session })
+      );
     }
-    const entries = buildEntries(transaction.type, figures, (a) =>
-      a.party ? partyId : cache.get(a.key)
+    const entries = await this.routeServiceLines(
+      transaction,
+      buildEntries(transaction.type, figures, (a) => (a.party ? partyId : cache.get(a.key))),
+      session
     );
 
     const accounts = await LedgerAccount.find({ _id: { $in: entries.map((e) => e.accountId) } })

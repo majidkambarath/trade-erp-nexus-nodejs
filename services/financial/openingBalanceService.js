@@ -20,6 +20,7 @@ const { writeEntries } = require("./ledgerBalances");
 const BatchService = require("../stock/batchService");
 const { ensurePartyAccount, KINDS } = require("./partyAccounts");
 const costing = require("../../utils/inventoryCosting");
+const kinds = require("../../utils/itemKinds");
 const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
@@ -671,7 +672,8 @@ class OpeningBalanceService {
     const [goLive, vouchers, stocks, history] = await Promise.all([
       this.goLive(),
       OpeningBalanceVoucher.find({ section: "stock" }).sort({ createdAt: -1 }).lean(),
-      Stock.find({}).select("itemId sku itemName currentStock unitOfMeasure batchNumber expiryDate status").populate("unitOfMeasure", "shortCode").sort({ itemName: 1 }).lean(),
+      Stock.find({ ...kinds.STOCKED_ONLY }) // a service has no opening stock
+        .select("itemId sku itemName currentStock unitOfMeasure batchNumber expiryDate status").populate("unitOfMeasure", "shortCode").sort({ itemName: 1 }).lean(),
       InventoryMovement.aggregate([
         { $match: LIVE_MOVEMENT },
         { $group: { _id: "$stockId", movements: { $sum: 1 }, ours: { $sum: { $cond: [{ $eq: ["$eventType", "OPENING_STOCK"] }, 1, 0] } } } },
@@ -738,6 +740,7 @@ class OpeningBalanceService {
       for (const r of clean) {
         r.stock = lookup.get(r.item);
         if (!r.stock) throw new AppError(`Row ${r.n}: that item no longer exists`, 404, "ITEM_NOT_FOUND");
+        if (kinds.isService(r.stock)) throw new AppError(`Row ${r.n}: ${r.stock.itemName} is a service item and has no stock to open with`, 409, "SERVICE_HAS_NO_STOCK");
       }
 
       // Opening stock only for an item with no history: otherwise the quantity and cost already mean something.

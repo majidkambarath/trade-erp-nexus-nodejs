@@ -4,6 +4,7 @@ const Vendor = require("../models/modules/vendorModel");
 const Customer = require("../models/modules/customerModel");
 const DebitLog = require("../models/modules/DebitLog");
 const CreditLog = require("../models/modules/CreditLog");
+const AppError = require("../utils/AppError");
 
 class LedgerService {
   // 1. All Parties (Combined) - Optional
@@ -198,11 +199,15 @@ static async getPartyLedger(partyType, partyId, filters = {}) {
   const party = await PartyModel.findById(partyId)
     .select(partyType === "Vendor" ? "vendorName vendorId" : "customerName customerId")
     .lean();
+  // The tenant plugin already scopes this query to the organisation in scope, so a missing party
+  // means either no such id or one that belongs to someone else - answered the same way, like every
+  // other by-id read (see CLAUDE.md "another organisation's document ... answers 404").
+  if (!party) throw new AppError(`${partyType} not found`, 404);
 
   return {
     party: {
-      name: partyType === "Vendor" ? party?.vendorName : party?.customerName,
-      partyId: partyType === "Vendor" ? party?.vendorId : party?.customerId,
+      name: partyType === "Vendor" ? party.vendorName : party.customerName,
+      partyId: partyType === "Vendor" ? party.vendorId : party.customerId,
       currentBalance: runningBalance,
     },
     ledger,

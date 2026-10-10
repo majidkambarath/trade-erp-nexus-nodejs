@@ -715,7 +715,16 @@ class IfrsReportsService {
       const [out, inp] = await Promise.all([AccountConfigService.resolveAccount("vat-sales"), AccountConfigService.resolveAccount("vat-purchase")]);
       const output = byId.get(String(out));
       const input = byId.get(String(inp));
-      return { output: output ? nat("LIABILITY", output.closingNet) : 0, input: input ? nat("ASSET", input.closingNet) : 0 };
+      // VAT the company assesses on its reverse-charge purchases is a liability of its own account (the matching input is in Input VAT
+      // above), so it is a third line: left out, the net would count the input and not the liability that offsets it.
+      let reverseCharge = 0;
+      try {
+        const rcm = byId.get(String(await AccountConfigService.resolveAccount("rcm-purchase")));
+        reverseCharge = rcm ? nat("LIABILITY", rcm.closingNet) : 0;
+      } catch (err) {
+        if (err.code !== "ACCOUNT_NOT_CONFIGURED") throw err;
+      }
+      return { output: output ? nat("LIABILITY", output.closingNet) : 0, input: input ? nat("ASSET", input.closingNet) : 0, reverseCharge };
     } catch (err) {
       if (err.code === "ACCOUNT_NOT_CONFIGURED") return null;
       throw err;
@@ -754,7 +763,7 @@ class IfrsReportsService {
     const cashTotal = pair(sum(cur.cashRows.map((c) => c.net)), prev ? sum(prev.cashRows.map((c) => c.net)) : 0, hasPrevious);
 
     const inventoryAccounts = joinAccounts(cur.inventoryAccounts, prev?.inventoryAccounts || [], hasPrevious);
-    const net = (f) => (f.vat ? r2(f.vat.output - f.vat.input) : 0);
+    const net = (f) => (f.vat ? r2(f.vat.output + (f.vat.reverseCharge || 0) - f.vat.input) : 0);
     const name = ctx.entity.name || "The Company";
     return {
       ...this.head(ctx, "notes", "Notes to the financial statements"),
@@ -765,7 +774,7 @@ class IfrsReportsService {
         { key: "basis", title: "Basis of preparation", text: `The statements are prepared in accordance with International Financial Reporting Standards (IFRS) on the historical cost basis, from the company's general ledger. The functional and presentation currency is the ${currencyName()} (${currency()}). Amounts are rounded to two decimal places.` },
         { key: "inventory", title: "Inventories", text: "Inventories are stated at the lower of cost and net realisable value. Cost is the weighted average cost, recalculated on each purchase; a sale takes stock out at the current average and does not change it." },
         { key: "revenue", title: "Revenue recognition", text: "Revenue from the sale of goods is recognised at the point in time control passes to the customer, when the goods are dispatched and invoiced. It is measured at the transaction price net of VAT, discounts and returns (IFRS 15)." },
-        { key: "vat", title: "Value added tax", text: "Revenue, expenses and assets are recognised net of VAT. Output VAT charged on sales is a liability to the Federal Tax Authority and input VAT on purchases is recoverable from it; the net is settled with the authority." },
+        { key: "vat", title: "Value added tax", text: "Revenue, expenses and assets are recognised net of VAT. Output VAT charged on sales is a liability to the Federal Tax Authority and input VAT on purchases is recoverable from it; the net is settled with the authority. VAT the company assesses on purchases made under the reverse charge is recorded as a liability to the authority and, where recoverable, as input VAT at the same time." },
         { key: "classification", title: "Current and non-current classification", text: "An asset or liability is non-current when its account group, or any group above it, is named as fixed, non-current, property, plant, equipment, intangible or long-term. All other assets and liabilities are current." },
       ],
       tables: {
@@ -803,6 +812,10 @@ class IfrsReportsService {
               title: "Value added tax",
               rows: [
                 { key: "output", label: "Output VAT payable", ...pair(cur.vat.output, prev?.vat?.output, hasPrevious) },
+                // shown only when there is some: a company that never bought under the reverse charge sees the two lines it always did
+                ...(cur.vat.reverseCharge || prev?.vat?.reverseCharge
+                  ? [{ key: "reverseCharge", label: "Reverse-charge VAT payable (self-assessed)", ...pair(cur.vat.reverseCharge, prev?.vat?.reverseCharge, hasPrevious) }]
+                  : []),
                 { key: "input", label: "Input VAT recoverable", ...pair(cur.vat.input, prev?.vat?.input, hasPrevious) },
               ],
               net: pair(net(cur), prev ? net(prev) : 0, hasPrevious),

@@ -249,6 +249,10 @@ class PlatformOrganisationService {
         u.loginAttempts = 0;
       }
       await u.save();
+      // a password set by the developer, or an account switched off, ends the sign-ins the person holds
+      if (patch.password !== undefined || (patch.status !== undefined && patch.status !== "active")) {
+        await require("../../models/core/authSessionModel").updateMany({ adminId: u._id, revokedAt: null }, { $set: { revokedAt: new Date() } });
+      }
       return u;
     });
     await this.record({ ...ctx, action: "USER_UPDATED", organisation: code, summary: `Account ${user.email} changed: ${Object.keys(patch).map((k) => (k === "password" ? "password reset" : k)).join(", ")}` });

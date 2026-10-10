@@ -5,10 +5,11 @@ const AppError = require("../utils/AppError");
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
+    // (a secret is never echoed back in the refusal)
     const errorMessages = errors.array().map(error => ({
-      field: error.param,
+      field: error.path || error.param,
       message: error.msg,
-      value: error.value
+      value: /pass|secret|token|code/i.test(String(error.path || error.param || "")) ? undefined : error.value
     }));
     
     return next(new AppError('Validation failed', 400, 'VALIDATION_ERROR', errorMessages));
@@ -387,11 +388,16 @@ const validateProfileUpdate = [
 // Login validation
 const validateLogin = [
   body('email')
+    .isString()
+    .bail()
+    .trim()
     .isEmail()
     .normalizeEmail()
     .withMessage('Please provide a valid email'),
   
   body('password')
+    .isString()
+    .bail()
     .notEmpty()
     .withMessage('Password is required'),
   

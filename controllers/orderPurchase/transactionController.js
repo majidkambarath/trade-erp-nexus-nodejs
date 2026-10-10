@@ -45,8 +45,13 @@ const sendPaginated = (res, result) => {
 
 // Create new transaction
 exports.createTransaction = catchAsync(async (req, res) => {
+  // A document's number is allocated by the number series when it is saved (the order form sends none). A number named in the body is
+  // not taken: a person who may add a document must not be able to choose the number of a tax invoice.
+  // `isOpening` is the go-live load's flag (it also switches off the plan's monthly document limit), `quoteRef` / `linkedRef` are the
+  // links the conversions write: none of them is a field of the order form.
+  const { transactionNo: _chosenNumber, isOpening: _opening, quoteRef: _quote, linkedRef: _linked, ...body } = req.body || {};
   const transaction = await TransactionService.createTransaction(
-    req.body,
+    body,
     resolveCreatedBy(req)
   );
   await AuditService.log({
