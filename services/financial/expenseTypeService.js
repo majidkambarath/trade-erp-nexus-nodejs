@@ -2,12 +2,17 @@ const ExpenseCategory = require("../../models/modules/financial/expenseTypeModel
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
 const { searchRegex } = require("../../utils/regex");
+const { retryTransientTransaction } = require("../../utils/withTransactionSession");
+
+// A session the server has already ended (a write conflict aborts it) or one whose commit was already attempted throws from
+// abortTransaction(); that must never replace the error that sent us here.
+const abort = (session) => session.abortTransaction().catch(() => {});
 
 class ExpenseCategoryService {
   /* --------------------------------------------------------------
      CREATE – Main or Sub-Category
      -------------------------------------------------------------- */
-  static async create(data, createdBy) {
+  static create = retryTransientTransaction(async (data, createdBy) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -50,12 +55,12 @@ class ExpenseCategoryService {
       await session.commitTransaction();
       return category;
     } catch (err) {
-      await session.abortTransaction();
+      await abort(session);
       throw err;
     } finally {
       session.endSession();
     }
-  }
+  });
 
   /* --------------------------------------------------------------
      GET ALL – Hierarchical Tree (paginated)
@@ -139,7 +144,7 @@ class ExpenseCategoryService {
   /* --------------------------------------------------------------
      UPDATE
      -------------------------------------------------------------- */
-  static async update(id, data, updatedBy) {
+  static update = retryTransientTransaction(async (id, data, updatedBy) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -186,17 +191,17 @@ class ExpenseCategoryService {
       await session.commitTransaction();
       return updated;
     } catch (err) {
-      await session.abortTransaction();
+      await abort(session);
       throw err;
     } finally {
       session.endSession();
     }
-  }
+  });
 
   /* --------------------------------------------------------------
      DELETE – cascade + voucher check
      -------------------------------------------------------------- */
-  static async delete(id) {
+  static delete = retryTransientTransaction(async (id) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
@@ -225,12 +230,12 @@ class ExpenseCategoryService {
 
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abort(session);
       throw err;
     } finally {
       session.endSession();
     }
-  }
+  });
 }
 
 module.exports = ExpenseCategoryService;

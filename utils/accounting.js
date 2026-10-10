@@ -21,4 +21,13 @@ const categoryOf = (accountType) => CATEGORY_BY_ACCOUNT_TYPE[accountType] || "AS
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
-module.exports = { naturalBalance, categoryOf, round2, CATEGORY_BY_ACCOUNT_TYPE };
+// What is left of a voucher's total once invoices have been allocated, to the fils. Floating-point addition of several
+// two-decimal amounts can differ from the typed total by dust (317266.19000000006 against 317266.19), which, compared
+// plainly, made a fully-allocated voucher look as if it allocated MORE than its total and refused it. Only a real
+// over-allocation (a whole fils or more) is negative here.
+const remainderAfterAllocation = (total, allocated) => {
+  const left = round2(Number(total) - Number(allocated));
+  return left === 0 ? 0 : left; // never -0
+};
+
+module.exports = { naturalBalance, categoryOf, round2, remainderAfterAllocation, CATEGORY_BY_ACCOUNT_TYPE };

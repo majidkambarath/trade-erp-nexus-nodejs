@@ -14,7 +14,7 @@ const NumberSeriesService = require("../core/numberSeriesService");
 const FiscalYearService = require("../core/fiscalYearService");
 const { CLOSING_VOUCHER_TYPE } = require("../../utils/yearEnd");
 const { applyBalances } = require("./ledgerBalances");
-const { naturalBalance, categoryOf } = require("../../utils/accounting");
+const { naturalBalance, categoryOf, remainderAfterAllocation } = require("../../utils/accounting");
 const mongoose = require("mongoose");
 const { ensurePartyAccount } = require("./partyAccounts");
 const LedgerVoucherService = require("./ledgerVoucherService");
@@ -323,7 +323,7 @@ class FinancialService {
       );
     }
 
-    const onAccountAmount = totalAmount - totalAllocated;
+    const onAccountAmount = remainderAfterAllocation(totalAmount, totalAllocated); // to the fils: a sum of floats is not the typed total
     if (onAccountAmount < 0) {
       throw new AppError("Allocated amount cannot exceed total amount", 400);
     }
@@ -492,7 +492,7 @@ class FinancialService {
       );
     }
 
-    const onAccountAmount = totalAmount - totalAllocated;
+    const onAccountAmount = remainderAfterAllocation(totalAmount, totalAllocated); // to the fils: a sum of floats is not the typed total
     if (onAccountAmount < 0) {
       throw new AppError("Allocated amount cannot exceed total amount", 400);
     }
