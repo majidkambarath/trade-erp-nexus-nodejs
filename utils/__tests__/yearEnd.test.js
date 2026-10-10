@@ -192,3 +192,32 @@ test("a year is reopened newest first", () => {
   assert.match(refused.blockers[0].title, /Reopen 2027 first/);
   assert.equal(Y.assessReopen({ year: { code: "2026", status: "open" }, laterClosed: [] }).blockers[0].code, "NOT_CLOSED");
 });
+
+// ----------------------------------------------------------------------------- which year covers a day
+
+test("a year covers the days it was made for, whatever instants it was stored at (a legacy year began at 04:00 in Dubai)", () => {
+  const tz = require("../tz");
+  const days = (s, e) => ({ startDay: tz.dayOf(new Date(s), "Asia/Dubai"), endDay: tz.dayOf(new Date(e), "Asia/Dubai") });
+  // made from "2027-01-01" / "2027-12-31" before the screen's days were read on the organisation's calendar: UTC midnights
+  const legacy = { code: "2027", ...days("2027-01-01T00:00:00.000Z", "2027-12-31T00:00:00.000Z") };
+  // made properly
+  const proper = { code: "2028", ...days("2027-12-31T20:00:00.000Z", "2028-12-31T19:59:59.999Z") };
+  assert.deepEqual([legacy.startDay, legacy.endDay], ["2027-01-01", "2027-12-31"]);
+  assert.deepEqual([proper.startDay, proper.endDay], ["2028-01-01", "2028-12-31"]);
+  const years = [legacy, proper];
+  // closing 2026 asks who covers 1 January 2027: the 04:00 start must not read as "nobody"
+  assert.equal(Y.coveringYear(years, "2027-01-01").code, "2027");
+  assert.equal(Y.coveringYear(years, "2027-12-31").code, "2027");
+  assert.equal(Y.coveringYear(years, "2028-01-01").code, "2028");
+  assert.equal(Y.coveringYear(years, "2026-12-31"), null);
+  assert.equal(Y.coveringYear([], "2027-01-01"), null);
+  assert.equal(Y.coveringYear(undefined, "2027-01-01"), null);
+});
+
+test("a run of days is in conflict only with a year that overlaps it", () => {
+  const years = [{ code: "2026", startDay: "2026-01-01", endDay: "2026-12-31" }, { code: "2028", startDay: "2028-01-01", endDay: "2028-12-31" }];
+  assert.equal(Y.overlappingYear(years, "2027-01-01", "2027-12-31"), null, "the gap between them is free");
+  assert.equal(Y.overlappingYear(years, "2027-06-01", "2028-05-31").code, "2028");
+  assert.equal(Y.overlappingYear(years, "2026-12-31", "2027-12-30").code, "2026", "a shared last day overlaps");
+  assert.equal(Y.overlappingYear([], "2027-01-01", "2027-12-31"), null);
+});

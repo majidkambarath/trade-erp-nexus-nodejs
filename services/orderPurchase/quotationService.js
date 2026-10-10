@@ -62,8 +62,8 @@ class QuotationService {
       if (!S.isId(filters.partyId)) throw fail("Invalid customer", 400);
       q.partyId = new mongoose.Types.ObjectId(filters.partyId);
     }
-    const dateFrom = S.dayToDate(filters.dateFrom);
-    const dateTo = S.dayToDate(filters.dateTo);
+    const dateFrom = S.dayFilter(filters.dateFrom, "dateFrom");
+    const dateTo = S.dayFilter(filters.dateTo, "dateTo");
     if (dateFrom || dateTo) q.date = { ...(dateFrom && { $gte: dateFrom }), ...(dateTo && { $lte: new Date(dateTo.getTime() + 86399999) }) };
 
     if (filters.search) {
@@ -74,7 +74,7 @@ class QuotationService {
 
     const { page, limit, skip } = S.pageOf(filters);
     const [rows, total] = await Promise.all([
-      Quotation.find(q).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Quotation.find(q).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(), // _id: a stable page boundary
       Quotation.countDocuments(q),
     ]);
     const parties = await Customer.find({ _id: { $in: rows.map((r) => r.partyId) } }).select("customerId customerName").lean();

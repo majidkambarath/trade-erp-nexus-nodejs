@@ -4,7 +4,7 @@ const Stock = require("../../models/modules/stockModel");
 const Customer = require("../../models/modules/customerModel");
 const TransactionService = require("./transactionService");
 const { roundTo } = require("../../utils/pricing");
-const { toExpiryDay } = require("../../utils/documentExpiry");
+const { toExpiryDay, parseExpiry } = require("../../utils/documentExpiry");
 const kinds = require("../../utils/itemKinds");
 
 // What a quotation and a delivery note have in common: checking the customer and the lines, pricing
@@ -30,6 +30,14 @@ async function loadCustomer(partyId, { session } = {}) {
 function dayToDate(value) {
   const day = toExpiryDay(value);
   return day ? new Date(day) : null;
+}
+
+// A day bound of a list filter: null when none was given, the day as a Date when it is one, a 400 when something was given
+// that is not a date (a bound that is quietly dropped would widen the list and its total without a word).
+function dayFilter(value, name) {
+  const parsed = parseExpiry(value);
+  if (parsed.invalid) throw new AppError(`${name} is not a date`, 400, "INVALID_DATE");
+  return parsed.day ? new Date(parsed.day) : null;
 }
 
 // The lines as pricing inputs, after checking each against the stock master.
@@ -175,6 +183,6 @@ function pageOf(filters, { defaultLimit = 20 } = {}) {
 }
 
 module.exports = {
-  CUSTOMER_FIELDS, loadCustomer, dayToDate, prepareLines, priceDocument, storedLine, toPricingInput,
+  CUSTOMER_FIELDS, loadCustomer, dayToDate, dayFilter, prepareLines, priceDocument, storedLine, toPricingInput,
   attachStockDetails, escapeRegex, pageOf, isId,
 };

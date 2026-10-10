@@ -1,4 +1,5 @@
 const InventoryMovement = require("../../models/modules/inventoryMovementModel");
+const InventoryMovementService = require("../../services/stock/inventoryMovementService");
 const StockService = require("../../services/stock/stockService");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
@@ -57,37 +58,13 @@ class InventoryMovementController {
 
   // Get all inventory movements
   static getAllMovements = catchAsync(async (req, res) => {
-    const { startDate, endDate, eventType, movementType, search, page = 1, limit = 10 } = req.query;
-    const query = {};
-
-    if (startDate || endDate) {
-      query.date = {};
-      if (startDate) query.date.$gte = new Date(startDate);
-      if (endDate) query.date.$lte = new Date(endDate);
-    }
-
-    if (eventType) query.eventType = eventType;
-    if (movementType) query.quantity = movementType === "IN" ? { $gt: 0 } : { $lt: 0 };
-
-    if (search) {
-      const stocks = await StockService.getAllStock({ search });
-      const stockIds = stocks.map(stock => stock.itemId);
-      query.stockId = { $in: stockIds };
-    }
-
-    const movements = await InventoryMovement.find(query)
-      .skip((page - 1) * limit)
-      .limit(Number(limit))
-      .sort({ date: -1 })
-      .populate({ path: "stockId", select: "itemName" });
-
-    const total = await InventoryMovement.countDocuments(query);
+    const { movements, total, totalPages } = await InventoryMovementService.list(req.query);
 
     res.status(200).json({
       status: "success",
       results: movements.length,
       total,
-      totalPages: Math.ceil(total / limit),
+      totalPages,
       data: { movements },
     });
   });
@@ -105,53 +82,11 @@ class InventoryMovementController {
 
   // Get movement statistics
   static getMovementStats = catchAsync(async (req, res) => {
-    const { startDate, endDate } = req.query;
-    const match = {};
-
-    if (startDate || endDate) {
-      match.date = {};
-      if (startDate) match.date.$gte = new Date(startDate);
-      if (endDate) match.date.$lte = new Date(endDate);
-    }
-
-    const stats = await InventoryMovement.aggregate([
-      { $match: match },
-      {
-        $group: {
-          _id: null,
-          totalMovements: { $sum: 1 },
-          stockIn: { $sum: { $cond: [{ $gt: ["$quantity", 0] }, 1, 0] } },
-          stockOut: { $sum: { $cond: [{ $lt: ["$quantity", 0] }, 1, 0] } },
-          totalValue: { $sum: "$totalValue" },
-          recentMovements: {
-            $sum: {
-              $cond: [
-                {
-                  $gte: [
-                    "$date",
-                    new Date(Date.now() - 24 * 60 * 60 * 1000),
-                  ],
-                },
-                1,
-                0,
-              ],
-            },
-          },
-        },
-      },
-    ]);
+    const stats = await InventoryMovementService.stats(req.query);
 
     res.status(200).json({
       status: "success",
-      data: {
-        stats: stats[0] || {
-          totalMovements: 0,
-          stockIn: 0,
-          stockOut: 0,
-          totalValue: 0,
-          recentMovements: 0,
-        },
-      },
+      data: { stats },
     });
   });
 }

@@ -75,6 +75,93 @@ after(async () => {
 });
 
 // ------------------------------------------------------------------------------------------------
+// The flow charts' shaping (pure): the profit walk, the expense rows, the stock walk, margin by category
+
+describe("the flow figures", () => {
+  const D = require("../reports/dashboardService");
+  const group = (name, total, groupId = name) => ({ groupId, name, total, accounts: [] });
+  const pl = (groups, extra = {}) => ({
+    revenue: { total: 1000 }, directCosts: { total: 600 }, grossProfit: 400,
+    otherIncome: { total: 20 }, operatingExpenses: { total: groups.reduce((t, g) => t + g.total, 0), groups }, netProfit: 0, ...extra,
+  });
+
+  it("expense rows: the five biggest groups, the rest as Other, shares of the profit and loss's own total", () => {
+    const groups = [group("Rent", 300), group("Salaries", 900), group("Utilities", 120), group("Fuel", 80), group("Marketing", 200), group("Repairs", 60), group("Bank charges", 40), group("Sundry", 0)];
+    const out = D.expenseBreakdown(pl(groups));
+    assert.equal(out.total, 1700);
+    assert.deepEqual(out.rows.map((r) => [r.name, r.amount]), [["Salaries", 900], ["Rent", 300], ["Marketing", 200], ["Utilities", 120], ["Fuel", 80], ["Other", 100]]);
+    assert.equal(out.rows.reduce((t, r) => t + r.amount, 0), out.total, "the rows add up to the total");
+    assert.deepEqual(out.rows.map((r) => r.sharePct), [52.9, 17.6, 11.8, 7.1, 4.7, 5.9]);
+  });
+
+  it("no expenses is an empty list, not a division by zero", () => {
+    assert.deepEqual(D.expenseBreakdown(pl([])), { total: 0, rows: [] });
+  });
+
+  it("a group with no name is Other, never a blank row", () => {
+    const out = D.expenseBreakdown(pl([{ groupId: null, name: "", total: 50, accounts: [] }]));
+    assert.deepEqual(out.rows.map((r) => [r.key, r.name]), [["none", "Other"]]);
+  });
+
+  it("profit flow carries the profit and loss's own figures", () => {
+    assert.deepEqual(D.profitFlow(pl([group("Rent", 300)], { netProfit: 120 })), {
+      revenue: 1000, directCosts: 600, grossProfit: 400, operatingExpenses: 300, otherIncome: 20, netProfit: 120,
+    });
+  });
+
+  it("stock flow takes the movement report's value totals; closing follows from the rest", () => {
+    const t = (value) => ({ qty: 0, value });
+    const movement = {
+      from: "2026-10-01", to: "2026-10-31",
+      totals: { opening: t(1000), purchases: t(500), salesReturns: t(20), adjustments: t(-10), purchaseReturns: t(40), sales: t(300), writeOffs: t(30), closing: t(1140) },
+    };
+    const f = D.stockFlow(movement);
+    assert.deepEqual([f.opening, f.purchases, f.salesReturns, f.adjustments, f.purchaseReturns, f.sales, f.writeOffs, f.closing], [1000, 500, 20, -10, 40, 300, 30, 1140]);
+    assert.equal(f.opening + f.purchases + f.salesReturns + f.adjustments - f.purchaseReturns - f.sales - f.writeOffs, f.closing);
+  });
+
+  it("business flow: the stages, and the cash cycle from the balances over the window", () => {
+    const profit = { revenue: { total: 900 }, directCosts: { total: 600 }, grossProfit: 300, otherIncome: { total: 0 }, operatingExpenses: { total: 100, groups: [] }, netProfit: 200 };
+    const previous = { revenue: { total: 600 }, netProfit: 50 };
+    const input = {
+      profit, previous, purchases: 500, stockValue: 300, receipts: 400, receivables: 210, payables: 150,
+      window: { from: "2026-07-13", to: "2026-10-10", days: 90 }, invoiced: 945, purchased: 525, cogs: 600,
+    };
+    const f = D.businessFlow(input);
+    assert.deepEqual(f.stages, { bought: 500, stock: 300, sold: 900, collected: 400, owedByCustomers: 210, owedToVendors: 150 });
+    assert.deepEqual(f.previous, { revenue: 600, netProfit: 50, revenueChangePct: 50 });
+    assert.equal(f.statement.netProfit, 200);
+    // 210 / 945 x 90 = 20.0, 150 / 525 x 90 = 25.7, 300 / 600 x 90 = 45.0; cycle = 45.0 + 20.0 - 25.7
+    assert.deepEqual([f.cycle.dso, f.cycle.dpo, f.cycle.dio, f.cycle.cycleDays], [20, 25.7, 45, 39.3]);
+    assert.equal(f.cycle.enough, true);
+  });
+
+  it("business flow: a window under two weeks gives no cycle, and a missing base is null, not zero", () => {
+    const profit = { revenue: { total: 0 }, directCosts: { total: 0 }, grossProfit: 0, otherIncome: { total: 0 }, operatingExpenses: { total: 0, groups: [] }, netProfit: 0 };
+    const base = { profit, previous: { revenue: { total: 0 }, netProfit: 0 }, purchases: 0, stockValue: 100, receipts: 0, receivables: 50, payables: 40, window: { from: "2026-10-01", to: "2026-10-10", days: 10 }, invoiced: 500, purchased: 400, cogs: 300 };
+    const young = D.businessFlow(base);
+    assert.deepEqual([young.cycle.dso, young.cycle.dpo, young.cycle.dio, young.cycle.cycleDays, young.cycle.enough], [null, null, null, null, false]);
+    assert.equal(young.previous.revenueChangePct, null);
+    // two months of history, but never bought anything: DSO and DIO exist, DPO and so the cycle do not
+    const noPurchases = D.businessFlow({ ...base, window: { from: "2026-08-12", to: "2026-10-10", days: 60 }, purchased: 0 });
+    assert.deepEqual([noPurchases.cycle.dso, noPurchases.cycle.dio, noPurchases.cycle.dpo, noPurchases.cycle.cycleDays], [6, 20, null, null]);
+  });
+
+  it("margin by category: the best-selling first, the company's margin as the line, nothing for a category with no sales", () => {
+    const rows = [
+      { key: "a", name: "Oils", netRevenue: 300, grossProfit: 90, marginPct: 30 },
+      { key: "b", name: "Grains", netRevenue: 100, grossProfit: 10, marginPct: 10 },
+      { key: "c", name: "Gifts", netRevenue: 0, grossProfit: 0, marginPct: null },
+    ];
+    assert.deepEqual(D.categoryMargin(rows), {
+      averagePct: 25,
+      rows: [{ key: "a", name: "Oils", revenue: 300, marginPct: 30 }, { key: "b", name: "Grains", revenue: 100, marginPct: 10 }],
+    });
+    assert.deepEqual(D.categoryMargin([]), { averagePct: null, rows: [] });
+  });
+});
+
+// ------------------------------------------------------------------------------------------------
 // The period every part takes (pure)
 
 describe("the period", () => {
@@ -172,6 +259,7 @@ function assertNothingYet(d, seeded) {
   assert.equal(a.collections.length, 6);
   assert.ok(a.collections.every((w) => w.receipts === 0 && w.invoiced === 0));
   assert.deepEqual(a.treemap, []);
+  assert.deepEqual(a.categoryMargin, { averagePct: null, rows: [] });
   assert.deepEqual(a.hourly, []);
   // sales
   const sl = d.sales;
@@ -186,12 +274,22 @@ function assertNothingYet(d, seeded) {
   assert.equal(inv.stockValueTrend.available, seeded);
   assert.equal(inv.stockValueTrend.months.length, 8);
   assert.ok(inv.stockValueTrend.months.every((m) => m.value === 0));
+  assert.deepEqual(
+    [inv.stockFlow.opening, inv.stockFlow.purchases, inv.stockFlow.sales, inv.stockFlow.closing],
+    [0, 0, 0, 0],
+  );
   // reports
   const r = d.reports;
   assert.deepEqual([r.grossProfit, r.netProfit, r.vat.net, r.vat.hasActivity], [0, 0, 0, false]);
   assert.deepEqual(r.vouchers.map((v) => [v.voucherType, v.amount]), [["receipt", 0], ["payment", 0], ["journal", 0], ["contra", 0], ["expense", 0]]);
   assert.equal(r.valueGrowth.length, 8);
   assert.equal(r.ageing.length, 5);
+  assert.deepEqual(r.profitFlow, { revenue: 0, directCosts: 0, grossProfit: 0, operatingExpenses: 0, otherIncome: 0, netProfit: 0 });
+  assert.deepEqual(r.expenses, { total: 0, rows: [] });
+  // the business flow of an empty business: nothing bought, sold or owed, and no cycle to speak of
+  assert.deepEqual(a.businessFlow.stages, { bought: 0, stock: 0, sold: 0, collected: 0, owedByCustomers: 0, owedToVendors: 0 });
+  assert.deepEqual([a.businessFlow.cycle.dso, a.businessFlow.cycle.dpo, a.businessFlow.cycle.dio, a.businessFlow.cycle.cycleDays], [null, null, null, null]);
+  assert.equal(a.businessFlow.cycle.enough, false);
 }
 
 async function everything(query = {}) {
@@ -617,7 +715,75 @@ describe("a small business", { skip }, () => {
     for (const v of r.vouchers) assert.equal(v.amount, book.byType.find((t) => t.voucherType === v.voucherType)?.amount || 0, v.voucherType);
     assert.deepEqual(r.vouchers.map((v) => [v.voucherType, v.amount]), [["receipt", 100], ["payment", 300], ["journal", 5000], ["contra", 1000], ["expense", 0]]);
     assert.deepEqual(r.valueGrowth.map((x) => x.grossProfit), R.summary.monthly.map((x) => x.grossProfit));
+    assert.deepEqual(r.valueGrowth.map((x) => x.netProfit), R.summary.monthly.map((x) => x.netProfit));
     assert.deepEqual(r.ageing, R.analytics.ageing);
+  });
+
+  it("profit flow and expense rows are the profit and loss's own figures and walk from revenue to net profit", async () => {
+    const r = R.reports;
+    const p = R.summary.period;
+    const pl = await svc.Ledger.profitAndLoss({ from: p.from, to: p.to });
+    assert.deepEqual(r.profitFlow, {
+      revenue: pl.revenue.total, directCosts: pl.directCosts.total, grossProfit: pl.grossProfit,
+      operatingExpenses: pl.operatingExpenses.total, otherIncome: pl.otherIncome.total, netProfit: pl.netProfit,
+    });
+    close(r.profitFlow.revenue - r.profitFlow.directCosts, r.profitFlow.grossProfit, "gross profit");
+    close(r.profitFlow.grossProfit + r.profitFlow.otherIncome - r.profitFlow.operatingExpenses, r.profitFlow.netProfit, "net profit");
+    assert.equal(r.expenses.total, pl.operatingExpenses.total);
+    close(r.expenses.rows.reduce((t, x) => t + x.amount, 0), r.expenses.total, "the expense rows add up");
+  });
+
+  it("business flow: every stage and the cycle are the reports' own figures", async () => {
+    const bf = R.analytics.businessFlow;
+    const p = R.analytics.period;
+    const pl = await svc.Ledger.profitAndLoss({ from: p.from, to: p.to });
+    const before = await svc.Ledger.profitAndLoss({ from: p.previousFrom, to: p.previousTo });
+    assert.equal(bf.statement.revenue, pl.revenue.total);
+    assert.equal(bf.statement.netProfit, pl.netProfit);
+    assert.deepEqual([bf.previous.revenue, bf.previous.netProfit], [before.revenue.total, before.netProfit]);
+    assert.equal(bf.stages.sold, pl.revenue.total);
+    assert.equal(bf.stages.collected, R.summary.collection.receipts);
+    const end = svc.Ledger.dayEnd(p.to);
+    const owedIn = await svc.Ageing.report({ type: "receivable", asOf: end });
+    const owedOut = await svc.Ageing.report({ type: "payable", asOf: end });
+    assert.deepEqual([bf.stages.owedByCustomers, bf.stages.owedToVendors], [owedIn.totals.total, owedOut.totals.total]);
+    const valuation = await svc.Stock.valuation({ asOn: p.to, groupBy: "category" });
+    assert.equal(bf.stages.stock, valuation.totals.value);
+    // the window never reaches back past the first sale and is at most 90 days
+    const c = bf.cycle;
+    assert.ok(c.days >= 1 && c.days <= 90, "window length");
+    assert.equal(c.to, p.to);
+    const sold = await Q.documentTotals("sales_order", c.from, c.to);
+    const bought = await Q.documentTotals("purchase_order", c.from, c.to);
+    const window = await svc.Ledger.profitAndLoss({ from: c.from, to: c.to });
+    assert.deepEqual([c.invoiced, c.purchased, c.cogs], [sold.total, bought.total, window.directCosts.total]);
+    const oneDp = (n) => Math.round(n * 10) / 10; // days are served to one decimal
+    if (c.days >= 14 && c.invoiced > 0) assert.equal(c.dso, oneDp((c.receivables / c.invoiced) * c.days), "DSO");
+    if (c.days >= 14 && c.purchased > 0) assert.equal(c.dpo, oneDp((c.payables / c.purchased) * c.days), "DPO");
+    if (c.days >= 14 && c.cogs > 0) assert.equal(c.dio, oneDp((c.stockValue / c.cogs) * c.days), "DIO");
+    if ([c.dso, c.dpo, c.dio].every((v) => v !== null)) assert.equal(c.cycleDays, oneDp(c.dio + c.dso - c.dpo), "cycle");
+  });
+
+  it("stock flow is the stock movement report's value, opening to closing, and its walk adds up", async () => {
+    const i = R.inventory;
+    const p = i.period;
+    const mv = await svc.Stock.movement({ from: p.from, to: p.to });
+    const f = i.stockFlow;
+    assert.deepEqual(
+      [f.opening, f.purchases, f.salesReturns, f.adjustments, f.purchaseReturns, f.sales, f.writeOffs, f.closing],
+      ["opening", "purchases", "salesReturns", "adjustments", "purchaseReturns", "sales", "writeOffs", "closing"].map((k) => mv.totals[k].value),
+    );
+    close(f.opening + f.purchases + f.salesReturns + f.adjustments - f.purchaseReturns - f.sales - f.writeOffs, f.closing, "stock walk");
+  });
+
+  it("margin by category agrees with the sales analysis it is drawn from", async () => {
+    const p = R.analytics.period;
+    const cat = await svc.Stock.salesAnalysis({ from: p.from, to: p.to, groupBy: "category", direction: "sales" });
+    const m = R.analytics.categoryMargin;
+    assert.deepEqual(
+      m.rows.map((x) => [x.name, x.revenue, x.marginPct]),
+      cat.rows.filter((c) => c.netRevenue > 0 && c.marginPct !== null).slice(0, 8).map((c) => [c.name, c.netRevenue, c.marginPct]),
+    );
   });
 
   // ---------------------------------------------------------------- balances and a chosen period

@@ -34,6 +34,7 @@ function validZone(zone) {
 const safe = (zone) => (validZone(zone) ? zone : UTC);
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const WALL_RE = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/; // a date and time with no zone
 const pad = (n) => String(n).padStart(2, "0");
 
 /** The zone's offset from UTC, in minutes, at an instant (Dubai +240, London 0 in winter and +60 in summer). */
@@ -94,6 +95,50 @@ function noonOf(ymd, zone = UTC) {
   return wallToInstant(y, m, d, 12, 0, 0, 0, zone);
 }
 
+/** Is this "YYYY-MM-DD" a day that exists? ("2026-02-30" has the right shape and is not one.) */
+function isRealDay(ymd) {
+  const text = String(ymd ?? "").trim();
+  if (!DAY_RE.test(text)) return false;
+  const [y, m, d] = text.split("-").map(Number);
+  const probe = new Date(Date.UTC(y, m - 1, d));
+  return probe.getUTCFullYear() === y && probe.getUTCMonth() === m - 1 && probe.getUTCDate() === d;
+}
+
+/**
+ * A date in a request, read as one end of a period on the zone's own calendar.
+ *   edge "start" is the "from" end, "end" the "to" end of a range.
+ *   - a plain "YYYY-MM-DD" is that calendar day in the zone: its first moment for "start" and its LAST millisecond for "end",
+ *     so the last day of a range is whole. (`new Date("2026-10-09")` is 00:00 UTC, which is 04:00 on the 9th in Dubai: as the
+ *     "to" end of a range it dropped everything the 9th held after four in the morning.) A day that does not exist is an
+ *     Invalid Date.
+ *   - "YYYY-MM-DDTHH:mm[:ss[.SSS]]" with NO zone (what a screen builds with `${day}T23:59:59.999`) is that wall-clock time on
+ *     the zone's clock. `new Date(...)` reads it on the SERVER's clock, which is UTC on the host and so four hours late in
+ *     Dubai: an "end of 31 December" that reached into the first four hours of 1 January.
+ *   - anything else is the instant `new Date(value)` reads: a timestamp with a zone ("...Z", "+04:00"), a Date, a number.
+ *   - nothing given (null, undefined, "") is null.
+ */
+function boundOf(value, edge = "start", zone = UTC) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return null;
+    if (DAY_RE.test(text)) {
+      if (!isRealDay(text)) return new Date(NaN);
+      return edge === "end" ? endOfDay(text, zone) : dayStart(text, zone);
+    }
+    const wall = WALL_RE.exec(text);
+    if (wall) {
+      const [y, m, d, h, mi] = [wall[1], wall[2], wall[3], wall[4], wall[5]].map(Number);
+      const s = Number(wall[6] || 0);
+      if (!isRealDay(`${wall[1]}-${wall[2]}-${wall[3]}`) || h > 23 || mi > 59 || s > 59) return new Date(NaN);
+      const ms = Number(`${wall[7] || ""}00`.slice(0, 3)); // ".9" is 900 ms
+      return wallToInstant(y, m, d, h, mi, s, ms, zone);
+    }
+    return new Date(text);
+  }
+  return new Date(value);
+}
+
 /** The calendar year of an instant in the zone. */
 const yearOf = (instant, zone = UTC) => Number(String(dayOf(instant, zone) || "").slice(0, 4));
 
@@ -120,4 +165,4 @@ function supportedZone(zone) {
     : { ok: true };
 }
 
-module.exports = { UTC, validZone, supportedZone, offsetMinutes, dayOf, todayIn, dayStart, dayEnd, endOfDay, noonOf, yearOf, monthStartDay, addDays };
+module.exports = { UTC, validZone, supportedZone, offsetMinutes, dayOf, todayIn, dayStart, dayEnd, endOfDay, noonOf, yearOf, monthStartDay, addDays, isRealDay, boundOf };

@@ -120,6 +120,32 @@ test("the VAT in the boxes agrees with the VAT accounts of the ledger", { skip }
   await svc.LedgerEntry.deleteOne({ voucherNo: "X-1" });
 });
 
+test("a difference that is only a journal on the VAT account is explained, not hidden: paying the last return is the usual one", { skip }, async () => {
+  const vatId = await svc.Config.resolveAccount("vat-sales");
+  const acc = await svc.LedgerAccount.findById(vatId);
+  const post = (extra) => svc.LedgerEntry.create({ voucherId: new mongoose.Types.ObjectId(), voucherNo: "X-2", accountId: acc._id, accountName: acc.accountName, accountCode: acc.accountCode, date: new Date(), createdBy: admin, voucherType: "journal", ...extra });
+  try {
+    // the previous return was paid to the tax authority: Output VAT is cleared by a journal inside this period
+    await post({ debitAmount: 3 });
+    const r = await svc.Vat.compute({ from: orgDay(-1), to: orgDay(1) });
+    const [out, inp] = r.reconciliation.rows;
+    assert.deepEqual([out.documents, out.ledger, out.difference, out.agrees], [3, 0, 3, false], "still not 'agrees': a journal is something to look at");
+    assert.deepEqual([out.journals, out.explained], [-3, true], "but all of the difference is the journal, and the row says so");
+    assert.deepEqual([inp.journals, inp.explained, inp.agrees], [0, false, true], "the Input VAT account was not touched");
+  } finally {
+    await svc.LedgerEntry.deleteMany({ voucherNo: "X-2" });
+  }
+  try {
+    // an entry behind the documents' backs that is not a journal is not explained away
+    await post({ creditAmount: 5, voucherType: "receipt" });
+    const r = await svc.Vat.compute({ from: orgDay(-1), to: orgDay(1) });
+    const out = r.reconciliation.rows[0];
+    assert.deepEqual([out.difference, out.agrees, out.journals, out.explained], [-5, false, 0, false]);
+  } finally {
+    await svc.LedgerEntry.deleteMany({ voucherNo: "X-2" });
+  }
+});
+
 test("a period with nothing in it is all zero, and a bad period is refused", { skip }, async () => {
   const r = await svc.Vat.compute({ from: orgDay(-40), to: orgDay(-30) });
   assert.equal(r.totals.netPayable, 0);

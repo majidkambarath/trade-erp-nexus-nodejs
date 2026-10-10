@@ -52,6 +52,32 @@ class CreditControlService {
     return breaches;
   }
 
+  // What the customer owes the organisation now, as a negative number (the sign evaluate() reads). The ledger answers it:
+  // invoices less receipts, returns, credit notes and what they hold on account. Customer.cashBalance cannot - it only
+  // moves with sales and on-account receipts, so a customer who always pays their invoices looked as if they owed every sale
+  // they ever made, and with credit control on every new order would breach. With ledger posting off the open invoices are the
+  // nearest thing to it. Every branch counts: a customer owes the organisation.
+  static async exposure(customer, partyId, { session } = {}) {
+    const AccountConfigService = require("./accountConfigService");
+    if (await AccountConfigService.isPostingEnabled({ session })) {
+      const LedgerAccount = mongoose.model("LedgerAccount");
+      const LedgerEntry = mongoose.model("LedgerEntry");
+      const names = [`Customer - ${customer.customerName}`, `Customer Advance - ${customer.customerName}`];
+      const found = LedgerAccount.find({ accountName: { $in: names } }).select("_id").lean();
+      const accounts = await (session ? found.session(session) : found);
+      if (accounts.length) {
+        const agg = LedgerEntry.aggregate([
+          { $match: { accountId: { $in: accounts.map((a) => a._id) }, isReversed: { $ne: true } } },
+          { $group: { _id: null, net: { $sum: { $subtract: ["$debitAmount", "$creditAmount"] } } } },
+        ]);
+        const [r] = await allBranches(() => (session ? agg.session(session) : agg));
+        return round2(-(r?.net || 0));
+      }
+    }
+    const open = await allBranches(() => AgeingService.openInvoices({ type: "receivable", partyId, session }));
+    return round2(-open.reduce((t, i) => t + i.outstanding, 0));
+  }
+
   static async assertSaleAllowed(transaction, { session, acknowledged = false, req } = {}) {
     if (transaction.type !== "sales_order") return;
     const cfg = await this.settings(session);
@@ -68,7 +94,7 @@ class CreditControlService {
       : [];
     const breaches = this.evaluate({
       creditLimit: Number(customer.creditLimit) || 0,
-      balance: customer.cashBalance,
+      balance: await this.exposure(customer, transaction.partyId, { session }),
       orderTotal: transaction.totalAmount,
       overdueInvoices: overdue,
       overdueBlockDays: cfg.overdueBlockDays,

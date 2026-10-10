@@ -30,6 +30,7 @@ let accounts = {};
 const flatAccounts = (groups) => groups.flatMap((g) => g.accounts);
 const amountOf = (groups, name) => flatAccounts(groups).find((a) => a.accountName === name)?.amount;
 const lineOf = (lines, key) => lines.find((l) => l.key === key);
+const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 // ---------------------------------------------------------------- pure rules (no database)
 
@@ -384,9 +385,12 @@ test("cash flows (indirect): operating, investing, financing, and the closing ca
   assert.equal(op.net.amount, -429);
   assert.equal(cf.investing.lines[0].amount, -1200, "furniture bought; depreciation is not a payment");
   assert.equal(cf.investing.net.amount, -1200);
-  assert.equal(lineOf(cf.financing.lines, "borrowings").amount, 2000);
-  assert.equal(lineOf(cf.financing.lines, "equity").amount, 5000);
+  assert.equal(lineOf(cf.financing.lines, "borrowingsDrawn").amount, 2000);
+  assert.equal(lineOf(cf.financing.lines, "borrowingsRepaid").amount, 0);
+  assert.equal(lineOf(cf.financing.lines, "capitalIntroduced").amount, 5000);
+  assert.equal(lineOf(cf.financing.lines, "drawingsAndDividends").amount, 0);
   assert.equal(cf.financing.net.amount, 7000);
+  assert.equal(op.interestPaid.label, "Interest and finance charges paid", "bank charges are finance costs here, and the line says so");
   assert.equal(cf.other.amount, 0);
   assert.equal(cf.netIncrease.amount, 5371);
   assert.equal(cf.openingCash.amount, 3000);
@@ -474,26 +478,117 @@ test("notes: policies, entity, and the note tables from the ledger", { skip }, a
   assert.equal(none.comparative, null);
 });
 
-test("cash that cannot be explained by a rule is shown as Other, and still reconciles", { skip }, async () => {
-  // cash moved to a bank account that is then switched off: it is no longer "cash and bank"
+test("a bank account switched off keeps its history: money moved to it is still cash, and past statements do not change", { skip }, async () => {
+  // cash moved to a bank account that is then switched off. It used to drop out of "cash and bank", so a transfer to it read as
+  // cash leaving ("Other movements") and every statement of an earlier period changed the day the account was closed.
   const dormant = await svc.AccountGroup.findOne({ name: "Bank" }).then((g) => svc.Chart.createAccount({ accountName: "Dormant Bank", groupId: g._id }, {}, admin));
   await svc.Financial.createVoucher({ voucherType: "contra", ledgerBased: true, fromAccountId: accounts.cash._id, toAccountId: dormant._id, totalAmount: 500, date: at("2025-07-10") }, admin);
   await svc.LedgerAccount.updateOne({ _id: dormant._id }, { isActive: false });
 
   const cf = await Ifrs.cashFlows({ from: "2025-07-01", to: "2025-07-31", compare: "none" });
-  assert.equal(cf.other.amount, -500);
+  assert.equal(cf.other.amount, 0, "between two cash and bank accounts: neither in nor out");
   assert.equal(cf.operating.net.amount, 0);
-  assert.equal(cf.netIncrease.amount, -500);
+  assert.equal(cf.netIncrease.amount, 0);
   assert.equal(cf.openingCash.amount, 8371);
-  assert.equal(cf.closingCash.amount, 7871);
-  assert.equal(cf.closingPerLedger.amount, 7871);
+  assert.equal(cf.closingCash.amount, 8371);
+  assert.equal(cf.closingPerLedger.amount, 8371);
   assert.equal(cf.reconciles, true);
-  assert.equal(cf.other.label, "Other movements (not classified above)");
 
-  // the position still holds the money, as a current asset
+  // the position holds the money, as a current asset
   const p = await Ifrs.financialPosition({ asAt: "2025-07-31", compare: "none" });
   assert.equal(amountOf(p.assets.current.groups, "Dormant Bank"), 500);
   assert.equal(p.isBalanced, true);
+});
+
+test("no offsetting (IAS 1.32): a bank in credit is an overdraft, a customer in credit a liability, a supplier in debit an asset", { skip }, async () => {
+  const before = await Ifrs.financialPosition({ asAt: "2025-08-31", compare: "none" });
+  const bank = amountOf(before.assets.current.groups, "ENBD Current");
+  const owed = amountOf(before.assets.current.groups, "Customer - Al Noor");
+  const payable = amountOf(before.equityAndLiabilities.currentLiabilities.groups, "Vendor - Gulf Mills");
+  assert.ok(bank > 0 && owed > 0 && payable > 0, "the story left a positive balance on each of the three accounts");
+  const acct = (name) => svc.LedgerAccount.findOne({ accountName: name });
+  const [customerAcc, vendorAcc] = await Promise.all([acct("Customer - Al Noor"), acct("Vendor - Gulf Mills")]);
+  const journal = (narration, dr, cr, amount) =>
+    svc.Financial.createVoucher({ voucherType: "journal", date: at("2025-09-05"), narration, lines: [{ accountId: dr._id, debit: amount }, { accountId: cr._id, credit: amount }] }, admin);
+  await journal("Rent paid from an account with too little in it", accounts.rent, accounts.enbd, bank + 1000); // overdrawn by 1,000
+  await journal("Customer paid more than they owed", accounts.cash, customerAcc, owed + 500); // in credit by 500
+  await journal("Vendor overpaid", vendorAcc, accounts.cash, payable + 300); // in debit by 300
+
+  const p = await Ifrs.financialPosition({ asAt: "2025-09-30", compare: "none" });
+  const liab = p.equityAndLiabilities.currentLiabilities.groups;
+  const assets = p.assets.current.groups;
+  const overdrafts = liab.find((g) => g.name === "Bank overdrafts");
+  assert.equal(overdrafts.amount, 1000);
+  assert.equal(amountOf(liab, "ENBD Current"), 1000, "the bank is on the liabilities side, as a positive");
+  assert.equal(amountOf(assets, "ENBD Current"), undefined, "and no longer a negative inside the assets");
+  assert.equal(liab.find((g) => g.name === "Customer credit balances").amount, 500);
+  assert.equal(assets.find((g) => g.name === "Supplier debit balances and advances").amount, 300);
+  for (const side of [assets, liab]) for (const a of flatAccounts(side)) assert.ok(a.amount >= 0, `${a.accountName} is not a negative`);
+  assert.equal(p.isBalanced, true, "moving an account to its own side raises both sides by the same amount");
+
+  // the notes tie to it (IAS 7.45 for the cash)
+  const n = await Ifrs.notes({ asAt: "2025-09-30", compare: "none" });
+  const cash = n.tables.cash;
+  const od = cash.presentedAs.find((r) => r.key === "bankOverdrafts");
+  const ca = cash.presentedAs.find((r) => r.key === "cashAssets");
+  assert.equal(od.amount, 1000);
+  assert.equal(r2(ca.amount - od.amount), r2(cash.total.net), "assets less overdrafts is the cash and cash equivalents of the note");
+  assert.equal(n.tables.tradeReceivables.rows.find((r) => r.key === "supplierDebits").amount, 300);
+  assert.equal(n.tables.tradePayables.rows.find((r) => r.key === "customerCredits").amount, 500);
+  const net = (rows) => rows.reduce((t, r) => t + r.amount, 0);
+  assert.equal(r2(n.tables.tradeReceivables.total.amount), r2(net(n.tables.tradeReceivables.rows)));
+
+  // the cash flow still reconciles, with the overdrawn bank inside cash and cash equivalents (IAS 7.8)
+  const cf = await Ifrs.cashFlows({ from: "2025-09-01", to: "2025-09-30", compare: "none" });
+  assert.equal(cf.reconciles, true);
+});
+
+test("cash flows are gross where the standard asks (IAS 7.21): borrowings drawn and repaid, capital in and drawings out", { skip }, async () => {
+  const journal = (narration, dr, cr, amount) =>
+    svc.Financial.createVoucher({ voucherType: "journal", date: at("2025-10-06"), narration, lines: [{ accountId: dr._id, debit: amount }, { accountId: cr._id, credit: amount }] }, admin);
+  await journal("Loan instalment", accounts.loan, accounts.cash, 500);
+  await journal("Owner takes money out", accounts.capital, accounts.cash, 200);
+  await journal("Owner puts money in", accounts.cash, accounts.capital, 900);
+  await journal("Loan drawn", accounts.cash, accounts.loan, 1500);
+  const cf = await Ifrs.cashFlows({ from: "2025-10-01", to: "2025-10-31", compare: "none" });
+  const f = cf.financing.lines;
+  assert.deepEqual(
+    ["borrowingsDrawn", "borrowingsRepaid", "capitalIntroduced", "drawingsAndDividends"].map((k) => lineOf(f, k).amount),
+    [1500, -500, 700, 0],
+    "an equity account is judged on its own net movement for the period, as the statement of changes in equity does"
+  );
+  assert.equal(cf.financing.net.amount, 1500 - 500 + 700);
+  assert.equal(cf.reconciles, true);
+});
+
+test("opening-balance vouchers are balances brought forward, not the first period's activity", { skip }, async () => {
+  // a company going live mid-history: an opening voucher dated inside the period a statement covers
+  const g = await svc.AccountGroup.findOne({ name: "Bank" });
+  const fresh = await svc.Chart.createAccount({ accountName: "Opening Test Bank", groupId: g._id }, {}, admin);
+  const eq = await svc.LedgerAccount.findOne({ accountName: "Opening Balance Equity" });
+  const post = (dr, cr, amount, type) =>
+    svc.LedgerEntry.insertMany([
+      { voucherId: new mongoose.Types.ObjectId(), voucherNo: `${type.toUpperCase()}-T`, voucherType: type, accountId: dr._id, accountName: dr.accountName, accountCode: dr.accountCode, date: at("2025-11-01"), debitAmount: amount, creditAmount: 0, createdBy: admin },
+    ]).then(() => svc.LedgerEntry.insertMany([
+      { voucherId: new mongoose.Types.ObjectId(), voucherNo: `${type.toUpperCase()}-T2`, voucherType: type, accountId: cr._id, accountName: cr.accountName, accountCode: cr.accountCode, date: at("2025-11-01"), debitAmount: 0, creditAmount: amount, createdBy: admin },
+    ]));
+  await post(fresh, eq, 777, "opening");
+  // an ordinary posting on the same day is activity
+  await svc.Financial.createVoucher({ voucherType: "journal", date: at("2025-11-01"), narration: "Ordinary", lines: [{ accountId: fresh._id, debit: 50 }, { accountId: accounts.capital._id, credit: 50 }] }, admin);
+
+  const cf = await Ifrs.cashFlows({ from: "2025-11-01", to: "2025-11-30", compare: "none" });
+  assert.equal(cf.netIncrease.amount, 50, "only the ordinary posting moved cash in the period");
+  assert.equal(cf.openingCash.amount, r2(cf.closingCash.amount - 50), "the opening voucher is in the cash the period started with");
+  assert.equal(cf.reconciles, true);
+  const eqChange = await Ifrs.changesInEquity({ from: "2025-11-01", to: "2025-11-30", compare: "none" });
+  assert.equal(eqChange.current.reconciles, true);
+  // the cash book and the legacy trial balance read it the same way
+  const book = await svc.Reports.cashBook({ from: "2025-11-01", to: "2025-11-30" });
+  const row = book.rows.find((r) => r.accountName === "Opening Test Bank");
+  assert.deepEqual([row.opening, row.receipts, row.closing], [777, 50, 827]);
+  const tb = await svc.Financial.getTrialBalance("2025-11-01", "2025-11-30");
+  const t = tb.trialBalance.find((a) => a.accountName === "Opening Test Bank");
+  assert.deepEqual([t.openingBalance, t.totalDebits, t.balance], [777, 50, 827]);
 });
 
 test("bad input is refused with a clear message", { skip }, async () => {
@@ -512,7 +607,7 @@ test("a ledger that does not balance is reported, not hidden", { skip }, async (
   const cf = await Ifrs.cashFlows({ from: "2025-08-01", to: "2025-08-31", compare: "none" });
   assert.equal(cf.reconciles, false);
   assert.equal(cf.difference, -75, "the statement explains nothing of the 75 that arrived");
-  assert.equal(cf.closingPerLedger.amount, 7871 + 75);
+  assert.equal(cf.closingPerLedger.amount, 8371 + 75);
 
   const p = await Ifrs.financialPosition({ asAt: "2025-08-31", from: "2025-08-01", compare: "none" });
   assert.equal(p.isBalanced, false);

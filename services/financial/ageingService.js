@@ -33,12 +33,13 @@ class AgeingService {
     const nameField = type === "receivable" ? "customerName" : "vendorName";
     const asOfDate = new Date(asOf);
 
-    const match = {
-      type: docType,
-      status: "APPROVED",
-      outstandingAmount: { $gt: 0.005 },
-      date: { $lte: asOfDate },
-    };
+    // "As at" a day in the past is what was open ON that day, including an invoice paid afterwards. The stored outstanding amount is
+    // only today's, so for a past day it is rebuilt: the invoice's total less what vouchers (receipts, payments, notes set against
+    // it) dated up to that day settled. A day that is not past keeps the stored figure, which is the same thing and cheaper.
+    const past = asOfDate.getTime() < Date.now() - 60 * 1000;
+    const match = past
+      ? { type: docType, status: "APPROVED", date: { $lte: asOfDate } }
+      : { type: docType, status: "APPROVED", outstandingAmount: { $gt: 0.005 }, date: { $lte: asOfDate } };
     if (partyId) match.partyId = new mongoose.Types.ObjectId(partyId);
 
     const q = Transaction.find(match)
@@ -46,7 +47,25 @@ class AgeingService {
       .populate({ path: "partyId", model: partyModel, select: `${nameField} paymentTerms` })
       .sort({ date: 1 })
       .lean();
-    const docs = await (session ? q.session(session) : q);
+    let docs = await (session ? q.session(session) : q);
+    if (past && docs.length) {
+      const Voucher = mongoose.model("Voucher");
+      const ids = docs.map((d) => d._id);
+      const agg = Voucher.aggregate([
+        // a voucher turned down or reversed (a bounced cheque) settled nothing; a held one (pending) already has
+        { $match: { "linkedInvoices.invoiceId": { $in: ids }, date: { $lte: asOfDate }, status: { $nin: ["cancelled", "rejected"] } } },
+        { $unwind: "$linkedInvoices" },
+        { $match: { "linkedInvoices.invoiceId": { $in: ids } } },
+        { $group: { _id: "$linkedInvoices.invoiceId", settled: { $sum: "$linkedInvoices.allocatedAmount" } } },
+      ]);
+      const settledBy = new Map((await (session ? agg.session(session) : agg)).map((r) => [String(r._id), r.settled]));
+      docs = docs
+        .map((d) => {
+          const settled = round2(settledBy.get(String(d._id)) || 0);
+          return { ...d, paidAmount: settled, outstandingAmount: round2(d.totalAmount - settled) };
+        })
+        .filter((d) => d.outstandingAmount > 0.005);
+    }
 
     return docs.map((d) => {
       const days = termDays(d.partyId?.paymentTerms);

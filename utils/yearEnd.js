@@ -64,6 +64,14 @@ function nextYearRange(startDay, endDay) {
   return { startDay: start, endDay: addDays(start, daysBetween(startDay, endDay)) };
 }
 
+// Which year covers a calendar day, and which one overlaps a run of days. `years` are [{ code, startDay, endDay }] in the
+// organisation's own days, so what decides "covered" is the days the year was made for, not the exact instants it was stored
+// at: a year made from plain day strings before FiscalYearService.create read them on the organisation's calendar began at
+// 04:00 on its first day and ended at 04:00 on its last (Dubai), and must not look like a year that does not cover its
+// first morning (a conflict that blocked closing the year before it).
+const coveringYear = (years, day) => (years || []).find((y) => y.startDay <= day && y.endDay >= day) || null;
+const overlappingYear = (years, startDay, endDay) => (years || []).find((y) => y.startDay <= endDay && y.endDay >= startDay) || null;
+
 // The name of the year after `code`: "2026" -> "2027", "FY2025-26" -> "FY2026-27", "FY26" -> by the new end date.
 function nextYearCode(code, nextEndDay) {
   const text = String(code || "").trim();
@@ -296,7 +304,7 @@ function assessReopen(facts) {
 
 module.exports = {
   CLOSING_VOUCHER_TYPE, HEAD_OFFICE, isPnl,
-  addDays, addMonths, daysBetween, longDay, nextYearRange, nextYearCode,
+  addDays, addMonths, daysBetween, longDay, nextYearRange, nextYearCode, coveringYear, overlappingYear,
   planClosing, closingEntries, unbalancedBranches,
   assessClose, assessReopen, unacknowledged,
   // shared with the month close (utils/periodClose.js)

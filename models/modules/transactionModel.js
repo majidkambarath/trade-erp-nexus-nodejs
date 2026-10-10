@@ -228,10 +228,10 @@ transactionSchema.index({ "returnOf.transactionId": 1 }, { sparse: true });
 transactionSchema.index({ status: 1 });
 transactionSchema.index({ date: -1 });
 transactionSchema.index({ isOpening: 1, type: 1, partyId: 1 });
-// List query: filter by type, sort by createdAt. Without this the sort
-// falls back to an in-memory sort of every matching document.
-transactionSchema.index({ type: 1, createdAt: -1 });
-transactionSchema.index({ createdAt: -1 });
+// List query: filter by type, sort by createdAt then _id (the tie-breaker that keeps a page boundary stable). Without this the
+// sort falls back to an in-memory sort of every matching document.
+transactionSchema.index({ type: 1, createdAt: -1, _id: -1 });
+transactionSchema.index({ createdAt: -1, _id: -1 });
 
 transactionSchema.index({ transactionNo: 1 }, { unique: true }); // unique within an organisation - NOT per branch: a tax invoice number must be unique per taxpayer, so branches take their own prefix in the number format
 

@@ -2,7 +2,7 @@ const Category = require("../../models/modules/categoryModel");
 const Stock = require("../../models/modules/stockModel");
 const AppError = require("../../utils/AppError");
 const mongoose = require("mongoose");
-const { searchRegex } = require("../../utils/regex");
+const { searchRegex, escapeRegex } = require("../../utils/regex");
 const { retryTransientTransaction } = require("../../utils/withTransactionSession");
 
 class CategoryService {
@@ -46,33 +46,33 @@ class CategoryService {
     const limit = Number(filters.limit) || 10;
     const skip = (page - 1) * limit;
 
-    // Search functionality
-    if (filters.search) {
-      query.$or = [
-        { name: searchRegex(filters.search) },
-        { description: searchRegex(filters.search) },
-      ];
-      if (filters.search.toUpperCase().includes("STATUS:ACTIVE")) {
-        query.status = "ACTIVE";
-      } else if (filters.search.toUpperCase().includes("STATUS:INACTIVE")) {
-        query.status = "INACTIVE";
-      }
+    // Search functionality. "status:active" / "status:inactive" in the text is a filter, not words to look for in a name
+    // (the whole text used to be searched as a name too, so the shortcut found nothing).
+    let status = filters.status ? String(filters.status) : "";
+    let text = typeof filters.search === "string" ? filters.search : "";
+    const shortcut = text.match(/\bstatus:(inactive|active)\b/i);
+    if (shortcut) {
+      status = status || shortcut[1];
+      text = text.replace(shortcut[0], " ");
+    }
+    text = text.trim();
+    if (text) {
+      query.$or = [{ name: searchRegex(text) }, { description: searchRegex(text) }];
     }
 
-    // Filter by status
-    if (filters.status) {
-      query.status = filters.status;
+    // Filter by status. The model keeps "Active" / "Inactive" as the form writes them; older rows may be upper case, so the
+    // comparison ignores case (it was an exact "ACTIVE", which matched nothing the screen ever wrote).
+    if (status) {
+      query.status = new RegExp(`^${escapeRegex(status.trim())}$`, "i");
     }
 
-    const categories = await Category.find(query)
-      .skip(skip)
-      .limit(limit)
-      .sort({ createdAt: -1 });
+    const [categories, total] = await Promise.all([
+      Category.find(query).skip(skip).limit(limit).sort({ createdAt: -1, _id: -1 }),
+      Category.countDocuments(query),
+    ]);
+    const totalPages = Math.ceil(total / limit);
 
-    const totalCategories = await Category.countDocuments(query);
-    const totalPages = Math.ceil(totalCategories / limit);
-
-    return { categories, totalPages };
+    return { categories, totalPages, total };
   }
 
   static async getCategoryById(id) {
@@ -150,11 +150,12 @@ class CategoryService {
         $group: {
           _id: null,
           totalCategories: { $sum: 1 },
+          // "Active" is what the model and the form write; the comparison ignores case so an older "ACTIVE" counts too
           activeCategories: {
-            $sum: { $cond: [{ $eq: ["$status", "ACTIVE"] }, 1, 0] },
+            $sum: { $cond: [{ $eq: [{ $toUpper: { $ifNull: ["$status", ""] } }, "ACTIVE"] }, 1, 0] },
           },
           inactiveCategories: {
-            $sum: { $cond: [{ $eq: ["$status", "INACTIVE"] }, 1, 0] },
+            $sum: { $cond: [{ $eq: [{ $toUpper: { $ifNull: ["$status", ""] } }, "INACTIVE"] }, 1, 0] },
           },
         },
       },

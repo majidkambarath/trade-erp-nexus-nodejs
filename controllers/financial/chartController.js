@@ -10,6 +10,7 @@ const StatementService = require("../../services/financial/statementService");
 const ReturnService = require("../../services/orderPurchase/returnService");
 const AuditService = require("../../services/core/auditService");
 const DefaultChartService = require("../../services/financial/defaultChartService");
+const LedgerReports = require("../../services/reports/ledgerReportsService");
 
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
 
@@ -107,9 +108,16 @@ exports.updateSettings = catchAsync(async (req, res) => {
 });
 
 // --- party ledger reports ---
-exports.getAgeing = catchAsync(async (req, res) =>
-  ok(res, await AgeingService.report({ type: req.query.type || "receivable", asOf: req.query.asOf || new Date() }))
-);
+exports.getAgeing = catchAsync(async (req, res) => {
+  const type = req.query.type || "receivable";
+  // the three report screens spell the date three ways (asOf, asOn, asAt); a wrong spelling used to be ignored and answer for today
+  const given = req.query.asOf || req.query.asOn || req.query.asAt;
+  const asOf = given ? LedgerReports.dayEnd(given) : new Date();
+  const report = await AgeingService.report({ type, asOf });
+  // The open invoices do not add up to the party accounts when a return, a credit note or an advance has not been set against an
+  // invoice. Said, with the amount, so the page ties to the books instead of leaving the difference to be found.
+  ok(res, { ...report, reconciliation: await LedgerReports.ageingReconciliation({ type, asOf, ageingTotal: report.totals.total }) });
+});
 exports.getStatement = catchAsync(async (req, res) =>
   ok(res, await StatementService.getStatement({ partyId: req.query.partyId, partyType: req.query.partyType, from: req.query.from, to: req.query.to }))
 );

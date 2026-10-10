@@ -28,6 +28,10 @@ const DocumentLinks = require("./deliveryNoteLinks");
 const ShareService = require("../messaging/shareService");
 const ItemKindService = require("../stock/itemKindService");
 const kinds = require("../../utils/itemKinds");
+const orgLocale = require("../../utils/orgLocale");
+const { listPeriod, condition: periodCondition } = require("../../utils/listPeriod");
+const Customer = require("../../models/modules/customerModel");
+const Vendor = require("../../models/modules/vendorModel");
 
 function logInbound(tag, payload) {
   try {
@@ -698,8 +702,12 @@ const logAmount = balanceEffect;
     );
   }
 
-  // Get all Transactions
-  // Get all Transactions
+  // The list every order screen reads (GET /transactions/transactions).
+  //   type (one, several or comma-separated), status, partyId, partyType, search, page (from 1), limit (1-200, default 20)
+  //   dateFilter TODAY | WEEK | MONTH | CUSTOM (+ startDate, endDate) and dateFrom / dateTo: a period of the ORGANISATION'S
+  //   calendar days on the document's date, the last day whole (utils/listPeriod.js).
+  // Newest saved first, ties broken by _id so a page boundary never shows a document twice or skips one. pagination.total
+  // counts what every filter leaves.
   static async getAllTransactions(filters) {
     try {
       const query = {};
@@ -713,64 +721,39 @@ const logAmount = balanceEffect;
       if (filters.status) query.status = filters.status;
       if (filters.partyId) {
         if (!mongoose.Types.ObjectId.isValid(filters.partyId))
-          throw new Error("Invalid partyId");
+          throw new AppError("Invalid partyId", 400, "INVALID_PARTY_ID");
         query.partyId = new mongoose.Types.ObjectId(filters.partyId);
       }
       if (filters.partyType) query.partyType = filters.partyType;
 
-      if (filters.search) {
+      const needle = filters.search === undefined || filters.search === null ? "" : String(filters.search).trim();
+      if (needle) {
         // Escape user input: an unescaped "(" throws, and crafted patterns can backtrack badly.
-        const escaped = filters.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const r = new RegExp(escaped, "i");
+        // The order screens promise "number, customer / vendor or user". A name is not stored on the document, so the
+        // party is found by its name or code first and then its documents.
+        const [customers, vendors] = await Promise.all([
+          Customer.find({ $or: [{ customerName: r }, { customerId: r }] }).select("_id").limit(200).lean(),
+          Vendor.find({ $or: [{ vendorName: r }, { vendorId: r }] }).select("_id").limit(200).lean(),
+        ]);
         query.$or = [
           { transactionNo: r },
           { notes: r },
           { createdBy: r },
           { "items.description": r },
+          { partyId: { $in: [...customers, ...vendors].map((p) => p._id) } },
         ];
       }
 
-      // ──────── DATE FILTER ──────── (unchanged)
-      if (filters.dateFilter) {
-        const today = new Date();
-        const types = Array.isArray(filters.type)
-          ? filters.type
-          : [filters.type].filter(Boolean);
-        const field = types.some((t) =>
-          ["purchase_return", "sales_return"].includes(t)
-        )
-          ? "returnDate"
-          : "date";
-
-        switch (filters.dateFilter) {
-          case "TODAY":
-            query[field] = {
-              $gte: new Date(today.setHours(0, 0, 0, 0)),
-              $lte: new Date(today.setHours(23, 59, 59, 999)),
-            };
-            break;
-          case "WEEK":
-            query[field] = {
-              $gte: new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000),
-            };
-            break;
-          case "MONTH":
-            query[field] = {
-              $gte: new Date(today.getFullYear(), today.getMonth(), 1),
-            };
-            break;
-          case "CUSTOM":
-            if (!filters.startDate || !filters.endDate)
-              throw new Error("startDate and endDate required for CUSTOM");
-            query[field] = {
-              $gte: new Date(filters.startDate),
-              $lte: new Date(filters.endDate),
-            };
-            break;
-          default:
-            throw new Error("Invalid date filter");
-        }
-      }
+      // ──────── DATE FILTER ────────
+      // On the document's own date for every type. This used to read `returnDate` for the two return types, which
+      // createTransaction does not store and no screen sends, so Today / This week / This month on a returns list matched
+      // no document at all (and an "all types" list with a period matched returns only).
+      const period = listPeriod(filters, { zone: orgLocale.timezone() });
+      if (period.error) throw new AppError(period.error.message, 400, period.error.code);
+      const dateMatch = periodCondition(period);
+      if (dateMatch) query.date = dateMatch;
 
       // ──────── PAGINATION ──────── (unchanged)
       const page = Math.max(1, parseInt(filters.page) || 1);
@@ -783,7 +766,7 @@ const logAmount = balanceEffect;
       // so each page cost grew with the total row count.
       const pipeline = [
         { $match: query },
-        { $sort: { createdAt: -1 } },
+        { $sort: { createdAt: -1, _id: -1 } }, // _id: documents saved in one millisecond (an import) still have one order
         { $skip: skip },
         { $limit: limit },
         // the copy of a draft order kept for reopening it (orderCloseService) is a whole document: not for a list
@@ -950,7 +933,7 @@ const logAmount = balanceEffect;
 
         // ---- 8. Restore order: $group does not preserve input order,
         // and this sorts only the page (<= limit docs), not the whole table.
-        { $sort: { createdAt: -1 } },
+        { $sort: { createdAt: -1, _id: -1 } },
       ];
 
       const transactions = await Transaction.aggregate(pipeline);
@@ -981,6 +964,7 @@ const logAmount = balanceEffect;
         },
       };
     } catch (error) {
+      if (error instanceof AppError) throw error; // a bad filter is the caller's 400, not a failure of ours
       throw new Error(`Failed to fetch transactions: ${error.message}`);
     }
   }

@@ -4,6 +4,7 @@ const { getTenant } = require("../../utils/tenant");
 const tz = require("../../utils/tz");
 const orgLocale = require("../../utils/orgLocale");
 const P = require("../../utils/periodClose");
+const FiscalYearPeriod = require("../../utils/fiscalYearPeriod");
 
 // The zone a company's calendar runs in: the one named, else the organisation in scope.
 const zoneOf = (companyId) => (companyId ? orgLocale.forCompany(companyId).timezone : orgLocale.timezone());
@@ -70,11 +71,9 @@ class FiscalYearService {
 
     const fy = await this.getForDate(date, { session, companyId: company });
     if (!fy) {
-      throw new AppError(
-        `No fiscal year covers ${new Date(date).toISOString().slice(0, 10)}`,
-        422,
-        "NO_FISCAL_YEAR"
-      );
+      // named by the organisation's calendar day (the UTC date is the day before for the first hours of a day in Dubai)
+      const day = tz.dayOf(new Date(date), zoneOf(company)) || String(date);
+      throw new AppError(`No fiscal year covers ${day}`, 422, "NO_FISCAL_YEAR");
     }
     if (fy.status === "closed") {
       throw new AppError(`Fiscal year ${fy.code} is closed`, 422, "PERIOD_CLOSED");
@@ -87,9 +86,11 @@ class FiscalYearService {
 
   static async create(data, req) {
     const { companyId } = getTenant(req);
-    const startDate = new Date(data.startDate);
-    const endDate = new Date(data.endDate);
-    if (!(endDate > startDate)) throw new AppError("End date must be after start date", 400, "INVALID_PERIOD");
+    // Plain days ("2025-01-01", what the screen sends) are the organisation's calendar days: the year starts at the start
+    // of its first day there and ends at the last millisecond of its last day there (utils/fiscalYearPeriod.js). A full
+    // timestamp is taken as the instant it names.
+    const { startDate, endDate, ok } = FiscalYearPeriod.instants(data.startDate, data.endDate, zoneOf(companyId));
+    if (!ok) throw new AppError("End date must be after start date", 400, "INVALID_PERIOD");
 
     // Years of one company may not overlap.
     const overlap = await FiscalYear.findOne({

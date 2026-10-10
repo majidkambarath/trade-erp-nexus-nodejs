@@ -19,8 +19,9 @@ class StatementService {
   static escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
   static async partyAccountIds(partyType, name) {
-    const prefix = partyType === "Vendor" ? "Vendor" : "Customer";
-    const exact = new RegExp(`^${prefix}( Advance)? - ${this.escape(name)}$`);
+    // the party's own account and its advance account: "Customer Advance - X" and "Advance to Vendor - X" (partyAccounts.js KINDS)
+    const prefix = partyType === "Vendor" ? "(Vendor|Advance to Vendor)" : "(Customer|Customer Advance)";
+    const exact = new RegExp(`^${prefix} - ${this.escape(name)}$`);
     const accounts = await LedgerAccount.find({ accountName: exact }).select("_id").lean();
     return accounts.map((a) => a._id);
   }
@@ -63,7 +64,7 @@ class StatementService {
       running = round2(running + sign * (e.debit - e.credit));
       return {
         _id: e._id, date: e.date, voucherNo: e.voucherNo, voucherType: e.voucherType,
-        narration: e.narration, debit: e.debit, credit: e.credit, balance: running,
+        narration: e.narration, debit: round2(e.debit), credit: round2(e.credit), balance: running,
       };
     });
     return {

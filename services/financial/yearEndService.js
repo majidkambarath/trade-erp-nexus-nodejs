@@ -153,15 +153,15 @@ class YearEndService {
       const range = Y.nextYearRange(startDay, endDay);
       let next = { code: null, exists: false, conflict: false, startDay: null, endDay: null };
       if (range) {
-        const from = orgLocale.dayStart(range.startDay);
-        const to = orgLocale.endOfDay(range.endDay);
-        const covering = years.find((y) => y.startDate <= from && y.endDate >= from);
+        // judged by the organisation's days, not the stored instants (see Y.coveringYear)
+        const days = years.map((y) => ({ code: y.code, startDay: orgLocale.dayOf(y.startDate), endDay: orgLocale.dayOf(y.endDate) }));
+        const covering = Y.coveringYear(days, range.startDay);
         if (covering) {
-          next = { code: covering.code, exists: true, conflict: false, startDay: orgLocale.dayOf(covering.startDate), endDay: orgLocale.dayOf(covering.endDate) };
+          next = { code: covering.code, exists: true, conflict: false, startDay: covering.startDay, endDay: covering.endDay };
         } else {
           let code = Y.nextYearCode(fy.code, range.endDay);
           if (years.some((y) => y.code === code)) code = `${code}-${range.endDay.slice(0, 4)}`.slice(0, 20);
-          next = { code, exists: false, conflict: years.some((y) => y.startDate <= to && y.endDate >= from), startDay: range.startDay, endDay: range.endDay };
+          next = { code, exists: false, conflict: Boolean(Y.overlappingYear(days, range.startDay, range.endDay)), startDay: range.startDay, endDay: range.endDay };
         }
       }
 

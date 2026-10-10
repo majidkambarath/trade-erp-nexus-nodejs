@@ -91,3 +91,55 @@ test("only zones that are never west of UTC are supported, and a made-up one is 
   assert.equal(tz.validZone("Asia/Dubai"), true);
   assert.equal(tz.validZone("Mars/Phobos"), false);
 });
+
+test("a plain day in a request is that day on the zone's calendar: whole at the end, from midnight at the start", () => {
+  assert.equal(iso(tz.boundOf("2026-10-09", "start", "Asia/Dubai")), "2026-10-08T20:00:00.000Z");
+  assert.equal(iso(tz.boundOf("2026-10-09", "end", "Asia/Dubai")), "2026-10-09T19:59:59.999Z");
+  assert.equal(iso(tz.boundOf(" 2026-10-09 ", "end", "Asia/Dubai")), "2026-10-09T19:59:59.999Z", "spaces are not part of a day");
+  assert.equal(iso(tz.boundOf("2026-10-09", "end", "UTC")), "2026-10-09T23:59:59.999Z");
+  // what `new Date(day)` said, and why it was wrong as the end of a range in Dubai
+  assert.equal(iso(new Date("2026-10-09")), "2026-10-09T00:00:00.000Z");
+  assert.ok(tz.boundOf("2026-10-09", "end", "Asia/Dubai") > new Date("2026-10-09T10:00:00.000Z"), "14:00 on the 9th is inside a range ending on the 9th");
+  // the last day of a range is whole in a zone with clock changes too (a 25-hour day)
+  assert.equal(iso(tz.boundOf("2026-10-25", "end", "Europe/London")), "2026-10-25T23:59:59.999Z");
+  assert.equal(iso(tz.boundOf("2026-10-25", "start", "Europe/London")), "2026-10-24T23:00:00.000Z");
+});
+
+test("anything that is not a plain day is the instant it names; nothing given is null; nonsense is an Invalid Date", () => {
+  assert.equal(iso(tz.boundOf("2026-10-09T10:00:00.000Z", "end", "Asia/Dubai")), "2026-10-09T10:00:00.000Z");
+  assert.equal(iso(tz.boundOf(new Date("2026-10-09T10:00:00.000Z"), "start", "Asia/Dubai")), "2026-10-09T10:00:00.000Z");
+  assert.equal(iso(tz.boundOf(Date.UTC(2026, 9, 9, 10), "start", "Asia/Dubai")), "2026-10-09T10:00:00.000Z");
+  assert.equal(tz.boundOf(undefined, "end", "Asia/Dubai"), null);
+  assert.equal(tz.boundOf(null, "end", "Asia/Dubai"), null);
+  assert.equal(tz.boundOf("  ", "end", "Asia/Dubai"), null);
+  assert.ok(Number.isNaN(tz.boundOf("banana", "end", "Asia/Dubai").getTime()));
+  assert.ok(Number.isNaN(tz.boundOf("2026-02-30", "end", "Asia/Dubai").getTime()), "30 February has the shape of a day and is not one");
+});
+
+test("a date and time with no zone is wall-clock time on the zone's clock, not the server's", () => {
+  // what the trial balance screen sends as the end of its range
+  assert.equal(iso(tz.boundOf("2026-12-31T23:59:59.999", "end", "Asia/Dubai")), "2026-12-31T19:59:59.999Z");
+  assert.equal(iso(tz.boundOf("2026-12-31T23:59:59.999", "end", "UTC")), "2026-12-31T23:59:59.999Z");
+  assert.equal(iso(tz.boundOf("2026-10-09T08:30", "start", "Asia/Dubai")), "2026-10-09T04:30:00.000Z");
+  assert.equal(iso(tz.boundOf("2026-10-09 08:30:15", "start", "Asia/Dubai")), "2026-10-09T04:30:15.000Z", "a space works as the T");
+  assert.equal(iso(tz.boundOf("2026-10-09T08:30:15.5", "start", "Asia/Dubai")), "2026-10-09T04:30:15.500Z");
+  assert.equal(iso(tz.boundOf("2026-07-01T23:59:59.999", "end", "Europe/London")), "2026-07-01T22:59:59.999Z", "BST");
+  // a zone written on the value is respected as written
+  assert.equal(iso(tz.boundOf("2026-12-31T23:59:59.999Z", "end", "Asia/Dubai")), "2026-12-31T23:59:59.999Z");
+  assert.equal(iso(tz.boundOf("2026-12-31T23:59:59.999+04:00", "end", "UTC")), "2026-12-31T19:59:59.999Z");
+  // nonsense inside the shape
+  assert.ok(Number.isNaN(tz.boundOf("2026-02-30T10:00:00", "end", "Asia/Dubai").getTime()));
+  assert.ok(Number.isNaN(tz.boundOf("2026-10-09T25:00:00", "end", "Asia/Dubai").getTime()));
+  assert.ok(Number.isNaN(tz.boundOf("2026-10-09T10:61:00", "end", "Asia/Dubai").getTime()));
+});
+
+test("which days exist", () => {
+  assert.equal(tz.isRealDay("2026-02-28"), true);
+  assert.equal(tz.isRealDay("2028-02-29"), true);
+  assert.equal(tz.isRealDay("2027-02-29"), false);
+  assert.equal(tz.isRealDay("2026-13-01"), false);
+  assert.equal(tz.isRealDay("2026-00-10"), false);
+  assert.equal(tz.isRealDay("2026-4-1"), false);
+  assert.equal(tz.isRealDay("0050-01-01"), false);
+  assert.equal(tz.isRealDay(null), false);
+});

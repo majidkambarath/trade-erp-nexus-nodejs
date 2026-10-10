@@ -22,12 +22,21 @@ const orgLocale = require("../../utils/orgLocale");
 const tz = require("../../utils/tz");
 
 const CATEGORY_ORDER = ["ASSET", "LIABILITY", "EQUITY", "INCOME", "EXPENSE"];
+// What a company had when it began keeping books here (utils/openingBalance*, a chart account created with a balance): balances
+// brought forward, not activity of the period they are dated in. Dated the go-live day they would otherwise be the first
+// period's "movement" - opening cash read 0 and the whole opening position showed up as cash flows and as capital introduced.
+const OPENING_TYPES = ["opening", "opening_stock"];
 const ymd = /^\d{4}-\d{2}-\d{2}$/;
 
 function bound(value, edge) {
   if (!value) return null;
   const text = String(value);
   const day = text.slice(0, 10);
+  if (ymd.test(day)) {
+    const [y, m, dd] = day.split("-").map(Number);
+    const real = new Date(Date.UTC(y, m - 1, dd));
+    if (real.getUTCFullYear() !== y || real.getUTCMonth() !== m - 1 || real.getUTCDate() !== dd) throw new AppError(`"${value}" is not a date`, 400, "INVALID_DATE");
+  }
   const d = ymd.test(day) ? (edge === "end" ? orgLocale.endOfDay(day) : orgLocale.dayStart(day)) : new Date(text);
   if (Number.isNaN(d.getTime())) throw new AppError(`"${value}" is not a date`, 400, "INVALID_DATE");
   return d;
@@ -74,13 +83,16 @@ class LedgerReportsService {
   static async accountMovements({ from, to, accountIds, includeClosing = false } = {}) {
     const start = dayStart(from);
     const end = dayEnd(to);
+    if (start && end && start > end) throw new AppError("from must not be after to", 400, "INVALID_RANGE");
     const match = { isReversed: { $ne: true } };
     if (end) match.date = { $lte: end };
     if (accountIds) match.accountId = { $in: accountIds.map((id) => new mongoose.Types.ObjectId(String(id))) };
-    const before = (f) => (start ? { $cond: [{ $lt: ["$date", start] }, f, 0] } : 0);
+    const isOpening = { $in: ["$voucherType", OPENING_TYPES] };
+    const before = (f) => (start ? { $cond: [{ $or: [{ $lt: ["$date", start] }, isOpening] }, f, 0] } : 0);
     const notClosing = { $ne: ["$voucherType", CLOSING_VOUCHER_TYPE] };
+    const notOpening = { $not: [isOpening] };
     const inPeriod = start
-      ? (includeClosing ? { $gte: ["$date", start] } : { $and: [{ $gte: ["$date", start] }, notClosing] })
+      ? (includeClosing ? { $and: [{ $gte: ["$date", start] }, notOpening] } : { $and: [{ $gte: ["$date", start] }, notClosing, notOpening] })
       : (includeClosing ? null : notClosing);
     const within = (f) => (inPeriod ? { $cond: [inPeriod, f, 0] } : f);
 
@@ -186,10 +198,27 @@ class LedgerReportsService {
     const isDirectIncome = (r) => directIncome.has(String(r.groupId));
     const isDirectCost = (r) => directCost.has(String(r.groupId));
 
+    // Sales discounts (line and header discounts at invoicing, rebates by credit note) are posted to an expense account so the
+    // discount stays visible in the books. The transaction price is net of them (IFRS 15.47, IAS 1.82(a)): they reduce revenue,
+    // and gross profit and the margin are measured on what the customer was actually charged. Net profit does not move.
+    let discountId = null;
+    try {
+      discountId = String(await AccountConfigService.resolveAccount("discount-sales"));
+    } catch (err) {
+      if (err.code !== "ACCOUNT_NOT_CONFIGURED") throw err;
+    }
+    const isDiscount = (r) => discountId && String(r.accountId) === discountId;
+
     const revenue = section(isDirectIncome, "INCOME");
-    const directCosts = section(isDirectCost, "EXPENSE");
+    const discounts = section(isDiscount, "EXPENSE");
+    if (discounts.total) {
+      const lines = discounts.groups.flatMap((g) => g.accounts).map((a) => ({ ...a, amount: round2(-a.amount) }));
+      revenue.groups.push({ groupId: "sales-discounts", name: "Less: sales discounts and rebates", synthetic: true, accounts: lines, total: round2(-discounts.total) });
+      revenue.total = round2(revenue.total - discounts.total);
+    }
+    const directCosts = section((r) => isDirectCost(r) && !isDiscount(r), "EXPENSE");
     const otherIncome = section((r) => !isDirectIncome(r), "INCOME");
-    const operatingExpenses = section((r) => !isDirectCost(r), "EXPENSE");
+    const operatingExpenses = section((r) => !isDirectCost(r) && !isDiscount(r), "EXPENSE");
     const grossProfit = round2(revenue.total - directCosts.total);
     return {
       from: from || null, to: to || null,
@@ -327,7 +356,12 @@ class LedgerReportsService {
     const wanted = kind === "cash" ? ["cash-account-group"] : kind === "bank" ? ["bank-account-group"] : ["cash-account-group", "bank-account-group"];
     const cash = await this.groupSet(["cash-account-group"]);
     const ids = await this.groupSet(wanted);
-    const accounts = await LedgerAccount.find({ groupId: { $in: [...ids] }, isActive: true }).select("accountCode accountName groupId bank").sort({ accountCode: 1 }).lean();
+    const found = await LedgerAccount.find({ groupId: { $in: [...ids] } }).select("accountCode accountName groupId bank isActive").sort({ accountCode: 1 }).lean();
+    // An account switched off later still holds what it held: leaving it out made every past period's cash book, cash flow and
+    // statement of financial position stop agreeing with the ledger. A switched-off account with no entries is not listed.
+    const off = found.filter((a) => a.isActive === false).map((a) => a._id);
+    const used = off.length ? new Set((await LedgerEntry.distinct("accountId", { accountId: { $in: off }, isReversed: { $ne: true } })).map(String)) : new Set();
+    const accounts = found.filter((a) => a.isActive !== false || used.has(String(a._id)));
     return accounts.map((a) => ({ ...a, kind: cash.has(String(a.groupId)) ? "cash" : "bank" }));
   }
 
@@ -356,18 +390,22 @@ class LedgerReportsService {
     const ids = accounts.map((a) => a._id);
     const start = dayStart(from);
     const end = dayEnd(to);
+    if (start && end && start > end) throw new AppError("from must not be after to", 400, "INVALID_RANGE");
     const base = { accountId: { $in: ids }, isReversed: { $ne: true } };
 
     const sumNet = async (extra) => {
       const [r] = await LedgerEntry.aggregate([{ $match: { ...base, ...extra } }, { $group: { _id: null, net: { $sum: { $subtract: ["$debitAmount", "$creditAmount"] } } } }]);
       return round2(r?.net || 0);
     };
-    const opening = start ? await sumNet({ date: { $lt: start } }) : 0;
+    // opening-balance vouchers are balances brought forward whatever day they are dated, and not money that moved in the period
+    const opening = start
+      ? await sumNet({ $or: [{ date: { $lt: start } }, { voucherType: { $in: OPENING_TYPES }, ...(end ? { date: { $lte: end } } : {}) }] })
+      : 0;
     const closingPerLedger = await sumNet(end ? { date: { $lte: end } } : {});
 
     const dateMatch = start || end ? { date: { ...(start ? { $gte: start } : {}), ...(end ? { $lte: end } : {}) } } : {};
     const perVoucher = await LedgerEntry.aggregate([
-      { $match: { ...base, ...dateMatch } },
+      { $match: { ...base, ...dateMatch, ...(start ? { voucherType: { $nin: OPENING_TYPES } } : {}) } },
       { $group: { _id: "$voucherId", type: { $first: "$voucherType" }, net: { $sum: { $subtract: ["$debitAmount", "$creditAmount"] } } } },
       { $group: { _id: "$type", inflow: { $sum: { $cond: [{ $gt: ["$net", 0] }, "$net", 0] } }, outflow: { $sum: { $cond: [{ $lt: ["$net", 0] }, { $multiply: ["$net", -1] }, 0] } }, count: { $sum: 1 } } },
     ]);
@@ -521,21 +559,40 @@ class LedgerReportsService {
 
   // What each customer owes (or each vendor is owed) on a date, read from the party accounts of
   // the ledger. Customers also carry their credit limit, how much of it is used, and what is overdue.
+  // What the party accounts hold at the end of the day, against what the open invoices add up to. `unapplied` is the difference:
+  // returns, credit notes and balances on account that have not been set against an invoice (negative when they exceed the debits).
+  static async ageingReconciliation({ type = "receivable", asOf, ageingTotal = 0 } = {}) {
+    const customer = type === "receivable";
+    const accounts = await LedgerAccount.find({ accountName: customer ? /^Customer - / : /^Vendor - / }).select("_id").lean();
+    const end = asOf ? new Date(asOf) : new Date();
+    const [row] = await LedgerEntry.aggregate([
+      { $match: { accountId: { $in: accounts.map((a) => a._id) }, isReversed: { $ne: true }, date: { $lte: end } } },
+      { $group: { _id: null, debit: { $sum: "$debitAmount" }, credit: { $sum: "$creditAmount" } } },
+    ]);
+    const ledger = round2(customer ? (row?.debit || 0) - (row?.credit || 0) : (row?.credit || 0) - (row?.debit || 0));
+    return { ledger, ageing: round2(ageingTotal), unapplied: round2(ledger - ageingTotal) };
+  }
+
   static async partyBalances({ type = "customer", asOn, includeZero = false } = {}) {
     if (!["customer", "vendor"].includes(type)) throw new AppError("type must be customer or vendor", 400);
     const customer = type === "customer";
     const rx = customer ? /^Customer( Advance)? - / : /^(Vendor|Advance to Vendor) - /;
     const accounts = await LedgerAccount.find({ accountName: rx }).select("accountName").lean();
     const nameOf = new Map(accounts.map((a) => [String(a._id), a.accountName.replace(rx, "")]));
-    const end = dayEnd(asOn || new Date().toISOString().slice(0, 10));
+    const end = dayEnd(asOn || orgLocale.today());
     const sums = await LedgerEntry.aggregate([
       { $match: { accountId: { $in: accounts.map((a) => a._id) }, isReversed: { $ne: true }, date: { $lte: end } } },
       { $group: { _id: "$accountId", debit: { $sum: "$debitAmount" }, credit: { $sum: "$creditAmount" } } },
     ]);
     const byName = new Map();
+    // what the party has paid us (or we them) in advance: the balance of their advance accounts, kept apart from the invoiced balance
+    const advanceIds = new Set(accounts.filter((a) => /^(Customer Advance|Advance to Vendor) - /.test(a.accountName)).map((a) => String(a._id)));
+    const heldFor = new Map();
     for (const s of sums) {
       const name = nameOf.get(String(s._id));
-      byName.set(name, round2((byName.get(name) || 0) + (customer ? s.debit - s.credit : s.credit - s.debit)));
+      const amount = customer ? s.debit - s.credit : s.credit - s.debit;
+      byName.set(name, round2((byName.get(name) || 0) + amount));
+      if (advanceIds.has(String(s._id))) heldFor.set(name, round2((heldFor.get(name) || 0) - amount)); // positive = held in the party's favour
     }
 
     const Party = customer ? Customer : Vendor;
@@ -551,7 +608,7 @@ class LedgerReportsService {
       const used = customer && limit > 0 ? round2((Math.max(balance, 0) / limit) * 100) : null;
       return {
         partyId: p?._id || null, partyCode: p?.[customer ? "customerId" : "vendorId"] || "", partyName: name,
-        paymentTerms: p?.paymentTerms || "", balance,
+        paymentTerms: p?.paymentTerms || "", balance, onAccount: heldFor.get(name) || 0,
         ...(customer ? { creditLimit: limit, available: limit > 0 ? round2(limit - balance) : null, utilisation: used, status: limit <= 0 ? "no-limit" : balance > limit ? "over" : used >= 80 ? "near" : "ok" } : {}),
         overdue: overdueOf.get(name) || 0,
       };
@@ -564,6 +621,8 @@ class LedgerReportsService {
         owed: round2(rows.filter((r) => r.balance > 0).reduce((t, r) => t + r.balance, 0)),
         advances: round2(rows.filter((r) => r.balance < 0).reduce((t, r) => t - r.balance, 0)),
         net: round2(rows.reduce((t, r) => t + r.balance, 0)),
+        // advances proper (the party's advance accounts), unlike `advances` above, which is any account whose net is on the other side
+        onAccount: round2(rows.reduce((t, r) => t + Math.max(r.onAccount, 0), 0)),
         overdue: round2(rows.reduce((t, r) => t + r.overdue, 0)),
         ...(customer ? { overLimit: rows.filter((r) => r.status === "over").length, nearLimit: rows.filter((r) => r.status === "near").length } : {}),
       },

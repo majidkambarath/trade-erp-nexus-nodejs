@@ -93,7 +93,9 @@ async function monthlyProfit(months, lastDay) {
 }
 
 // One posting account's movement by month (the VAT on sales, say). `side` is the side it is read on.
-async function accountMonthly(configKey, months, lastDay, side) {
+// `excludeJournals`: the movement the documents made. The quarter's VAT is cleared against these accounts by a journal (paying the
+// tax authority), which would otherwise show as a month of negative output VAT.
+async function accountMonthly(configKey, months, lastDay, side, { excludeJournals = false } = {}) {
   let accountId;
   try {
     accountId = await AccountConfigService.resolveAccount(configKey);
@@ -102,7 +104,7 @@ async function accountMonthly(configKey, months, lastDay, side) {
     throw err;
   }
   const rows = await LedgerEntry.aggregate([
-    { $match: { accountId, isReversed: { $ne: true }, date: range(`${months[0]}-01`, lastDay) } },
+    { $match: { accountId, isReversed: { $ne: true }, date: range(`${months[0]}-01`, lastDay), ...(excludeJournals ? { voucherType: { $ne: "journal" } } : {}) } },
     { $group: { _id: monthKey("$date"), debit: { $sum: "$debitAmount" }, credit: { $sum: "$creditAmount" } } },
   ]);
   const by = new Map(rows.map((r) => [r._id, side === "credit" ? r.credit - r.debit : r.debit - r.credit]));
@@ -192,6 +194,27 @@ async function invoiceStats(from, to) {
     { $group: { _id: null, invoices: { $sum: 1 }, net: { $sum: "$net" }, total: { $sum: "$total" } } },
   ]);
   return { invoices: row?.invoices || 0, net: round2(row?.net || 0), total: round2(row?.total || 0) };
+}
+
+// Approved documents of one type in a period, with VAT: how many and what they come to (what is actually owed on them).
+// Opening balances are left out, as in invoiceStats.
+async function documentTotals(type, from, to) {
+  const [row] = await Transaction.aggregate([
+    { $match: { type, status: { $in: APPROVED }, isOpening: { $ne: true }, date: range(from, to) } },
+    { $group: { _id: null, documents: { $sum: 1 }, total: { $sum: "$totalAmount" } } },
+  ]);
+  return { documents: row?.documents || 0, total: round2(row?.total || 0) };
+}
+
+// The calendar day of the first approved sales invoice (null when there is none): a business that began selling a
+// fortnight ago has two weeks of history, and the cash cycle must not pretend to have ninety days of it.
+async function firstSaleDay() {
+  const [row] = await Transaction.aggregate([
+    { $match: { type: "sales_order", status: { $in: APPROVED }, isOpening: { $ne: true } } },
+    { $group: { _id: null, first: { $min: "$date" } } },
+    { $project: { _id: 0, day: dayKey("$first") } },
+  ]);
+  return row?.day || null;
 }
 
 // Sales and purchase orders of a period by status.
@@ -340,5 +363,5 @@ module.exports = {
   addDays, daysBetween, lastDayOf, shiftMonth, monthRange, weekStart, quarterStart,
   monthlyProfit, accountMonthly, inventoryBalances, cashFlowMonthly,
   monthlyTrade, itemSalesByMonth, invoiceStats, orderStatuses, drafts, dailyOrders, pipeline, settlement, customersByItem,
-  voucherTotal, weeklyCollections, hourlyPulse,
+  voucherTotal, weeklyCollections, hourlyPulse, documentTotals, firstSaleDay,
 };

@@ -15,11 +15,12 @@ exports.createCategory = catchAsync(async (req, res) => {
 });
 
 exports.getAllCategories = catchAsync(async (req, res) => {
-  const { categories, totalPages } = await CategoryService.getAllCategories(req.query);
+  const { categories, totalPages, total } = await CategoryService.getAllCategories(req.query);
 
   res.status(200).json({
     status: "success",
     results: categories.length,
+    total,
     totalPages,
     data: {
       categories,

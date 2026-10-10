@@ -11,6 +11,13 @@ const { BankMaster } = require("../../models/modules/banking/bankingModels");
 const AppError = require("../../utils/AppError");
 const { naturalBalance, round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
+const tz = require("../../utils/tz");
+const orgLocale = require("../../utils/orgLocale");
+
+// A day a person typed, as the instant that ends / starts it on the ORGANISATION's calendar (utils/tz.js boundOf). `new Date("2026-10-09")`
+// is 04:00 on the 9th in Dubai, so as the end of a range it hid everything the 9th held after four in the morning.
+const startOf = (v) => tz.boundOf(v, "start", orgLocale.timezone());
+const endOf = (v) => tz.boundOf(v, "end", orgLocale.timezone());
 
 const SUBTYPE = {
   ASSET: "current_asset",
@@ -28,7 +35,7 @@ class ChartOfAccountsService {
   // the chart and the report can never disagree).
   static async balances(asOf) {
     const match = { isReversed: { $ne: true } };
-    if (asOf) match.date = { $lte: new Date(asOf) };
+    if (asOf) match.date = { $lte: endOf(asOf) };
     const rows = await LedgerEntry.aggregate([
       { $match: match },
       { $group: { _id: "$accountId", debit: { $sum: "$debitAmount" }, credit: { $sum: "$creditAmount" }, entries: { $sum: 1 } } },
@@ -312,15 +319,15 @@ class ChartOfAccountsService {
     let openingDr = 0, openingCr = 0;
     if (from) {
       const [o] = await LedgerEntry.aggregate([
-        { $match: { ...live, date: { $lt: new Date(from) } } },
+        { $match: { ...live, date: { $lt: startOf(from) } } },
         { $group: { _id: null, d: { $sum: "$debitAmount" }, c: { $sum: "$creditAmount" } } },
       ]);
       openingDr = o?.d || 0;
       openingCr = o?.c || 0;
     }
     const range = {};
-    if (from) range.$gte = new Date(from);
-    if (to) range.$lte = new Date(to);
+    if (from) range.$gte = startOf(from);
+    if (to) range.$lte = endOf(to);
     const entries = await LedgerEntry.find({ ...live, ...(from || to ? { date: range } : {}) })
       .sort({ date: 1, createdAt: 1, _id: 1 })
       .lean();

@@ -412,8 +412,11 @@ test("customers: a receipt settles part of an opening invoice, and a settled one
   assert.equal(await net(acc._id), 1300);
 
   await assert.rejects(() => svc.OB.reverseParty(a._id, by), { code: "OPENING_INVOICE_SETTLED" });
+  // "as at" is what was open ON that day: the receipt was made two days after go-live, so at go-live the whole invoice was open
   const rep = await svc.Ageing.report({ type: "receivable", asOf: new Date(`${GO_LIVE}T00:00:00Z`) });
-  assert.equal(rep.rows.find((x) => x.partyName === "Al Noor").buckets.d1_30, 500);
+  assert.equal(rep.rows.find((x) => x.partyName === "Al Noor").buckets.d1_30, 1200.5);
+  const after = await svc.Ageing.report({ type: "receivable", asOf: new Date(`${addDays(GO_LIVE, 2)}T23:59:59Z`) });
+  assert.equal(after.rows.find((x) => x.partyName === "Al Noor").buckets.d1_30, 500, "and from the day of the receipt, what is left");
   const list = await svc.OB.listParties("customer");
   const row = list.rows.find((r) => r.reference === "INV-1001");
   assert.deepEqual([row.amount, row.paid, row.outstanding, row.canReverse], [1200.5, 700.5, 500, false]);

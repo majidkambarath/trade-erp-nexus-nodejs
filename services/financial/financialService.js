@@ -13,6 +13,9 @@ const AppError = require("../../utils/AppError");
 const NumberSeriesService = require("../core/numberSeriesService");
 const FiscalYearService = require("../core/fiscalYearService");
 const { CLOSING_VOUCHER_TYPE } = require("../../utils/yearEnd");
+const orgLocale = require("../../utils/orgLocale");
+const tz = require("../../utils/tz");
+const { listPeriod, condition: periodCondition } = require("../../utils/listPeriod");
 const { applyBalances } = require("./ledgerBalances");
 const { naturalBalance, categoryOf, remainderAfterAllocation } = require("../../utils/accounting");
 const mongoose = require("mongoose");
@@ -1268,29 +1271,27 @@ class FinancialService {
   }
 
   // Get all vouchers with filters and pagination - Optimized query with lean()
+  //   voucherType, status, paymentMode, partyId, approvalStatus, search, dateFrom / dateTo (the organisation's calendar days,
+  //   the last day whole), page (from 1), limit (1-200, default 20).
+  // Newest saved first, ties broken by _id; pagination.total counts what every filter leaves.
   static async getAllVouchers(filters = {}) {
     const query = {};
 
     if (filters.voucherType) query.voucherType = filters.voucherType;
     if (filters.status) query.status = filters.status;
     if (filters.paymentMode) query.paymentMode = filters.paymentMode === "transfer" ? { $in: ["transfer", "online"] } : filters.paymentMode;
-    if (filters.partyId && mongoose.Types.ObjectId.isValid(filters.partyId))
+    if (filters.partyId) {
+      // a party that cannot exist is an error: dropping the filter would list (and count) everyone's vouchers
+      if (!mongoose.Types.ObjectId.isValid(filters.partyId)) throw new AppError("Invalid partyId", 400, "INVALID_PARTY_ID");
       query.partyId = filters.partyId;
+    }
     if (filters.approvalStatus) query.approvalStatus = filters.approvalStatus;
 
-    // Date filters
-    if (filters.dateFrom || filters.dateTo) {
-      query.date = {};
-      if (filters.dateFrom) {
-        const fromDate = new Date(filters.dateFrom);
-        if (!isNaN(fromDate)) query.date.$gte = fromDate;
-      }
-      if (filters.dateTo) {
-        const toDate = new Date(filters.dateTo);
-        // a date with no time means the whole of that day
-        if (!isNaN(toDate)) query.date.$lte = /^\d{4}-\d{2}-\d{2}$/.test(String(filters.dateTo)) ? new Date(toDate.getTime() + 86400000 - 1) : toDate;
-      }
-    }
+    // Date filters: plain days are the organisation's days, and a "to" day is whole (utils/listPeriod.js)
+    const period = listPeriod({ dateFrom: filters.dateFrom, dateTo: filters.dateTo }, { zone: orgLocale.timezone() });
+    if (period.error) throw new AppError(period.error.message, 400, period.error.code);
+    const dateMatch = periodCondition(period);
+    if (dateMatch) query.date = dateMatch;
 
     // Search functionality
     if (filters.search) {
@@ -1303,13 +1304,14 @@ class FinancialService {
       ];
     }
 
-    // Pagination
-    const page = parseInt(filters.page) || 1;
-    const limit = parseInt(filters.limit) || 20;
+    // Pagination: a page is from 1 (a negative skip is a server error) and a page holds 1-200 rows (an unbounded or
+    // negative limit meant "everything" or a silent abs()), the bounds the other document lists use
+    const page = Math.max(1, parseInt(filters.page) || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(filters.limit) || 20));
     const skip = (page - 1) * limit;
 
     const vouchers = await Voucher.find(query)
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(limit)
       .populate("createdBy", "name username")
@@ -1946,7 +1948,9 @@ class FinancialService {
       case "balance_sheet":
         return this.getBalanceSheet(dateTo);
       case "cash_flow":
-        return this.getCashFlowReport(dateFrom, dateTo);
+        // Read from the ledger like every other statement. This report used to add up receipt, payment and contra voucher totals,
+        // which left out expenses, journals and cheque clearing and so never agreed with the cash and bank accounts.
+        return require("../reports/ledgerReportsService").cashFlow({ from: dateFrom, to: dateTo });
       case "expense_summary":
         return this.getExpenseSummary(dateFrom, dateTo);
       case "party_statement":
@@ -1973,19 +1977,27 @@ class FinancialService {
   // closed year's profit reaches Retained Earnings and income and expense start the next year at zero. One dated inside
   // the period is left out of its movement, so the closed year still shows its own profit; `includeClosing` counts it.
   static async getTrialBalance(dateFrom, dateTo, { includeClosing = false } = {}) {
-    const from = dateFrom ? new Date(dateFrom) : null;
-    const to = dateTo ? new Date(dateTo) : null;
+    // A plain day, or a day with a time but no zone (the screen sends `${day}T23:59:59.999`), is the organisation's day and
+    // wall clock, not the server's: on a UTC host "end of 31 December" reached four hours into 1 January in Dubai, and a
+    // plain "to" day stopped at 04:00 local (utils/tz.js boundOf). A Date or a stamp with a zone is read exactly as before.
+    const zone = orgLocale.timezone();
+    const from = dateFrom ? tz.boundOf(dateFrom, "start", zone) : null;
+    const to = dateTo ? tz.boundOf(dateTo, "end", zone) : null;
 
     const match = { isReversed: { $ne: true } };
     if (to) match.date = { $lte: to };
 
     const notClosing = { $ne: ["$voucherType", CLOSING_VOUCHER_TYPE] };
+    // Opening-balance vouchers are the position the company began with, not activity of the period they are dated in
+    // (ledgerReportsService.accountMovements applies the same rule).
+    const isOpening = { $in: ["$voucherType", ["opening", "opening_stock"]] };
+    const notOpening = { $not: [isOpening] };
     const periodTest = from
-      ? (includeClosing ? { $gte: ["$date", from] } : { $and: [{ $gte: ["$date", from] }, notClosing] })
+      ? (includeClosing ? { $and: [{ $gte: ["$date", from] }, notOpening] } : { $and: [{ $gte: ["$date", from] }, notClosing, notOpening] })
       : (includeClosing ? null : notClosing);
     const inPeriod = (field) => (periodTest ? { $cond: [periodTest, field, 0] } : field);
     const beforePeriod = (field) =>
-      from ? { $cond: [{ $lt: ["$date", from] }, field, 0] } : 0;
+      from ? { $cond: [{ $or: [{ $lt: ["$date", from] }, isOpening] }, field, 0] } : 0;
 
     const rows = await LedgerEntry.aggregate([
       { $match: match },
@@ -2006,7 +2018,7 @@ class FinancialService {
           localField: "_id",
           foreignField: "_id",
           as: "acc",
-          pipeline: [{ $project: { accountType: 1, groupId: 1 } }],
+          pipeline: [{ $project: { accountType: 1, groupId: 1, accountName: 1, accountCode: 1 } }],
         },
       },
       {
@@ -2029,8 +2041,9 @@ class FinancialService {
       const net = r2(row.openingDebit + row.periodDebit - (row.openingCredit + row.periodCredit));
       return {
         _id: row._id,
-        accountName: row.accountName,
-        accountCode: row.accountCode,
+        // the chart's current name and code: the entry's copy is what it was called when it was posted (blank on some old rows)
+        accountName: row.acc?.[0]?.accountName || row.accountName,
+        accountCode: row.acc?.[0]?.accountCode || row.accountCode,
         accountType,
         category,
         groupName: row.grp?.[0]?.name || null,
@@ -2082,7 +2095,10 @@ class FinancialService {
   // closed to Retained Earnings until the year is closed); the profit of closed years is already in Retained Earnings.
   // Read from the start of that year, so the closing entries of earlier years count and this year's own do not.
   static async getBalanceSheet(asOf) {
-    const year = await FiscalYearService.getForDate(asOf ? new Date(asOf) : new Date());
+    // The screen sends "2025-12-31T23:59:59.999" with no zone: read it as the organisation's wall clock, not the server's
+    // (on a UTC host that is four hours into 1 January in Dubai, so the year just closed was not found).
+    const asOfInstant = asOf ? tz.boundOf(asOf, "end", orgLocale.timezone()) : new Date();
+    const year = await FiscalYearService.getForDate(asOfInstant);
     const { trialBalance } = await this.getTrialBalance(year ? year.startDate : undefined, asOf);
     const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
     const lines = (category) =>
@@ -2091,10 +2107,21 @@ class FinancialService {
         .map((a) => ({ _id: a._id, accountCode: a.accountCode, accountName: a.accountName, groupName: a.groupName, amount: r2(a.balance) }))
         .filter((a) => Math.abs(a.amount) >= 0.005);
     const sum = (arr) => r2(arr.reduce((t, a) => t + a.amount, 0));
-    const assets = lines("ASSET");
-    const liabilities = lines("LIABILITY");
+    let assets = lines("ASSET");
+    let liabilities = lines("LIABILITY");
     const equity = lines("EQUITY");
     const earned = r2(sum(lines("INCOME")) - sum(lines("EXPENSE")));
+    // A bank account in credit is an overdraft, a customer in credit a liability, a supplier in debit an asset: shown on their
+    // own side rather than as a negative inside the other (IAS 1.32). Totals of both sides rise by the same amount.
+    const isBank = (a) => /\b(bank|cash)\b/i.test(a.groupName || "") || /\b(bank|cash)\b/i.test(a.accountName || "");
+    const moved = (a, groupName) => ({ ...a, groupName, amount: r2(-a.amount) });
+    const toLiabilities = assets.filter((a) => a.amount < 0 && (isBank(a) || /^Customer( Advance)? - /.test(a.accountName)));
+    const toAssets = liabilities.filter((a) => a.amount < 0 && /^Vendor - /.test(a.accountName));
+    assets = [...assets.filter((a) => !toLiabilities.includes(a)), ...toAssets.map((a) => moved(a, "Supplier debit balances"))];
+    liabilities = [
+      ...liabilities.filter((a) => !toAssets.includes(a)),
+      ...toLiabilities.map((a) => moved(a, isBank(a) ? "Bank overdrafts" : "Customer credit balances")),
+    ];
     const totalAssets = sum(assets);
     const totalLiabilities = sum(liabilities);
     const totalEquity = r2(sum(equity) + earned);

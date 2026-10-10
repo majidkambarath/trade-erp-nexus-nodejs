@@ -32,8 +32,9 @@ const orgLocale = require("../../utils/orgLocale");
 //     brought forward" (a year that WAS closed has its profit in Retained Earnings by its year-end
 //     closing entry, so only years never closed appear here) and profit from `from` to `asAt` as
 //     "Profit for the period". `from` defaults to the start of the fiscal year the date falls in.
-//   An account with a balance on the opposite side of its group (an asset in credit, say) is shown
-//     as a negative on its own side; nothing is reclassified between assets and liabilities.
+//   No offsetting (IAS 1.32): a bank account in credit is a bank overdraft in current liabilities, a customer account in
+//     credit is "Customer credit balances" in current liabilities, and a supplier account in debit is "Supplier debit
+//     balances and advances" in current assets. Each account is judged on its own balance, so two banks never net.
 
 const currency = () => orgLocale.baseCurrency(); // the books are kept in the organisation's base currency
 const currencyName = () => currencyCatalog.SUPPORTED[currency()]?.name || currency(); // "UAE Dirham", "Pound Sterling"
@@ -314,6 +315,7 @@ class IfrsReportsService {
         groupId: r.groupId ? String(r.groupId) : null, groupName: r.groupName, category: r.category,
         path, nonCurrent: path.some((n) => NON_CURRENT_RX.test(n)), isCash: ctx.cashIds.has(accountId),
         openingNet, periodNet, closingNet: r2(openingNet + periodNet),
+        periodDebit: r2(r.periodDebit), periodCredit: r2(r.periodCredit),
       };
     });
   }
@@ -325,7 +327,7 @@ class IfrsReportsService {
   // ---------------------------------------------------------------- 1. Financial position
 
   // The balances at the end of a period: each account on its side, and the profit that sits in equity.
-  static positionItems(rows) {
+  static positionItems(rows, ctx) {
     const items = [];
     let broughtForward = 0;
     let forPeriod = 0;
@@ -337,10 +339,20 @@ class IfrsReportsService {
       }
       const section = positionSection(r);
       if (!section) continue;
-      items.push({
-        section, accountId: r.accountId, accountCode: r.accountCode, accountName: r.accountName,
-        groupId: r.groupId, groupName: r.groupName, rank: presentationRank(r), amount: nat(r.category, r.closingNet),
-      });
+      const amount = nat(r.category, r.closingNet);
+      const item = { section, accountId: r.accountId, accountCode: r.accountCode, accountName: r.accountName, groupId: r.groupId, groupName: r.groupName, rank: presentationRank(r), amount };
+      // An account on the wrong side of its own group is not a negative asset or liability (IAS 1.32). It is shown where it
+      // belongs: a bank in credit is an overdraft, a customer in credit owes them (a liability), a supplier in debit
+      // owes us (an asset). `ctx` is absent when only equity is wanted.
+      if (amount < 0 && section === "currentAssets" && r.isCash) {
+        items.push({ ...item, section: "currentLiabilities", groupId: "bank-overdrafts", groupName: "Bank overdrafts", rank: 7, amount: r2(-amount) });
+      } else if (amount < 0 && section === "currentAssets" && ctx?.receivableGroups.has(String(r.groupId))) {
+        items.push({ ...item, section: "currentLiabilities", groupId: "customer-credit-balances", groupName: "Customer credit balances", rank: 3, amount: r2(-amount) });
+      } else if (amount < 0 && section === "currentLiabilities" && ctx?.payableGroups.has(String(r.groupId))) {
+        items.push({ ...item, section: "currentAssets", groupId: "supplier-debit-balances", groupName: "Supplier debit balances and advances", rank: 4, amount: r2(-amount) });
+      } else {
+        items.push(item);
+      }
     }
     return { items, profitBroughtForward: r2(broughtForward), profitForPeriod: r2(forPeriod) };
   }
@@ -349,8 +361,8 @@ class IfrsReportsService {
     const ctx = await this.context();
     const { from, to, mode, comparative } = this.period(ctx, query);
     const hasPrevious = Boolean(comparative);
-    const cur = this.positionItems(await this.loadRows(ctx, from, to));
-    const prev = hasPrevious ? this.positionItems(await this.loadRows(ctx, comparative.from, comparative.to)) : null;
+    const cur = this.positionItems(await this.loadRows(ctx, from, to), ctx);
+    const prev = hasPrevious ? this.positionItems(await this.loadRows(ctx, comparative.from, comparative.to), ctx) : null;
 
     // join the two columns on the account, then file by section and group
     const entries = new Map();
@@ -566,9 +578,16 @@ class IfrsReportsService {
       LedgerReports.cashFlow({ from, to }),
     ]);
     const effect = {};
+    const gross = { borrowingsIn: 0, borrowingsOut: 0, capital: 0, drawings: 0, assetsBought: 0 };
     for (const r of rows) {
       const bucket = cashFlowBucket(r, ctx);
       effect[bucket] = (effect[bucket] || 0) - r.periodNet;
+      // IAS 7.21: investing and financing cash flows are reported gross. Loans: what was drawn and what was repaid. Equity: what
+      // each equity account gained or lost in the period, as the statement of changes in equity reads it (a transfer between two
+      // equity accounts is neither). Non-current assets: what was bought; the rest of the movement is disposals.
+      if (bucket === "borrowings") { gross.borrowingsIn += r.periodCredit; gross.borrowingsOut += r.periodDebit; }
+      else if (bucket === "equity") { if (r.periodNet < 0) gross.capital += -r.periodNet; else gross.drawings += r.periodNet; }
+      else if (bucket === "nonCurrentAssets") gross.assetsBought += r.periodDebit;
     }
     const e = (bucket) => r2(effect[bucket] || 0);
 
@@ -596,10 +615,16 @@ class IfrsReportsService {
     // disposals, neither of which is a payment
     const nonCurrentAssets = r2(e("nonCurrentAssets") - depreciation - disposal);
     const investing = nonCurrentAssets;
+    const assetPurchases = r2(-gross.assetsBought);
+    const assetDisposals = r2(nonCurrentAssets - assetPurchases);
 
     const borrowings = e("borrowings");
     const equity = e("equity");
     const financing = sum([borrowings, equity]);
+    const borrowingsDrawn = r2(gross.borrowingsIn);
+    const borrowingsRepaid = r2(-gross.borrowingsOut);
+    const capitalIntroduced = r2(gross.capital);
+    const drawingsAndDividends = r2(-gross.drawings);
     const other = e("unclassified");
 
     const netIncrease = sum([operating, investing, financing, other]);
@@ -612,6 +637,7 @@ class IfrsReportsService {
       inventory, receivables, payables, otherCurrentAssets, otherCurrentLiabilities, workingCapital,
       cashGenerated, interestPaid, incomeTaxPaid, operating,
       nonCurrentAssets, investing, borrowings, equity, financing, other,
+      assetPurchases, assetDisposals, borrowingsDrawn, borrowingsRepaid, capitalIntroduced, drawingsAndDividends,
       netIncrease, openingCash, closingCash, closingPerLedger, difference, reconciles: Math.abs(difference) < 0.01,
       cashAccounts: ledgerCash.accounts,
     };
@@ -655,20 +681,26 @@ class IfrsReportsService {
           ...v("workingCapital"),
         },
         cashGenerated: line("cashGenerated", "Cash generated from operations"),
-        interestPaid: line("interestPaid", "Interest paid"),
+        interestPaid: line("interestPaid", "Interest and finance charges paid"),
         incomeTaxPaid: line("incomeTaxPaid", "Income tax paid"),
         net: line("operating", "Net cash from / (used in) operating activities"),
       },
       investing: {
         label: "Cash flows from investing activities",
-        lines: [line("nonCurrentAssets", "Net (purchase) / disposal of non-current assets")],
+        // gross (IAS 7.21): what was bought, and - when there is any - what disposals brought in
+        lines: [
+          line("assetPurchases", "Purchase of property, plant and equipment"),
+          line("assetDisposals", "Proceeds from disposal of non-current assets", { optional: true }),
+        ],
         net: line("investing", "Net cash from / (used in) investing activities"),
       },
       financing: {
         label: "Cash flows from financing activities",
         lines: [
-          line("borrowings", "Proceeds from / (repayment of) borrowings and long-term liabilities"),
-          line("equity", "Capital introduced / (drawings and dividends)"),
+          line("borrowingsDrawn", "Proceeds from borrowings", { optional: true }),
+          line("borrowingsRepaid", "Repayment of borrowings", { optional: true }),
+          line("capitalIntroduced", "Capital introduced by the owners", { optional: true }),
+          line("drawingsAndDividends", "Drawings and dividends paid", { optional: true }),
         ],
         net: line("financing", "Net cash from / (used in) financing activities"),
       },
@@ -698,14 +730,26 @@ class IfrsReportsService {
       const r = byId.get(String(a._id));
       return { accountId: String(a._id), accountCode: a.accountCode, accountName: a.accountName, kind: a.kind, net: r ? r.closingNet : 0 };
     });
+    // Each account on its own side, as the statement of financial position shows it: an account in credit inside the receivables is a
+    // liability and one in debit inside the payables an asset. `...Net` keeps the account balances netted, for the ageing tie-out.
+    const owing = (list, f) => sum(list.map(f).filter((n) => n > 0));
+    const inCredit = (list, f) => r2(-sum(list.map(f).filter((n) => n < 0)));
+    const isCustomer = (r) => /^Customer - /.test(r.accountName);
+    const isVendor = (r) => /^Vendor - /.test(r.accountName);
     return {
-      tradeReceivables: sum(receivables.filter((r) => /^Customer - /.test(r.accountName)).map(asset)),
-      otherReceivables: sum(receivables.filter((r) => !/^Customer - /.test(r.accountName)).map(asset)),
+      tradeReceivables: owing(receivables.filter(isCustomer), asset),
+      otherReceivables: owing(receivables.filter((r) => !isCustomer(r)), asset),
+      supplierDebits: inCredit(payables, liability),
+      tradeReceivablesNet: sum(receivables.filter(isCustomer).map(asset)),
       inventory: sum(inGroup(ctx.inventoryGroups).map(asset)),
       inventoryAccounts: inGroup(ctx.inventoryGroups).map((r) => ({ accountId: r.accountId, accountCode: r.accountCode, accountName: r.accountName, amount: asset(r) })),
       cashRows,
-      tradePayables: sum(payables.filter((r) => /^Vendor - /.test(r.accountName)).map(liability)),
-      otherPayables: sum(payables.filter((r) => !/^Vendor - /.test(r.accountName)).map(liability)),
+      cashAssets: owing(cashRows, (c) => c.net),
+      bankOverdrafts: inCredit(cashRows, (c) => c.net),
+      tradePayables: owing(payables.filter(isVendor), liability),
+      otherPayables: owing(payables.filter((r) => !isVendor(r)), liability),
+      customerCredits: inCredit(receivables, asset),
+      tradePayablesNet: sum(payables.filter(isVendor).map(liability)),
       byId,
     };
   }
@@ -744,23 +788,27 @@ class IfrsReportsService {
     const prev = hasPrevious ? await snapshot(comparative.to) : null;
     const p = (key) => pair(cur[key], prev?.[key], hasPrevious);
 
-    // open invoices by age, as at the date (the invoices' outstanding amounts as they stand)
+    // open invoices by age, as they stood at the end of the date (a past date is rebuilt from the vouchers dated up to it)
     const ageingOf = async (type, ledgerTotal) => {
       const report = await AgeingService.report({ type, asOf: LedgerReports.dayEnd(to) });
       return {
-        basis: "Open invoices dated up to the date, aged from their due date; amounts outstanding as they stand now.",
+        basis: "Open invoices dated up to the date, aged from their due date, as they stood at the end of that day.",
         buckets: report.buckets.map((b) => ({ key: b.key, label: b.label, amount: r2(report.totals[b.key]) })),
         total: r2(report.totals.total), overdue: r2(report.overdue),
         // receipts, payments and credit notes not yet set against an invoice
         notSetAgainstInvoices: r2(ledgerTotal - report.totals.total),
       };
     };
-    const [receivableAgeing, payableAgeing] = await Promise.all([ageingOf("receivable", cur.tradeReceivables), ageingOf("payable", cur.tradePayables)]);
+    const [receivableAgeing, payableAgeing] = await Promise.all([ageingOf("receivable", cur.tradeReceivablesNet), ageingOf("payable", cur.tradePayablesNet)]);
 
     const cashAccounts = cur.cashRows
       .map((c) => ({ ...c, comparativeNet: hasPrevious ? r2(prev.cashRows.find((x) => x.accountId === c.accountId)?.net || 0) : null }))
       .filter((c) => Math.abs(c.net) >= 0.005 || Math.abs(c.comparativeNet || 0) >= 0.005);
     const cashTotal = pair(sum(cur.cashRows.map((c) => c.net)), prev ? sum(prev.cashRows.map((c) => c.net)) : 0, hasPrevious);
+    // cash and cash equivalents include overdrafts repayable on demand (IAS 7.8); the statement of financial position shows them as a
+    // liability (IAS 1.32), so the note reconciles the two (IAS 7.45)
+    const cashAssets = p("cashAssets");
+    const bankOverdrafts = p("bankOverdrafts");
 
     const inventoryAccounts = joinAccounts(cur.inventoryAccounts, prev?.inventoryAccounts || [], hasPrevious);
     const net = (f) => (f.vat ? r2(f.vat.output + (f.vat.reverseCharge || 0) - f.vat.input) : 0);
@@ -770,9 +818,9 @@ class IfrsReportsService {
       asAt: to, from, compare: mode, comparative: hasPrevious ? { asAt: comparative.to, from: comparative.from } : null,
       disclaimer: "Basic notes generated from the general ledger. They are not a complete set of IFRS disclosures and should be reviewed with your accountant.",
       policies: [
-        { key: "entity", title: "Reporting entity", text: `${name}${ctx.entity.trn ? ` (TRN ${ctx.entity.trn})` : ""} trades in food products in the United Arab Emirates. These notes accompany the statements for the period ended ${to}.` },
-        { key: "basis", title: "Basis of preparation", text: `The statements are prepared in accordance with International Financial Reporting Standards (IFRS) on the historical cost basis, from the company's general ledger. The functional and presentation currency is the ${currencyName()} (${currency()}). Amounts are rounded to two decimal places.` },
-        { key: "inventory", title: "Inventories", text: "Inventories are stated at the lower of cost and net realisable value. Cost is the weighted average cost, recalculated on each purchase; a sale takes stock out at the current average and does not change it." },
+        { key: "entity", title: "Reporting entity", text: `${name}${ctx.entity.trn ? ` (TRN ${ctx.entity.trn})` : ""} is the reporting entity. These notes accompany the statements for the period ended ${to}.` },
+        { key: "basis", title: "Basis of preparation", text: `The statements are prepared from the company's general ledger on the historical cost basis, applying the recognition and measurement requirements of International Financial Reporting Standards (IFRS). They are not a complete set of IFRS financial statements until the disclosures listed as not yet available are added. The functional and presentation currency is the ${currencyName()} (${currency()}). Amounts are rounded to two decimal places.` },
+        { key: "inventory", title: "Inventories", text: "Inventories are stated at weighted average cost, recalculated on each purchase; a sale takes stock out at the current average and does not change it. Stock found expired or damaged is written off when it is identified. No allowance for net realisable value below cost (IAS 2.9) is calculated by the system: review slow-moving and expiring stock with your accountant." },
         { key: "revenue", title: "Revenue recognition", text: "Revenue from the sale of goods is recognised at the point in time control passes to the customer, when the goods are dispatched and invoiced. It is measured at the transaction price net of VAT, discounts and returns (IFRS 15)." },
         { key: "vat", title: "Value added tax", text: "Revenue, expenses and assets are recognised net of VAT. Output VAT charged on sales is a liability to the Federal Tax Authority and input VAT on purchases is recoverable from it; the net is settled with the authority. VAT the company assesses on purchases made under the reverse charge is recorded as a liability to the authority and, where recoverable, as input VAT at the same time." },
         { key: "classification", title: "Current and non-current classification", text: "An asset or liability is non-current when its account group, or any group above it, is named as fixed, non-current, property, plant, equipment, intangible or long-term. All other assets and liabilities are current." },
@@ -783,8 +831,9 @@ class IfrsReportsService {
           rows: [
             { key: "trade", label: "Trade receivables (customers)", ...p("tradeReceivables") },
             { key: "other", label: "Advances to vendors and other receivables", ...p("otherReceivables"), optional: true },
+            { key: "supplierDebits", label: "Supplier accounts in debit (presented with receivables)", ...p("supplierDebits"), optional: true },
           ],
-          total: pair(cur.tradeReceivables + cur.otherReceivables, prev ? prev.tradeReceivables + prev.otherReceivables : 0, hasPrevious),
+          total: pair(cur.tradeReceivables + cur.otherReceivables + cur.supplierDebits, prev ? prev.tradeReceivables + prev.otherReceivables + prev.supplierDebits : 0, hasPrevious),
           ageing: receivableAgeing,
         },
         inventory: {
@@ -797,14 +846,20 @@ class IfrsReportsService {
           title: "Cash and cash equivalents",
           accounts: cashAccounts.map((c) => ({ accountId: c.accountId, accountCode: c.accountCode, accountName: c.accountName, kind: c.kind, net: c.net, comparativeNet: c.comparativeNet })),
           total: { ...cashTotal, net: cashTotal.amount, comparativeNet: cashTotal.comparative },
+          // the same figure as two lines of the statement of financial position (IAS 7.45)
+          presentedAs: [
+            { key: "cashAssets", label: "Cash and bank balances (current assets)", ...cashAssets },
+            { key: "bankOverdrafts", label: "Bank overdrafts (current liabilities)", ...bankOverdrafts, negate: true, optional: true },
+          ],
         },
         tradePayables: {
           title: "Trade and other payables",
           rows: [
             { key: "trade", label: "Trade payables (vendors)", ...p("tradePayables") },
             { key: "other", label: "Advances from customers and other payables", ...p("otherPayables"), optional: true },
+            { key: "customerCredits", label: "Customer accounts in credit (presented with payables)", ...p("customerCredits"), optional: true },
           ],
-          total: pair(cur.tradePayables + cur.otherPayables, prev ? prev.tradePayables + prev.otherPayables : 0, hasPrevious),
+          total: pair(cur.tradePayables + cur.otherPayables + cur.customerCredits, prev ? prev.tradePayables + prev.otherPayables + prev.customerCredits : 0, hasPrevious),
           ageing: payableAgeing,
         },
         vat: cur.vat

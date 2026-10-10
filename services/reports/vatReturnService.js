@@ -7,7 +7,16 @@ const AccountConfigService = require("../financial/accountConfigService");
 const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
+const { ambientTenant } = require("../../utils/tenantContext");
 const { dayStart, dayEnd } = require("./ledgerReportsService");
+
+// One return is filed for the taxpayer (one TRN), whatever branches it has. Inside a branch view the figures are that branch's slice
+// only, so a return saved from there would be filed as the organisation's. Year-end close refuses the same way.
+const assertWholeOrganisation = () => {
+  if (ambientTenant()?.branchView) {
+    throw new AppError("The VAT return covers every branch: switch to All branches first", 409, "ALL_BRANCHES_REQUIRED");
+  }
+};
 
 // The UAE VAT return (FTA form VAT 201), built live from the approved documents so it can never
 // disagree with them, and reconciled to the VAT accounts of the ledger.
@@ -127,20 +136,29 @@ class VatReturnService {
     return lines;
   }
 
-  static async companyEmirate() {
+  // The emirate set in the company profile, or null when none is (the return then assumes Dubai and says so).
+  static async configuredEmirate() {
     try {
       const settings = await AccountConfigService.getSettings({});
-      return settings?.profile?.emirate || "Dubai";
+      return String(settings?.profile?.emirate || "").trim() || null;
     } catch {
-      return "Dubai";
+      return null;
     }
+  }
+
+  static async companyEmirate() {
+    return (await this.configuredEmirate()) || "Dubai";
   }
 
   // The return for a period, from the documents.
   static async compute({ from, to } = {}) {
     const lines = await this.collect({ from, to });
-    const emirate = await this.companyEmirate();
+    const configured = await this.configuredEmirate();
+    const emirate = configured || "Dubai";
     const emirateBox = BOX_OF_EMIRATE[String(emirate).toLowerCase()] || "1b";
+    // standard-rated supplies are reported under the emirate of the establishment: when none is set, or the text is not one of the
+    // seven, the return says it assumed Dubai rather than looking as though it knew
+    const emirateAssumed = !configured || !(String(configured).toLowerCase() in BOX_OF_EMIRATE);
 
     const acc = {};
     const add = (box, label, taxable, vat) => {
@@ -200,7 +218,7 @@ class VatReturnService {
     return {
       // The UAE VAT 201 return is filed in dirhams by law, whatever currency the books are kept in: it is a UAE feature
       // (the `vatReturn` plan feature), not part of the general reports that follow the organisation's base currency.
-      from, to, emirate, currency: "AED", boxes, totals,
+      from, to, emirate, emirateAssumed, currency: "AED", boxes, totals,
       unclassified: { ...unclassified, amount: round2(unclassified.amount), vat: round2(unclassified.vat) },
       notReported: { count: notReported.count, amount: round2(notReported.amount), note: "Out-of-scope lines, zero-rated or exempt purchases and sales on which the customer accounts for the VAT (reverse charge) appear in no box." },
       customerAccounts: { count: customerAccounts.count, amount: round2(customerAccounts.amount), note: "Sales on which the customer accounts for the VAT under the reverse charge. You charge no VAT and declare no output tax on them; the customer declares them in box 3." },
@@ -235,22 +253,34 @@ class VatReturnService {
         if (err.code === "ACCOUNT_NOT_CONFIGURED") return null;
         throw err;
       }
-      const [row] = await LedgerEntry.aggregate([
+      // Split by whether a person's journal made the entry: the VAT paid to the tax authority is cleared against these accounts
+      // by a journal, so every quarter holds the previous quarter's settlement. It still counts (an adjustment made behind the
+      // documents' backs must show as a difference); the split only lets the screen say how much of a difference it is.
+      const parts = await LedgerEntry.aggregate([
         { $match: { accountId: new mongoose.Types.ObjectId(String(accountId)), isReversed: { $ne: true }, date: { $gte: start, $lte: end } } },
-        { $group: { _id: null, debit: { $sum: "$debitAmount" }, credit: { $sum: "$creditAmount" } } },
+        { $group: { _id: { $eq: ["$voucherType", "journal"] }, debit: { $sum: "$debitAmount" }, credit: { $sum: "$creditAmount" } } },
       ]);
-      const debit = row?.debit || 0;
-      const credit = row?.credit || 0;
-      return round2(side === "credit" ? credit - debit : debit - credit);
+      const net = (p) => (p ? round2(side === "credit" ? (p.credit || 0) - (p.debit || 0) : (p.debit || 0) - (p.credit || 0)) : 0);
+      const journals = net(parts.find((p) => p._id === true));
+      return { total: round2(net(parts.find((p) => p._id === true)) + net(parts.find((p) => p._id === false))), journals };
     };
     const [ledgerOutput, ledgerInput, ledgerRcm] = await Promise.all([ledgerNet("vat-sales", "credit"), ledgerNet("vat-purchase", "debit"), ledgerNet("rcm-purchase", "credit")]);
     const out = docVat("output");
     const inp = round2(docVat("input") + docRcm); // the reverse-charge input is posted to the same Input VAT account
-    const row = (label, documents, ledger) => ({ label, documents, ledger, difference: ledger == null ? null : round2(documents - ledger), agrees: ledger != null && Math.abs(documents - ledger) < 0.01 });
+    const row = (label, documents, l) => {
+      const ledger = l == null ? null : l.total;
+      const journals = l == null ? 0 : l.journals;
+      const difference = ledger == null ? null : round2(documents - ledger);
+      const agrees = ledger != null && Math.abs(documents - ledger) < 0.01;
+      // `explained`: the documents match what the ledger holds apart from journals, i.e. the whole difference is a settlement or an
+      // adjustment posted by journal. It is still not "agrees" (a journal is a difference to look at); the screen says it in words.
+      const explained = !agrees && ledger != null && journals !== 0 && Math.abs(round2(ledger - journals) - documents) < 0.01;
+      return { label, documents, ledger, difference, agrees, journals, explained };
+    };
     const rows = [row("Output VAT", out, ledgerOutput), row("Input VAT", inp, ledgerInput)];
     // The reverse-charge row appears when there is something to say about it (an account unmapped on a company that never used reverse
     // charge would only be noise), but always when a document or the ledger holds an amount, so a mismatch cannot hide.
-    if (docRcm || ledgerRcm) rows.push(row("Reverse-charge VAT (self-assessed)", docRcm, ledgerRcm));
+    if (docRcm || (ledgerRcm && (ledgerRcm.total || ledgerRcm.journals))) rows.push(row("Reverse-charge VAT (self-assessed)", docRcm, ledgerRcm));
     return { rows };
   }
 
@@ -312,11 +342,21 @@ class VatReturnService {
   static async get(id) {
     const r = await VATReturn.findOne({ _id: id, companyId: getTenant().companyId }).lean();
     if (!r) throw new AppError("VAT return not found", 404);
+    // A finalised or filed return is the figures as they were. Documents and vouchers dated inside its period can still be posted
+    // afterwards (a bank fee found on a statement, a card settlement), so what the books say for the period can move: said here,
+    // with the amounts, because the tax authority has the old ones.
+    if (r.status === "FINALIZED" || r.status === "FILED") {
+      const live = await this.compute({ from: r.periodFrom, to: r.periodTo });
+      const delta = (a, b) => round2((a || 0) - (b || 0));
+      const diff = { outputVat: delta(live.totals.outputVat, r.totals?.outputVat), recoverableVat: delta(live.totals.recoverableVat, r.totals?.recoverableVat), netPayable: delta(live.totals.netPayable, r.totals?.netPayable) };
+      r.changedSince = Object.values(diff).some((v) => Math.abs(v) >= 0.005) ? { ...diff, current: live.totals } : null;
+    }
     return r;
   }
 
   // Saves the current figures for a period as a DRAFT (replacing an earlier draft of the same period).
   static async createDraft({ from, to, notes }, adminId) {
+    assertWholeOrganisation();
     const { companyId } = getTenant();
     const live = await this.compute({ from, to });
     const clash = await VATReturn.findOne({ companyId, status: { $in: ["FINALIZED", "FILED"] }, periodFrom: { $lte: to }, periodTo: { $gte: from } }).lean();
@@ -331,6 +371,7 @@ class VatReturnService {
 
   // Locks the figures as prepared. Refused while lines still have no tax treatment.
   static async finalize(id, adminId, { allowUnclassified = false } = {}) {
+    assertWholeOrganisation();
     const r = await VATReturn.findOne({ _id: id, companyId: getTenant().companyId });
     if (!r) throw new AppError("VAT return not found", 404);
     if (r.status !== "DRAFT") throw new AppError(`This return is already ${r.status.toLowerCase()}`, 409, "NOT_DRAFT");
@@ -349,6 +390,7 @@ class VatReturnService {
   }
 
   static async file(id, adminId, { reference, filedOn } = {}) {
+    assertWholeOrganisation();
     const r = await VATReturn.findOne({ _id: id, companyId: getTenant().companyId });
     if (!r) throw new AppError("VAT return not found", 404);
     if (r.status !== "FINALIZED") throw new AppError("Finalise the return before marking it filed", 409, "NOT_FINALIZED");
