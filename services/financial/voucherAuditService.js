@@ -1,10 +1,12 @@
 const mongoose = require("mongoose");
-const { Voucher, LedgerEntry } = require("../../models/modules/financial/financialModels");
+const { Voucher, LedgerEntry, LedgerAccount } = require("../../models/modules/financial/financialModels");
+const OpeningBalanceVoucher = require("../../models/modules/financial/openingBalanceModel");
+const FiscalYear = require("../../models/modules/financial/fiscalYearModel");
 const Transaction = require("../../models/modules/transactionModel");
 const ActivityLog = require("../../models/modules/financial/activityLogModel");
 const { Cheque } = require("../../models/modules/banking/bankingModels");
 const AccountConfigService = require("./accountConfigService");
-const { round2, splitEntries } = require("../core/postingTrail");
+const { round2, splitEntries, isReversalRow } = require("../core/postingTrail");
 const { getTenant } = require("../../utils/tenant");
 const AppError = require("../../utils/AppError");
 
@@ -24,6 +26,21 @@ const DOC_LABEL = {
   purchase_return: "Purchase return",
   sales_return: "Sales return",
 };
+
+// A posting whose number is shown in the ledger but which has no Voucher behind it: the ledger
+// rows are the record. Each kind keeps its facts somewhere of its own (the opening voucher, the
+// fiscal year that was closed, the account that was opened with a balance), so the trail finds
+// them there instead of answering "Voucher not found" for a number the ledger itself printed.
+const SOURCE_LABEL = {
+  opening: "Opening balance",
+  opening_stock: "Opening stock",
+  closing: "Year-end closing",
+  stock_adjustment: "Stock adjustment",
+  stock_writeoff: "Stock write-off",
+  cheque_clearance: "Cheque clearing",
+};
+
+const fact = (label, value, type = "text") => (value === null || value === undefined || value === "" ? null : { label, value, type });
 
 class VoucherAuditService {
   // The few fields worth keeping in an audit row.
@@ -81,7 +98,7 @@ class VoucherAuditService {
   static async trail(id) {
     if (!mongoose.isValidObjectId(id)) throw new AppError("Voucher not found", 404);
     const v = await Voucher.findById(id).lean();
-    if (!v) throw new AppError("Voucher not found", 404);
+    if (!v) return this.postingTrail(id);
 
     const { companyId } = getTenant();
     const invoiceIds = (v.linkedInvoices || []).map((l) => l.invoiceId).filter(Boolean);
@@ -161,16 +178,132 @@ class VoucherAuditService {
             history: cheque.history || [],
           }
         : null,
-      activity: activity.map((a) => ({
-        _id: a._id,
-        at: a.at,
-        action: a.action,
-        username: a.username,
-        summary: a.summary,
-        before: a.before,
-        after: a.after,
-        ip: a.ip,
-      })),
+      activity: this.activityRows(activity),
+    };
+  }
+
+  static activityRows(rows) {
+    return rows.map((a) => ({
+      _id: a._id,
+      at: a.at,
+      action: a.action,
+      username: a.username,
+      summary: a.summary,
+      before: a.before,
+      after: a.after,
+      ip: a.ip,
+    }));
+  }
+
+  // The trail of a posting that has no Voucher behind it: an opening balance, opening stock, a
+  // year-end closing entry, an account opened with a balance, a stock adjustment or write-off.
+  // Same shape as a voucher's trail, so the screen is one component; `source` says what it is and
+  // carries the facts that kind keeps. It answers 404 only when nothing was posted under the id.
+  static async postingTrail(id) {
+    const entries = await LedgerEntry.find({ voucherId: id }).sort({ createdAt: 1, _id: 1 }).lean();
+    if (!entries.length) throw new AppError("Voucher not found", 404);
+
+    const { companyId } = getTenant();
+    const head = entries.find((e) => !isReversalRow(e)) || entries[0];
+    const kind = head.voucherType;
+    // a reversal marks every row of the posting reversed, the original and its reversal alike
+    let status = entries.every((e) => e.isReversed) ? "reversed" : "posted";
+    let narration = head.narration || null;
+    let facts = [];
+    let label = SOURCE_LABEL[kind] || (kind ? String(kind).replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()) : "Posting");
+    let year = null;
+    let account = null;
+
+    if (kind === "opening" || kind === "opening_stock") {
+      const ob = await OpeningBalanceVoucher.findById(id).lean();
+      if (ob) {
+        if (ob.status === "reversed") status = "reversed";
+        narration = ob.narration || narration;
+        facts =
+          ob.section === "stock"
+            ? [fact("Items", (ob.rows || []).length, "number"), fact("Stock value", round2(ob.totalValue), "money")]
+            : [
+                fact("Accounts", (ob.lines || []).length, "number"),
+                fact("Total debit", round2(ob.totalDebit), "money"),
+                fact("Total credit", round2(ob.totalCredit), "money"),
+                ob.differenceAmount > 0
+                  ? fact(`Balancing figure to Opening Balance Equity (${ob.differenceSide})`, round2(ob.differenceAmount), "money")
+                  : null,
+              ];
+        if (ob.reversedAt) facts.push(fact("Reversed on", ob.reversedAt, "datetime"));
+      } else if (head.referenceType === "opening_invoice") {
+        // a customer's or vendor's opening invoice is a trade document: its id is the voucherId
+        const t = await Transaction.findById(id).select("transactionNo type date totalAmount").lean();
+        label = "Opening invoice";
+        if (t) {
+          facts = [fact("Invoice", t.transactionNo), fact("Document", DOC_LABEL[t.type] || t.type), fact("Amount", round2(t.totalAmount), "money")];
+        }
+      } else if (kind === "opening") {
+        // an account created with an opening balance: the account's own id is the voucherId
+        account = await LedgerAccount.findById(id).select("accountCode accountName openingBalance openingSide").lean();
+        if (account) {
+          facts = [
+            fact("Account", `${account.accountCode} ${account.accountName}`),
+            fact("Opening balance", round2(account.openingBalance), "money"),
+            fact("Side", account.openingSide === "credit" ? "Credit" : account.openingSide === "debit" ? "Debit" : null),
+          ];
+        }
+      }
+    } else if (kind === "closing") {
+      year =
+        (await FiscalYear.findOne({ "closing.voucherId": id }).lean()) ||
+        // a year since reopened has lost its `closing`; the entries still name the year
+        (head.financialYear ? await FiscalYear.findOne({ code: head.financialYear }).lean() : null);
+      const c = year?.closing && String(year.closing.voucherId) === String(id) ? year.closing : null;
+      facts = [
+        fact("Fiscal year", year?.code || head.financialYear),
+        c ? fact("Income", round2(c.income), "money") : null,
+        c ? fact("Expenses", round2(c.expenses), "money") : null,
+        c ? fact(c.profit < 0 ? "Loss moved to equity" : "Profit moved to equity", round2(Math.abs(c.profit)), "money") : null,
+        c ? fact("Moved to", c.retainedAccountName) : null,
+        c ? fact("Accounts closed", c.accounts, "number") : null,
+        c && year.closedAt ? fact("Closed on", year.closedAt, "datetime") : null,
+      ];
+    }
+
+    const sourceActivity = [{ entityId: String(id) }];
+    // closing and reopening a year is logged against the year, not against the entry it posted
+    if (year) sourceActivity.push({ entity: "FiscalYear", entityId: String(year._id), action: { $in: ["PERIOD_CLOSED", "PERIOD_REOPENED"] } });
+    const activity = await ActivityLog.find({ companyId, $or: sourceActivity }).sort({ at: 1, _id: 1 }).lean();
+
+    const ledger = splitEntries(entries);
+    return {
+      voucher: {
+        _id: id,
+        voucherNo: head.voucherNo,
+        voucherType: kind,
+        typeLabel: label,
+        date: head.date,
+        status,
+        approvalStatus: null,
+        totalAmount: ledger.totals.debit,
+        onAccountAmount: 0,
+        partyName: null,
+        partyType: null,
+        paymentMode: null,
+        paymentAccountName: null,
+        narration,
+        ledgerBased: true,
+        currency: null,
+        exchangeRate: null,
+        createdAt: entries[0].createdAt,
+        updatedAt: entries[entries.length - 1].createdAt,
+      },
+      source: { kind, label, facts: facts.filter(Boolean) },
+      ledger: {
+        postingEnabled: true,
+        ...ledger,
+        note: status === "reversed" ? "This posting was reversed; its entries were taken back." : null,
+      },
+      allocations: [],
+      onAccount: 0,
+      cheque: null,
+      activity: this.activityRows(activity),
     };
   }
 
