@@ -1,0 +1,15 @@
+# Secrets and local state: never baked into an image
+.env
+.env.*
+uploads
+*.log
+# Not needed to run the server
+.git
+.github
+node_modules
+docs
+scripts
+**/__tests__
+Dockerfile
+.dockerignore
+render.yaml

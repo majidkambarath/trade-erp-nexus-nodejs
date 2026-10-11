@@ -1,0 +1,6 @@
+# Files that are read on Linux (a container build, Render, nvm) must be LF even when checked out on Windows.
+Dockerfile   text eol=lf
+.dockerignore text eol=lf
+.nvmrc       text eol=lf
+render.yaml  text eol=lf
+*.sh         text eol=lf
