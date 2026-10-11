@@ -149,6 +149,8 @@ app.use("/api/v1/batches", batchRouter); // before adminRouter, whose bare GET /
 app.use("/api/v1/vat-return", vatReturnRouter); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/stock-reports", require("./routes/reports/stockReportRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/trade-reports", require("./routes/reports/tradeReportRoutes")); // before adminRouter, like every new top-level GET
+app.use("/api/v1/trade-orders", require("./routes/orderPurchase/tradeOrderRoutes")); // sales and purchase orders: commitments, no posting
+app.use("/api/v1/goods-receipts", require("./routes/orderPurchase/goodsReceiptRoutes")); // goods received: before adminRouter, like every new top-level GET
 app.use("/api/v1/ifrs", require("./routes/reports/ifrsRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/dashboard-summary", require("./routes/reports/dashboardRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/opening-balances", require("./routes/financial/openingBalanceRoutes")); // before adminRouter, whose bare GET /:id would capture it

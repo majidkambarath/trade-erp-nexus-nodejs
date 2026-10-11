@@ -25,6 +25,7 @@ const DebitLog = require("../../models/modules/DebitLog");
 const CreditLog = require("../../models/modules/CreditLog");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const DocumentLinks = require("./deliveryNoteLinks");
+const ReceiptLinks = require("./receiptLinks");
 const ShareService = require("../messaging/shareService");
 const ItemKindService = require("../stock/itemKindService");
 const kinds = require("../../utils/itemKinds");
@@ -387,6 +388,8 @@ class TransactionService {
           { session, excludeId: transaction._id }
         );
         await DocumentLinks.assertDeliveriesKept(transaction, checked.items, { session });
+        // an invoice made from goods received cannot bill more than was received
+        await ReceiptLinks.assertWithinReceipts(transaction, checked.items, { session });
         // changing what is ordered lifts a "closed short" mark: the lines are the order again
         if (transaction.closedShort?.at && DocumentLinks.linesChanged(transaction, checked.items)) transaction.set("closedShort", undefined);
         data.items = checked.items;
@@ -490,6 +493,7 @@ class TransactionService {
       await Transaction.findByIdAndDelete(id).session(session);
       // Delivery notes and quotations that pointed at this order are released.
       await DocumentLinks.onSalesOrderChanged(transaction, { session, deleted: true });
+      await ReceiptLinks.onPurchaseInvoiceChanged(transaction, { session, deleted: true });
       // The online link a customer was sent no longer points at anything that exists. Fire and forget:
       // failing to withdraw it must never fail the delete.
       ShareService.revokeFor("Transaction", transaction._id, "The document was deleted");
@@ -531,6 +535,8 @@ class TransactionService {
         await CreditControlService.assertSaleAllowed(transaction, {
           session, acknowledged: options.acknowledged === true, req: options.req,
         });
+        // the 3-way match, once more at the moment it counts
+        await ReceiptLinks.assertWithinReceipts(transaction, transaction.items, { session });
         const stockUpdates = await this.processTransactionStock(id, transaction, createdBy, session);
         // Accounting entries (receivable/payable, revenue or inventory, VAT, cost of goods sold).
         // A no-op until the company has mapped its accounts and switched ledger posting on.
@@ -594,6 +600,7 @@ class TransactionService {
       // Delivery notes against this order learn whether it is now invoiced (approved), or no longer
       // (rejected, cancelled); a converted quotation is released if its order was rejected or cancelled.
       await DocumentLinks.onSalesOrderChanged(transaction, { session });
+      await ReceiptLinks.onPurchaseInvoiceChanged(transaction, { session });
 
       return transaction;
     }

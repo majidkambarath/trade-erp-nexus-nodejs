@@ -13,6 +13,11 @@ const SERIES = {
   // DN, which is the debit note.
   QT: { prefix: "QT", numberLength: 4, label: "Quotation" },
   DLN: { prefix: "DLN", numberLength: 4, label: "Delivery note" },
+  // Orders (commitments, no posting) and the vendor-side paper that travels with received goods. Distinct from SO / PO,
+  // which are the numbers of the invoices issued and recorded, and must keep running.
+  SORD: { prefix: "SORD", numberLength: 4, label: "Sales order" },
+  PORD: { prefix: "PORD", numberLength: 4, label: "Purchase order" },
+  GRN: { prefix: "GRN", numberLength: 4, label: "Goods received note" },
   RV: { prefix: "RV", numberLength: 4, label: "Receipt voucher" },
   PV: { prefix: "PV", numberLength: 4, label: "Payment voucher" },
   JV: { prefix: "JV", numberLength: 4, label: "Journal voucher" },
