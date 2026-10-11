@@ -122,14 +122,17 @@ describe("the flow figures", () => {
 
   it("business flow: the stages, and the cash cycle from the balances over the window", () => {
     const profit = { revenue: { total: 900 }, directCosts: { total: 600 }, grossProfit: 300, otherIncome: { total: 0 }, operatingExpenses: { total: 100, groups: [] }, netProfit: 200 };
-    const previous = { revenue: { total: 600 }, netProfit: 50 };
+    const previous = { revenue: { total: 600 }, directCosts: { total: 400 }, grossProfit: 200, otherIncome: { total: 0 }, operatingExpenses: { total: 150, groups: [] }, netProfit: 50 };
     const input = {
       profit, previous, purchases: 500, stockValue: 300, receipts: 400, receivables: 210, payables: 150,
       window: { from: "2026-07-13", to: "2026-10-10", days: 90 }, invoiced: 945, purchased: 525, cogs: 600,
     };
     const f = D.businessFlow(input);
     assert.deepEqual(f.stages, { bought: 500, stock: 300, sold: 900, collected: 400, owedByCustomers: 210, owedToVendors: 150 });
-    assert.deepEqual(f.previous, { revenue: 600, netProfit: 50, revenueChangePct: 50 });
+    assert.deepEqual(f.previous, {
+      revenue: 600, netProfit: 50, revenueChangePct: 50,
+      statement: { revenue: 600, directCosts: 400, grossProfit: 200, operatingExpenses: 150, otherIncome: 0, netProfit: 50 },
+    });
     assert.equal(f.statement.netProfit, 200);
     // 210 / 945 x 90 = 20.0, 150 / 525 x 90 = 25.7, 300 / 600 x 90 = 45.0; cycle = 45.0 + 20.0 - 25.7
     assert.deepEqual([f.cycle.dso, f.cycle.dpo, f.cycle.dio, f.cycle.cycleDays], [20, 25.7, 45, 39.3]);
@@ -138,7 +141,7 @@ describe("the flow figures", () => {
 
   it("business flow: a window under two weeks gives no cycle, and a missing base is null, not zero", () => {
     const profit = { revenue: { total: 0 }, directCosts: { total: 0 }, grossProfit: 0, otherIncome: { total: 0 }, operatingExpenses: { total: 0, groups: [] }, netProfit: 0 };
-    const base = { profit, previous: { revenue: { total: 0 }, netProfit: 0 }, purchases: 0, stockValue: 100, receipts: 0, receivables: 50, payables: 40, window: { from: "2026-10-01", to: "2026-10-10", days: 10 }, invoiced: 500, purchased: 400, cogs: 300 };
+    const base = { profit, previous: { revenue: { total: 0 }, directCosts: { total: 0 }, grossProfit: 0, otherIncome: { total: 0 }, operatingExpenses: { total: 0, groups: [] }, netProfit: 0 }, purchases: 0, stockValue: 100, receipts: 0, receivables: 50, payables: 40, window: { from: "2026-10-01", to: "2026-10-10", days: 10 }, invoiced: 500, purchased: 400, cogs: 300 };
     const young = D.businessFlow(base);
     assert.deepEqual([young.cycle.dso, young.cycle.dpo, young.cycle.dio, young.cycle.cycleDays, young.cycle.enough], [null, null, null, null, false]);
     assert.equal(young.previous.revenueChangePct, null);
@@ -540,7 +543,7 @@ describe("a small business", { skip }, () => {
   });
 
   it("sales, purchases and gross profit by month agree with the reports", async () => {
-    assert.deepEqual(R.analytics.monthly.map((x) => [x.month, x.sales, x.purchases, x.grossProfit]), R.summary.monthly.map((x) => [x.month, x.revenue, x.purchases, x.grossProfit]));
+    assert.deepEqual(R.analytics.monthly.map((x) => [x.month, x.sales, x.purchases, x.grossProfit, x.netProfit]), R.summary.monthly.map((x) => [x.month, x.revenue, x.purchases, x.grossProfit, x.netProfit]));
   });
 
   it("categories: this month against last, and the last three months", async () => {
@@ -741,12 +744,14 @@ describe("a small business", { skip }, () => {
     assert.equal(bf.statement.revenue, pl.revenue.total);
     assert.equal(bf.statement.netProfit, pl.netProfit);
     assert.deepEqual([bf.previous.revenue, bf.previous.netProfit], [before.revenue.total, before.netProfit]);
+    assert.equal(bf.previous.statement.directCosts, before.directCosts.total, "the whole statement of the period before is carried");
     assert.equal(bf.stages.sold, pl.revenue.total);
     assert.equal(bf.stages.collected, R.summary.collection.receipts);
     const end = svc.Ledger.dayEnd(p.to);
-    const owedIn = await svc.Ageing.report({ type: "receivable", asOf: end });
-    const owedOut = await svc.Ageing.report({ type: "payable", asOf: end });
-    assert.deepEqual([bf.stages.owedByCustomers, bf.stages.owedToVendors], [owedIn.totals.total, owedOut.totals.total]);
+    // what is owed is the party balances' figure (it nets what was received or paid on account), not the open invoices'
+    const owedIn = await svc.Ledger.partyBalances({ type: "customer", asOn: p.to });
+    const owedOut = await svc.Ledger.partyBalances({ type: "vendor", asOn: p.to });
+    assert.deepEqual([bf.stages.owedByCustomers, bf.stages.owedToVendors], [owedIn.totals.owed, owedOut.totals.owed]);
     const valuation = await svc.Stock.valuation({ asOn: p.to, groupBy: "category" });
     assert.equal(bf.stages.stock, valuation.totals.value);
     // the window never reaches back past the first sale and is at most 90 days

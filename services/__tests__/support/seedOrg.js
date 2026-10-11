@@ -357,7 +357,9 @@ async function ownedIds(stack, code) {
     for (const name of mongoose.modelNames()) {
       const M = mongoose.model(name);
       if (!M.schema.path("companyId")) continue;
-      const rows = await M.find({ companyId: code }).select("_id").lean();
+      // oldest first, always: without a sort the order is whichever index the planner walks (a createdAt index, added for the
+      // paged lists, made it newest first and "the first transaction" became the one the branch person had just made)
+      const rows = await M.find({ companyId: code }).select("_id").sort({ _id: 1 }).lean();
       if (rows.length) out[name] = rows.map((r) => String(r._id));
     }
   });

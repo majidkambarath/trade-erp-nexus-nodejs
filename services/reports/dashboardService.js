@@ -193,7 +193,8 @@ function businessFlow({ profit, previous, purchases, stockValue, receipts, recei
   const dio = per(stockValue, cogs);
   return {
     statement: profitFlow(profit),
-    previous: { revenue: previous.revenue.total, netProfit: previous.netProfit, revenueChangePct: change(profit.revenue.total, previous.revenue.total) },
+    // the whole statement of the period before, so each stage can say what share of revenue it was then
+    previous: { revenue: previous.revenue.total, netProfit: previous.netProfit, revenueChangePct: change(profit.revenue.total, previous.revenue.total), statement: profitFlow(previous) },
     stages: { bought: purchases, stock: stockValue, sold: profit.revenue.total, collected: receipts, owedByCustomers: receivables, owedToVendors: payables },
     cycle: {
       from: window.from, to: window.to, days: window.days, minDays: CYCLE_MIN_DAYS, enough: window.days >= CYCLE_MIN_DAYS,
@@ -381,7 +382,7 @@ class DashboardService {
     const [
       daily, customers, vendors, previousVendors, items, categories, stockByCategory, profits, trade, itemMonths, cash, profit, receipts, invoices,
       activeItems, inStockItems, draftSales, draftPurchases, receiptsWeek, receiptsLastWeek, paymentsWeek, paymentsLastWeek,
-      pipeline, open, ageingIn, ageingOut, collections, hourly, reached, categoryOf, previousProfit, firstSale,
+      pipeline, open, ageingIn, ageingOut, collections, hourly, reached, categoryOf, previousProfit, firstSale, customerBalances, vendorBalances,
     ] = await Promise.all([
       Q.dailyOrders(Q.addDays(p.to, -6), p.to),
       analysis(p, "customer"),
@@ -415,6 +416,8 @@ class DashboardService {
       categoryOfItems(),
       LedgerReports.profitAndLoss({ from: p.previousFrom, to: p.previousTo }),
       Q.firstSaleDay(),
+      LedgerReports.partyBalances({ type: "customer", asOn: p.to }),
+      LedgerReports.partyBalances({ type: "vendor", asOn: p.to }),
     ]);
 
     // ---- the cash cycle's window: the 90 days to the period's last day, but not before the first sale
@@ -498,7 +501,7 @@ class DashboardService {
         itemsInStock: inStockItems,
         activeItems,
       },
-      monthly: p.months.map((month, i) => ({ month, sales: profits[i].revenue, purchases: trade[i].purchases, grossProfit: profits[i].grossProfit })),
+      monthly: p.months.map((month, i) => ({ month, sales: profits[i].revenue, purchases: trade[i].purchases, grossProfit: profits[i].grossProfit, netProfit: profits[i].netProfit })),
       categorySales: { currentMonth: months3[2], previousMonth: months3[1], rows: categorySales },
       categoryMonths: { months: months3, rows: categoryMonths },
       cashFlow: { accounts: cash.accounts, months: cash.months },
@@ -531,7 +534,11 @@ class DashboardService {
         profit, previous: previousProfit, window,
         purchases: round2(vendors.rows.reduce((t, r) => t + (r.netValue || 0), 0)),
         stockValue: stockByCategory.totals.value, receipts,
-        receivables: ageingIn.totals.total, payables: ageingOut.totals.total,
+        // What is OWED is the ledger's balance per party, which nets a receipt or payment kept on account: open invoices alone
+        // said customers owed 6,300 when 3,000 had been received on account. With posting switched off there is no ledger to
+        // read, so the open documents are the answer.
+        receivables: stockByCategory.reconciliation?.postingEnabled ? customerBalances.totals.owed : ageingIn.totals.total,
+        payables: stockByCategory.reconciliation?.postingEnabled ? vendorBalances.totals.owed : ageingOut.totals.total,
         invoiced: invoicedWindow.total, purchased: purchasedWindow.total, cogs: profitWindow.directCosts.total,
       }),
       hourly,
