@@ -390,6 +390,7 @@ class TransactionService {
         await DocumentLinks.assertDeliveriesKept(transaction, checked.items, { session });
         // an invoice made from goods received cannot bill more than was received
         await ReceiptLinks.assertWithinReceipts(transaction, checked.items, { session });
+        await ReceiptLinks.assertWithinDeliveries(transaction, checked.items, { session });
         // changing what is ordered lifts a "closed short" mark: the lines are the order again
         if (transaction.closedShort?.at && DocumentLinks.linesChanged(transaction, checked.items)) transaction.set("closedShort", undefined);
         data.items = checked.items;
@@ -537,6 +538,7 @@ class TransactionService {
         });
         // the 3-way match, once more at the moment it counts
         await ReceiptLinks.assertWithinReceipts(transaction, transaction.items, { session });
+        await ReceiptLinks.assertWithinDeliveries(transaction, transaction.items, { session });
         const stockUpdates = await this.processTransactionStock(id, transaction, createdBy, session);
         // Accounting entries (receivable/payable, revenue or inventory, VAT, cost of goods sold).
         // A no-op until the company has mapped its accounts and switched ledger posting on.

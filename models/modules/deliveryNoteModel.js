@@ -23,7 +23,8 @@ const deliveryNoteSchema = new mongoose.Schema(
 
     partyId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: true },
     // Where the lines came from. A note against a sales order tracks how much of that order is out.
-    source: { type: linkSchema(["manual", "sales_order", "quotation"]), default: () => ({ kind: "manual" }) },
+    // "trade_order" is a sales order DOCUMENT (a commitment that posts nothing): see models/modules/tradeOrderModel.js.
+    source: { type: linkSchema(["manual", "sales_order", "quotation", "trade_order"]), default: () => ({ kind: "manual" }) },
     // The sales order that invoices these goods (the source order, or one raised from the note).
     invoice: { type: linkSchema(["sales_order"]), default: undefined },
     invoiceStatus: { type: String, required: true, default: "NONE" },

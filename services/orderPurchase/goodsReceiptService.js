@@ -361,6 +361,8 @@ class GoodsReceiptService {
     const date = input?.date ? S.dayToDate(input.date) : new Date(todayInOrg());
     if (!date) throw fail("Enter a valid date", 400, "INVALID_DATE");
     const nos = receipts.map((r) => r.receiptNo);
+    // the order's freight and header discount ride on its first invoice, once
+    const extras = await TradeOrderService.firstInvoiceExtras("purchase", receipts, { session });
     const vendorNos = [...new Set(receipts.map((r) => r.vendorDeliveryNo).filter(Boolean))];
 
     const invoice = await TransactionService.createTransaction(
@@ -382,8 +384,8 @@ class GoodsReceiptService {
               expiryDate: l.expiryDate || undefined,
             }))
         ),
-        charges: receipts.flatMap((r) => r.charges.map((c) => c.toObject())),
-        discount: receipts.reduce((t, r) => t + (r.discount || 0), 0),
+        charges: [...receipts.flatMap((r) => r.charges.map((c) => c.toObject())), ...extras.charges],
+        discount: receipts.reduce((t, r) => t + (r.discount || 0), 0) + extras.discount,
         notes: `Goods received ${nos.join(", ")}`,
         status: "DRAFT",
       },

@@ -1,5 +1,6 @@
 const AppError = require("../../utils/AppError");
 const GoodsReceipt = require("../../models/modules/goodsReceiptModel");
+const DeliveryNote = require("../../models/modules/deliveryNoteModel");
 const { getTenant } = require("../../utils/tenant");
 const { INVOICE_STATE, overBilled } = require("../../utils/tradeOrders");
 
@@ -52,4 +53,25 @@ async function assertWithinReceipts(transaction, items, { session } = {}) {
   );
 }
 
-module.exports = { onPurchaseInvoiceChanged, assertWithinReceipts, stateOf };
+// The same match on the sales side, for an invoice made from the delivery notes of a sales order document: it may bill no more
+// of an item than was delivered. Notes that are not against an order document (the older, standalone path) are not judged.
+async function assertWithinDeliveries(transaction, items, { session } = {}) {
+  if (!transaction || transaction.type !== "sales_order") return;
+  const { companyId } = getTenant();
+  const q = DeliveryNote.find({ companyId, "invoice.id": transaction._id, status: "DELIVERED", "source.kind": "trade_order" })
+    .select("deliveryNoteNo items.itemId items.qty items.deliveredQty")
+    .lean();
+  const notes = await (session ? q.session(session) : q);
+  if (!notes.length) return;
+  const have = notes.flatMap((n) => n.items.map((l) => ({ itemId: l.itemId, receivedQty: l.deliveredQty ?? l.qty })));
+  const over = overBilled((items || []).map((l) => ({ itemId: l.itemId, qty: l.qty })), have);
+  if (!over.length) return;
+  throw new AppError(
+    `The invoice bills ${over[0].billed} of an item but ${notes.map((n) => n.deliveryNoteNo).join(", ")} delivered ${over[0].received}. An invoice made from delivered goods cannot bill more than was delivered.`,
+    409,
+    "BILLED_MORE_THAN_DELIVERED",
+    { items: over }
+  );
+}
+
+module.exports = { onPurchaseInvoiceChanged, assertWithinReceipts, assertWithinDeliveries, stateOf };

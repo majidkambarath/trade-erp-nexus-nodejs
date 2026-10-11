@@ -26,6 +26,7 @@ exports.summary = catchAsync(async (req, res) => ok(res, await DeliveryNoteServi
 exports.uninvoiced = catchAsync(async (req, res) => ok(res, await DeliveryNoteService.uninvoiced({ partyId: req.query.partyId })));
 exports.availability = catchAsync(async (req, res) => ok(res, await DeliveryNoteService.availability(req.query.itemIds, { excludeId: req.query.excludeId })));
 exports.fromOrder = catchAsync(async (req, res) => ok(res, await DeliveryNoteService.prefillFromOrder(req.params.orderId)));
+exports.fromTradeOrder = catchAsync(async (req, res) => ok(res, await DeliveryNoteService.prefillFromTradeOrder(req.params.orderId)));
 exports.get = catchAsync(async (req, res) => ok(res, await DeliveryNoteService.getById(req.params.id)));
 exports.pickList = catchAsync(async (req, res) => ok(res, await DeliveryNoteService.pickList(req.params.id)));
 exports.activity = catchAsync(async (req, res) => ok(res, await AuditService.list(req, { entity: "DeliveryNote", entityId: req.params.id, limit: 100 })));

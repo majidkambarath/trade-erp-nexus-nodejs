@@ -35,6 +35,7 @@ router.get("/:id/activity", requirePermission(can("view")), c.activity);
 router.put("/:id", requirePermission(can("edit")), c.update);
 router.delete("/:id", requirePermission(can("delete")), c.remove);
 
+router.post("/:id/invoice", requirePermission(can("approve")), c.invoice); // the invoice for what has been delivered / received
 router.post("/:id/confirm", requirePermission(can("approve")), c.confirm);
 router.post("/:id/cancel", requirePermission(can("approve")), c.cancel);
 router.post("/:id/close", requirePermission(can("approve")), c.close);

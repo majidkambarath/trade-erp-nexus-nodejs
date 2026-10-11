@@ -16,6 +16,7 @@ router.get("/summary", requirePermission("sales.view"), c.summary);
 router.get("/uninvoiced", requirePermission("sales.view"), c.uninvoiced);
 router.get("/availability", requirePermission("sales.view"), c.availability);
 router.get("/from-order/:orderId", requirePermission("sales.view"), c.fromOrder);
+router.get("/from-trade-order/:orderId", requirePermission("sales.view"), c.fromTradeOrder); // a sales order DOCUMENT (no posting)
 router.post("/invoice", requirePermission("sales.approve"), c.invoice); // one sales order for one or more delivered notes
 
 router.get("/", requirePermission("sales.view"), c.list);

@@ -3,6 +3,8 @@ const AppError = require("../../utils/AppError");
 const DeliveryNote = require("../../models/modules/deliveryNoteModel");
 const Quotation = require("../../models/modules/quotationModel");
 const Transaction = require("../../models/modules/transactionModel");
+const TradeOrder = require("../../models/modules/tradeOrderModel");
+const TradeRules = require("../../utils/tradeOrders");
 const Customer = require("../../models/modules/customerModel");
 const Stock = require("../../models/modules/stockModel");
 const StockBatch = require("../../models/modules/stockBatchModel");
@@ -80,6 +82,30 @@ async function noteLinesFor(orderId, { session, excludeId } = {}) {
     .lean();
   const notes = await (session ? q.session(session) : q);
   return notes.flatMap((n) => n.items.map((l) => ({ sourceLineId: l.sourceLineId, status: n.status, qty: l.qty, deliveredQty: l.deliveredQty })));
+}
+
+// The sales ORDER DOCUMENT a note is raised against: it must be confirmed and the same customer's.
+async function loadTradeOrder(id, { session } = {}) {
+  if (!S.isId(id)) throw fail("Invalid sales order", 400, "ORDER_REQUIRED");
+  const q = TradeOrder.findById(id).lean();
+  const order = await (session ? q.session(session) : q);
+  if (!order || order.kind !== "sales") throw fail("Sales order not found", 404, "ORDER_NOT_FOUND");
+  if (!TradeRules.ORDER_OPEN.includes(order.status)) {
+    throw fail(`${order.orderNo} is ${order.status.toLowerCase()}; nothing can be delivered against it${order.status === "DRAFT" ? ". Confirm it first" : ""}`, 409, "ORDER_NOT_DELIVERABLE");
+  }
+  return order;
+}
+
+// Lines of every live note against an order document, in the shape the progress rules read (a signed-for note is "received").
+async function tradeOrderNoteLines(orderId, { session, excludeId } = {}) {
+  const { companyId } = getTenant();
+  const q = DeliveryNote.find({ companyId, "source.kind": "trade_order", "source.id": orderId, status: { $ne: "CANCELLED" }, ...(excludeId && { _id: { $ne: excludeId } }) })
+    .select("status invoiceStatus items.sourceLineId items.qty items.deliveredQty")
+    .lean();
+  const notes = await (session ? q.session(session) : q);
+  return notes.flatMap((n) =>
+    n.items.map((l) => ({ sourceLineId: l.sourceLineId, status: n.status === "DELIVERED" ? "RECEIVED" : "DRAFT", qty: l.qty, receivedQty: l.deliveredQty, invoiceStatus: n.invoiceStatus }))
+  );
 }
 
 const invoiceStateOfOrder = (order) => (order.status === "APPROVED" ? INVOICE_STATE.INVOICED : INVOICE_STATE.DRAFT);
@@ -162,9 +188,18 @@ class DeliveryNoteService {
       order = await Transaction.findById(dn.source.id).select("transactionNo status date items._id items.qty items.description items.itemCode").lean();
       if (order) progress = fulfilment(order.items, await noteLinesFor(order._id));
     }
+    let tradeOrder = null;
+    if (dn.source?.kind === "trade_order" && dn.source.id) {
+      const doc = await TradeOrder.findById(dn.source.id).select("orderNo status date items._id items.qty items.description items.itemCode").lean();
+      if (doc) {
+        tradeOrder = { id: doc._id, no: doc.orderNo, status: doc.status, lines: doc.items.map((l) => ({ lineId: l._id, description: l.description, itemCode: l.itemCode })) };
+        progress = TradeRules.orderProgress(doc.items, await tradeOrderNoteLines(doc._id));
+      }
+    }
     return {
       ...present({ ...dn, items }),
       party,
+      sourceTradeOrder: tradeOrder,
       sourceOrder: order
         ? { id: order._id, no: order.transactionNo, status: order.status, lines: order.items.map((l) => ({ lineId: l._id, description: l.description, itemCode: l.itemCode })) }
         : null,
@@ -191,6 +226,26 @@ class DeliveryNoteService {
         price: l.price ?? (l.qty ? (Number(l.rate) || 0) / l.qty : 0),
         ...f[String(l._id)],
       })),
+    };
+  }
+
+  // What can still be delivered on each line of a sales ORDER DOCUMENT.
+  static async prefillFromTradeOrder(orderId) {
+    const order = await loadTradeOrder(orderId);
+    const [party, lines, items] = await Promise.all([S.loadCustomer(order.partyId), tradeOrderNoteLines(order._id), S.attachStockDetails(order.items)]);
+    const progress = TradeRules.orderProgress(order.items, lines);
+    return {
+      order: { id: order._id, no: order.orderNo, status: order.status, date: order.date, reference: order.reference || "" },
+      party,
+      deliveryAddress: addressOf(party),
+      lines: items.map((l) => {
+        const p = progress.lines[String(l._id)];
+        // the same names the note form reads for a Transaction order: how much is left to deliver
+        return {
+          sourceLineId: l._id, itemId: l.itemId, itemCode: l.itemCode, description: l.description, stockDetails: l.stockDetails,
+          price: l.price, ordered: p.ordered, delivered: p.received, onTheWay: p.onTheWay, remaining: p.toReceive,
+        };
+      }),
     };
   }
 
@@ -319,6 +374,28 @@ class DeliveryNoteService {
   // The lines of a note from what the client sent. Against an order, the client names the order line and
   // the quantity; the item, price, discount and tax come from the order, so a note can never disagree
   // with the invoice it belongs to. On its own, the lines carry their own price like a quotation's.
+  static async #buildTradeOrderLines(data, order, { session, excludeId } = {}) {
+    if (!Array.isArray(data.items) || !data.items.length) throw fail("Add at least one item", 400, "ITEMS_REQUIRED");
+    const progress = TradeRules.orderProgress(order.items, await tradeOrderNoteLines(order._id, { session, excludeId }));
+    const taken = new Map();
+    const inputs = data.items.map((given, index) => {
+      const n = index + 1;
+      const line = order.items.find((x) => String(x._id) === String(given.sourceLineId));
+      if (!line) throw fail(`Line ${n}: that item is not on ${order.orderNo}`, 400, "LINE_NOT_ON_ORDER");
+      const qty = Number(given.qty);
+      if (!(qty > 0)) throw fail(`Line ${n}: quantity must be above zero`, 400, "INVALID_QUANTITY");
+      const key = String(line._id);
+      const total = (taken.get(key) || 0) + qty;
+      taken.set(key, total);
+      const left = progress.lines[key].toReceive;
+      if (Math.round((total - left) * 1000) / 1000 > 0) {
+        throw fail(`Line ${n}: only ${left} of ${line.description} is left to deliver on ${order.orderNo}`, 409, "OVER_DELIVERY", { line: n, remaining: left });
+      }
+      return { ...S.toPricingInput(line, qty), sourceLineId: line._id };
+    });
+    return S.prepareLines(inputs, { session });
+  }
+
   static async #buildLines(data, order, { session, excludeId } = {}) {
     if (!order) return S.prepareLines(data.items, { session });
 
@@ -345,30 +422,36 @@ class DeliveryNoteService {
 
   static create = withTransactionSession(async (data, createdBy, session) => {
     const { companyId, branchId } = getTenant();
-    const order = data.sourceTransactionId ? await loadOrder(data.sourceTransactionId, { session }) : null;
-    const partyId = order ? order.partyId : data.partyId;
+    const tradeOrder = data.sourceTradeOrderId ? await loadTradeOrder(data.sourceTradeOrderId, { session }) : null;
+    const order = !tradeOrder && data.sourceTransactionId ? await loadOrder(data.sourceTransactionId, { session }) : null;
+    const partyId = tradeOrder ? tradeOrder.partyId : order ? order.partyId : data.partyId;
     const customer = await S.loadCustomer(partyId, { session });
+    const bound = tradeOrder || order; // charges and a header discount follow the whole order onto its invoice
 
     const date = S.dayToDate(data.date) || new Date(todayInOrg());
-    const lines = await DeliveryNoteService.#buildLines(data, order, { session });
+    const lines = tradeOrder
+      ? await DeliveryNoteService.#buildTradeOrderLines(data, tradeOrder, { session })
+      : await DeliveryNoteService.#buildLines(data, order, { session });
     const priced = await S.priceDocument(
-      { items: lines, charges: order ? [] : data.charges, discount: order ? 0 : data.discount, date },
+      { items: lines, charges: bound ? [] : data.charges, discount: bound ? 0 : data.discount, date },
       { session }
     );
     const deliveryNoteNo = await NumberSeriesService.allocate("DLN", date, { session });
     const [doc] = await DeliveryNote.create(
       [{
         companyId, branchId, deliveryNoteNo, partyId, date, status: "DRAFT",
-        source: order ? { kind: "sales_order", id: order._id, no: order.transactionNo } : { kind: "manual" },
+        source: tradeOrder
+          ? { kind: "trade_order", id: tradeOrder._id, no: tradeOrder.orderNo }
+          : order ? { kind: "sales_order", id: order._id, no: order.transactionNo } : { kind: "manual" },
         invoice: order ? { kind: "sales_order", id: order._id, no: order.transactionNo } : undefined,
         invoiceStatus: order ? invoiceStateOfOrder(order) : INVOICE_STATE.NONE,
         // a form sends blanks as "", so a blank takes the default, which a person can then overwrite
-        reference: data.reference || order?.lpono || "",
+        reference: data.reference || order?.lpono || tradeOrder?.reference || "",
         deliveryAddress: data.deliveryAddress || addressOf(customer),
         contactPerson: data.contactPerson || customer.contactPerson || "",
         contactPhone: data.contactPhone || customer.phone || "",
         vehicleNo: data.vehicleNo || "", driverName: data.driverName || "", driverPhone: data.driverPhone || "",
-        items: priced.lines, charges: priced.charges, discount: order ? 0 : Number(data.discount) || 0,
+        items: priced.lines, charges: priced.charges, discount: bound ? 0 : Number(data.discount) || 0,
         pricing: priced.pricing, totalAmount: priced.totalAmount,
         notes: data.notes || "", createdBy,
       }],
@@ -418,8 +501,9 @@ class DeliveryNoteService {
     if (!DELIVERY_EDITABLE.includes(dn.status)) {
       throw fail(`${dn.deliveryNoteNo} has been ${dn.status.toLowerCase()} and can no longer be edited`, 409, "DELIVERY_NOTE_NOT_EDITABLE");
     }
+    const tradeOrder = dn.source?.kind === "trade_order" && dn.source.id ? await loadTradeOrder(dn.source.id, { session }) : null;
     const order = dn.source?.kind === "sales_order" && dn.source.id ? await loadOrder(dn.source.id, { session }) : null;
-    if (!order && data.partyId && String(data.partyId) !== String(dn.partyId)) {
+    if (!order && !tradeOrder && data.partyId && String(data.partyId) !== String(dn.partyId)) {
       await S.loadCustomer(data.partyId, { session });
       dn.partyId = data.partyId;
     }
@@ -427,16 +511,19 @@ class DeliveryNoteService {
     if (!date) throw fail("Enter a valid date", 400, "INVALID_DATE");
 
     if (data.items || data.charges !== undefined || data.discount !== undefined || data.date) {
+      const bound = tradeOrder || order;
       const lines = data.items
-        ? await DeliveryNoteService.#buildLines(data, order, { session, excludeId: dn._id })
+        ? tradeOrder
+          ? await DeliveryNoteService.#buildTradeOrderLines(data, tradeOrder, { session, excludeId: dn._id })
+          : await DeliveryNoteService.#buildLines(data, order, { session, excludeId: dn._id })
         : await S.prepareLines(dn.items.map((l) => ({ ...S.toPricingInput(l.toObject()), sourceLineId: l.sourceLineId || undefined })), { session });
       const priced = await S.priceDocument(
-        { items: lines, charges: order ? [] : data.charges ?? dn.charges.map((c) => c.toObject()), discount: order ? 0 : data.discount ?? dn.discount, date },
+        { items: lines, charges: bound ? [] : data.charges ?? dn.charges.map((c) => c.toObject()), discount: bound ? 0 : data.discount ?? dn.discount, date },
         { session }
       );
       dn.items = priced.lines;
       dn.charges = priced.charges;
-      dn.discount = order ? 0 : Number(data.discount ?? dn.discount) || 0;
+      dn.discount = bound ? 0 : Number(data.discount ?? dn.discount) || 0;
       dn.pricing = priced.pricing;
       dn.totalAmount = priced.totalAmount;
     }
@@ -562,6 +649,8 @@ class DeliveryNoteService {
     if (!date) throw fail("Enter a valid date", 400, "INVALID_DATE");
     const refs = [...new Set(notes.map((n) => n.reference).filter(Boolean))];
     const nos = notes.map((n) => n.deliveryNoteNo);
+    // the order's freight and header discount ride on its first invoice, once (lazy: the order service requires this one)
+    const extras = await require("./tradeOrderService").firstInvoiceExtras("sales", notes, { session });
 
     const salesOrder = await TransactionService.createTransaction(
       {
@@ -574,8 +663,8 @@ class DeliveryNoteService {
         items: notes.flatMap((n) =>
           n.items.filter((l) => (l.deliveredQty ?? l.qty) > 0).map((l) => S.toPricingInput(l.toObject(), l.deliveredQty ?? l.qty, l.deliveredQty ?? l.qty))
         ),
-        charges: notes.flatMap((n) => n.charges.map((c) => c.toObject())),
-        discount: notes.reduce((t, n) => t + (n.discount || 0), 0),
+        charges: [...notes.flatMap((n) => n.charges.map((c) => c.toObject())), ...extras.charges],
+        discount: notes.reduce((t, n) => t + (n.discount || 0), 0) + extras.discount,
         lpono: refs.join(", ") || null,
         linkedRef: nos.join(", "),
         notes: `Delivery notes ${nos.join(", ")}`,

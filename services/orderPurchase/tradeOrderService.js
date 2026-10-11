@@ -96,6 +96,47 @@ class TradeOrderService {
   static kindOf = kindOf;
   static loadParty = loadParty;
 
+  // Charges (freight, handling) and a header discount belong to the WHOLE order, so they go on its first invoice, once. `docs`
+  // are the receipts / delivery notes being invoiced; nothing is carried unless they all belong to one order that has no
+  // other document already on an invoice.
+  static async firstInvoiceExtras(kind, docs, { session } = {}) {
+    const none = { charges: [], discount: 0 };
+    const sourceKind = kind === "sales" ? "trade_order" : "purchase_order";
+    if (!docs.length || docs.some((d) => d.source?.kind !== sourceKind || !d.source.id)) return none;
+    const ids = [...new Set(docs.map((d) => String(d.source.id)))];
+    if (ids.length !== 1) return none;
+    const { companyId } = getTenant();
+    const q = TradeOrder.findById(ids[0]).lean();
+    const order = await (session ? q.session(session) : q);
+    if (!order) return none;
+    const Model = kind === "sales" ? DeliveryNote : GoodsReceipt;
+    const other = Model.exists({ companyId, "source.id": order._id, invoiceStatus: { $ne: "NONE" }, status: { $ne: "CANCELLED" }, _id: { $nin: docs.map((d) => d._id) } });
+    if (await (session ? other.session(session) : other)) return none;
+    return { charges: (order.charges || []).map((c) => ({ ...c })), discount: Number(order.discount) || 0 };
+  }
+
+  // Raise the invoice for what has been delivered / received against an order and not yet invoiced: all of it, as one draft.
+  static createInvoice = withTransactionSession(async (id, input, createdBy, session) => {
+    const order = await TradeOrder.findById(id).session(session);
+    if (!order) throw fail("Order not found", 404, "ORDER_NOT_FOUND");
+    if (!["CONFIRMED", "CLOSED"].includes(order.status)) {
+      throw fail(`${order.orderNo} is ${order.status.toLowerCase()}; it can only be invoiced once it is confirmed`, 409, "ORDER_STATE");
+    }
+    const { companyId } = getTenant();
+    if (order.kind === "sales") {
+      const notes = await DeliveryNote.find({ companyId, "source.kind": "trade_order", "source.id": order._id, status: "DELIVERED", invoiceStatus: "NONE" }).select("_id").session(session);
+      if (!notes.length) throw fail(`Nothing has been delivered on ${order.orderNo} that is waiting for an invoice. Confirm a delivery note first.`, 409, "NOTHING_TO_INVOICE");
+      const DeliveryNoteService = require("./deliveryNoteService");
+      const out = await DeliveryNoteService.createInvoice({ deliveryNoteIds: notes.map((n) => String(n._id)), date: input?.date }, createdBy, session);
+      return { kind: "sales", invoice: out.salesOrder, documents: out.deliveryNotes };
+    }
+    const receipts = await GoodsReceipt.find({ companyId, "source.kind": "purchase_order", "source.id": order._id, status: "RECEIVED", invoiceStatus: "NONE" }).select("_id").session(session);
+    if (!receipts.length) throw fail(`Nothing has been received on ${order.orderNo} that is waiting for an invoice. Confirm goods received first.`, 409, "NOTHING_TO_INVOICE");
+    const GoodsReceiptService = require("./goodsReceiptService");
+    const out = await GoodsReceiptService.createInvoice({ receiptIds: receipts.map((r) => String(r._id)), date: input?.date, vendorInvoiceNo: input?.vendorInvoiceNo }, createdBy, session);
+    return { kind: "purchase", invoice: out.purchaseInvoice, documents: out.goodsReceipts };
+  });
+
   // ---- reading -----------------------------------------------------------------------------
   static async list(filters = {}) {
     const k = kindOf(filters.kind);

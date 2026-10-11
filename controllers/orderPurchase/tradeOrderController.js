@@ -48,6 +48,17 @@ const transition = (name, action, text) =>
     ok(res, shaped(o));
   });
 
+exports.invoice = catchAsync(async (req, res) => {
+  const out = await TradeOrderService.createInvoice(req.params.id, req.body, resolveCreatedBy(req));
+  const DocumentAuditService = require("../../services/orderPurchase/documentAuditService");
+  await AuditService.log({
+    req, action: "TRANSACTION_CREATED", entity: "Transaction", entityId: out.invoice._id,
+    summary: `${DocumentAuditService.describe(out.invoice)} saved as ${out.invoice.status}, from ${out.kind === "sales" ? "sales" : "purchase"} order ${req.params.id}`,
+    after: DocumentAuditService.snapshot(out.invoice),
+  });
+  ok(res, { invoice: out.invoice, documents: out.documents }, 201);
+});
+
 exports.confirm = transition("confirm", "ORDER_CONFIRMED", "confirmed");
 exports.cancel = transition("cancel", "ORDER_CANCELLED", "cancelled");
 exports.close = transition("close", "ORDER_CLOSED", "closed");
