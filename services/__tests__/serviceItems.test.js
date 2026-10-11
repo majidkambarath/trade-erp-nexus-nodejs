@@ -382,7 +382,8 @@ test("a company whose posting map predates service-expense is topped up on its f
 
 test("stock reports, valuation, low stock and reorder ignore services; sales analysis counts their revenue", { skip }, async () => {
   const sale = await sellApproved([L(consulting, 5, 400), L(rice, 5, 20)]);
-  const to = new Date().toISOString().slice(0, 10);
+  // the organisation's own day (Dubai, UTC+4): the sale is dated on it, so a window ending on the UTC date misses it for four hours a day
+  const to = new Date(Date.now() + 4 * 3600e3).toISOString().slice(0, 10);
   const from = `${to.slice(0, 4)}-01-01`;
 
   const valuation = await svc.StockReports.valuation({ asOn: to, includeZero: true });
