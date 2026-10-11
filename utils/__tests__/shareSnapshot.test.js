@@ -27,7 +27,7 @@ const transaction = () => ({
 const customer = () => ({
   _id: "LEAK-cust", customerName: "Al Noor Trading", customerId: "C1", billingAddress: "Al Quoz", phone: "050 111 2222",
   email: "ali@alnoor.ae", trnNumber: "100123456700003", paymentTerms: "Net 30",
-  vat: { trn: "100123456700003", registered: "LEAK-vat" },
+  vat: { trn: "100123456700003", status: "registered", registered: "LEAK-vat", tradeLicenseNo: "LEAK-licence" },
   credit: { limit: "LEAK-credit" }, bankAccounts: [{ iban: "LEAK-iban" }], documents: [{ name: "LEAK-kyc" }],
   contacts: [{ name: "LEAK-contact" }], shippingAddress: "LEAK-ship", minShelfLifeDays: 45, eInvoice: { participantId: "LEAK-pid" },
 });
@@ -49,7 +49,8 @@ test("the snapshot holds exactly the whitelisted fields, group by group", () => 
   assert.deepEqual(keys(s.document.charges[0]), allowed(INVOICE_ALLOWED.charge));
   assert.deepEqual(keys(s.document.pricing), allowed(INVOICE_ALLOWED.pricing));
   assert.deepEqual(keys(s.party), allowed(INVOICE_ALLOWED.party));
-  assert.deepEqual(keys(s.party.vat), ["trn"], "only the registration number of the VAT block");
+  assert.deepEqual(keys(s.party.vat), ["status", "trn"], "only the registration number and status of the VAT block");
+  assert.equal(s.party.vat.status, "registered");
   assert.deepEqual(keys(s.company), allowed(INVOICE_ALLOWED.company));
 });
 

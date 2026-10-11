@@ -45,8 +45,11 @@ function invoiceSnapshot({ transaction, customer, company, currency = orgLocale.
     pricing: pick(toPlain(tx.pricing), PRICING_KEYS),
   };
   const party = { ...pick(c, PARTY_KEYS) };
-  // Only the registration number of a customer's VAT block, never the block itself.
-  if (c.vat && c.vat.trn) party.vat = { trn: c.vat.trn };
+  // Only the registration number and the registration status of a customer's VAT block, never the block itself: the invoice
+  // prints "TRN ..." and "VAT status Registered" under the customer's name, and the status is the customer's own fact.
+  const vat = c.vat || {};
+  const status = typeof vat.status === "string" && vat.status ? vat.status : null;
+  if (vat.trn || status) party.vat = { ...(status ? { status } : {}), ...(vat.trn ? { trn: vat.trn } : {}) };
   return {
     kind: "tax_invoice",
     document,
