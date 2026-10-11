@@ -103,8 +103,13 @@ function calculateItems(items) {
         (item.stockDetails.itemCode || item.stockDetails.sku)) ||
       (item.itemId ? String(item.itemId) : "");
 
+    // `rate` is the line's VALUE (VAT-exclusive, after its discount), as the order form has always sent it. A caller that sends
+    // the unit price (an import, a script, a conversion from another document) would otherwise store the unit price there and
+    // every printed sheet would read it as the value. The unit price travels in `price`; a line with only `rate` is left as sent.
+    const hasPrice = item.price !== undefined && item.price !== null && item.price !== "";
     return {
       ...item,
+      ...(hasPrice ? { rate: priced.taxable } : {}),
       itemCode,
       package: item.package ?? 0,
       grossAmount: priced.gross,

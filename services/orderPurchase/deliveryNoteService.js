@@ -243,7 +243,7 @@ class DeliveryNoteService {
         // the same names the note form reads for a Transaction order: how much is left to deliver
         return {
           sourceLineId: l._id, itemId: l.itemId, itemCode: l.itemCode, description: l.description, stockDetails: l.stockDetails,
-          price: l.price, ordered: p.ordered, delivered: p.received, onTheWay: p.onTheWay, remaining: p.toReceive,
+          price: l.price, ordered: p.ordered, delivered: p.received, pending: p.onTheWay, onTheWay: p.onTheWay, remaining: p.toReceive,
         };
       }),
     };

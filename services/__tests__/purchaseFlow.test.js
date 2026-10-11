@@ -264,3 +264,24 @@ test("bad input is refused with a reason", { skip }, async () => {
   await assert.rejects(() => svc.Orders.create({ kind: "purchase", partyId: mill._id, items: [] }, "tester"), { code: "ITEMS_REQUIRED" });
   await assert.rejects(() => svc.Receipts.createInvoice({ receiptIds: [] }, "tester"), { code: "RECEIPTS_REQUIRED" });
 });
+
+test("a line's rate is its VALUE whatever the caller sent: the unit price lives in price", { skip }, async () => {
+  // a script or import that sends the unit price in `rate` used to store it there, and every printed sheet then read the unit
+  // price as the line's value and charged VAT on qty x value (a 585-unit line printed with 4,409.15 of VAT on 150.74)
+  const tx = await svc.Tx.createTransaction({
+    type: "purchase_order", partyId: mill._id, partyType: "Vendor", partyTypeRef: "Vendor", date: D(4, 2),
+    items: [{ itemId: rice._id, description: "Rice 5kg", qty: 585, price: 150.74, rate: 150.74, vatPercent: 5 }],
+  }, "tester");
+  const stored = await svc.Tx.getTransactionById(tx._id);
+  const item = stored.items[0];
+  assert.equal(item.price, 150.74);
+  assert.equal(item.taxableAmount, 88182.9);
+  assert.equal(item.rate, 88182.9, "rate is the VAT-exclusive value, after any discount");
+  assert.equal(item.vatAmount, 4409.15);
+  // a discount comes off the value, as the order form has always stored it
+  const d = await svc.Tx.createTransaction({
+    type: "purchase_order", partyId: mill._id, partyType: "Vendor", partyTypeRef: "Vendor", date: D(4, 2),
+    items: [{ itemId: rice._id, description: "Rice 5kg", qty: 10, price: 20, rate: 20, discountPercent: 10, vatPercent: 5 }],
+  }, "tester");
+  assert.equal((await svc.Tx.getTransactionById(d._id)).items[0].rate, 180);
+});
