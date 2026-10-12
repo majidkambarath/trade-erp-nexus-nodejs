@@ -778,202 +778,57 @@ const logAmount = balanceEffect;
       const limit = Math.min(200, Math.max(1, parseInt(filters.limit) || 20));
       const skip = (page - 1) * limit;
 
-      // ──────── AGGREGATION PIPELINE ────────
-      // Paginate first, then join. Previously every matching transaction was joined
-      // (customers, vendors, per-line stock + UOM) and only then sorted and sliced,
-      // so each page cost grew with the total row count.
-      const pipeline = [
-        { $match: query },
-        { $sort: { createdAt: -1, _id: -1 } }, // _id: documents saved in one millisecond (an import) still have one order
-        { $skip: skip },
-        { $limit: limit },
+      // ──────── THE PAGE ────────
+      // One indexed read of the page, then ONE read each for the parties, the stock items and their units, joined here. This was a
+      // single aggregation that looked a stock item up (and its unit inside it) once per document LINE: a page of 100 invoices
+      // made hundreds of lookups on the database server, and two people on the list at once made each other wait for many
+      // seconds. The page and the count are independent reads, so they run together.
+      const FIELDS =
+        "transactionNo type partyId partyType partyTypeRef vendorReference date deliveryDate returnDate expectedDispatch status totalAmount " +
+        "docno lpono discount paidAmount outstandingAmount creditedAmount returnOf items terms notes quoteRef linkedRef creditNoteIssued " +
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals";
+      const [docs, total] = await Promise.all([
+        Transaction.find(query).select(FIELDS).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
+        Transaction.countDocuments(query),
+      ]);
+
+      const idsOf = (list) => [...new Set(list.filter(Boolean).map(String))].map((id) => new mongoose.Types.ObjectId(id));
+      const customerIds = idsOf(docs.filter((d) => d.partyType === "Customer").map((d) => d.partyId));
+      const vendorIds = idsOf(docs.filter((d) => d.partyType !== "Customer").map((d) => d.partyId));
+      const itemIds = idsOf(docs.flatMap((d) => (d.items || []).map((i) => i && i.itemId)));
+      const [customers, vendors, stocks] = await Promise.all([
+        customerIds.length ? Customer.find({ _id: { $in: customerIds } }).lean() : [],
+        vendorIds.length ? Vendor.find({ _id: { $in: vendorIds } }).lean() : [],
+        itemIds.length ? Stock.find({ _id: { $in: itemIds } }).lean() : [],
+      ]);
+      const UOM = mongoose.model("UOM");
+      const unitIds = idsOf(stocks.map((st) => st.unitOfMeasure));
+      const units = unitIds.length ? await UOM.find({ _id: { $in: unitIds } }).lean() : [];
+      const byId = (rows) => new Map(rows.map((r) => [String(r._id), r]));
+      const customerBy = byId(customers);
+      const vendorBy = byId(vendors);
+      const unitBy = byId(units);
+      const stockBy = new Map(
+        stocks.map((st) => [String(st._id), { ...st, unitOfMeasureDetails: unitBy.get(String(st.unitOfMeasure)) || undefined }])
+      );
+
+      const result = docs.map((d) => {
+        const isCustomer = d.partyType === "Customer";
+        const party = (isCustomer ? customerBy : vendorBy).get(String(d.partyId)) || null;
+        const name = party ? (isCustomer ? party.customerName : party.vendorName) : null;
         // the copy of a draft order kept for reopening it (orderCloseService) is a whole document: not for a list
-        { $unset: "closedShort.original" },
-
-        // ---- 1. Lookup Customer ---- (unchanged)
-        {
-          $lookup: {
-            from: "customers",
-            localField: "partyId",
-            foreignField: "_id",
-            as: "customerData",
-          },
-        },
-
-        // ---- 2. Lookup Vendor ---- (unchanged)
-        {
-          $lookup: {
-            from: "vendors",
-            localField: "partyId",
-            foreignField: "_id",
-            as: "vendorData",
-          },
-        },
-
-        // ---- 3. Build a single `party` object (full doc) ---- (unchanged)
-        {
-          $set: {
-            party: {
-              $cond: {
-                if: { $eq: ["$partyType", "Customer"] },
-                then: { $arrayElemAt: ["$customerData", 0] },
-                else: { $arrayElemAt: ["$vendorData", 0] },
-              },
-            },
-          },
-        },
-
-        // ---- 4. FIXED: Build `partyName` correctly ----
-        // Use $getField to extract property from first array element (MongoDB 5.1+)
-        // Fallback to null if no match
-        {
-          $set: {
-            partyName: {
-              $cond: {
-                if: { $eq: ["$partyType", "Customer"] },
-                then: {
-                  $ifNull: [
-                    {
-                      $getField: {
-                        field: "customerName",
-                        input: { $arrayElemAt: ["$customerData", 0] },
-                      },
-                    },
-                    null,
-                  ],
-                },
-                else: {
-                  $ifNull: [
-                    {
-                      $getField: {
-                        field: "vendorName",
-                        input: { $arrayElemAt: ["$vendorData", 0] },
-                      },
-                    },
-                    null,
-                  ],
-                },
-              },
-            },
-          },
-        },
-
-        // ──────── NO $unset – keep everything ──────── (unchanged)
-
-        // ---- 5. Unwind items for stock lookup ---- (unchanged)
-        {
-          $unwind: { path: "$items", preserveNullAndEmptyArrays: true },
-        },
-
-        // ---- 6. Lookup Stock + nested UOM ---- (unchanged)
-        {
-          $lookup: {
-            from: "stocks",
-            let: { itemId: "$items.itemId" },
-            pipeline: [
-              { $match: { $expr: { $eq: ["$_id", "$$itemId"] } } },
-              {
-                $lookup: {
-                  from: "uoms",
-                  localField: "unitOfMeasure",
-                  foreignField: "_id",
-                  as: "unitOfMeasureDetails",
-                },
-              },
-              {
-                $set: {
-                  unitOfMeasureDetails: {
-                    $arrayElemAt: ["$unitOfMeasureDetails", 0],
-                  },
-                },
-              },
-            ],
-            as: "items.stockDetails",
-          },
-        },
-        {
-          $set: {
-            "items.stockDetails": { $arrayElemAt: ["$items.stockDetails", 0] },
-          },
-        },
-
-        // ---- 7. Group back the document ---- (unchanged, but now partyName is correct)
-        {
-          $group: {
-            _id: "$_id",
-            transactionNo: { $first: "$transactionNo" },
-            type: { $first: "$type" },
-            partyId: { $first: "$partyId" },
-            partyType: { $first: "$partyType" },
-            partyTypeRef: { $first: "$partyTypeRef" },
-            vendorReference: { $first: "$vendorReference" },
-            date: { $first: "$date" },
-            deliveryDate: { $first: "$deliveryDate" },
-            returnDate: { $first: "$returnDate" },
-            expectedDispatch: { $first: "$expectedDispatch" },
-            status: { $first: "$status" },
-            totalAmount: { $first: "$totalAmount" },
-            // Ensure sales-order fields are included in list output
-            docno: { $first: "$docno" },
-            lpono: { $first: "$lpono" },
-            discount: { $first: "$discount" },
-            paidAmount: { $first: "$paidAmount" },
-            outstandingAmount: { $first: "$outstandingAmount" },
-            creditedAmount: { $first: "$creditedAmount" },
-            returnOf: { $first: "$returnOf" },
-            items: { $push: "$items" },
-            terms: { $first: "$terms" },
-            notes: { $first: "$notes" },
-            quoteRef: { $first: "$quoteRef" },
-            linkedRef: { $first: "$linkedRef" },
-            creditNoteIssued: { $first: "$creditNoteIssued" },
-            createdBy: { $first: "$createdBy" },
-            createdAt: { $first: "$createdAt" },
-            updatedAt: { $first: "$updatedAt" },
-            priority: { $first: "$priority" },
-            grnGenerated: { $first: "$grnGenerated" },
-            invoiceGenerated: { $first: "$invoiceGenerated" },
-            // opening balance invoices (no lines) are told apart in the lists
-            isOpening: { $first: "$isOpening" },
-            dueDate: { $first: "$dueDate" },
-            // a sales order the customer will not take the rest of (without its reopen copy, dropped above)
-            closedShort: { $first: "$closedShort" },
-            lastSend: { $first: "$lastSend" },
-            approvals: { $first: "$approvals" }, // who has approved it (a first of two shows as "awaiting a second approver")
-
-            // keep the raw lookup arrays
-            customerData: { $first: "$customerData" },
-            vendorData: { $first: "$vendorData" },
-
-            // our new fields
-            party: { $first: "$party" },
-            partyName: { $first: "$partyName" },
-          },
-        },
-
-        // ---- 8. Restore order: $group does not preserve input order,
-        // and this sorts only the page (<= limit docs), not the whole table.
-        { $sort: { createdAt: -1, _id: -1 } },
-      ];
-
-      const transactions = await Transaction.aggregate(pipeline);
-      const total = await Transaction.countDocuments(query);
-
-      // ---- Final shape (optional safety) ---- (updated fallback for consistency)
-      const result = transactions.map((t) => ({
-        ...t,
-        partyName: t.partyName || "Unknown Party", // Now rarely triggers
-        party: t.party || null,
-        customerData: t.customerData?.length ? t.customerData[0] : null,
-        vendorData: t.vendorData?.length ? t.vendorData[0] : null,
-        // a document with no lines (an opening balance invoice) comes out of the join as one empty
-        // placeholder; it is not a line
-        items: t.items.filter((i) => i && i.itemId).map((i) => ({
-          ...i,
-          stockDetails: i.stockDetails || null,
-        })),
-      }));
-      // console.log(result);
+        const { original: _kept, ...closedShort } = d.closedShort || {};
+        return {
+          ...d,
+          ...(d.closedShort ? { closedShort } : {}),
+          party,
+          partyName: name || "Unknown Party",
+          // a document with no lines (an opening balance invoice) has nothing to show as a line
+          items: (d.items || [])
+            .filter((i) => i && i.itemId)
+            .map((i) => ({ ...i, stockDetails: stockBy.get(String(i.itemId)) || null })),
+        };
+      });
       return {
         transactions: result,
         pagination: {

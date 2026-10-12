@@ -285,3 +285,16 @@ test("a line's rate is its VALUE whatever the caller sent: the unit price lives 
   }, "tester");
   assert.equal((await svc.Tx.getTransactionById(d._id)).items[0].rate, 180);
 });
+
+test("the order lists the invoices made from what was received, with where each stands", { skip }, async () => {
+  const read = await svc.Orders.getById(order._id);
+  assert.ok(Array.isArray(read.invoices));
+  assert.ok(read.invoices.length >= 1, "the invoices raised from this order's receipts are listed");
+  for (const inv of read.invoices) {
+    assert.ok(inv.no && ["DRAFT", "APPROVED"].includes(inv.status), `${inv.no} ${inv.status}`);
+    assert.equal(typeof inv.totalAmount, "number");
+    assert.equal(typeof inv.outstandingAmount, "number");
+  }
+  const fresh = await svc.Orders.create({ kind: "purchase", partyId: mill._id, items: [line(rice, 1, 10)] }, "tester");
+  assert.deepEqual((await svc.Orders.getById(fresh._id)).invoices, [], "an order nothing was invoiced against lists none");
+});

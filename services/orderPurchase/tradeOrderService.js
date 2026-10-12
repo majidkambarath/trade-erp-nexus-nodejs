@@ -192,7 +192,30 @@ class TradeOrderService {
       S.attachStockDetails(order.items),
       receiptLinesFor(order.kind, [order._id]),
     ]);
-    return { ...present({ ...order, items }, orderProgress(order.items, receipts.get(String(order._id)) || [])), party };
+    return {
+      ...present({ ...order, items }, orderProgress(order.items, receipts.get(String(order._id)) || [])),
+      party,
+      invoices: await TradeOrderService.invoicesOf(order),
+    };
+  }
+
+  // The invoices that were made from what was delivered / received against this order, with where each one stands: the order's own
+  // screen shows them (and the one-click Approve) so nobody has to hunt for a draft invoice on another page.
+  static async invoicesOf(order) {
+    const Model = order.kind === "sales" ? DeliveryNote : GoodsReceipt;
+    const rows = await Model.find({ "source.id": order._id, "invoice.id": { $ne: null } }).select("invoice").lean();
+    const ids = [...new Set(rows.map((r) => String(r.invoice.id)))];
+    if (!ids.length) return [];
+    const Transaction = require("../../models/modules/transactionModel");
+    const docs = await Transaction.find({ _id: { $in: ids } })
+      .select("transactionNo status date totalAmount paidAmount outstandingAmount creditedAmount approvals")
+      .sort({ date: 1, createdAt: 1 })
+      .lean();
+    return docs.map((d) => ({
+      id: d._id, no: d.transactionNo, status: d.status, date: d.date, totalAmount: d.totalAmount,
+      paidAmount: d.paidAmount, outstandingAmount: d.outstandingAmount, creditedAmount: d.creditedAmount || 0,
+      approvals: Array.isArray(d.approvals) ? d.approvals.length : 0,
+    }));
   }
 
   // ---- writing -----------------------------------------------------------------------------

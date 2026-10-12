@@ -232,6 +232,10 @@ transactionSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
 transactionSchema.index({ partyId: 1, partyType: 1 });
 transactionSchema.index({ "returnOf.transactionId": 1 }, { sparse: true });
 transactionSchema.index({ status: 1 });
+// The order lists read one type, newest first, by date or by when it was saved: without these every list sorted the whole collection.
+transactionSchema.index({ type: 1, createdAt: -1, _id: -1 });
+transactionSchema.index({ type: 1, date: -1 });
+transactionSchema.index({ type: 1, status: 1, date: -1 });
 transactionSchema.index({ date: -1 });
 transactionSchema.index({ isOpening: 1, type: 1, partyId: 1 });
 // List query: filter by type, sort by createdAt then _id (the tie-breaker that keeps a page boundary stable). Without this the
