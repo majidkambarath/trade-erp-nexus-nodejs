@@ -52,6 +52,17 @@ function parseArgs(argv) {
   return out;
 }
 
+// Fields a schema marks `select: false` are left out of a find() by default: Admin.password,
+// twoFactor.secretEnc and its recovery codes, MessagingSettings.apiKeyEnc, EInvoiceSettings.webhookSecretEnc,
+// Voucher.heldCheque, DocumentSend.pending. A backup that drops them restores users who cannot sign in, so
+// every hidden path is asked for back by name, read off the schema rather than listed here - a new one added
+// later is then in the backup without anybody remembering this.
+const hiddenPaths = (Model) =>
+  Object.entries(Model.schema.paths)
+    .filter(([, p]) => p.options && p.options.select === false)
+    .map(([name]) => `+${name}`)
+    .join(" ");
+
 const tenantedModels = () =>
   mongoose
     .modelNames()
@@ -76,7 +87,10 @@ async function exportOrganisation(code, dir) {
       let n = 0;
       try {
         // a cursor, not find().lean(): a 512 MB instance must not hold a whole ledger in memory
-        for await (const doc of Model.find({}).lean().cursor()) {
+        const hidden = hiddenPaths(Model);
+        const query = Model.find({});
+        if (hidden) query.select(hidden);
+        for await (const doc of query.lean().cursor()) {
           fs.writeSync(handle, `${EJSON.stringify(doc)}\n`);
           n += 1;
           if (Model.modelName === "Attachment" && doc.key) attachmentKeys.push(doc.key);
@@ -95,6 +109,7 @@ async function exportOrganisation(code, dir) {
     takenAt: new Date().toISOString(),
     database: mongoose.connection.name,
     format: "ndjson-ejson",
+    hiddenFieldsIncluded: Object.fromEntries(tenantedModels().map((M) => [M.modelName, hiddenPaths(M).replace(/\+/g, "").split(" ").filter(Boolean)]).filter(([, v]) => v.length)),
     rows: Object.values(counts).reduce((a, b) => a + b, 0),
     counts,
     attachments: {
