@@ -10,6 +10,11 @@ npm run backup -- --all --out D:/backups      # every client, plus the console's
 npm run backup:restore -- --from D:/backups/2026-10-12T.../gulf-foods --confirm
 ```
 
+A restore goes into a **database of its own** — point `MONGO_URI` at an empty one. There is no "restore a
+copy beside the original": every row keeps its `_id` so the references between them still resolve, and
+`Admin.email` is unique across all organisations, so a second copy of the same people cannot sit next to the
+first whatever it is called.
+
 The default output directory is `backups/` in this repo, which is gitignored.
 
 ## Why the export cannot leak one client into another's backup
@@ -39,7 +44,9 @@ one thing nor the other. So the real procedure is:
 2. Check it there: sign in, open the trial balance, confirm it balances and the figures look right.
 3. Only then decide what to do with the live one — which is a conversation with the client, not a script.
 
-To look at a backup beside the live data, restore it under another code: `--as gulf-foods-copy`.
+A restored copy's `Attachment` rows still name the **source** organisation's Cloudinary assets. Reading them
+is fine; deleting a file in the copy would delete the original's, so treat a restored copy as read-only until
+you have decided what it is for.
 
 ## Rehearse it before you need it
 

@@ -4,11 +4,17 @@
 // not a backup, so the procedure below is meant to be REHEARSED on a throwaway database before it is needed.
 //
 //   node scripts/backup/import.js --from backups/<stamp>/gulf-foods --confirm
-//   node scripts/backup/import.js --from backups/<stamp>/gulf-foods --as gulf-foods-copy --confirm
 //
 // It REFUSES to write into an organisation that already holds anything. A restore is not a merge: putting
 // rows back on top of live ones would duplicate what survived and leave the books neither one thing nor the
-// other. To inspect a backup beside the live data, restore it under a different code with --as.
+// other. So a restore goes into a DATABASE OF ITS OWN - point MONGO_URI at an empty one, check the books
+// there, and only then decide what to do with the live one.
+//
+// There is deliberately no "restore it under another code beside the original": every row keeps its own _id
+// so that the references between them (a voucher to its ledger rows, a line to its item) still resolve.
+// Minting new ids would mean rewriting every one of those references, and a restore that gets one wrong is
+// worse than no restore. Admin.email is globally unique too, so a second copy of the same people cannot
+// coexist with the first whatever their organisation is called.
 //
 // It writes through the raw driver on purpose, bypassing utils/tenantPlugin.js, because the rows already
 // carry their companyId and must go back EXACTLY as they were - _id included, so every reference between
@@ -35,12 +41,11 @@ const { EJSON } = require("bson");
 const Organisation = require("../../models/core/organisationModel");
 
 function parseArgs(argv) {
-  const out = { from: null, as: null, confirm: false };
+  const out = { from: null, confirm: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === "--confirm") out.confirm = true;
     else if (a === "--from") out.from = path.resolve(String(argv[(i += 1)] || ""));
-    else if (a === "--as") out.as = String(argv[(i += 1)] || "").trim();
     else throw new Error(`unknown argument ${a}`);
   }
   if (!out.from) throw new Error("--from <directory> is required (one organisation's directory of an export)");
@@ -60,30 +65,26 @@ async function main() {
   const manifestPath = path.join(args.from, "manifest.json");
   if (!fs.existsSync(manifestPath)) throw new Error(`no manifest.json in ${args.from}`);
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  const source = manifest.organisation;
-  const target = args.as || source;
+  const organisation = manifest.organisation;
 
   if (!process.env.MONGO_URI) throw new Error("MONGO_URI is not set");
   await mongoose.connect(process.env.MONGO_URI);
-  console.log(`restoring "${source}" as "${target}" into database ${mongoose.connection.name}`);
+  console.log(`restoring "${organisation}" into database ${mongoose.connection.name}`);
   console.log(`taken ${manifest.takenAt} from ${manifest.database}, ${manifest.rows} rows`);
 
   // Refuse onto anything that already exists. Checked BEFORE a single write, across every collection the
   // export covers, so a half-restore is not a state this script can produce.
-  if (await Organisation.exists({ code: target })) throw new Error(`organisation "${target}" already exists here: restore into an empty database, or use --as <another code>`);
+  if (await Organisation.exists({ code: organisation })) throw new Error(`organisation "${organisation}" already exists here: point MONGO_URI at an empty database`);
   const models = mongoose.modelNames().map((n) => mongoose.model(n)).filter((m) => m.schema.options.tenantScoped);
   for (const Model of models) {
-    const n = await Model.collection.countDocuments({ companyId: target });
-    if (n > 0) throw new Error(`${Model.modelName} already holds ${n} rows for "${target}": a restore is not a merge`);
+    const n = await Model.collection.countDocuments({ companyId: organisation });
+    if (n > 0) throw new Error(`${Model.modelName} already holds ${n} rows for "${organisation}": a restore is not a merge`);
   }
 
   // The registry row first: without it authenticateToken refuses every account of the organisation.
   const orgPath = path.join(args.from, "_organisation.json");
   if (!fs.existsSync(orgPath)) throw new Error(`no _organisation.json in ${args.from}`);
-  const org = EJSON.parse(fs.readFileSync(orgPath, "utf8"));
-  org.code = target;
-  if (args.as) delete org._id; // a copy beside the original needs its own id
-  await Organisation.collection.insertOne(org);
+  await Organisation.collection.insertOne(EJSON.parse(fs.readFileSync(orgPath, "utf8")));
 
   const written = {};
   for (const Model of models) {
@@ -92,10 +93,11 @@ async function main() {
     const rows = readNdjson(file);
     // every row must belong to the organisation this export says it is; one that does not means the wrong
     // directory was passed, and that is a refusal, not something to filter out quietly
-    const stray = rows.find((r) => r.companyId !== source);
-    if (stray) throw new Error(`${Model.modelName}: a row carries companyId "${stray.companyId}", not "${source}" - wrong directory?`);
-    if (target !== source) for (const r of rows) r.companyId = target;
-    if (rows.length) await Model.collection.insertMany(rows, { ordered: false });
+    const stray = rows.find((r) => r.companyId !== organisation);
+    if (stray) throw new Error(`${Model.modelName}: a row carries companyId "${stray.companyId}", not "${organisation}" - wrong directory?`);
+    // ordered: true on purpose - stop at the first row that will not go in rather than write round it and
+    // leave a restore that is missing rows the count check only notices at the end
+    if (rows.length) await Model.collection.insertMany(rows, { ordered: true });
     written[Model.modelName] = rows.length;
   }
 
@@ -105,8 +107,9 @@ async function main() {
   console.log(`\n${total} rows written (the export recorded ${expected})`);
   if (total !== expected) throw new Error("the row count does not match the manifest: do not use this restore");
   if (manifest.attachments?.count) {
-    console.log(`\n${manifest.attachments.count} attachment FILES are not in this backup. Copy them into uploads/attachments`);
-    console.log("or the rows restored above point at files that are not on disk. Their keys are in manifest.json.");
+    console.log(`\n${manifest.attachments.count} attachment FILES are not in this backup, and are not restored.`);
+    console.log("The rows above still name the assets of the organisation this backup came FROM: for a copy");
+    console.log("that is fine to read, but deleting a file here would delete the original's. Keys: manifest.json.");
   }
   console.log("\nNow check it by hand: sign in, open the trial balance, and confirm it balances.");
 }
