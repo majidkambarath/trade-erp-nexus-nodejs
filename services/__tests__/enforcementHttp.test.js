@@ -313,6 +313,11 @@ test("the status route tells a screen what it may show", { skip }, async () => {
   assert.equal(s.features.quotations, true);
   assert.equal(s.limits.users, null, "the override from the earlier test is the limit now");
   assert.ok(s.usage.users >= 2 && s.usage.documentsPerMonth >= 3);
-  assert.equal(s.room.branches.limit, 3);
+  // The standard plan prints branches: 3, but it does not include multiBranch and BranchService.create asks
+  // for the feature BEFORE the room - so all three were unreachable and this said "2 free" to the screen.
+  // A limit never offers what a feature gate refuses: without multiBranch the only branch is the head office.
+  assert.equal(s.features.multiBranch, false);
+  assert.equal(s.room.branches.limit, 1);
+  assert.equal(s.room.branches.remaining, 0, "and the screen is told there is no room, as the API would answer");
   assert.equal((await call("GET", "/organisation/status")).status, 401, "and it needs a sign-in");
 });
