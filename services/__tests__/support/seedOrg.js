@@ -234,7 +234,14 @@ async function seedOrg({ stack, call, code, tag, log = () => {} }) {
   const utilities = acct("Utilities");
   const v = (body) => api("owner", "POST", "/vouchers/vouchers", { date: today(), ...body });
   if (customerId && soId) {
-    const rcpt = await step("receipt", () => v({ voucherType: "receipt", customerId, totalAmount: A.receipt, paymentMode: "cash", narration: C("receipt-note"), linkedInvoices: [{ invoiceId: soId, amount: A.receipt, balance: Math.round((Number(rec(so)?.totalAmount || 0) - A.receipt) * 100) / 100 }] }));
+    // What the invoice still OWES, read fresh - not what it was billed. The approved sales return above
+    // credits it (ReturnService.applyToOriginal, since returns are applied to their invoice), so outstanding
+    // is the total less those 4 units. FinancialService compares the allocation against outstandingAmount,
+    // so computing from totalAmount was short by exactly what the return credited and the receipt was
+    // refused 409 "Invoice balance mismatch" - which cost this whole sweep its seed.
+    const live = await api("owner", "GET", `/transactions/transactions/${soId}`);
+    const owed = Number(rec(live)?.outstandingAmount ?? rec(so)?.totalAmount ?? 0);
+    const rcpt = await step("receipt", () => v({ voucherType: "receipt", customerId, totalAmount: A.receipt, paymentMode: "cash", narration: C("receipt-note"), linkedInvoices: [{ invoiceId: soId, amount: A.receipt, balance: Math.round((owed - A.receipt) * 100) / 100 }] }));
     note(C("receipt-note"));
     add("voucher", rcpt?.data?.data?._id || rcpt?.body?._id);
   }
