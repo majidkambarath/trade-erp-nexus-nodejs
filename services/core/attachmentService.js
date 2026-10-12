@@ -1,13 +1,37 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { Readable } = require("stream");
 const mongoose = require("mongoose");
 const Attachment = require("../../models/modules/financial/attachmentModel");
 const AppError = require("../../utils/AppError");
+const logger = require("../../utils/logger");
+const cloudinary = require("../../config/cloudinary");
 const { getTenant } = require("../../utils/tenant");
 
 const ROOT = path.resolve(__dirname, "..", "..", "uploads", "attachments");
 const MAX_BYTES = 10 * 1024 * 1024;
+
+// Where NEW files go. Cloudinary when it is configured, because the server's own disk does not survive a
+// deploy: files written there were lost while their rows stayed, so a client opened a document that was gone.
+// ATTACHMENT_STORAGE=disk asks for the old behaviour - the tests use it, and so does a laptop with no account.
+// An existing row is read from its own `storage`, never from this.
+function storageChoice() {
+  const asked = String(process.env.ATTACHMENT_STORAGE || "").trim().toLowerCase();
+  if (asked === "disk" || asked === "cloudinary") return asked;
+  const configured = process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET;
+  return configured ? "cloudinary" : "disk";
+}
+
+// raw + private: Cloudinary keeps the bytes as they are (it must not treat a PDF or a spreadsheet as an
+// image to transform) and will not serve them without a signature.
+const RAW_PRIVATE = { resource_type: "raw", type: "private" };
+
+const uploadPrivate = (buffer, publicId, format) =>
+  new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream({ ...RAW_PRIVATE, public_id: publicId, format }, (err, result) => (err ? reject(err) : resolve(result)));
+    stream.end(buffer);
+  });
 
 // Whitelist by extension, and the content must look like the type it claims (magic bytes), so a
 // renamed executable is refused. csv/txt have no signature and are checked as text.
@@ -61,10 +85,7 @@ class AttachmentService {
     const { companyId } = getTenant(req);
     const year = String(new Date().getFullYear());
     const key = path.posix.join(year, `${crypto.randomBytes(16).toString("hex")}${ext}`);
-    const full = path.join(ROOT, ...key.split("/"));
-    await fs.promises.mkdir(path.dirname(full), { recursive: true });
-    await fs.promises.writeFile(full, file.buffer, { flag: "wx" });
-    return Attachment.create({
+    const row = {
       companyId,
       key,
       originalName: safeName(file.originalname),
@@ -72,7 +93,25 @@ class AttachmentService {
       size: file.buffer.length,
       uploadedBy: uploadedBy ? String(uploadedBy) : null,
       label,
-    });
+    };
+
+    if (storageChoice() === "cloudinary") {
+      // the organisation is in the id so a stray asset can be traced back; the name is 128 random bits
+      const publicId = `erp_attachments/${companyId}/${year}/${path.basename(key, ext)}`;
+      let stored;
+      try {
+        stored = await uploadPrivate(file.buffer, publicId, ext.slice(1));
+      } catch (err) {
+        // the row is written only once the bytes are safe: a record of a file nobody has is worse than a refusal
+        throw new AppError(`The file could not be stored: ${err?.message || "upload failed"}`, 502, "ATTACHMENT_STORE_FAILED");
+      }
+      return Attachment.create({ ...row, storage: "cloudinary", publicId: stored.public_id });
+    }
+
+    const full = path.join(ROOT, ...key.split("/"));
+    await fs.promises.mkdir(path.dirname(full), { recursive: true });
+    await fs.promises.writeFile(full, file.buffer, { flag: "wx" });
+    return Attachment.create({ ...row, storage: "disk" });
   }
 
   static toRef(a) {
@@ -93,11 +132,47 @@ class AttachmentService {
     return a;
   }
 
-  // Resolve a path for streaming, refusing anything that would escape the upload root.
+  // Resolve a path for streaming, refusing anything that would escape the upload root. Disk rows only: a
+  // caller that reaches here with a Cloudinary row is looking in the wrong place and should hear so.
   static filePath(a) {
+    if (a.storage === "cloudinary") throw new AppError("That file is not on the server's disk", 500, "ATTACHMENT_NOT_ON_DISK");
     const full = path.resolve(ROOT, ...a.key.split("/"));
     if (!full.startsWith(ROOT + path.sep)) throw new AppError("Invalid attachment path", 400);
     return full;
+  }
+
+  // The bytes, wherever this row says they are. The signed address lives for a minute and never reaches the
+  // client: the file is read here and piped, so a download stays behind get()'s organisation check and keeps
+  // the nosniff and attachment headers the route sets.
+  static async open(a) {
+    if (a.storage === "cloudinary") {
+      if (!a.publicId) throw new AppError("File is missing on the server", 410);
+      const url = cloudinary.utils.private_download_url(a.publicId, path.extname(a.key).slice(1), {
+        ...RAW_PRIVATE,
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+      });
+      const res = await fetch(url);
+      if (!res.ok || !res.body) throw new AppError("File is missing on the server", 410);
+      return Readable.fromWeb(res.body);
+    }
+    const full = this.filePath(a);
+    if (!fs.existsSync(full)) throw new AppError("File is missing on the server", 410);
+    return fs.createReadStream(full);
+  }
+
+  // Delete the bytes. The caller removes the row either way: a file left behind is tidier than a record
+  // nobody can get rid of, so a failure here is logged, not raised.
+  static async destroyStored(a) {
+    if (a.storage === "cloudinary") {
+      if (!a.publicId) return;
+      try {
+        await cloudinary.uploader.destroy(a.publicId, { ...RAW_PRIVATE, invalidate: true });
+      } catch (err) {
+        logger.warn(`[attachments] could not delete ${a.publicId}: ${err?.message || err}`);
+      }
+      return;
+    }
+    await fs.promises.rm(this.filePath(a), { force: true });
   }
 
   // Attach a stored file to a document (pushes a reference onto the owner's attachments array).
@@ -158,7 +233,7 @@ class AttachmentService {
         await Owner.updateOne({ _id: a.ownerId }, { $pull: pull });
       }
     }
-    await fs.promises.rm(this.filePath(a), { force: true });
+    await this.destroyStored(a);
     await a.deleteOne();
   }
 
@@ -179,7 +254,7 @@ class AttachmentService {
       } else if (named && (a.ownerType !== ownerType || String(a.ownerId) !== String(ownerId))) {
         throw new AppError("A document file belongs to another record", 409, "ATTACHMENT_IN_USE");
       } else if (!named && a.ownerType === ownerType && String(a.ownerId) === String(ownerId)) {
-        await fs.promises.rm(this.filePath(a), { force: true });
+        await this.destroyStored(a);
         await a.deleteOne();
       }
     }

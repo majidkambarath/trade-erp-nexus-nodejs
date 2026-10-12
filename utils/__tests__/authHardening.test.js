@@ -23,7 +23,7 @@ test("a signing key is judged on being set, not a placeholder, long enough and v
 });
 
 test("production insists on a real key; any other environment only warns or says nothing", () => {
-  const prod = (extra = {}) => configProblems({ NODE_ENV: "production", MONGO_URI: "mongodb+srv://x", JWT_SECRET: STRONG, SECRET_BOX_KEY: "a".repeat(64), PUBLIC_APP_URL: "https://app.example", PLATFORM_JWT_SECRET: `${STRONG}-platform`, ...extra });
+  const prod = (extra = {}) => configProblems({ NODE_ENV: "production", MONGO_URI: "mongodb+srv://x", JWT_SECRET: STRONG, SECRET_BOX_KEY: "a".repeat(64), PUBLIC_APP_URL: "https://app.example", PLATFORM_JWT_SECRET: `${STRONG}-platform`, SYSTEM_MAIL_PROVIDER: "resend", ...extra });
   assert.deepEqual(prod(), { fatal: [], warnings: [] });
   assert.equal(prod({ JWT_SECRET: "" }).fatal.length, 1);
   assert.match(prod({ JWT_SECRET: "your-secret-key" }).fatal[0], /JWT_SECRET/);
@@ -35,6 +35,15 @@ test("production insists on a real key; any other environment only warns or says
   const warned = prod({ SECRET_BOX_KEY: undefined, PUBLIC_APP_URL: undefined, PLATFORM_JWT_SECRET: undefined });
   assert.equal(warned.fatal.length, 0);
   assert.equal(warned.warnings.length, 3);
+  // mail that goes nowhere: "forgot my password" answers the person normally and sends nothing, so the only way
+  // back in is an administrator. Worth saying loudly, not worth refusing to start for.
+  for (const provider of [undefined, "console"]) {
+    const quiet = prod({ SYSTEM_MAIL_PROVIDER: provider });
+    assert.equal(quiet.fatal.length, 0, `provider ${provider}`);
+    assert.equal(quiet.warnings.length, 1, `provider ${provider}`);
+    assert.match(quiet.warnings[0], /SYSTEM_MAIL_PROVIDER/);
+  }
+  for (const provider of ["resend", "smtp"]) assert.deepEqual(prod({ SYSTEM_MAIL_PROVIDER: provider }), { fatal: [], warnings: [] });
   // development and tests: no opinion
   assert.deepEqual(configProblems({ NODE_ENV: "development", JWT_SECRET: "x" }), { fatal: [], warnings: [] });
   assert.deepEqual(configProblems({}), { fatal: [], warnings: [] });

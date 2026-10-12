@@ -1,10 +1,16 @@
 {
   "name": "trade-erp-node",
-  "version": "1.1.1.0",
+  "version": "1.2.0.0",
   "description": "",
   "main": "index.js",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
-    "start": "nodemon server.js",
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "backup": "node scripts/backup/export.js",
+    "backup:restore": "node scripts/backup/import.js",
     "seed": "node utils/setup.js",
     "seed:accounting": "node utils/seedAccounting.js",
     "seed:platform": "node utils/platformSetup.js",
@@ -26,7 +32,9 @@
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
     "nodemailer": "^10.0.16",
-    "nodemon": "^3.1.10",
     "path-to-regexp": "^1.8.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
   }
 }

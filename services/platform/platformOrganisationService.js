@@ -7,7 +7,6 @@
 const Organisation = require("../../models/core/organisationModel");
 const Branch = require("../../models/core/branchModel");
 const Admin = require("../../models/core/adminModel");
-const Transaction = require("../../models/modules/transactionModel");
 const PlatformAudit = require("../../models/platform/platformAuditModel");
 const CompanySettings = require("../../models/modules/financial/companySettingsModel");
 const OrganisationService = require("../core/organisationService");
@@ -21,6 +20,7 @@ const { permissionsFor } = require("../../utils/adminPermissions");
 const roles = require("../../utils/permissions");
 const RoleService = require("../core/roleService");
 const UserService = require("../core/userService");
+const UsageService = require("../core/usageService");
 
 const HEAD_OFFICE = OrganisationService.HEAD_OFFICE;
 const inOrg = async (code, fn) => {
@@ -82,18 +82,12 @@ class PlatformOrganisationService {
 
   // ---- reading
 
+  // The same count the limits are judged by, never a second opinion: UsageService.current is what
+  // assertRoom refuses on, so the console's "room left" is read from it rather than counted again here.
+  // Counted twice it drifted - this read used UTC's month and included the go-live opening invoices, so a
+  // client just loaded looked far closer to its document limit than the enforcer thought it was.
   static async usage(code) {
-    return inOrg(code, async () => {
-      const start = new Date();
-      start.setUTCDate(1);
-      start.setUTCHours(0, 0, 0, 0);
-      const [users, branches, documentsThisMonth] = await Promise.all([
-        Admin.countDocuments({ isActive: true, status: "active" }),
-        Branch.countDocuments({ isActive: true }),
-        Transaction.countDocuments({ createdAt: { $gte: start } }),
-      ]);
-      return { users, branches, documentsPerMonth: documentsThisMonth };
-    });
+    return inOrg(code, (org) => UsageService.current(org));
   }
 
   // The whole picture of one organisation, as the console's detail screen shows it.

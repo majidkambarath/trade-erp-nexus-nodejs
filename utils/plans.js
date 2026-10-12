@@ -80,7 +80,17 @@ const hasFeature = (org, key) => {
 function effectiveLimits(org) {
   const plan = planOf(org);
   const overrides = org?.limitOverrides || {};
-  return Object.fromEntries(LIMIT_KEYS.map((k) => [k, limitOf(plan, overrides, k)]));
+  const limits = Object.fromEntries(LIMIT_KEYS.map((k) => [k, limitOf(plan, overrides, k)]));
+  // A limit must never offer room that a feature gate then refuses. BranchService.create asks for the
+  // multiBranch feature BEFORE it asks for room, so without that feature the only branch an organisation can
+  // ever have is the head office - whatever number the plan prints. The standard plan said three, so the
+  // console showed two branches free while the API answered FEATURE_NOT_IN_PLAN. The feature decides; give a
+  // client branches by switching multiBranch on for them and the plan's number applies again.
+  if (!effectiveFeatures(org).multiBranch) {
+    // narrowing only: unlimited becomes the head office alone, and an unknown plan (which allows nothing) stays 0
+    limits.branches = limits.branches === null ? 1 : Math.min(limits.branches, 1);
+  }
+  return limits;
 }
 
 // How a limit reads when someone tries to use more: { ok, limit, used, remaining }.

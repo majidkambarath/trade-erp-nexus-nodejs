@@ -42,7 +42,7 @@ test.before(async () => {
   await mongoose.connect(uri);
   PlatformAuth = require("../platform/platformAuthService");
   ctx = require("../../utils/tenantContext");
-  M = { Admin: require("../../models/core/adminModel"), Audit: require("../../models/platform/platformAuditModel"), Activity: require("../../models/modules/financial/activityLogModel") };
+  M = { Admin: require("../../models/core/adminModel"), Audit: require("../../models/platform/platformAuditModel"), Activity: require("../../models/modules/financial/activityLogModel"), Transaction: require("../../models/modules/transactionModel") };
   await mongoose.connection.syncIndexes();
   const deadline = Date.now() + 60000;
   for (;;) {
@@ -141,6 +141,33 @@ test("a new organisation arrives complete: its own books in the chosen currency,
   const chose = await call("PUT", "/profile/change-password", { token: S.erpToken, body: { currentPassword: "owner-password-1", newPassword: "owner-chose-this-1", confirmPassword: "owner-chose-this-1" } });
   assert.equal(chose.status, 200, JSON.stringify(chose.data));
   assert.equal((await call("GET", "/currencies", { token: S.erpToken })).status, 200, "and then everything opens");
+});
+
+// The console must not hold a second opinion about how much of the plan is used: whatever it shows is what
+// createTransaction will refuse on. It counted its own way once - UTC's month, opening invoices included - so a
+// client whose go-live balances had just been loaded looked nearly out of documents while the enforcer counted
+// none of them, and the developer raised a limit that did not need raising.
+test("the console's usage is the figure the limit is enforced on: an opening invoice and an old one are not this month's", { skip }, async () => {
+  const month = async () => (await plat("GET", `/organisations/${S.org}`)).body.usage.documentsPerMonth;
+  const before = await month();
+
+  const planted = [
+    { companyId: S.org, branchId: "main", transactionNo: "OPEN-USAGE-1", type: "sales_order", isOpening: true, createdAt: new Date(), updatedAt: new Date() },
+    { companyId: S.org, branchId: "main", transactionNo: "OLD-USAGE-1", type: "sales_order", createdAt: new Date(Date.now() - 45 * 24 * 3600 * 1000), updatedAt: new Date() },
+  ];
+  // the raw driver on purpose: the rows must exist exactly as written, with no scope stamping them
+  await M.Transaction.collection.insertMany(planted);
+  try {
+    assert.equal(await month(), before, "neither the go-live load nor an older month counts against this month");
+
+    // the positive control: a plain document of this month DOES count, so the zero above is a filter and not a broken read
+    await M.Transaction.collection.insertOne({ companyId: S.org, branchId: "main", transactionNo: "NOW-USAGE-1", type: "sales_order", createdAt: new Date(), updatedAt: new Date() });
+    const after = (await plat("GET", `/organisations/${S.org}`)).body;
+    assert.equal(after.usage.documentsPerMonth, before + 1, "a document raised this month is counted");
+    assert.equal(after.room.documentsPerMonth.used, before + 1, "and the room left is read from the same figure");
+  } finally {
+    await M.Transaction.collection.deleteMany({ transactionNo: { $in: ["OPEN-USAGE-1", "OLD-USAGE-1", "NOW-USAGE-1"] } });
+  }
 });
 
 test("a bad organisation is refused with the reason, and nothing is half made", { skip }, async () => {

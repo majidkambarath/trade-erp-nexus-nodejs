@@ -1,6 +1,5 @@
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
-const fs = require("fs");
 const ChartOfAccountsService = require("../../services/financial/chartOfAccountsService");
 const TaxCodeService = require("../../services/financial/taxCodeService");
 const AttachmentService = require("../../services/core/attachmentService");
@@ -85,13 +84,14 @@ exports.listAttachments = catchAsync(async (req, res) => {
 });
 exports.downloadAttachment = catchAsync(async (req, res) => {
   const a = await AttachmentService.get(req.params.id, req);
-  const file = AttachmentService.filePath(a);
-  if (!fs.existsSync(file)) throw new AppError("File is missing on the server", 410);
+  // the service knows whether this row's bytes are on disk or in Cloudinary; either way they are piped from
+  // here, so the checks and the headers below apply to both
+  const bytes = await AttachmentService.open(a);
   res.setHeader("Content-Type", a.mimeType);
   // nosniff + attachment: the browser downloads it rather than interpreting it
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Disposition", `${req.query.inline === "1" && a.mimeType !== "text/html" ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(a.originalName)}`);
-  fs.createReadStream(file).pipe(res);
+  bytes.pipe(res);
 });
 exports.deleteAttachment = catchAsync(async (req, res) => {
   await AttachmentService.remove(req.params.id, req);
