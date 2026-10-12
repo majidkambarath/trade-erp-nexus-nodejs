@@ -342,6 +342,8 @@ class ChartOfAccountsService {
       return {
         // voucherId is the source document: the ledger screen drills into its audit trail
         _id: e._id, date: e.date, voucherId: e.voucherId, voucherNo: e.voucherNo, voucherType: e.voucherType,
+        // tells a customer's opening invoice (a trade document) from an opening balance voucher: both post as "opening"
+        referenceType: e.referenceType || null,
         narration: e.narration, debit: e.debitAmount, credit: e.creditAmount, balance: round2(running), net,
       };
     });
