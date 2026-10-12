@@ -196,12 +196,24 @@ test("features and limits are overridden per organisation, merged, reset, and nu
   org = await svc.Org.update(code, { featureOverrides: { banking: false } });
   assert.equal(plans.hasFeature(org, "einvoicing"), true, "the earlier one is kept: overrides merge");
   assert.equal(plans.hasFeature(org, "banking"), false, "and the new one applies");
-  org = await svc.Org.update(code, { limitOverrides: { branches: null } });
-  assert.equal(plans.effectiveLimits(org).branches, null, "null is unlimited");
+  // documentsPerMonth, not branches: branches is gated by the multiBranch feature, so its limit is judged
+  // against that too (below) and it cannot show the override mechanism on its own.
+  org = await svc.Org.update(code, { limitOverrides: { documentsPerMonth: null } });
+  assert.equal(plans.effectiveLimits(org).documentsPerMonth, null, "null is unlimited");
   assert.equal(plans.effectiveLimits(org).users, 25);
-  org = await svc.Org.update(code, { resetFeatures: ["banking"], resetLimits: ["branches"] });
+  org = await svc.Org.update(code, { resetFeatures: ["banking"], resetLimits: ["documentsPerMonth"] });
   assert.equal(plans.hasFeature(org, "banking"), true, "back to the plan's setting");
-  assert.equal(plans.effectiveLimits(org).branches, 3, "the plan's branch limit returns");
+  assert.equal(plans.effectiveLimits(org).documentsPerMonth, 2000, "the plan's document limit returns");
+
+  // A limit never offers room a feature gate refuses: BranchService.create asks for multiBranch BEFORE it
+  // asks for room, so on a plan without it the only branch is the head office - an override cannot buy more.
+  assert.equal(plans.hasFeature(org, "multiBranch"), false);
+  org = await svc.Org.update(code, { limitOverrides: { branches: null } });
+  assert.equal(plans.effectiveLimits(org).branches, 1, "not even unlimited, while the feature is off");
+  org = await svc.Org.update(code, { featureOverrides: { multiBranch: true } });
+  assert.equal(plans.effectiveLimits(org).branches, null, "switch the feature on and the override applies");
+  org = await svc.Org.update(code, { resetFeatures: ["multiBranch"], resetLimits: ["branches"] });
+  assert.equal(plans.effectiveLimits(org).branches, 1, "and back to the head office alone");
   await assert.rejects(() => svc.Org.update(code, { featureOverrides: { banking: "maybe" } }), /known features/);
 });
 
