@@ -23,6 +23,19 @@ it closes the defects that only appear once there is real money and a second org
 - **The dev-server addresses are no longer trusted in production.** With `SameSite=None` cookies, a page on
   someone's own machine could call the live API with their session.
 
+### Also fixed, after a security review of the release
+
+- **The backup's `--as` flag could not do what it claimed** and is gone. It rewrote `companyId` but every row
+  kept its `_id`, so restoring a copy beside the original — its only purpose — collided on every row and on
+  the globally unique `Admin.email`. Minting new ids would mean rewriting every reference between them, and a
+  restore that gets one wrong is worse than none. A restore goes into a database of its own.
+- **The export dropped every field a schema hides** — nine of them, `Admin.password` and the two-factor
+  secrets among them. Row counts matched, so the first proof passed: the restore produced the right number of
+  accounts, none of which could sign in. The paths are read off each schema now.
+- `insertMany` on restore is ordered, so a row that will not go in stops the restore instead of leaving gaps.
+
+The review found nothing exploitable. Three of the fixes above are themselves security fixes.
+
 ### Added
 
 - **Per-organisation backup and restore** — `npm run backup -- --org <code>` and `npm run backup:restore`.
