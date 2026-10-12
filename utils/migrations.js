@@ -26,7 +26,38 @@ async function runMigrations() {
   out.sessionsAssigned = (await runUnscoped(why, () => AuthSession.updateMany(noOrg, { $set: { companyId: original.companyId } }))).modifiedCount;
   const core = await assignCoreToOriginalOrganisation();
   if (Object.keys(core).length) out.coreAssigned = core; // only reported when something was actually assigned
+  const applied = await applyApprovedReturnsToTheirInvoices();
+  if (applied) out.returnsApplied = applied;
   return out;
+}
+
+// A return used to leave the invoice it returned reading "Unpaid" for its full amount. Approved returns are now set against
+// that invoice (ReturnService.applyToOriginal); the ones approved before that are set against it here, once. `appliedToInvoice`
+// is the marker: a return that has the field has been dealt with (it is claimed BEFORE the invoice is touched, so two
+// instances starting together cannot apply one return twice, and a crash in between under-applies rather than double-applies).
+async function applyApprovedReturnsToTheirInvoices() {
+  const Transaction = mongoose.model("Transaction");
+  const why = "migration: set approved returns against the invoices they return, across every organisation";
+  const returns = await runUnscoped(why, () =>
+    Transaction.find({
+      type: { $in: ["sales_return", "purchase_return"] }, status: "APPROVED",
+      "returnOf.transactionId": { $ne: null }, appliedToInvoice: { $exists: false },
+    }).select("type totalAmount returnOf").lean()
+  );
+  const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+  let done = 0;
+  for (const ret of returns) {
+    await runUnscoped(why, async () => {
+      const original = await Transaction.findById(ret.returnOf.transactionId).select("outstandingAmount").lean();
+      const credit = r2(ret.totalAmount);
+      const take = original ? r2(Math.min(Math.max(Number(original.outstandingAmount) || 0, 0), credit)) : 0;
+      const claimed = await Transaction.updateOne({ _id: ret._id, appliedToInvoice: { $exists: false } }, { $set: { appliedToInvoice: take } });
+      if (!claimed.modifiedCount || !original) return;
+      await Transaction.updateOne({ _id: original._id }, { $inc: { creditedAmount: credit, outstandingAmount: -take } });
+      done += 1;
+    });
+  }
+  return done;
 }
 
 // The original collections (orders, ledger, parties, stock, masters ...) were written before organisations

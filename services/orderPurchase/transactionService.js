@@ -360,7 +360,7 @@ class TransactionService {
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
-      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef"]) delete data[key];
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef"]) delete data[key];
       // changing a document takes back an approval it was given: what was approved is no longer what is there
       if (transaction.approvals?.length) transaction.approvals = [];
 
@@ -487,6 +487,7 @@ class TransactionService {
         await PostingService.reverseTransaction(transaction, { session });
         await RecostService.recostAfterChange(transaction, { session });
         await this.reversePartyBalanceAndLog(transaction, createdBy, session); // REVERSE financials
+        await ReturnService.removeFromOriginal(transaction, { session }); // the invoice it was set against is owed again
       }
 
       if (transaction.type === "purchase_order") {
@@ -552,6 +553,8 @@ class TransactionService {
 
         // NEW: Update party cash balance + create Debit/Credit Log
         await this.updatePartyBalanceAndLog(transaction, createdBy, session);
+        // A return is applied to the invoice it returns, as a payment is: what is still owed on that invoice falls by it
+        await ReturnService.applyToOriginal(transaction, { session });
 
         // Handle purchase_order specific
         if (transaction.type === "purchase_order") {
@@ -586,6 +589,7 @@ class TransactionService {
             session
           );
           await this.reversePartyBalanceAndLog(transaction, createdBy, session); // REVERSE financials
+          await ReturnService.removeFromOriginal(transaction, { session });
         }
 
         if (transaction.type === "purchase_order") {
@@ -915,6 +919,8 @@ const logAmount = balanceEffect;
             discount: { $first: "$discount" },
             paidAmount: { $first: "$paidAmount" },
             outstandingAmount: { $first: "$outstandingAmount" },
+            creditedAmount: { $first: "$creditedAmount" },
+            returnOf: { $first: "$returnOf" },
             items: { $push: "$items" },
             terms: { $first: "$terms" },
             notes: { $first: "$notes" },

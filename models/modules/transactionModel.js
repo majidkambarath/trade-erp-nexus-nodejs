@@ -130,6 +130,11 @@ const transactionSchema = new mongoose.Schema({
   totalAmount: { type: Number, required: true, min: 0 },
   paidAmount: { type: Number, default: 0, min: 0 },
   outstandingAmount: { type: Number, default: 0, min: 0 },
+  // What approved returns against this invoice have credited (a sales or purchase return is applied to the invoice it returns,
+  // exactly as a payment is), and, on a return, how much of that credit actually came off the invoice's open balance (the rest
+  // is owed back: the invoice was already paid). Written by ReturnService only; a request body cannot set them.
+  creditedAmount: { type: Number, default: 0, min: 0 },
+  appliedToInvoice: { type: Number, default: 0, min: 0 },
   items: [itemSchema],
   // Header charges (freight, handling, ...): each has its own tax and posts to its own account.
   charges: [
@@ -210,7 +215,8 @@ transactionSchema.pre("save", function (next) {
     this.isModified("totalAmount") ||
     this.isModified("paidAmount")
   ) {
-    this.outstandingAmount = this.totalAmount - this.paidAmount;
+    // returns applied to this invoice come off what is owed, as payments do (a later receipt must not give them back)
+    this.outstandingAmount = Math.max(0, this.totalAmount - this.paidAmount - (this.creditedAmount || 0));
   }
   // Remove automatic status changes based on payment
   next();

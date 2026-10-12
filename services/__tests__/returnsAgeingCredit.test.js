@@ -298,3 +298,90 @@ test("audit log never throws and keeps secrets out", { skip }, async () => {
   assert.equal(rows[0].after.nested.apiKey, "[redacted]");
   assert.equal(rows[0].after.nested.ok, 1);
 });
+
+// ---- a return is set against the invoice it returns ----
+const fresh = (id) => svc.Transaction.findById(id).lean();
+
+test("a return is applied to its invoice: what is owed falls, and a delete or a cancel puts it back", { skip }, async () => {
+  await make("purchase_order", vendor, "Vendor", [line(50, 10)]); // stock for the sale
+  const sale = await make("sales_order", customer, "Customer", [line(10, 20)]); // 200 + 5% = 210
+  assert.equal((await fresh(sale._id)).outstandingAmount, 210);
+
+  const r1 = await make("sales_return", customer, "Customer", [line(4, 20, { returnOfLineId: sale.items[0]._id })], { returnOf: { transactionId: sale._id } }); // 84
+  let inv = await fresh(sale._id);
+  assert.equal(inv.creditedAmount, 84);
+  assert.equal(inv.outstandingAmount, 126, "210 less the 84 credited");
+  assert.equal(inv.paidAmount, 0, "a return is not a payment");
+  assert.equal((await fresh(r1._id)).appliedToInvoice, 84);
+
+  // a later receipt-style save of the invoice must not give the credit back
+  const doc = await svc.Transaction.findById(sale._id);
+  doc.paidAmount = 26;
+  await doc.save();
+  inv = await fresh(sale._id);
+  assert.equal(inv.outstandingAmount, 100, "210 - 26 paid - 84 credited");
+
+  await svc.Tx.deleteTransaction(r1._id, "tester");
+  inv = await fresh(sale._id);
+  assert.equal(inv.creditedAmount, 0);
+  assert.equal(inv.outstandingAmount, 184, "the 84 is owed again (210 - 26 paid)");
+});
+
+test("a return against an invoice that is already paid takes nothing off it, and deleting it takes nothing back", { skip }, async () => {
+  const sale = await make("sales_order", customer, "Customer", [line(5, 20)]); // 105
+  await svc.Transaction.updateOne({ _id: sale._id }, { $set: { paidAmount: 105, outstandingAmount: 0 } });
+  const r = await make("sales_return", customer, "Customer", [line(2, 20, { returnOfLineId: sale.items[0]._id })], { returnOf: { transactionId: sale._id } }); // 42
+  let inv = await fresh(sale._id);
+  assert.equal(inv.outstandingAmount, 0);
+  assert.equal(inv.creditedAmount, 42, "the credit is recorded even though nothing was open");
+  assert.equal((await fresh(r._id)).appliedToInvoice, 0);
+  await svc.Tx.deleteTransaction(r._id, "tester");
+  inv = await fresh(sale._id);
+  assert.equal(inv.creditedAmount, 0);
+  assert.equal(inv.outstandingAmount, 0);
+});
+
+test("a purchase return is applied to the purchase invoice the same way", { skip }, async () => {
+  const buy = await make("purchase_order", vendor, "Vendor", [line(20, 10)]); // 210
+  await make("purchase_return", vendor, "Vendor", [line(5, 10, { returnOfLineId: buy.items[0]._id })], { returnOf: { transactionId: buy._id } }); // 52.50
+  const inv = await fresh(buy._id);
+  assert.equal(inv.creditedAmount, 52.5);
+  assert.equal(inv.outstandingAmount, 157.5);
+});
+
+test("a body cannot set creditedAmount or appliedToInvoice", { skip }, async () => {
+  const sale = await make("sales_order", customer, "Customer", [line(1, 20)], { approve: false });
+  await svc.Tx.updateTransaction(sale._id, { creditedAmount: 999, appliedToInvoice: 999, notes: "x" }, "tester");
+  const inv = await fresh(sale._id);
+  assert.equal(inv.creditedAmount, 0);
+  assert.equal(inv.appliedToInvoice, 0);
+});
+
+test("ageing as at a past day takes the returns dated up to it off the invoice", { skip }, async () => {
+  const sale = await make("sales_order", customer, "Customer", [line(10, 20)], { date: day(20) }); // 210
+  await make("sales_return", customer, "Customer", [line(5, 20, { returnOfLineId: sale.items[0]._id })], { returnOf: { transactionId: sale._id }, date: day(10) }); // 105
+  const before = await svc.Ageing.openInvoices({ type: "receivable", asOf: day(15), partyId: customer._id });
+  assert.equal(before.find((i) => String(i.transactionId) === String(sale._id)).outstanding, 210, "the return had not happened yet");
+  const after = await svc.Ageing.openInvoices({ type: "receivable", asOf: day(5), partyId: customer._id });
+  assert.equal(after.find((i) => String(i.transactionId) === String(sale._id)).outstanding, 105);
+  const today = await svc.Ageing.openInvoices({ type: "receivable", partyId: customer._id });
+  assert.equal(today.find((i) => String(i.transactionId) === String(sale._id)).outstanding, 105);
+});
+
+test("migration: a return approved before this existed is set against its invoice once", { skip }, async () => {
+  const sale = await make("sales_order", customer, "Customer", [line(10, 20)]); // 210
+  const r = await make("sales_return", customer, "Customer", [line(3, 20, { returnOfLineId: sale.items[0]._id })], { returnOf: { transactionId: sale._id } }); // 63
+  // put both back as an older version left them: no marker on the return, nothing credited on the invoice
+  await svc.Transaction.collection.updateOne({ _id: r._id }, { $unset: { appliedToInvoice: "" } });
+  await svc.Transaction.collection.updateOne({ _id: sale._id }, { $set: { creditedAmount: 0, outstandingAmount: 210 } });
+  const { runMigrations } = require("../../utils/migrations");
+  const out = await runMigrations();
+  assert.ok(out.returnsApplied >= 1);
+  let inv = await fresh(sale._id);
+  assert.equal(inv.creditedAmount, 63);
+  assert.equal(inv.outstandingAmount, 147);
+  await runMigrations(); // a second start does nothing more
+  inv = await fresh(sale._id);
+  assert.equal(inv.creditedAmount, 63);
+  assert.equal(inv.outstandingAmount, 147);
+});

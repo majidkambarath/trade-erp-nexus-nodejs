@@ -59,10 +59,22 @@ class AgeingService {
         { $group: { _id: "$linkedInvoices.invoiceId", settled: { $sum: "$linkedInvoices.allocatedAmount" } } },
       ]);
       const settledBy = new Map((await (session ? agg.session(session) : agg)).map((r) => [String(r._id), r.settled]));
+      // approved returns dated up to that day are set against the invoice they return, as a payment is
+      const returnsAgg = Transaction.aggregate([
+        {
+          $match: {
+            type: { $in: ["sales_return", "purchase_return"] }, status: "APPROVED", date: { $lte: asOfDate },
+            "returnOf.transactionId": { $in: ids },
+          },
+        },
+        { $group: { _id: "$returnOf.transactionId", credited: { $sum: "$totalAmount" } } },
+      ]);
+      const creditedBy = new Map((await (session ? returnsAgg.session(session) : returnsAgg)).map((r) => [String(r._id), r.credited]));
       docs = docs
         .map((d) => {
           const settled = round2(settledBy.get(String(d._id)) || 0);
-          return { ...d, paidAmount: settled, outstandingAmount: round2(d.totalAmount - settled) };
+          const credited = round2(creditedBy.get(String(d._id)) || 0);
+          return { ...d, paidAmount: settled, outstandingAmount: Math.max(0, round2(d.totalAmount - settled - credited)) };
         })
         .filter((d) => d.outstandingAmount > 0.005);
     }

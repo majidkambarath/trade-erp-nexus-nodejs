@@ -91,6 +91,36 @@ class ReturnService {
     });
   }
 
+  // An APPROVED return is set against the invoice it returns, the way a payment is: the invoice's open balance falls by the
+  // credit (never below nothing; what the invoice no longer owes is simply owed back to the customer, or by the vendor, through
+  // the party account, which the return's ledger entry already moved). `creditedAmount` on the invoice says how much has been
+  // credited in all; `appliedToInvoice` on the return says how much of its credit came off the open balance, so undoing it puts
+  // back exactly that. Without this a returned invoice kept reading "Unpaid" for the full amount while the party account fell.
+  // The caller saves the return afterwards (it is the document being approved), so `appliedToInvoice` is set on the object.
+  static async applyToOriginal(ret, { session } = {}) {
+    const originalId = ret.returnOf?.transactionId;
+    if (!originalId || !(ret.type in ORIGINAL_TYPE)) return 0;
+    const q = Transaction.findById(originalId).select("outstandingAmount").lean();
+    const original = await (session ? q.session(session) : q);
+    if (!original) return 0;
+    const credit = round2(ret.totalAmount);
+    const take = round2(Math.min(Math.max(Number(original.outstandingAmount) || 0, 0), credit));
+    await Transaction.updateOne({ _id: originalId }, { $inc: { creditedAmount: credit, outstandingAmount: -take } }, session ? { session } : {});
+    ret.appliedToInvoice = take;
+    return take;
+  }
+
+  // The exact inverse of applyToOriginal, for a return that is deleted or cancelled after it was approved.
+  static async removeFromOriginal(ret, { session } = {}) {
+    const originalId = ret.returnOf?.transactionId;
+    if (!originalId || !(ret.type in ORIGINAL_TYPE)) return 0;
+    const credit = round2(ret.totalAmount);
+    const give = round2(ret.appliedToInvoice || 0);
+    await Transaction.updateOne({ _id: originalId }, { $inc: { creditedAmount: -credit, outstandingAmount: give } }, session ? { session } : {});
+    ret.appliedToInvoice = 0;
+    return give;
+  }
+
   // Validates a return before it is saved. Returns the items with returnOfLineId filled in.
   static async validate({ type, partyId, returnOf, items, date }, { session, excludeId } = {}) {
     const isReturn = type in ORIGINAL_TYPE;
