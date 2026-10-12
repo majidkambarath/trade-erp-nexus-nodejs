@@ -227,7 +227,9 @@ test("an allowed origin is answered, exactly; a foreign one is refused before th
   assert.match(pre.headers.get("vary") || "", /Origin/i);
   assert.notEqual(pre.headers.get("access-control-allow-origin"), "*");
 
-  for (const origin of ["https://evil.example", `${ORIGIN}.evil.example`, "http://app.shell.test", "https://app.shell.test:8443", "https://sub.app.shell.test", "null", "https://APP.SHELL.TEST.", "file://", "https://evil.example/?https://app.shell.test"]) {
+  for (const origin of ["https://evil.example", `${ORIGIN}.evil.example`, "http://app.shell.test", "https://app.shell.test:8443", "https://sub.app.shell.test", "null", "https://APP.SHELL.TEST.", "file://", "https://evil.example/?https://app.shell.test",
+    // the dev server addresses are a convenience on a laptop, never trusted by a production server
+    "http://localhost:5173", "http://localhost:3000"]) {
     const preflight = await call("OPTIONS", "/login", { headers: { Origin: origin, "Access-Control-Request-Method": "POST" } });
     assert.equal(preflight.status, 403, `${origin}: preflight`);
     assert.equal(preflight.headers.get("access-control-allow-origin"), null, `${origin}: was told it may read the answer`);

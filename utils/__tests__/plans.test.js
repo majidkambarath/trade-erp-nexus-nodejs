@@ -110,6 +110,34 @@ test("a trial plan ends after its trial days; a paid plan after the period it is
   assert.equal(p.endsAtFor("internal", start), null, "no period given, no end");
 });
 
+// A plan that prints room a feature gate then refuses is a plan that lies: BranchService.create asks for the
+// multiBranch feature before it asks for room, so the console showed "2 of 3 branches free" on the standard
+// plan while the API answered FEATURE_NOT_IN_PLAN for every one of them.
+test("the branches limit is 1 whenever multiBranch is off, whatever the plan or the override says", () => {
+  const limits = (org) => p.effectiveLimits(org);
+  assert.equal(p.effectiveFeatures({ planCode: "standard" }).multiBranch, false);
+  assert.equal(limits({ planCode: "standard" }).branches, 1, "standard has no multiBranch, so only the head office");
+  assert.equal(limits({ planCode: "trial" }).branches, 1);
+
+  // an override cannot buy room the feature does not allow
+  assert.equal(limits({ planCode: "standard", limitOverrides: { branches: 5 } }).branches, 1);
+  assert.equal(limits({ planCode: "standard", limitOverrides: { branches: null } }).branches, 1, "not even unlimited");
+
+  // switch the feature on and the plan's own number applies again
+  assert.equal(limits({ planCode: "standard", featureOverrides: { multiBranch: true } }).branches, 3);
+  assert.equal(limits({ planCode: "standard", featureOverrides: { multiBranch: true }, limitOverrides: { branches: 5 } }).branches, 5);
+
+  // the plans that do include it are untouched
+  assert.equal(limits({ planCode: "premium" }).branches, 20);
+  assert.equal(limits({ planCode: "internal" }).branches, null, "unlimited");
+
+  // and what checkLimit answers follows it, since that is what the refusal is built from
+  assert.equal(limits({ planCode: "typo" }).branches, 0, "an unknown plan still allows nothing: the clamp narrows, never widens");
+
+  // and what checkLimit answers follows it, since that is what the refusal is built from
+  assert.deepEqual(p.checkLimit({ planCode: "standard" }, "branches", 1), { ok: false, limit: 1, used: 1, remaining: 0 });
+});
+
 test("'this month' is counted on the organisation's own calendar, not UTC's", () => {
   // 01:00 on 1 October in Dubai is still 21:00 on 30 September in UTC, and belongs to October.
   assert.equal(p.monthStartIn("Asia/Dubai", new Date("2026-09-30T21:00:00Z")).toISOString(), "2026-09-30T20:00:00.000Z");

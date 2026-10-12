@@ -48,6 +48,7 @@ function configProblems(env = process.env) {
   if (!env.SECRET_BOX_KEY && !env.EINVOICE_SECRET_KEY) warnings.push("SECRET_BOX_KEY is not set: stored provider keys, two-factor secrets and recovery codes are protected with a key derived from JWT_SECRET, so rotating JWT_SECRET would make them unreadable.");
   if (!env.PUBLIC_APP_URL) warnings.push("PUBLIC_APP_URL is not set: reset links and customer document links point at the default frontend address.");
   if (!env.PLATFORM_JWT_SECRET) warnings.push("PLATFORM_JWT_SECRET is not set: the developer console's key is derived from JWT_SECRET.");
+  if (!env.SYSTEM_MAIL_PROVIDER || env.SYSTEM_MAIL_PROVIDER === "console") warnings.push("SYSTEM_MAIL_PROVIDER is 'console': no mail leaves the server, so \"forgot my password\" answers the person normally and sends nothing. Set SYSTEM_MAIL_PROVIDER=resend|smtp with its credentials.");
   return { fatal, warnings };
 }
 
