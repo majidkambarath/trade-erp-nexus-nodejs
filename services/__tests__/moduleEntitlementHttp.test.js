@@ -206,9 +206,10 @@ test("a custom role made while a module was sold grants nothing of it once it is
   await setOrg("delta", { "moduleOverrides.finance": true });
   const role = await api("delta", "POST", "/access/roles", { key: "cashier", name: "Cashier", rank: 40, permissions: ["finance.create", "sales.view"] });
   assert.equal(role.status, 201, JSON.stringify(role.data));
-  const person = await api("delta", "POST", "/access/users", { name: "Cash Desk", email: "cashier@delta.test", password: "cashier-pass-1", role: "cashier" });
-  assert.equal(person.status, 201, JSON.stringify(person.data));
-  const signIn = await call("POST", "/login", { body: { email: "cashier@delta.test", password: "cashier-pass-1" } });
+  // made straight in the database, not through /access/users: a person an administrator adds must choose their own
+  // password before anything else answers (mustChangePassword), which is not what this case is about
+  await as("delta", () => new M.Admin({ name: "Cash Desk", email: "cashier@delta.test", password: PASSWORD, type: "viewer", roleKey: "cashier", status: "active", isActive: true }).save());
+  const signIn = await call("POST", "/login", { body: { email: "cashier@delta.test", password: PASSWORD } });
   assert.equal(signIn.status, 200, JSON.stringify(signIn.data));
   const token = signIn.body.tokens.accessToken;
   const asCashier = (method, url, body) => call(method, url, { token, body });

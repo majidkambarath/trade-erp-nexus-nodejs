@@ -221,8 +221,11 @@ test("the developer sells modules: at creation, changed afterwards, and put back
   assert.equal(detail.body.modules.sales.full, true);
   assert.deepEqual(detail.body.modules.reports.actions, ["view"]);
 
-  // its owner signs in and is held to it, although their role is every permission there is
-  const token = await erpLogin("owner@barakat.test", "owner-password-2");
+  // its owner signs in and is held to it, although their role is every permission there is. (The console chose
+  // their password, so they must choose their own before anything else answers - see mustChangePassword.)
+  const first = await erpLogin("owner@barakat.test", "owner-password-2");
+  await call("PUT", "/profile/change-password", { token: first, body: { currentPassword: "owner-password-2", newPassword: "owner-chose-this-2", confirmPassword: "owner-chose-this-2" } });
+  const token = await erpLogin("owner@barakat.test", "owner-chose-this-2");
   const asOwner = (url) => call("GET", url, { token });
   assert.equal((await asOwner("/vouchers/vouchers")).code, "MODULE_NOT_IN_PLAN");
   assert.equal((await asOwner("/accounting/reports/general-ledger")).code, "MODULE_NOT_IN_PLAN");
@@ -236,7 +239,10 @@ test("the developer sells modules: at creation, changed afterwards, and put back
   const back = await plat("PATCH", "/organisations/barakat", { resetModules: ["finance", "accounts", "reports"] });
   assert.equal(back.body.modules.finance.full, true, "the premium plan has it all");
   assert.equal(back.body.modules.reports.full, true);
-  assert.deepEqual(back.body.organisation.moduleOverrides, {}, "nothing of its own left");
+  // mongoose minimizes an empty object away, so "nothing of its own" reads as no field at all (featureOverrides
+  // behaves the same); what matters is that the organisation is back on the plan, asserted above
+  assert.deepEqual(back.body.organisation.moduleOverrides ?? {}, {}, "nothing of its own left");
+  assert.equal(back.body.modules.accounts.full, true, "and the modules it was sold without are back");
 
   // a module that does not exist, and an action a module does not have, are refused with their reason
   assert.equal((await plat("PATCH", "/organisations/barakat", { moduleOverrides: { ledger: true } })).code, "MODULES_INVALID");
