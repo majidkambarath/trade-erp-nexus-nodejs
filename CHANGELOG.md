@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.3.0.0 — 13 October 2026
+
+Modules are now sold per organisation. A customer can be given Sales, Purchase, Inventory and the dashboard and
+nothing else, and no one inside that organisation — not even its owner — can reach the rest.
+
+### Added
+
+- **A module is what an organisation BOUGHT, and it is the ceiling every role inside it is capped to.** A plan
+  carries a set of modules and an organisation its own overrides (all of it, none of it, or named actions, so
+  Reports can be sold without the financial statements). `plans.entitledKeys(org)` turns that into permission
+  keys and `identityOf` intersects it with the person's role once per request:
+  `grants = capTo(grantsOf(role), entitledKeys(organisation))`. Every route in the API already reads those
+  grants through `requirePermission` — only seven routes have no permission, all self-service — so one
+  intersection shuts the whole product at once, including for the built-in Owner role, which is every
+  permission there is in code. Roles could never be this boundary: a customer's own owner can always grant
+  themselves back what a role took away.
+
+- **The cap is applied after `expand()`**, so nothing the customer did not buy leaks in through an implication:
+  a sales approver in an organisation without Inventory does not receive `inventory.view`. The item, category
+  and unit pick lists such a person needs are reached with `lookups.view`, which those routes already accept.
+
+- **Three things no plan can remove** (`ALWAYS_ON`): the pick lists every form fills itself from, the company
+  settings printed on every document, and the dashboard the app lands on. Without them an organisation could be
+  sold a product that cannot open a form, print a document or show a first screen.
+
+- **A new plan, Trade only** (`trading`): buying and selling with the stock behind it and no books. The
+  documents still post to the ledger — they must, or stock has no cost and an invoice no entry — so the books
+  are complete and correct; this customer simply did not buy the screens that read them. Switch Accounts on
+  later and the history is all there.
+
+- **Its own refusal.** `403 MODULE_NOT_IN_PLAN` with `details { module, required, plan }` and "Finance is not
+  included in this organisation's plan", so a person is not told their role is at fault for a door no
+  administrator of theirs can open. It writes no activity row, for the same reason.
+
+- **The role editor cannot offer what cannot be held**: the catalogue is narrowed to the organisation's
+  ceiling, and `validateCustomRole` already refused granting beyond what the person making the role holds, so
+  custom roles are capped for free. A role built while a module was sold keeps listing and saving afterwards;
+  the people on it simply hold none of that module from the next request.
+
+- **The developer console**: `GET /platform/catalog` carries the modules with their actions, an organisation can
+  be CREATED with its modules already chosen, and a change applies on the token the customer already holds. The
+  organisation's own activity trail names the modules that moved.
+
 ## 1.2.0.0 — 12 October 2026
 
 The release that makes it safe to put two paying clients on one deployment. No new customer-facing feature:
