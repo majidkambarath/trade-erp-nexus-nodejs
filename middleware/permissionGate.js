@@ -31,9 +31,8 @@ function denied(req, wanted, why) {
 // person's role and no administrator of theirs can grant it, so the words name the module and the answer says
 // to ask us, not them. Deliberately NOT written to the organisation's activity trail: nobody there can act on
 // it, and a row naming the URL someone typed is exactly what the data-bleed sweep reads as a leak.
-function notInPlan(req, wanted) {
-  const key = wanted.find((k) => roles.isKey(k)) || wanted[0] || "";
-  const module = String(key).split(".")[0];
+function notInPlan(req, wanted, keys) {
+  const module = String(keys[0]).split(".")[0];
   const label = roles.MODULES[module]?.label || module;
   return new AppError(`${label} is not included in this organisation's plan.`, 403, "MODULE_NOT_IN_PLAN", {
     module,
@@ -42,11 +41,16 @@ function notInPlan(req, wanted) {
   });
 }
 
-/** Of the two ceilings, which one refuses: the organisation's plan is named first, because a role cannot lift it. */
+/**
+ * Of the two ceilings, which one refuses: the organisation's plan is named first, because a role cannot lift it.
+ * A guard that names nothing real - a function guard that could not work out a document's type - is the person's
+ * role refusing, as it always was: "(nothing named)" is not a module and must not be reported as one.
+ */
 function refusalFor(req, wanted, why) {
   const org = req.organisation;
-  const bought = wanted.some((k) => roles.isKey(k) && plans.moduleAllows(org, k));
-  return org && !bought ? notInPlan(req, wanted) : denied(req, wanted, why);
+  const keys = wanted.filter((k) => roles.isKey(k));
+  if (!org || !keys.length) return denied(req, wanted, why);
+  return keys.some((k) => plans.moduleAllows(org, k)) ? denied(req, wanted, why) : notInPlan(req, wanted, keys);
 }
 
 /**

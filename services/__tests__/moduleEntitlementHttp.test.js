@@ -200,3 +200,33 @@ test("a developer cannot store a module override that means nothing", { skip }, 
   await Org.update("delta", { resetModules: ["reports"] });
   assert.equal((await api("delta", "GET", "/accounting/reports/general-ledger")).code, "MODULE_NOT_IN_PLAN", "and taken away again");
 });
+
+test("a custom role made while a module was sold grants nothing of it once it is not", { skip }, async () => {
+  // Finance is switched on for this organisation, an administrator builds a role around it, someone is put on it
+  await setOrg("delta", { "moduleOverrides.finance": true });
+  const role = await api("delta", "POST", "/access/roles", { key: "cashier", name: "Cashier", rank: 40, permissions: ["finance.create", "sales.view"] });
+  assert.equal(role.status, 201, JSON.stringify(role.data));
+  const person = await api("delta", "POST", "/access/users", { name: "Cash Desk", email: "cashier@delta.test", password: "cashier-pass-1", role: "cashier" });
+  assert.equal(person.status, 201, JSON.stringify(person.data));
+  const signIn = await call("POST", "/login", { body: { email: "cashier@delta.test", password: "cashier-pass-1" } });
+  assert.equal(signIn.status, 200, JSON.stringify(signIn.data));
+  const token = signIn.body.tokens.accessToken;
+  const asCashier = (method, url, body) => call(method, url, { token, body });
+  assert.equal((await asCashier("GET", "/vouchers/vouchers")).status, 200, "while it is sold");
+
+  // the developer takes Finance away. The role still names it; the person holds none of it, at once.
+  await setOrg("delta", { "moduleOverrides.finance": false });
+  const refused = await asCashier("GET", "/vouchers/vouchers");
+  assert.equal(refused.code, "MODULE_NOT_IN_PLAN", JSON.stringify(refused.data));
+  const status = await asCashier("GET", "/organisation/status");
+  assert.equal(status.body.me.role.key, "cashier", "they keep their role");
+  assert.equal(status.body.me.grants.some((g) => g.startsWith("finance.")), false);
+  assert.equal(status.body.me.grants.includes("sales.view"), true, "the rest of the role is untouched");
+
+  // and the stored role is still there, listed, and can be saved again without the permission nobody can hold
+  const listed = (await api("delta", "GET", "/access/roles")).body.roles.find((r) => r.key === "cashier");
+  assert.ok(listed, "a role naming a permission the organisation no longer holds still lists");
+  const saved = await api("delta", "PATCH", "/access/roles/cashier", { name: "Cash desk", rank: 40, permissions: ["sales.view"] });
+  assert.equal(saved.status, 200, JSON.stringify(saved.data));
+  await setOrg("delta", { moduleOverrides: {} });
+});

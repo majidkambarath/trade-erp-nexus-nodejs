@@ -205,6 +205,49 @@ test("the developer edits an organisation; what cannot change is refused", { ski
   assert.equal((await plat("GET", "/organisations/no-such-org")).status, 404);
 });
 
+test("the developer sells modules: at creation, changed afterwards, and put back to the plan", { skip }, async () => {
+  // made on a full plan but sold without the books, and with Reports as far as looking only
+  const made = await plat("POST", "/organisations", newOrg({
+    legalName: "Barakat Trading LLC",
+    code: "barakat",
+    planCode: "premium",
+    moduleOverrides: { finance: false, accounts: false, reports: ["view"] },
+    firstAdmin: { name: "Owner Two", email: "owner@barakat.test", password: "owner-password-2" },
+  }));
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  assert.equal(made.body.organisation.moduleOverrides.finance, false);
+  const detail = await plat("GET", "/organisations/barakat");
+  assert.equal(detail.body.modules.finance.on, false, "the detail says what it holds");
+  assert.equal(detail.body.modules.sales.full, true);
+  assert.deepEqual(detail.body.modules.reports.actions, ["view"]);
+
+  // its owner signs in and is held to it, although their role is every permission there is
+  const token = await erpLogin("owner@barakat.test", "owner-password-2");
+  const asOwner = (url) => call("GET", url, { token });
+  assert.equal((await asOwner("/vouchers/vouchers")).code, "MODULE_NOT_IN_PLAN");
+  assert.equal((await asOwner("/accounting/reports/general-ledger")).code, "MODULE_NOT_IN_PLAN");
+  assert.equal((await asOwner("/transactions/transactions?type=sales_order")).status, 200);
+
+  // the developer sells Finance, then only part of it, then puts it back to the plan
+  assert.equal((await plat("PATCH", "/organisations/barakat", { moduleOverrides: { finance: true } })).body.modules.finance.full, true);
+  assert.equal((await asOwner("/vouchers/vouchers")).status, 200, "on the token they already hold");
+  const part = await plat("PATCH", "/organisations/barakat", { moduleOverrides: { finance: ["view", "create"] } });
+  assert.deepEqual(part.body.modules.finance.actions, ["create", "view"]);
+  const back = await plat("PATCH", "/organisations/barakat", { resetModules: ["finance", "accounts", "reports"] });
+  assert.equal(back.body.modules.finance.full, true, "the premium plan has it all");
+  assert.equal(back.body.modules.reports.full, true);
+  assert.deepEqual(back.body.organisation.moduleOverrides, {}, "nothing of its own left");
+
+  // a module that does not exist, and an action a module does not have, are refused with their reason
+  assert.equal((await plat("PATCH", "/organisations/barakat", { moduleOverrides: { ledger: true } })).code, "MODULES_INVALID");
+  assert.equal((await plat("PATCH", "/organisations/barakat", { moduleOverrides: { reports: ["view", "bogus"] } })).code, "MODULES_INVALID");
+  assert.equal((await plat("POST", "/organisations", newOrg({ legalName: "Bad Modules Co", moduleOverrides: { sales: "yes" }, firstAdmin: undefined }))).code, "MODULES_INVALID");
+
+  // the organisation's own trail names the modules that moved, in words its people can read
+  const rows = await raw(() => M.Activity.find({ companyId: "barakat", action: "PLATFORM_ORGANISATION_UPDATED" }).lean());
+  assert.ok(rows.some((r) => /modules: finance/.test(r.summary)), JSON.stringify(rows.map((r) => r.summary)));
+});
+
 test("a subscription can be extended and the organisation suspended and reopened", { skip }, async () => {
   const set = await plat("PATCH", `/organisations/${S.org}`, { subscription: { endsAt: "2027-03-31", graceDays: 7, onExpiry: "readonly" } });
   assert.equal(set.body.organisation.subscription.endsAt.slice(0, 10), "2027-03-31");
