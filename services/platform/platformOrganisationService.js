@@ -70,8 +70,17 @@ class PlatformOrganisationService {
 
   static catalog() {
     return {
-      plans: Object.entries(plans.PLANS).map(([code, p]) => ({ code, name: p.name, trialDays: p.trialDays || null, features: p.features, limits: p.limits })),
+      plans: Object.entries(plans.PLANS).map(([code, p]) => ({ code, name: p.name, trialDays: p.trialDays || null, features: p.features, modules: p.modules, limits: p.limits })),
       features: Object.entries(plans.FEATURES).map(([key, f]) => ({ key, label: f.label })),
+      // The whole modules an organisation can be sold, each with its own actions and which of them can never be
+      // switched off (the pick lists, the company settings, the first screen): the console draws exactly this.
+      modules: plans.MODULE_KEYS.map((key) => ({
+        key,
+        label: roles.MODULES[key].label,
+        hint: roles.MODULES[key].hint,
+        actions: Object.entries(roles.MODULES[key].actions).map(([action, label]) => ({ action, label })),
+        alwaysOn: plans.ALWAYS_ON.filter((k) => k.startsWith(`${key}.`)).map((k) => k.slice(key.length + 1)),
+      })),
       limits: plans.LIMIT_KEYS,
       currencies: currencies.list(),
       unsupportedCurrencies: currencies.THREE_DECIMAL,
@@ -100,6 +109,7 @@ class PlatformOrganisationService {
       organisation: org.toJSON(),
       profile: settings?.profile || {},
       features: plans.effectiveFeatures(org),
+      modules: plans.effectiveModules(org),
       limits,
       usage,
       state: plans.subscriptionState(org, now),
@@ -109,7 +119,7 @@ class PlatformOrganisationService {
 
   static async list(opts = {}, now = new Date()) {
     const out = await OrganisationService.list(opts);
-    out.rows = out.rows.map((o) => ({ ...o, state: plans.subscriptionState(o, now), features: plans.effectiveFeatures(o) }));
+    out.rows = out.rows.map((o) => ({ ...o, state: plans.subscriptionState(o, now), features: plans.effectiveFeatures(o), modules: plans.effectiveModules(o) }));
     return out;
   }
 
@@ -150,7 +160,11 @@ class PlatformOrganisationService {
   static async update(code, patch, ctx) {
     await OrganisationService.update(code, patch);
     const fields = Object.keys(patch).filter((k) => patch[k] !== undefined);
-    await this.record({ ...ctx, action: "ORGANISATION_UPDATED", organisation: code, summary: `Changed: ${fields.join(", ") || "nothing"}`, details: { fields } });
+    // A module change is named in the organisation's own trail: "which part of the product did we gain or lose"
+    // is the question its people will ask, and "Changed: moduleOverrides" does not answer it.
+    const modules = [...Object.keys(patch.moduleOverrides || {}), ...(patch.resetModules || [])];
+    const summary = `Changed: ${fields.join(", ") || "nothing"}${modules.length ? ` (modules: ${modules.join(", ")})` : ""}`;
+    await this.record({ ...ctx, action: "ORGANISATION_UPDATED", organisation: code, summary, details: { fields } });
     return this.detail(code);
   }
 

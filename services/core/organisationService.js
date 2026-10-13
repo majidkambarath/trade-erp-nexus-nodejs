@@ -88,6 +88,9 @@ function clean(input = {}) {
 
   if (input.code !== undefined && input.code !== null && String(input.code).trim()) out.code = String(input.code).trim().toLowerCase();
   out.featureOverrides = input.featureOverrides || {};
+  out.moduleOverrides = input.moduleOverrides || {};
+  const badModules = plans.moduleOverrideError(out.moduleOverrides);
+  if (badModules) throw bad(badModules, "MODULES_INVALID");
   out.limitOverrides = input.limitOverrides || {};
   out.notes = input.notes ? String(input.notes).trim() : undefined;
 
@@ -182,7 +185,7 @@ class OrganisationService {
         [{
           code, legalName: c.legalName, tradeName: c.tradeName, country: c.country, baseCurrency: c.baseCurrency, timezone: c.timezone,
           status: c.planCode === "trial" ? "trial" : "active", planCode: c.planCode,
-          featureOverrides: c.featureOverrides, limitOverrides: c.limitOverrides,
+          featureOverrides: c.featureOverrides, moduleOverrides: c.moduleOverrides, limitOverrides: c.limitOverrides,
           subscription: { startsAt, endsAt: endsAt || null, graceDays: c.graceDays, onExpiry: c.onExpiry },
           provisioning: {}, createdBy: by, notes: c.notes,
         }],
@@ -332,10 +335,18 @@ class OrganisationService {
     for (const k of patch.resetFeatures || []) delete features[k];
     const limits = { ...(org.limitOverrides || {}), ...(patch.limitOverrides || {}) };
     for (const k of patch.resetLimits || []) delete limits[k];
+    // Modules behave the same way, and are refused with their own reason rather than a bare validation error:
+    // the console sends the whole set on Save, so a typo there must name the module it is about.
+    const modules = { ...(org.moduleOverrides || {}), ...(patch.moduleOverrides || {}) };
+    for (const k of patch.resetModules || []) delete modules[k];
+    const wrong = plans.moduleOverrideError(modules);
+    if (wrong) throw bad(wrong, "MODULES_INVALID");
     org.featureOverrides = features;
     org.limitOverrides = limits;
+    org.moduleOverrides = modules;
     org.markModified("featureOverrides");
     org.markModified("limitOverrides");
+    org.markModified("moduleOverrides");
 
     const sub = patch.subscription || {};
     if (sub.endsAt !== undefined) {

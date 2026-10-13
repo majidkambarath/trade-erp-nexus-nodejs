@@ -5,7 +5,7 @@
 // optional features are switched on for them, their limits and when their subscription ends. Their own
 // company details (letterhead, TRN, bank details) stay in CompanySettings, edited by the customer.
 const mongoose = require("mongoose");
-const { PLAN_CODES, FEATURE_KEYS, LIMIT_KEYS } = require("../../utils/plans");
+const { PLAN_CODES, FEATURE_KEYS, LIMIT_KEYS, moduleOverrideError } = require("../../utils/plans");
 
 // Lower-case letters, digits and hyphens; not starting or ending with a hyphen. It becomes a key in every
 // collection and may appear in a URL, so it stays boring on purpose.
@@ -19,6 +19,14 @@ const featureOverrides = {
     validator: (v) => v && typeof v === "object" && !Array.isArray(v) && Object.entries(v).every(([k, val]) => FEATURE_KEYS.includes(k) && typeof val === "boolean"),
     message: `featureOverrides may only switch known features on or off (${FEATURE_KEYS.join(", ")})`,
   },
+};
+// Which whole modules this organisation was sold, where it differs from its plan: true (all of it), false
+// (none), or a list of that module's own actions. The reason it is NOT booleans like featureOverrides is that a
+// module is often sold in part - Reports without the financial statements. utils/plans.js owns the rules.
+const moduleOverrides = {
+  type: mongoose.Schema.Types.Mixed,
+  default: {},
+  validate: { validator: (v) => moduleOverrideError(v) === null, message: (p) => moduleOverrideError(p.value) || "Invalid module overrides" },
 };
 const limitOverrides = {
   type: mongoose.Schema.Types.Mixed,
@@ -48,6 +56,7 @@ const organisationSchema = new mongoose.Schema(
     status: { type: String, enum: ["trial", "active", "suspended", "closed"], default: "trial" },
     planCode: { type: String, required: true, enum: PLAN_CODES },
     featureOverrides,
+    moduleOverrides,
     limitOverrides,
     subscription: {
       startsAt: { type: Date, default: Date.now },

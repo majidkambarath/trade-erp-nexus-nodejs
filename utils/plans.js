@@ -5,8 +5,13 @@
 // top. Nothing here reads a clock: `now` is always passed in, so "what happens the day after it expires"
 // is a test, not a wait.
 
-// The things that can be switched on or off per organisation. Core trading (sales, purchases, stock,
-// ledger, reports) is deliberately NOT listed: an organisation without them has no product.
+// The person-level catalogue: which modules the product has and what each can do. An organisation is sold
+// modules; a role inside it is given actions. Both are written in the same names so they can be compared.
+const perms = require("./permissions");
+
+// The optional add-ons that can be switched on or off per organisation. These are the EXTRAS; which whole
+// modules an organisation has bought is the separate table below (MODULES), because a feature switched off
+// hides one screen while a module switched off is a part of the product the customer did not buy.
 const FEATURES = {
   quotations: { label: "Quotations", paths: ["/quotations"] },
   deliveryNotes: { label: "Delivery notes", paths: ["/delivery-notes"] },
@@ -25,28 +30,68 @@ const FEATURE_KEYS = Object.keys(FEATURES);
 const ALL = Object.fromEntries(FEATURE_KEYS.map((k) => [k, true]));
 const only = (...keys) => Object.fromEntries(FEATURE_KEYS.map((k) => [k, keys.includes(k)]));
 
+// ---- modules: the parts of the product an organisation has bought ------------------------------------------
+//
+// A module is one of the product's own modules, named exactly as a role is written (utils/permissions.js
+// MODULES), so a plan reads the way the sidebar does. Its value says what the organisation holds there:
+//   true             every action the module has
+//   false            nothing: the screens are not offered and the API refuses with MODULE_NOT_IN_PLAN
+//   ["view", ...]    only those actions - a module sold in part (Reports without the financial statements)
+//
+// This is NOT a permission. It is the CEILING that every role in the organisation is capped to, so not even
+// its owner can hold what was never sold (the built-in Owner and Administrator roles are all permissions, in
+// code). A person's own role then decides what they may do inside that ceiling, as it always did.
+const MODULE_KEYS = perms.MODULE_KEYS;
+const MODULE_ACTIONS = Object.fromEntries(MODULE_KEYS.map((m) => [m, Object.keys(perms.MODULES[m].actions)]));
+
+// On whatever a plan or an override says: the pick lists every form fills itself from, the company settings
+// printed on every document, and the dashboard the app lands on after signing in. Without these an
+// organisation could be sold a product that cannot open a form, print a document or show a first screen.
+const ALWAYS_ON = ["lookups.view", "settings.view", "reports.view"];
+
+const ALL_MODULES = Object.fromEntries(MODULE_KEYS.map((m) => [m, true]));
+/** Every module but the ones named, which are off; `detail` sells one in part ({ reports: ["view"] }). */
+const modulesExcept = (off = [], detail = {}) => ({
+  ...ALL_MODULES,
+  ...Object.fromEntries(off.map((m) => [m, false])),
+  ...detail,
+});
+
 // A limit of null means unlimited.
 const PLANS = {
   trial: {
     name: "Trial",
     trialDays: 14,
     features: only("quotations", "deliveryNotes", "batches"),
+    modules: ALL_MODULES,
     limits: { users: 3, branches: 1, documentsPerMonth: 200 },
   },
   standard: {
     name: "Standard",
     features: only("quotations", "deliveryNotes", "batches", "banking", "currencies", "vatReturn", "messaging"),
+    modules: ALL_MODULES,
     limits: { users: 10, branches: 3, documentsPerMonth: 2000 },
   },
   premium: {
     name: "Premium",
     features: ALL,
+    modules: ALL_MODULES,
     limits: { users: 50, branches: 20, documentsPerMonth: 20000 },
+  },
+  // Buying and selling, with the stock behind it, and no books: the documents still post to the ledger (they
+  // must, or stock has no cost and an invoice no entry) - this customer simply did not buy the screens that
+  // read it. Add the modules back one at a time for a customer who grows into them.
+  trading: {
+    name: "Trade only",
+    features: only("quotations", "deliveryNotes", "batches", "messaging"),
+    modules: modulesExcept(["finance", "banking", "accounts", "audit"], { reports: ["view"] }),
+    limits: { users: 10, branches: 2, documentsPerMonth: 2000 },
   },
   // For the organisation that existed before plans did, and for the developers' own testing.
   internal: {
     name: "Internal",
     features: ALL,
+    modules: ALL_MODULES,
     limits: { users: null, branches: null, documentsPerMonth: null },
   },
 };
@@ -75,6 +120,62 @@ const hasFeature = (org, key) => {
   if (!(key in FEATURES)) throw new Error(`Unknown feature "${key}"`); // a typo in a guard must crash, not allow
   return effectiveFeatures(org)[key];
 };
+
+// ---- modules: what one organisation holds
+
+// The actions an organisation holds in one module: the plan's value, the organisation's own override on top,
+// and then the floor (ALWAYS_ON). An unknown plan, a missing value or an override that is not a boolean or a
+// list of that module's own actions holds NOTHING but the floor: failing open on a typo would hand out a part
+// of the product nobody paid for. Read with hasOwnProperty, so a name every object inherits is not an override.
+function moduleActions(org, key) {
+  if (!MODULE_KEYS.includes(key)) throw new Error(`Unknown module "${key}"`);
+  const plan = planOf(org);
+  const overrides = org?.moduleOverrides;
+  const own = overrides && typeof overrides === "object" && Object.prototype.hasOwnProperty.call(overrides, key) ? overrides[key] : undefined;
+  const chosen = own === undefined ? plan?.modules?.[key] : own;
+  const all = MODULE_ACTIONS[key];
+  const granted = chosen === true ? all : Array.isArray(chosen) ? all.filter((a) => chosen.includes(a)) : [];
+  const floor = ALWAYS_ON.filter((k) => k.startsWith(`${key}.`)).map((k) => k.slice(key.length + 1));
+  return [...new Set([...granted, ...floor])].sort();
+}
+
+/** module -> { on, full, actions } for EVERY known module: what the console draws and the status sends. */
+function effectiveModules(org) {
+  return Object.fromEntries(
+    MODULE_KEYS.map((m) => {
+      const actions = moduleActions(org, m);
+      return [m, { on: actions.length > 0, full: actions.length === MODULE_ACTIONS[m].length, actions }];
+    })
+  );
+}
+
+/** The ceiling as permission keys ("sales.approve"), sorted: what every role in the organisation is capped to. */
+function entitledKeys(org) {
+  return MODULE_KEYS.flatMap((m) => moduleActions(org, m).map((a) => `${m}.${a}`)).sort();
+}
+
+/** Does the organisation hold this one permission key at all? (It decides WHICH refusal a route gives.) */
+function moduleAllows(org, key) {
+  const name = String(key ?? "");
+  const dot = name.indexOf(".");
+  if (dot < 1) return false;
+  const module = name.slice(0, dot);
+  if (!MODULE_KEYS.includes(module)) return false;
+  return moduleActions(org, module).includes(name.slice(dot + 1));
+}
+
+/** Why a per-organisation module override cannot be stored, or null when it can. Used by the model and the console. */
+function moduleOverrideError(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "Module overrides must be an object";
+  for (const [key, v] of Object.entries(value)) {
+    if (!MODULE_KEYS.includes(key)) return `Not a known module: ${key}`;
+    if (typeof v === "boolean") continue;
+    if (!Array.isArray(v) || v.some((a) => typeof a !== "string" || !MODULE_ACTIONS[key].includes(a))) {
+      return `"${key}" must be true, false, or a list of its own actions (${MODULE_ACTIONS[key].join(", ")})`;
+    }
+  }
+  return null;
+}
 
 // limit -> number | null (unlimited). An override of null means "unlimited for this organisation".
 function effectiveLimits(org) {
@@ -160,5 +261,7 @@ function monthStartIn(timezone, now = new Date()) {
 
 module.exports = {
   FEATURES, FEATURE_KEYS, PLANS, PLAN_CODES, LIMIT_KEYS,
+  MODULE_KEYS, MODULE_ACTIONS, ALWAYS_ON,
   effectiveFeatures, hasFeature, effectiveLimits, checkLimit, subscriptionState, endsAtFor, monthStartIn,
+  moduleActions, effectiveModules, entitledKeys, moduleAllows, moduleOverrideError,
 };

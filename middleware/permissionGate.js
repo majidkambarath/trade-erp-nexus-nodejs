@@ -10,6 +10,7 @@
 // fails on any that does neither, so a new route cannot quietly ship open.
 const AppError = require("../utils/AppError");
 const roles = require("../utils/permissions");
+const plans = require("../utils/plans");
 const AuditService = require("../services/core/auditService");
 
 const asList = (need) => (Array.isArray(need) ? need : [need]).filter(Boolean);
@@ -26,6 +27,28 @@ function denied(req, wanted, why) {
   return new AppError(message, 403, "PERMISSION_DENIED", { required: wanted, role: role?.key || null });
 }
 
+// The other reason a door is shut: the organisation never bought this module (utils/plans.js). It is not the
+// person's role and no administrator of theirs can grant it, so the words name the module and the answer says
+// to ask us, not them. Deliberately NOT written to the organisation's activity trail: nobody there can act on
+// it, and a row naming the URL someone typed is exactly what the data-bleed sweep reads as a leak.
+function notInPlan(req, wanted) {
+  const key = wanted.find((k) => roles.isKey(k)) || wanted[0] || "";
+  const module = String(key).split(".")[0];
+  const label = roles.MODULES[module]?.label || module;
+  return new AppError(`${label} is not included in this organisation's plan.`, 403, "MODULE_NOT_IN_PLAN", {
+    module,
+    required: wanted,
+    plan: req.organisation?.planCode || null,
+  });
+}
+
+/** Of the two ceilings, which one refuses: the organisation's plan is named first, because a role cannot lift it. */
+function refusalFor(req, wanted, why) {
+  const org = req.organisation;
+  const bought = wanted.some((k) => roles.isKey(k) && plans.moduleAllows(org, k));
+  return org && !bought ? notInPlan(req, wanted) : denied(req, wanted, why);
+}
+
 /**
  * Require ANY ONE of the permissions. `need` is a key, a list of keys, or a function of the request (sync or async) that
  * returns one of those, for the routes whose answer depends on what is being touched. A guard that names nothing refuses.
@@ -35,7 +58,7 @@ function requirePermission(need) {
     try {
       if (!req.admin) throw new AppError("Authentication required", 401, "AUTH_REQUIRED");
       const wanted = asList(typeof need === "function" ? await need(req) : need);
-      if (!roles.canAny(req.admin.grants, wanted)) throw denied(req, wanted.length ? wanted : ["(nothing named)"]);
+      if (!roles.canAny(req.admin.grants, wanted)) throw refusalFor(req, wanted.length ? wanted : ["(nothing named)"]);
       return next();
     } catch (error) {
       return next(error);
@@ -51,7 +74,7 @@ function requirePermission(need) {
  */
 function assertPermission(req, key, why) {
   if (!req.admin) throw new AppError("Authentication required", 401, "AUTH_REQUIRED");
-  if (!roles.can(req.admin.grants, key)) throw denied(req, [key], why);
+  if (!roles.can(req.admin.grants, key)) throw refusalFor(req, [key], why);
 }
 
 /** A person's own record, or - for anyone else's - the permission. */

@@ -169,6 +169,23 @@ function expand(keys) {
   return [...out].sort();
 }
 
+/**
+ * Grants narrowed to the ceiling the ORGANISATION was sold (utils/plans.js `entitledKeys`). The ceiling is applied
+ * AFTER expand(), so nothing the customer did not buy can leak in through an implication: a sales approver in an
+ * organisation without the Inventory module does not receive `inventory.view` (the item and category pick lists such
+ * a person needs are reached with `lookups.view`, which every route offering them accepts). It is a pure filter: it
+ * can only take away, so no ceiling can ever grant anything.
+ *
+ * `ceiling` of null or undefined means "not supplied" and caps nothing - for the callers that have no organisation to
+ * hand (a job, a test of the role table alone). An EMPTY list is a real ceiling and leaves nothing.
+ */
+function capTo(grants, ceiling) {
+  const held = (grants || []).filter(isKey);
+  if (ceiling === null || ceiling === undefined) return held;
+  const allowed = ceiling instanceof Set ? ceiling : new Set(ceiling);
+  return held.filter((k) => allowed.has(k));
+}
+
 /** Keys a role names that are not in the catalogue (a typo, or one a newer version removed). */
 const unknownKeys = (keys) => (keys || []).filter((k) => !isKey(k));
 
@@ -416,20 +433,28 @@ const shortName = (key) => SHORT[key] || SHORT[key.split(".")[1]] || key;
  * brings with it (`implies`). Sent by the server so the screen never keeps its own copy of the rules: it locks "View"
  * when someone ticks "Approve" because this says so.
  */
-const catalogue = () =>
-  MODULE_KEYS.map((m) => ({
+// `ceiling` (utils/plans.js `entitledKeys`) narrows the editor to the modules the organisation was SOLD: a
+// permission it cannot hold must not be offered as a tick, since validateCustomRole would refuse it anyway (the
+// person making the role does not hold it either). Left out, the whole catalogue is returned, as it always was.
+const catalogue = (ceiling = null) => {
+  const allowed = ceiling === null || ceiling === undefined ? null : ceiling instanceof Set ? ceiling : new Set(ceiling);
+  const inPlan = (key) => !allowed || allowed.has(key);
+  return MODULE_KEYS.map((m) => ({
     key: m,
     label: MODULES[m].label,
     hint: MODULES[m].hint,
     automatic: m === "lookups", // ticked for you whenever a role does anything beyond looking
-    actions: Object.entries(MODULES[m].actions).map(([action, label]) => {
-      const key = `${m}.${action}`;
-      return { key, action, short: shortName(key), label, read: isRead(key), implies: expand([key]).filter((k) => k !== key) };
-    }),
-  }));
+    actions: Object.entries(MODULES[m].actions)
+      .filter(([action]) => inPlan(`${m}.${action}`))
+      .map(([action, label]) => {
+        const key = `${m}.${action}`;
+        return { key, action, short: shortName(key), label, read: isRead(key), implies: expand([key]).filter((k) => k !== key) };
+      }),
+  })).filter((m) => m.actions.length > 0);
+};
 
 module.exports = {
   MODULES, MODULE_KEYS, KEYS, ALL_KEYS, IMPLIES, BUILT_IN, BUILT_IN_KEYS, LEGACY_TYPES, TOP_RANK,
-  isKey, isRead, isBuiltIn, expand, unknownKeys, resolveRole, grantsOf, roleKeyOf, roleKeyAt, can, canAny, mayManage,
+  isKey, isRead, isBuiltIn, expand, capTo, unknownKeys, resolveRole, grantsOf, roleKeyOf, roleKeyAt, can, canAny, mayManage,
   validateCustomRole, validateApprovalLimit, legacyPermissions, catalogue, DOCUMENT_MODULE, moduleOfType, viewableTypes,
 };

@@ -110,8 +110,14 @@ test("a customer's token cannot open the console, and a console token cannot ope
 
 test("the catalogue offers the plans, features, currencies, and says why a three-decimal currency is not offered", { skip }, async () => {
   const c = (await plat("GET", "/catalog")).body;
-  assert.deepEqual(c.plans.map((p) => p.code).sort(), ["internal", "premium", "standard", "trial"]);
+  assert.deepEqual(c.plans.map((p) => p.code).sort(), ["internal", "premium", "standard", "trading", "trial"]);
   assert.ok(c.features.some((f) => f.key === "einvoicing"));
+  // the whole modules an organisation can be sold, each with its actions and the ones no plan can take away
+  const finance = c.modules.find((m) => m.key === "finance");
+  assert.ok(finance && finance.label === "Finance" && finance.actions.some((a) => a.action === "approve"));
+  assert.deepEqual(c.modules.find((m) => m.key === "reports").alwaysOn, ["view"], "the first screen always opens");
+  assert.deepEqual(c.plans.find((p) => p.code === "trading").modules.finance, false, "the trade-only plan has no books");
+  assert.equal(c.plans.find((p) => p.code === "premium").modules.finance, true);
   assert.ok(c.currencies.some((x) => x.code === "AED") && c.currencies.some((x) => x.code === "SAR"));
   assert.ok(!c.currencies.some((x) => x.code === "KWD"));
   assert.ok(c.unsupportedCurrencies.includes("KWD"));

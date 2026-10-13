@@ -152,3 +152,105 @@ test("'this month' is counted on the organisation's own calendar, not UTC's", ()
   assert.equal(p.monthStartIn(undefined, new Date("2026-10-15T10:00:00Z")).toISOString(), "2026-10-01T00:00:00.000Z");
   assert.equal(p.monthStartIn("Not/AZone", new Date("2026-10-15T10:00:00Z")).toISOString(), "2026-10-01T00:00:00.000Z");
 });
+
+// ---- modules: the parts of the product an organisation was sold ----------------------------------------------
+
+test("a module is the organisation's ceiling: the plan's set, its own overrides, and a floor nothing can remove", () => {
+  const perms = require("../permissions");
+  const actionsOf = (org, m) => p.moduleActions(org, m);
+
+  // every full plan holds every module whole
+  for (const code of ["trial", "standard", "premium", "internal"]) {
+    const org = { planCode: code };
+    for (const m of p.MODULE_KEYS) assert.deepEqual(actionsOf(org, m), [...p.MODULE_ACTIONS[m]].sort(), `${code} holds all of ${m}`);
+    assert.deepEqual(p.entitledKeys(org), perms.KEYS.slice().sort(), `${code} holds every permission key`);
+  }
+
+  // the trade-only plan: no books, and Reports only as far as looking
+  const trade = { planCode: "trading" };
+  assert.deepEqual(actionsOf(trade, "finance"), []);
+  assert.deepEqual(actionsOf(trade, "accounts"), []);
+  assert.deepEqual(actionsOf(trade, "banking"), []);
+  assert.deepEqual(actionsOf(trade, "reports"), ["view"], "it may look, not read the statements");
+  assert.deepEqual(actionsOf(trade, "sales"), [...p.MODULE_ACTIONS.sales].sort());
+  assert.equal(p.moduleAllows(trade, "reports.financial"), false);
+  assert.equal(p.moduleAllows(trade, "reports.view"), true);
+  assert.equal(p.moduleAllows(trade, "finance.create"), false);
+
+  // the floor: the pick lists a form fills itself from, the settings printed on a document, the first screen
+  const nothing = { planCode: "trading", moduleOverrides: Object.fromEntries(p.MODULE_KEYS.map((m) => [m, false])) };
+  // named here, not read from ALWAYS_ON: the point is WHICH three, and comparing the list to itself proves nothing
+  const FLOOR = ["lookups.view", "reports.view", "settings.view"];
+  assert.deepEqual(p.entitledKeys(nothing), FLOOR, "everything switched off still leaves the pick lists, the settings and the first screen");
+  for (const key of FLOOR) assert.equal(p.moduleAllows(nothing, key), true, `${key} cannot be switched off`);
+  assert.deepEqual([...p.ALWAYS_ON].sort(), FLOOR, "and the floor is exactly those three");
+
+  // an override wins over the plan, both ways, and may sell a module in part
+  assert.deepEqual(actionsOf({ planCode: "trading", moduleOverrides: { finance: true } }, "finance"), [...p.MODULE_ACTIONS.finance].sort());
+  assert.deepEqual(actionsOf({ planCode: "premium", moduleOverrides: { finance: ["view", "create"] } }, "finance"), ["create", "view"]);
+  assert.deepEqual(actionsOf({ planCode: "premium", moduleOverrides: { audit: false } }, "audit"), []);
+
+  // an unknown plan, a junk override and a name every object inherits all hold NOTHING beyond the floor
+  assert.deepEqual(p.entitledKeys({ planCode: "typo" }), [...p.ALWAYS_ON].sort());
+  assert.deepEqual(actionsOf({ planCode: "premium", moduleOverrides: { sales: "yes" } }, "sales"), [], "a value that is not true, false or a list grants nothing");
+  assert.deepEqual(actionsOf({ planCode: "premium", moduleOverrides: { sales: ["approve", "fly"] } }, "sales"), ["approve"], "an action the module does not have is dropped");
+  assert.deepEqual(actionsOf({ planCode: "trading", moduleOverrides: Object.create({ finance: true }) }, "finance"), [], "an inherited name is not this organisation's override");
+  assert.throws(() => actionsOf({ planCode: "premium" }, "nonsense"), /Unknown module/);
+
+  // effectiveModules is what the console and the status read
+  const shown = p.effectiveModules(trade);
+  assert.deepEqual(shown.finance, { on: false, full: false, actions: [] });
+  assert.deepEqual(shown.reports, { on: true, full: false, actions: ["view"] });
+  assert.equal(shown.sales.full, true);
+});
+
+test("a module override is refused unless it is true, false or a list of that module's own actions", () => {
+  assert.equal(p.moduleOverrideError({}), null);
+  assert.equal(p.moduleOverrideError({ finance: false, reports: ["view", "financial"] }), null);
+  assert.match(p.moduleOverrideError({ ledger: true }), /Not a known module: ledger/);
+  assert.match(p.moduleOverrideError({ reports: ["view", "bogus"] }), /must be true, false, or a list/);
+  assert.match(p.moduleOverrideError({ sales: "on" }), /must be true, false, or a list/);
+  assert.match(p.moduleOverrideError({ sales: [1] }), /must be true, false, or a list/);
+  assert.match(p.moduleOverrideError(null), /must be an object/);
+  assert.match(p.moduleOverrideError([]), /must be an object/);
+});
+
+test("the ceiling caps a role, and not even the owner escapes it", () => {
+  const perms = require("../permissions");
+  const owner = perms.grantsOf(perms.resolveRole("super_admin"));
+  const trade = { planCode: "trading" };
+
+  const capped = perms.capTo(owner, p.entitledKeys(trade));
+  assert.equal(capped.includes("sales.approve"), true, "what was sold is untouched");
+  assert.equal(capped.includes("finance.create"), false, "what was not sold is gone, although the role holds it");
+  assert.equal(capped.includes("accounts.manage"), false);
+  assert.equal(capped.includes("reports.financial"), false, "a module sold in part is capped at the action");
+  assert.equal(capped.includes("reports.view"), true);
+  assert.equal(capped.includes("lookups.view"), true, "the pick lists survive, so every form still opens");
+  assert.ok(capped.every((k) => owner.includes(k)), "a ceiling can only take away");
+
+  // an implication cannot smuggle a module in: a sales approver in an organisation without Inventory does not
+  // receive inventory.view (the item pick lists it needs are reached with lookups.view)
+  const noStock = { planCode: "premium", moduleOverrides: { inventory: false } };
+  const seller = perms.capTo(perms.expand(["sales.approve"]), p.entitledKeys(noStock));
+  assert.equal(seller.includes("sales.approve"), true);
+  assert.equal(seller.includes("inventory.view"), false);
+  assert.equal(seller.includes("lookups.view"), true);
+
+  // no ceiling supplied caps nothing; an empty one is a real ceiling and leaves nothing
+  assert.deepEqual(perms.capTo(owner, null), owner);
+  assert.deepEqual(perms.capTo(owner, undefined), owner);
+  assert.deepEqual(perms.capTo(owner, []), []);
+  assert.deepEqual(perms.capTo(owner, new Set(["sales.view"])), ["sales.view"], "a Set is taken as it is");
+});
+
+test("the role editor is drawn without what the organisation cannot hold", () => {
+  const perms = require("../permissions");
+  const whole = perms.catalogue();
+  const trade = perms.catalogue(p.entitledKeys({ planCode: "trading" }));
+  assert.ok(whole.some((m) => m.key === "finance"));
+  assert.equal(trade.some((m) => m.key === "finance"), false, "a module with no action left is not drawn at all");
+  assert.deepEqual(trade.find((m) => m.key === "reports").actions.map((a) => a.action), ["view"]);
+  assert.deepEqual(whole.find((m) => m.key === "reports").actions.map((a) => a.action), ["view", "financial", "vat"]);
+  assert.deepEqual(perms.catalogue(null), whole, "no ceiling is the whole catalogue, as it was before modules");
+});

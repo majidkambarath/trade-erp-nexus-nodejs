@@ -4,6 +4,7 @@ const Admin = require("../models/core/adminModel");
 const Organisation = require("../models/core/organisationModel");
 const Role = require("../models/core/roleModel");
 const roles = require("../utils/permissions");
+const plans = require("../utils/plans");
 const orgLocale = require("../utils/orgLocale");
 
 // While a person's password is one someone else chose, they may only choose their own: read who they are and what they may
@@ -98,8 +99,15 @@ async function resolveBranch(admin, header) {
   return { branchId: asked, branchView: asked };
 }
 
-const identityOf = (admin, role) => {
-  const grants = roles.grantsOf(role);
+// The organisation's ceiling and the person's role, in that order. The ceiling is what the customer was SOLD
+// (utils/plans.js `entitledKeys`, from its plan and the developer's overrides); the role is what this person may
+// do inside it. Capping here is what makes a module a boundary rather than a courtesy: every route in the API
+// reads `grants` through requirePermission, so a module that was not bought is refused everywhere at once,
+// including to the organisation's own owner, whose built-in role is every permission there is.
+// `roleGrants` is kept beside it, uncapped, so a refusal can say which of the two shut the door.
+const identityOf = (admin, role, organisation = null) => {
+  const roleGrants = roles.grantsOf(role);
+  const grants = organisation ? roles.capTo(roleGrants, plans.entitledKeys(organisation)) : roleGrants;
   return {
     id: String(admin._id),
     email: admin.email,
@@ -107,6 +115,7 @@ const identityOf = (admin, role) => {
     // what the person may do: their role and the permissions it expands to (utils/permissions.js)
     role: role ? { key: role.key, name: role.name, rank: role.rank, builtIn: role.builtIn, active: role.isActive !== false, approvalLimit: role.approvalLimit ?? null } : { key: roles.roleKeyOf(admin), name: null, rank: 0, builtIn: false, active: false },
     grants,
+    roleGrants, // what the ROLE allows, before the organisation's ceiling: only for telling the two refusals apart
     // the seven coarse permissions the token has always carried, now derived from the real ones
     permissions: roles.legacyPermissions(grants, role?.rank),
     name: admin.name,
@@ -151,7 +160,7 @@ const makeAuthenticator = ({ allowBlocked = false } = {}) => async (req, res, ne
     if (branch.failure) return next(branch.failure);
 
     // the role they hold in the branch they are working in (their own, unless they were given another for it)
-    req.admin = identityOf(admin, await roleOf(admin, roles.roleKeyAt(admin, branch.branchId)));
+    req.admin = identityOf(admin, await roleOf(admin, roles.roleKeyAt(admin, branch.branchId)), organisation);
     req.organisation = organisation;
     req.tenant = { companyId: admin.companyId, branchId: branch.branchId, branchView: branch.branchView };
     req.sessionId = decoded.sid || null; // the sign-in this request belongs to (turning two-factor on ends all the OTHERS)
@@ -195,7 +204,7 @@ const optionalAuth = async (req, res, next) => {
         const { admin, organisation, failure } = await accountFor(decoded);
         // An organisation that may not use the system (or not change anything) is treated as anonymous here.
         if (!failure && !requestRefusal(organisation, req.method)) {
-          req.admin = identityOf(admin, await roleOf(admin, roles.roleKeyAt(admin, admin.branchId || HEAD_OFFICE)));
+          req.admin = identityOf(admin, await roleOf(admin, roles.roleKeyAt(admin, admin.branchId || HEAD_OFFICE)), organisation);
           req.organisation = organisation;
           req.tenant = { companyId: admin.companyId, branchId: admin.branchId };
         }

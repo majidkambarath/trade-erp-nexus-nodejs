@@ -4,8 +4,20 @@ const Admin = require("../../models/core/adminModel");
 const Role = require("../../models/core/roleModel");
 const AppError = require("../../utils/AppError");
 const roles = require("../../utils/permissions");
+const plans = require("../../utils/plans");
 
 const clean = (v) => String(v ?? "").trim();
+
+// What this organisation was SOLD, as permission keys, or null when it cannot be read (then the catalogue is the
+// whole one, as it was before modules existed). Never a reason for the roles screen to fail: the server still
+// refuses anything beyond the ceiling, whatever the editor happened to draw.
+const ceilingOf = async () => {
+  try {
+    return plans.entitledKeys(await require("./usageService").organisation());
+  } catch (_) {
+    return null;
+  }
+};
 
 // The person asking, as the role object the pure rules take: what they hold and where they rank.
 const actorOf = (req) => ({
@@ -48,6 +60,9 @@ class RoleService {
   }
 
   static async list() {
+    // The editor is drawn from the catalogue, narrowed to what this organisation was sold: a tick it could never
+    // use is worse than no tick (the server would refuse the role, naming a permission the person cannot picture).
+    const ceiling = await ceilingOf();
     const [custom, held, heldInBranch] = await Promise.all([
       Role.find().sort({ rank: -1, name: 1 }).lean(),
       Admin.aggregate([{ $group: { _id: { $ifNull: ["$roleKey", "$type"] }, n: { $sum: 1 } } }]),
@@ -57,7 +72,7 @@ class RoleService {
     const people = {};
     for (const h of [...held, ...heldInBranch]) people[h._id] = (people[h._id] || 0) + h.n;
     return {
-      catalogue: roles.catalogue(),
+      catalogue: roles.catalogue(ceiling),
       roles: [
         ...roles.BUILT_IN_KEYS.map((k) => present(roles.resolveRole(k), people[k] || 0)),
         ...custom.map((r) => present(roles.resolveRole(r.key, [r]), people[r.key] || 0, r.permissions)),

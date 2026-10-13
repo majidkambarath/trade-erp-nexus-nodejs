@@ -114,6 +114,9 @@ class UsageService {
       organisation: { code: org.code, legalName: org.legalName, country: org.country, baseCurrency: org.baseCurrency, timezone: org.timezone, planCode: org.planCode, planName: plans.PLANS[org.planCode]?.name || org.planCode },
       subscription: plans.subscriptionState(org, now),
       features: plans.effectiveFeatures(org),
+      // The modules the organisation bought, so a screen can say "not included in your plan" instead of blaming the
+      // person's role. What they may do inside them is still me.grants, which is already capped to this.
+      modules: plans.effectiveModules(org),
       limits,
       usage,
       room: Object.fromEntries(plans.LIMIT_KEYS.map((k) => [k, plans.checkLimit(org, k, usage[k] ?? 0)])),
