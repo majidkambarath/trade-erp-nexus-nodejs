@@ -80,7 +80,11 @@ class PeriodCloseService {
 
       const within = { $gte: from, $lte: to };
       const [documents, vouchers, sums, postingEnabled, banks, stockFacts] = light ? [0, 0, [], true, [], null] : await Promise.all([
-        sessionOf(Transaction.countDocuments({ status: "DRAFT", isOpening: { $ne: true }, date: within }), session),
+        // draft trade documents and draft productions: either could never be posted once the period is locked
+        Promise.all([
+          sessionOf(Transaction.countDocuments({ status: "DRAFT", isOpening: { $ne: true }, date: within }), session),
+          sessionOf(require("../../models/modules/productionOrderModel").countDocuments({ status: "DRAFT", date: within }), session),
+        ]).then(([trade, production]) => trade + production),
         sessionOf(Voucher.countDocuments({ status: { $in: ["draft", "pending"] }, date: within }), session),
         sessionOf(LedgerEntry.aggregate([
           { $match: { isReversed: { $ne: true }, date: { $lte: to } } },

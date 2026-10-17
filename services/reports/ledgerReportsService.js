@@ -48,6 +48,7 @@ const VOUCHER_LABEL = {
   receipt: "Receipt", payment: "Payment", journal: "Journal", contra: "Contra", expense: "Expense",
   debit_note: "Debit note", credit_note: "Credit note",
   opening: "Opening balance", opening_stock: "Opening stock", stock_writeoff: "Stock write-off", closing: "Year-end closing",
+  production: "Production",
   sales_order: "Sales invoice", sales_return: "Sales return", purchase_order: "Purchase invoice", purchase_return: "Purchase return",
 };
 const CASH_FLOW_LABEL = {
@@ -59,7 +60,7 @@ const CASH_FLOW_LABEL = {
 // The order voucher kinds read in on a screen: trade documents, then money, then books, then the rest.
 const TYPE_ORDER = [
   "sales_order", "sales_return", "purchase_order", "purchase_return", "receipt", "payment", "expense", "journal", "contra",
-  "debit_note", "credit_note", "cheque_clearance", "stock_adjustment", "stock_writeoff", "opening", "opening_stock", "closing",
+  "debit_note", "credit_note", "cheque_clearance", "stock_adjustment", "stock_writeoff", "production", "opening", "opening_stock", "closing",
 ];
 const typeRank = (t) => {
   const i = TYPE_ORDER.indexOf(t);

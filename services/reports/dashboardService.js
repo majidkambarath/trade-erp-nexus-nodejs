@@ -166,13 +166,14 @@ const profitFlow = (profit) => ({
 });
 
 // Stock value as a flow over the period: opening, what came in, what went out, closing (the stock movement report's own
-// totals, in value). Out-buckets are positive magnitudes there; `adjustments` is signed.
+// totals, in value). Out-buckets are positive magnitudes there; `adjustments` and `production` are signed.
 const stockFlow = (movement) => {
   const v = (bucket) => movement.totals[bucket].value;
   return {
     from: movement.from, to: movement.to,
     opening: v("opening"), purchases: v("purchases"), salesReturns: v("salesReturns"), adjustments: v("adjustments"),
     purchaseReturns: v("purchaseReturns"), sales: v("sales"), writeOffs: v("writeOffs"), closing: v("closing"),
+    production: movement.totals.production?.value ?? 0, // signed: what productions added (the costs moved into stock)
   };
 };
 
