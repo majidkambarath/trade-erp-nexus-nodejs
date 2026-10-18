@@ -40,9 +40,9 @@ class JobWorkService {
       atWorker: prog.atWorker,
       overdue: rules.isOverdue(o.status, returnByDay, todayInOrg()),
       actions: {
-        edit: o.status === "DRAFT",
-        delete: o.status === "DRAFT",
-        send: o.status === "DRAFT",
+        edit: o.status === "DRAFT" && !o.source?.kind,
+        delete: o.status === "DRAFT" && !o.source?.kind,
+        send: o.status === "DRAFT" && !o.source?.kind,
         receive: open && prog.atWorker > 0,
         cancel: o.status === "SENT" && !(o.receipts || []).some((r) => !r.reversedAt),
         challan: o.status !== "DRAFT" && o.status !== "CANCELLED",
@@ -81,8 +81,8 @@ class JobWorkService {
 
   // ---- drafts --------------------------------------------------------------------------------------------
 
-  static async prepare(data, { session } = {}) {
-    const errors = rules.validateOrder(data);
+  static async prepare(data, { session, sameItem = false } = {}) {
+    const errors = rules.validateOrder(data, { sameItem });
     if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
     if (!isId(data.jobWorkerId)) throw fail("Job worker not found", 400, "JOB_WORKER_NOT_FOUND");
     const vendor = await Vendor.findById(data.jobWorkerId).session(session || null).lean();
@@ -123,6 +123,14 @@ class JobWorkService {
   static workerSnapshot(v) {
     return { name: v.vendorName, code: v.vendorId, address: v.address, taxId: v.vat?.trn || v.trnNO || undefined, phone: v.phone || undefined };
   }
+
+  // A process order's job-work step (services/stock/processOrderService.js): the part goes out and comes back as the same
+  // part, so the same item on both sides is allowed here (and only here: a request body cannot set `source`).
+  static createForProcess = withTransactionSession(async (data, source, by, session) => {
+    const fields = await this.prepare(data, { session, sameItem: true });
+    const [o] = await JobWorkOrder.create([{ ...fields, source, status: "DRAFT", createdBy: String(by || "system") }], { session });
+    return o;
+  });
 
   static create = withTransactionSession(async (data, by, session) => {
     const fields = await this.prepare(data, { session });
@@ -202,6 +210,7 @@ class JobWorkService {
     o.cancelledAt = new Date();
     o.cancelledBy = String(by || "system");
     await o.save({ session });
+    await this.syncProcess(o, session);
     return o;
   });
 
@@ -218,6 +227,9 @@ class JobWorkService {
 
   static receiveIn = withTransactionSession(async (id, input, { absorbedId }, by, session) => {
     const o = await this.load(id, session);
+    if (o.source?.kind === "process" && (input.costs || []).length) {
+      throw fail(`${o.jobWorkNo} is a step of process order ${o.source.no}: its costs are added when that order is finished`, 400, "PROCESS_COSTS_AT_FINISH");
+    }
     if (!rules.OPEN.has(o.status)) throw fail(`${o.jobWorkNo || "This job work"} is ${o.status.toLowerCase()}; nothing can be received on it`, 409, "JOB_WORK_NOT_OPEN");
     const { errors, lines } = rules.validateReceipt(o.toObject(), input);
     if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
@@ -225,7 +237,8 @@ class JobWorkService {
     if (!date) throw fail("Enter a valid date", 400, "INVALID_DATE");
     if (date < o.date) throw fail("Goods cannot come back before the day they were sent", 400, "INVALID_DATE");
 
-    const made = lines.filter((l) => l.finishedQty > 0);
+    // a step of a process order makes nothing here: that order’s own Production does, when it is finished
+    const made = o.source?.kind === "process" ? [] : lines.filter((l) => l.finishedQty > 0);
     const lineOf = (lineId) => o.lines.find((x) => String(x._id) === String(lineId));
     const weights = made.map((l) => l.rawConsumed * (Number(lineOf(l.lineId).unitValue) || 0));
     const shares = rules.splitCosts(input.costs || [], weights);
@@ -255,6 +268,7 @@ class JobWorkService {
     o.status = rules.progress(o.toObject()).status;
     o.updatedBy = String(by || "system");
     await o.save({ session });
+    await this.syncProcess(o, session, by);
     return { order: o, productions };
   });
 
@@ -271,8 +285,15 @@ class JobWorkService {
     o.status = rules.progress(o.toObject()).status;
     o.updatedBy = String(by || "system");
     await o.save({ session });
+    await this.syncProcess(o, session, by);
     return o;
   });
+
+  // A job raised by a process order's step tells that step where it stands (sent, partly back, back, cancelled).
+  static async syncProcess(o, session, by) {
+    if (o.source?.kind !== "process") return;
+    await require("./processOrderService").onJobWorkChanged(o, session, by); // required here: the two call each other
+  }
 }
 
 module.exports = JobWorkService;

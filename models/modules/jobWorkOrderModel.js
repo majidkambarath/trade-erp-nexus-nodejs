@@ -57,6 +57,9 @@ const jobWorkOrderSchema = new mongoose.Schema(
     notes: { type: String, trim: true, maxlength: 1000 },
     lines: { type: [lineSchema], default: [] },
     receipts: { type: [receiptSchema], default: [] },
+    // raised by a step of a process order (utils/processOrders.js): the part goes out and comes back as the same part,
+    // processed; its receipts post nothing (the order's own Production does, when it is finished)
+    source: { kind: { type: String, enum: ["process"] }, id: { type: id }, no: String, stepId: { type: id } },
     cancelledAt: Date,
     cancelledBy: String,
     createdBy: String,

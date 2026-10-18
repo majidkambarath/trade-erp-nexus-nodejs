@@ -54,7 +54,7 @@ const productionOrderSchema = new mongoose.Schema(
     },
     notes: { type: String, trim: true, maxlength: 1000 },
     // made by a receipt on a job work (utils/jobWork.js): reversed only through that job, so the two never drift
-    source: { kind: { type: String, enum: ["job_work"] }, id: { type: id }, no: String },
+    source: { kind: { type: String, enum: ["job_work", "process"] }, id: { type: id }, no: String },
     ledgerPosted: { type: Boolean, default: false },
     acknowledged: { type: [String], default: undefined }, // warnings ticked when it was posted
     postedAt: Date,

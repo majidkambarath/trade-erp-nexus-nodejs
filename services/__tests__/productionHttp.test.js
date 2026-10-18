@@ -217,3 +217,32 @@ test("job work over HTTP: opt-in like Production, stock rights to send, finance 
   const actions = await as(() => M.ActivityLog.find({ entity: "JobWorkOrder", entityId: draft.body._id }).lean());
   assert.deepEqual(actions.map((a) => a.action).sort(), ["JOB_WORK_CREATED", "JOB_WORK_RECEIVED", "JOB_WORK_SENT"]);
 });
+
+test("process orders over HTTP: the person a step is given to works it; someone else with the same rights cannot", { skip }, async () => {
+  const off = await api("other", "GET", "/process-orders/board");
+  assert.equal(off.code, "FEATURE_NOT_IN_PLAN", "part of the Production feature");
+  await roleAndPerson("watcher", ["inventory.view"]);
+  const looker = await as(() => M.Admin.findOne({ email: "looker@prd.test" }).lean());
+  const body = { finished: { stockId: S.finished, qty: 2 }, materials: [{ stockId: S.raw, qty: 2 }], steps: [{ name: "Bending", mode: "in_house", assigneeId: String(looker._id) }] };
+  await cannot("looker", "POST", "/process-orders", body);
+  const draft = await api("owner", "POST", "/process-orders", body);
+  assert.equal(draft.status, 201, JSON.stringify(draft.data));
+  const open = await api("owner", "POST", `/process-orders/${draft.body._id}/release`, {});
+  assert.match(open.body.processNo, /^PRO-/);
+  const stepId = open.body.steps[0]._id;
+  const board = await api("looker", "GET", "/process-orders/board");
+  assert.deepEqual(board.body.mine.map((c) => c.stepName), ["Bending"], "on the looker's own list");
+  const refused = await api("watcher", "POST", `/process-orders/${draft.body._id}/steps/${stepId}/start`, {});
+  assert.equal(refused.status, 403);
+  const started = await api("looker", "POST", `/process-orders/${draft.body._id}/steps/${stepId}/start`, {});
+  assert.equal(started.status, 200, JSON.stringify(started.data));
+  const done = await api("looker", "POST", `/process-orders/${draft.body._id}/steps/${stepId}/complete`, { qtyDone: 2 });
+  assert.equal(done.status, 200, JSON.stringify(done.data));
+  assert.equal(done.body.readyToFinish, true);
+  await cannot("looker", "POST", `/process-orders/${draft.body._id}/finish`, {});
+  const finished = await api("owner", "POST", `/process-orders/${draft.body._id}/finish`, {});
+  assert.equal(finished.status, 200, JSON.stringify(finished.data));
+  assert.match(finished.body.production.productionNo, /^PRD-/);
+  const actions = await as(() => M.ActivityLog.find({ entity: "ProcessOrder", entityId: draft.body._id }).lean());
+  assert.deepEqual(actions.map((a) => a.action).sort(), ["PROCESS_ORDER_COMPLETED", "PROCESS_ORDER_CREATED", "PROCESS_ORDER_RELEASED", "PROCESS_STEP_DONE", "PROCESS_STEP_STARTED"]);
+});

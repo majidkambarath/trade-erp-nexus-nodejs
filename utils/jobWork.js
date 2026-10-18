@@ -44,7 +44,7 @@ function progress(order) {
 }
 
 // Every problem as { field, code, message }; empty = the job can be saved.
-function validateOrder(input = {}) {
+function validateOrder(input = {}, { sameItem = false } = {}) {
   const errors = [];
   const add = (field, code, message) => errors.push({ field, code, message });
   if (!idOf(input.jobWorkerId)) add("jobWorkerId", "JOB_WORKER_REQUIRED", "Choose the job worker (the vendor doing the work)");
@@ -54,7 +54,7 @@ function validateOrder(input = {}) {
     const n = `Line ${i + 1}`;
     if (!idOf(l?.rawStockId)) add(`lines.${i}.rawStockId`, "ITEM_REQUIRED", `${n}: choose the item you send`);
     if (!idOf(l?.finishedStockId)) add(`lines.${i}.finishedStockId`, "ITEM_REQUIRED", `${n}: choose the item that comes back`);
-    else if (idOf(l.finishedStockId) === idOf(l.rawStockId)) add(`lines.${i}.finishedStockId`, "SAME_ITEM", `${n}: the item that comes back must be a different item (e.g. "coated") from the one sent`);
+    else if (!sameItem && idOf(l.finishedStockId) === idOf(l.rawStockId)) add(`lines.${i}.finishedStockId`, "SAME_ITEM", `${n}: the item that comes back must be a different item (e.g. "coated") from the one sent`);
     if (!(num(l?.qtySent) > 0)) add(`lines.${i}.qtySent`, "INVALID_QTY", `${n}: the quantity sent must be more than zero`);
     if (l?.finishedPerRaw !== undefined && l.finishedPerRaw !== "" && !(num(l.finishedPerRaw) > 0)) {
       add(`lines.${i}.finishedPerRaw`, "INVALID_QTY", `${n}: finished per unit sent must be more than zero`);

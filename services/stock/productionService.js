@@ -118,7 +118,7 @@ class ProductionService {
         edit: p.status === "DRAFT",
         delete: p.status === "DRAFT",
         post: p.status === "DRAFT",
-        reverse: p.status === "POSTED" && p.source?.kind !== "job_work", // a job-work receipt is reversed on its job
+        reverse: p.status === "POSTED" && !p.source?.kind, // made by a job-work receipt or a process order: undone there
       },
     };
   }
@@ -457,6 +457,9 @@ class ProductionService {
     if (p.status !== "POSTED") throw fail(`${p.productionNo} is ${p.status.toLowerCase()}; only a posted production can be reversed`, 409, "PRODUCTION_NOT_POSTED");
     if (p.source?.kind === "job_work" && !fromJobWork) {
       throw fail(`${p.productionNo} was made by a receipt on job work ${p.source.no}; reverse that receipt on the job work instead`, 409, "PRODUCTION_FROM_JOB_WORK");
+    }
+    if (p.source?.kind === "process" && !fromJobWork) {
+      throw fail(`${p.productionNo} finished process order ${p.source.no}; reopen that order instead`, 409, "PRODUCTION_FROM_PROCESS");
     }
     await FiscalYearService.assertPostingAllowed(p.date, { session });
 

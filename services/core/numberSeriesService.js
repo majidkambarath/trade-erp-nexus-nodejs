@@ -31,6 +31,8 @@ const SERIES = {
   PRD: { prefix: "PRD", numberLength: 4, label: "Production" },
   // Job work: the delivery challan our parts go out on to an outside job worker (a coater).
   JWC: { prefix: "JWC", numberLength: 4, label: "Job work challan" },
+  // A process order: one product made through steps (cutting, bending, painting ...), in-house or at job workers.
+  PRO: { prefix: "PRO", numberLength: 4, label: "Process order" },
   // Opening balances (go-live): account balances, customer / vendor invoices carried over, stock.
   OBV: { prefix: "OBV", numberLength: 4, label: "Opening balance voucher" },
   OSI: { prefix: "OSI", numberLength: 4, label: "Opening sales invoice" },
