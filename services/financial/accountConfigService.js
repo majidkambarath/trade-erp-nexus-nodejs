@@ -241,8 +241,13 @@ class AccountConfigService {
         set[`profile.${k}`] = String(v).trim();
       }
       if (data.profile.vatRegistered !== undefined) set["profile.vatRegistered"] = Boolean(data.profile.vatRegistered);
-      const trn = set["profile.trn"];
-      if (trn && !/^\d{15}$/.test(trn)) throw new AppError("A UAE TRN is 15 digits", 400, "INVALID_TRN");
+      // the company's own tax number follows its country: a UAE TRN, an Indian GSTIN, ... (utils/partyMaster.js)
+      if (set["profile.trn"]) {
+        const { normalizeTrn, isValidTrn, taxIdRule } = require("../../utils/partyMaster");
+        const country = require("../../utils/orgLocale").country();
+        set["profile.trn"] = normalizeTrn(set["profile.trn"]);
+        if (!isValidTrn(set["profile.trn"], country)) throw new AppError(taxIdRule(country).message, 400, "INVALID_TRN");
+      }
     }
     await CompanySettings.updateOne({ companyId }, { $set: set });
     return this.getSettings(req);

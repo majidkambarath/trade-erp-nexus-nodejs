@@ -56,7 +56,8 @@ class ItemKindService {
     const Quotation = require("../../models/modules/quotationModel");
     const DeliveryNote = require("../../models/modules/deliveryNoteModel");
     const ProductionOrder = require("../../models/modules/productionOrderModel");
-    const [movements, batches, transactions, quotations, notes, productions] = await allBranches(() =>
+    const JobWorkOrder = require("../../models/modules/jobWorkOrderModel");
+    const [movements, batches, transactions, quotations, notes, productions, jobWork] = await allBranches(() =>
       Promise.all([
         withSession(InventoryMovement.countDocuments({ stockId: stock.itemId }), session),
         withSession(StockBatch.countDocuments({ stockId: stock._id }), session),
@@ -64,9 +65,10 @@ class ItemKindService {
         withSession(Quotation.countDocuments({ "items.itemId": stock._id }), session),
         withSession(DeliveryNote.countDocuments({ "items.itemId": stock._id }), session),
         withSession(ProductionOrder.countDocuments({ $or: [{ "finished.stockId": stock._id }, { "materials.stockId": stock._id }] }), session),
+        withSession(JobWorkOrder.countDocuments({ $or: [{ "lines.rawStockId": stock._id }, { "lines.finishedStockId": stock._id }] }), session),
       ])
     );
-    return { movements, batches, documents: transactions + quotations + notes + productions, transactions, quotations, deliveryNotes: notes, productions };
+    return { movements, batches, documents: transactions + quotations + notes + productions + jobWork, transactions, quotations, deliveryNotes: notes, productions, jobWork };
   }
 
   // Goods -> service needs an item nothing has happened to: no stock, no movement, no batch, no document.

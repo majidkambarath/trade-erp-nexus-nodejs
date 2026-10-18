@@ -1,3 +1,4 @@
+const orgLocale = require("../../utils/orgLocale");
 const mongoose = require("mongoose");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
@@ -57,7 +58,7 @@ class PartyMasterService {
       const stored = existing
         ? { status: existing.vat?.status, trn: existing.vat?.trn || existing[k.legacyTrn] || null, tradeLicenseNo: existing.vat?.tradeLicenseNo }
         : undefined;
-      const vat = resolveVat({ input: data.vat, legacyTrn: data[k.legacyTrn], existing: stored });
+      const vat = resolveVat({ input: data.vat, legacyTrn: data[k.legacyTrn], existing: stored, country: orgLocale.country() }); // TRN, GSTIN, ... by the organisation's country
       if (vat.trn && vat.trn !== (stored?.trn || null)) await this.assertUniqueTrn(kind, vat.trn, existing?._id);
       patch.vat = vat;
       patch[k.legacyTrn] = vat.trn;

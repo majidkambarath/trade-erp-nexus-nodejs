@@ -106,6 +106,7 @@ async function contraAccounts(costs, absorbedId, session) {
 
 class ProductionService {
   static movedAt = movedAt;
+  static absorbedAccount = absorbedAccount; // for a caller that posts inside its own transaction (job work)
   static CONTRA_NAME = CONTRA_NAME;
 
   // ---- reading -------------------------------------------------------------------------------------------
@@ -118,7 +119,7 @@ class ProductionService {
         edit: p.status === "DRAFT",
         delete: p.status === "DRAFT",
         post: p.status === "DRAFT",
-        reverse: p.status === "POSTED",
+        reverse: p.status === "POSTED" && p.source?.kind !== "job_work", // a job-work receipt is reversed on its job
       },
     };
   }
@@ -450,11 +451,14 @@ class ProductionService {
 
   // Undoes a posted production: the finished item back out at the cost it came in at, the materials back in
   // at theirs, the batches put back and the ledger reversed. Refused once any of the finished goods have gone.
-  static reverse = withTransactionSession(async (id, { reason } = {}, by, session) => {
+  static reverse = withTransactionSession(async (id, { reason, fromJobWork = false } = {}, by, session) => {
     if (!isId(id)) throw fail("Production not found", 404, "NOT_FOUND");
     const p = await ProductionOrder.findById(id).session(session);
     if (!p) throw fail("Production not found", 404, "NOT_FOUND");
     if (p.status !== "POSTED") throw fail(`${p.productionNo} is ${p.status.toLowerCase()}; only a posted production can be reversed`, 409, "PRODUCTION_NOT_POSTED");
+    if (p.source?.kind === "job_work" && !fromJobWork) {
+      throw fail(`${p.productionNo} was made by a receipt on job work ${p.source.no}; reverse that receipt on the job work instead`, 409, "PRODUCTION_FROM_JOB_WORK");
+    }
     await FiscalYearService.assertPostingAllowed(p.date, { session });
 
     const finished = await Stock.findById(p.finished.stockId).session(session).lean();

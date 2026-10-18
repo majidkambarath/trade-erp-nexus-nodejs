@@ -29,6 +29,8 @@ const SERIES = {
   SA: { prefix: "SA", numberLength: 4, label: "Stock adjustment" },
   // A production: materials used up and expenses moved into the cost of the item it made.
   PRD: { prefix: "PRD", numberLength: 4, label: "Production" },
+  // Job work: the delivery challan our parts go out on to an outside job worker (a coater).
+  JWC: { prefix: "JWC", numberLength: 4, label: "Job work challan" },
   // Opening balances (go-live): account balances, customer / vendor invoices carried over, stock.
   OBV: { prefix: "OBV", numberLength: 4, label: "Opening balance voucher" },
   OSI: { prefix: "OSI", numberLength: 4, label: "Opening sales invoice" },

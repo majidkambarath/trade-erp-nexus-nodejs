@@ -187,3 +187,33 @@ test("another branch cannot see a production", { skip }, async () => {
   const deleted = await api("owner", "DELETE", `/productions/${draft.body._id}`);
   assert.equal(deleted.status, 200);
 });
+
+test("job work over HTTP: opt-in like Production, stock rights to send, finance rights to move costs in, audited", { skip }, async () => {
+  const off = await api("other", "GET", "/job-work");
+  assert.equal(off.status, 403);
+  assert.equal(off.code, "FEATURE_NOT_IN_PLAN", "part of the Production feature");
+
+  const Vendor = require("../../models/modules/vendorModel");
+  const coater = String((await as(() => new Vendor({ vendorId: "VC1", vendorName: "Shine Coaters", contactPerson: "x", address: "Pune", paymentTerms: "Net 30" }).save()))._id);
+  const body = { jobWorkerId: coater, purpose: "Powder coating", lines: [{ rawStockId: S.raw, finishedStockId: S.finished, qtySent: 5 }] };
+  await cannot("looker", "POST", "/job-work", body);
+
+  const draft = await api("stockonly", "POST", "/job-work", body);
+  assert.equal(draft.status, 201, JSON.stringify(draft.data));
+  const sent = await api("stockonly", "POST", `/job-work/${draft.body._id}/send`, {});
+  assert.equal(sent.status, 200, JSON.stringify(sent.data));
+  assert.match(sent.body.jobWorkNo, /^JWC-/);
+  assert.equal(sent.body.atWorker, 5);
+  const stock = await api("owner", "GET", "/stock/stock");
+  assert.equal(stock.data.data.stocks.find((s) => String(s._id) === S.raw).withJobWorker, 5, "the stock list shows what is with the job worker");
+
+  const receipt = { lines: [{ lineId: sent.body.lines[0]._id, finishedQty: 5 }], costs: [{ accountId: S.expense, amount: 25 }], acknowledge: ["COST_EXCEEDS_SPEND"] };
+  const refused = await cannot("stockonly", "POST", `/job-work/${draft.body._id}/receive`, receipt);
+  assert.deepEqual(refused.details.required, ["finance.create"]);
+  const back = await api("maker", "POST", `/job-work/${draft.body._id}/receive`, receipt);
+  assert.equal(back.status, 200, JSON.stringify(back.data));
+  assert.equal(back.body.status, "RECEIVED");
+  assert.equal(back.body.productions.length, 1);
+  const actions = await as(() => M.ActivityLog.find({ entity: "JobWorkOrder", entityId: draft.body._id }).lean());
+  assert.deepEqual(actions.map((a) => a.action).sort(), ["JOB_WORK_CREATED", "JOB_WORK_RECEIVED", "JOB_WORK_SENT"]);
+});
