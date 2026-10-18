@@ -45,13 +45,13 @@ function dayOf(value) {
   return day ? new Date(`${day}T00:00:00.000Z`) : null;
 }
 
-// The instant a production's stock moves at: now for today, the last moment of the day for a past day,
-// so it sorts after everything else of its day and nothing may come after it (see LATER_MOVEMENTS_EXIST).
-function movedAt(date) {
-  const day = orgDay(date);
-  const end = orgLocale.endOfDay(day);
-  const now = new Date();
-  return end < now ? end : now;
+// A production's stock moves on its DAY, stored at midnight like every document's date (an invoice dated today is
+// midnight too), so the cost replay (RecostService.recostItem, ordered by date then createdAt) puts two things of the same
+// day in the order they were entered. Stamping the clock time instead put a same-day invoice entered AFTER the production
+// before it, and the replay counted the production twice in the item's stored value (found on the live books). Nothing of a
+// LATER day may have moved its items (LATER_MOVEMENTS_EXIST): this is that day's last moment.
+function lastMomentOf(date) {
+  return orgLocale.endOfDay(orgDay(date));
 }
 
 // "Production costs moved to stock". A company whose posting map predates the key gets the defaults added
@@ -105,7 +105,6 @@ async function contraAccounts(costs, absorbedId, session) {
 }
 
 class ProductionService {
-  static movedAt = movedAt;
   static absorbedAccount = absorbedAccount; // for a caller that posts inside its own transaction (job work)
   static CONTRA_NAME = CONTRA_NAME;
 
@@ -337,7 +336,7 @@ class ProductionService {
       throw fail("Ledger posting is off, so costs cannot be moved into stock. Switch ledger posting on, or post the production with materials only.", 409, "LEDGER_POSTING_OFF");
     }
 
-    const at = movedAt(date);
+    const at = lastMomentOf(date);
     const involved = [p.finished, ...p.materials];
     const later = await InventoryMovement.findOne({ stockId: { $in: involved.map((m) => m.itemId) }, date: { $gt: at }, ...LIVE })
       .select("stockId referenceNumber date").session(session).lean();
@@ -374,7 +373,7 @@ class ProductionService {
           eventType: "PRODUCTION_ISSUE", referenceType: "Production", referenceId: p._id, referenceNumber: productionNo,
           unitCost: r.rate, totalValue: r.cost, costBasis: "production",
           rateBefore: pool.avgRate, rateAfter: r.pool.avgRate, costPoolAfter: r.pool.costValue, poolQtyAfter: r.pool.quantity,
-          notes: `Used in production ${productionNo}: ${p.finished.itemName}`, createdBy, date: at,
+          notes: `Used in production ${productionNo}: ${p.finished.itemName}`, createdBy, date,
         }],
         { session }
       );
@@ -404,7 +403,7 @@ class ProductionService {
         eventType: "PRODUCTION_RECEIPT", referenceType: "Production", referenceId: p._id, referenceNumber: productionNo,
         unitCost: totals.unitCost, totalValue: totals.total, costBasis: "production",
         rateBefore: pool.avgRate, rateAfter: r.pool.avgRate, costPoolAfter: r.pool.costValue, poolQtyAfter: r.pool.quantity,
-        notes: `Made in production ${productionNo}`, createdBy, batchNumber: p.finished.batchNumber, expiryDate: p.finished.expiryDate, date: at,
+        notes: `Made in production ${productionNo}`, createdBy, batchNumber: p.finished.batchNumber, expiryDate: p.finished.expiryDate, date,
       }],
       { session }
     );

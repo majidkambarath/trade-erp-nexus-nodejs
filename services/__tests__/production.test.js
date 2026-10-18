@@ -357,3 +357,20 @@ test("an expense filed under Cost of Goods Sold is offset inside cost of sales, 
   assert.equal(await balance(contra), -40);
   assert.equal((await svc.StockReports.ledgerCheck({ asOn: today() })).lines.find((l) => l.key === "production").difference, 0);
 });
+
+test("a sale dated the same day after a production: the replay keeps the order things happened in (found on live books)", { skip }, async () => {
+  // a production posted today, then a sales invoice dated today (documents are dated at midnight): the cost replay the
+  // sale starts must put the production first, or the item's stored value counts the production twice
+  const part = await svc.Stock.create({ itemId: "PART9", sku: "PART9", itemName: "Part 9", category: (await svc.Category.findOne({}))._id });
+  const made = await svc.Stock.create({ itemId: "MADE9", sku: "MADE9", itemName: "Made 9", category: part.category });
+  await buy([L(part, 100, 50)]);
+  await svc.P.post((await svc.P.create({ finished: { stockId: made._id, qty: 100 }, materials: [{ stockId: part._id, qty: 100 }] }, "tester"))._id, {}, "tester");
+  await sell([L(made, 10, 120)], { date: today() }); // a day, as the invoice form sends it: stored at midnight
+  const m = await item(made);
+  assert.deepEqual([m.currentStock, r2(m.costValue), m.purchasePrice], [90, 4500, 50], "90 left at 50 each: 4,500, not 9,500");
+  // the item's stored value equals what its last movement left in the pool (an earlier test in this file posted a purchase
+  // with ledger posting off, so the organisation-wide stock-vs-ledger figure is not the measure here)
+  const last = await svc.Movement.findOne({ stockId: "MADE9" }).sort({ date: -1, createdAt: -1, _id: -1 }).lean();
+  assert.equal(last.eventType, "SALES_DISPATCH", "the sale sorts after the production it came after");
+  assert.equal(r2(last.costPoolAfter), r2(m.costValue));
+});
