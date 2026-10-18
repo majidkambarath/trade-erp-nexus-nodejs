@@ -6,6 +6,7 @@ const TransactionService = require("./transactionService");
 const { roundTo } = require("../../utils/pricing");
 const { toExpiryDay, parseExpiry } = require("../../utils/documentExpiry");
 const kinds = require("../../utils/itemKinds");
+const { orgTaxTerms } = require("../../utils/countryRules");
 
 // What a quotation and a delivery note have in common: checking the customer and the lines, pricing
 // the document with the same code that prices the invoice it can become, and attaching the stock
@@ -68,7 +69,7 @@ async function prepareLines(items, { session, allowEmpty = false } = {}) {
     const discountAmount = num(line.discountAmount) || 0;
     if (discountAmount < 0) throw new AppError(`Line ${n}: discount cannot be negative`, 400, "INVALID_DISCOUNT");
     const vatPercent = num(line.vatPercent) || 0;
-    if (vatPercent < 0) throw new AppError(`Line ${n}: VAT cannot be negative`, 400, "INVALID_VAT");
+    if (vatPercent < 0) throw new AppError(`Line ${n}: ${orgTaxTerms().tax} cannot be negative`, 400, "INVALID_VAT");
     return {
       itemId: line.itemId,
       itemCode: line.itemCode || stock.itemId || "",

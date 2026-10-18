@@ -11,6 +11,7 @@ const PostingService = require("./postingService");
 const AuditService = require("../core/auditService");
 const { backfillPartyAccounts } = require("./partyAccounts");
 const { GROUPS, ACCOUNTS, GROUP_FOR_KEY } = require("../../utils/defaultChart");
+const { localAccountName } = require("../../utils/countryRules");
 const { getTenant } = require("../../utils/tenant");
 
 const SUBTYPE = {
@@ -46,13 +47,26 @@ class DefaultChartService {
       created.groups = newGroups.length;
     }
 
-    // Accounts: the same, with each group's new codes reserved together.
-    const existing = await LedgerAccount.find({ accountName: { $in: ACCOUNTS.map((a) => a[0]) } });
+    // Accounts: the same, with each group's new codes reserved together. Named in the organisation's own words ("Input GST"
+    // in India: utils/countryRules.js); an account made under the UAE name before is renamed in place, never made twice.
+    const organisation = await Organisation.findOne({ code: companyId }).select("country").lean();
+    const country = organisation?.country || "AE";
+    const nameOf = (n) => localAccountName(n, country);
+    const existing = await LedgerAccount.find({ accountName: { $in: [...new Set(ACCOUNTS.flatMap((a) => [a[0], nameOf(a[0])]))] } });
     const accountByKey = {};
     const missing = []; // [accountName, group, configKey]
-    for (const [accountName, groupName, configKey] of ACCOUNTS) {
+    for (const [baseName, groupName, configKey] of ACCOUNTS) {
       const group = groups[groupName];
+      const accountName = nameOf(baseName);
       let acc = existing.find((a) => a.accountName === accountName && String(a.groupId) === String(group._id));
+      if (!acc && accountName !== baseName) {
+        acc = existing.find((a) => a.accountName === baseName && String(a.groupId) === String(group._id));
+        if (acc) {
+          acc.accountName = accountName;
+          await acc.save();
+          created.renamed = (created.renamed || 0) + 1;
+        }
+      }
       if (!acc) {
         // An account with this name may already exist outside a group (created before groups).
         acc = existing.find((a) => a.accountName === accountName && !a.groupId);
@@ -104,7 +118,6 @@ class DefaultChartService {
     // The starter tax codes are the UAE's (VAT 5%, zero-rated, exempt, out of scope). An organisation in another
     // country must not be handed another country's tax: it adds its own in Accounting setup. One with no
     // registry row (the older single-company set-up) keeps the old behaviour.
-    const organisation = await Organisation.findOne({ code: companyId }).select("country").lean();
     if (!organisation || organisation.country === "AE") created.taxCodes = await TaxCodeService.ensureStarter(companyId);
     return created;
   }
