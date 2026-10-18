@@ -66,8 +66,47 @@ async function absorbedAccount() {
   }
 }
 
+// Where each cost's credit goes: a "Production Costs Moved to Stock" account in the SAME group as the expense, so the
+// P&L shows the expense and the amount moved out of it side by side (an expense filed under Cost of Goods Sold is
+// offset inside cost of sales, and gross profit stays right). The posting key's own account serves its own group
+// (and an expense with no group); another group gets one made on first use, the way a party account is.
+const CONTRA_NAME = "Production Costs Moved to Stock";
+async function contraAccounts(costs, absorbedId, session) {
+  const out = new Map();
+  if (!costs.length) return out;
+  const AccountGroupService = require("../financial/accountGroupService");
+  const ids = [...new Set(costs.map((c) => String(c.accountId)))];
+  const [keyed, expenses] = await Promise.all([
+    LedgerAccount.findById(absorbedId).select("groupId").session(session).lean(),
+    LedgerAccount.find({ _id: { $in: ids } }).select("groupId subType").session(session).lean(),
+  ]);
+  const byGroup = new Map();
+  for (const e of expenses) {
+    const group = e.groupId ? String(e.groupId) : null;
+    if (!group || !keyed?.groupId || group === String(keyed.groupId)) { out.set(String(e._id), String(absorbedId)); continue; }
+    if (!byGroup.has(group)) {
+      let contra = await LedgerAccount.findOne({ groupId: e.groupId, accountType: "expense", accountName: CONTRA_NAME }).select("_id").session(session).lean();
+      if (!contra) {
+        const accountCode = await AccountGroupService.generateNextAccountCode(e.groupId, { session });
+        [contra] = await LedgerAccount.create(
+          [{
+            accountCode, accountName: CONTRA_NAME, accountType: "expense", subType: e.subType || "operating_expense", groupId: e.groupId,
+            allowDirectPosting: true, isSystemAccount: true, createdBy: SYSTEM_USER,
+            description: "Expenses of this group moved into the cost of items made in productions (each expense keeps what was spent on it).",
+          }],
+          { session }
+        );
+      }
+      byGroup.set(group, String(contra._id));
+    }
+    out.set(String(e._id), byGroup.get(group));
+  }
+  return out;
+}
+
 class ProductionService {
   static movedAt = movedAt;
+  static CONTRA_NAME = CONTRA_NAME;
 
   // ---- reading -------------------------------------------------------------------------------------------
 
@@ -174,7 +213,7 @@ class ProductionService {
       if (!a) throw fail(`Cost ${i + 1}: expense account not found`, 400, "INVALID_COST_ACCOUNT");
       if (a.accountType !== "expense") throw fail(`Cost ${i + 1}: ${a.accountName} is not an expense account`, 400, "INVALID_COST_ACCOUNT");
       if (a.isActive === false || a.allowDirectPosting === false) throw fail(`Cost ${i + 1}: ${a.accountName} cannot take postings`, 400, "INVALID_COST_ACCOUNT");
-      if (reserved.has(String(a._id))) throw fail(`Cost ${i + 1}: ${a.accountName} cannot be moved into a product's cost`, 400, "INVALID_COST_ACCOUNT");
+      if (reserved.has(String(a._id)) || a.accountName === CONTRA_NAME) throw fail(`Cost ${i + 1}: ${a.accountName} cannot be moved into a product's cost`, 400, "INVALID_COST_ACCOUNT");
       return { accountId: a._id, accountCode: a.accountCode, accountName: a.accountName, amount: costing.roundValue(Number(c.amount)), narration: c.narration ? String(c.narration).trim().slice(0, 300) : undefined };
     });
 
@@ -373,9 +412,11 @@ class ProductionService {
     let ledgerPosted = false;
     if (postingOn && totals.total > 0) {
       const inventoryId = await AccountConfigService.resolveAccount("inventory-asset", { session });
+      const contra = await contraAccounts(p.costs, absorbedId, session);
       const lines = rules.ledgerLines({
         inventoryAccountId: String(inventoryId), absorbedAccountId: absorbedId && String(absorbedId),
-        materialsCost, costs: p.costs, productionNo, itemName: p.finished.itemName, qty: p.finished.qty,
+        materialsCost, costs: p.costs.map((c) => ({ ...c.toObject(), contraAccountId: contra.get(String(c.accountId)) })),
+        productionNo, itemName: p.finished.itemName, qty: p.finished.qty,
       });
       const accounts = await LedgerAccount.find({ _id: { $in: [...new Set(lines.map((l) => l.accountId))] } }).select("accountName accountCode").session(session).lean();
       const accById = new Map(accounts.map((a) => [String(a._id), a]));

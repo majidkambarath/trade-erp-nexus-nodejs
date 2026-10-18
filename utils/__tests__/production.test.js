@@ -79,3 +79,11 @@ test("costReport: posted productions by the item they made, with materials and c
   assert.deepEqual(r.productions.map((p) => p.productionNo), ["PRD-1", "PRD-2"]);
   assert.deepEqual(report.totals, { materials: 150, costs: 100, total: 250 });
 });
+
+test("ledgerLines: a cost that names its own contra (its expense's group) is credited there", () => {
+  const lines = P.ledgerLines({
+    inventoryAccountId: "INV", absorbedAccountId: "ABS", materialsCost: 0, productionNo: "PRD-1", itemName: "x", qty: 1,
+    costs: [{ accountName: "Travelling", amount: 50 }, { accountName: "Coating", amount: 30, contraAccountId: "ABS-COGS" }],
+  });
+  assert.deepEqual(lines.map((l) => [l.accountId, l.debit, l.credit]), [["INV", 80, 0], ["ABS", 0, 50], ["ABS-COGS", 0, 30]]);
+});

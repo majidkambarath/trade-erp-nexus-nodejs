@@ -65,7 +65,8 @@ function totals({ materialCosts = [], costs = [], qty }) {
 //   Cr Inventory              materials    (the materials out)
 //   Cr costs-moved-to-stock   each cost    (one line per cost, narrated with the expense it came from)
 // The expense accounts themselves are not touched: each keeps what was spent on it, and the P&L shows the
-// amount moved into stock as a line of its own.
+// amount moved into stock as a line of its own. A cost may name its own `contraAccountId` (the contra in the
+// expense's own group, so the credit sits beside the expense in the P&L); else it goes to `absorbedAccountId`.
 function ledgerLines({ inventoryAccountId, absorbedAccountId, materialsCost, costs = [], productionNo, itemName, qty }) {
   const made = `${productionNo}: ${itemName} x ${qty}`;
   const lines = [];
@@ -79,7 +80,7 @@ function ledgerLines({ inventoryAccountId, absorbedAccountId, materialsCost, cos
     if (!(amount > 0)) continue;
     const from = c.accountName ? `${c.accountName}` : "expense";
     lines.push({
-      accountId: absorbedAccountId, debit: 0, credit: amount,
+      accountId: c.contraAccountId || absorbedAccountId, debit: 0, credit: amount,
       narration: `${from} moved to stock: production ${made}${c.narration ? ` - ${c.narration}` : ""}`,
     });
   }

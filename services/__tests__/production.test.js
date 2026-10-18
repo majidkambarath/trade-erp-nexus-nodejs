@@ -319,3 +319,41 @@ test("a company whose posting map predates production-absorbed is topped up on i
   assert.equal(posted.ledgerPosted, true);
   assert.equal((await absorbed()).accountName, "Production Costs Moved to Stock", "mapped again by the top-up, and used");
 });
+
+test("an expense filed under Cost of Goods Sold is offset inside cost of sales, by a contra in its own group", { skip }, async () => {
+  const cogsAccount = await svc.LedgerAccount.findOne({ accountName: "Cost of Goods Sold" }).lean();
+  const direct = await svc.LedgerAccount.create({
+    accountCode: "COGS-901", accountName: "Direct Coating", accountType: "expense", subType: cogsAccount.subType, groupId: cogsAccount.groupId,
+    level: cogsAccount.level, isActive: true, allowDirectPosting: true, currentBalance: 0, openingBalance: 0, createdBy: admin,
+  });
+  await expense(direct, 40, "Coating job");
+  const contraIn = (groupId) => svc.LedgerAccount.find({ groupId, accountName: "Production Costs Moved to Stock" }).lean();
+  assert.equal((await contraIn(cogsAccount.groupId)).length, 0, "none until it is needed");
+
+  const p = await svc.P.post((await svc.P.create({ finished: { stockId: other._id, qty: 1 }, costs: [{ accountId: direct._id, amount: 40 }] }, "tester"))._id, {}, "tester");
+  const [contra] = await contraIn(cogsAccount.groupId);
+  assert.ok(contra, "made in the expense's own group on first use");
+  assert.equal(contra.isSystemAccount, true);
+  const entries = await entriesOf(p);
+  assert.equal(r2(entries.filter((e) => String(e.accountId) === String(contra._id)).reduce((s, e) => s + e.creditAmount, 0)), 40);
+  const opexContra = (await absorbed())._id;
+  assert.equal(entries.some((e) => String(e.accountId) === String(opexContra)), false, "nothing to the Operating Expenses contra");
+  assert.deepEqual([await balance(direct), await balance(contra)], [40, -40], "the expense keeps its 40; the contra beside it carries -40");
+
+  // the P&L: both lines in cost of sales, side by side
+  const pl = await svc.Ledger.profitAndLoss({ from: today(), to: today() });
+  const directLines = pl.directCosts.groups.flatMap((g) => g.accounts);
+  assert.equal(directLines.find((a) => a.accountName === "Direct Coating")?.amount, 40);
+  assert.ok(directLines.some((a) => String(a.accountId) === String(contra._id)), "the contra is in cost of sales, not in operating expenses");
+  assert.equal(pl.operatingExpenses.groups.flatMap((g) => g.accounts).some((a) => String(a.accountId) === String(contra._id)), false);
+
+  // a second production reuses it; it can never be a cost itself; reversal puts it back
+  await expense(direct, 10, "Another coating job");
+  const p2 = await svc.P.post((await svc.P.create({ finished: { stockId: other._id, qty: 1 }, costs: [{ accountId: direct._id, amount: 10 }] }, "tester"))._id, {}, "tester");
+  assert.equal((await contraIn(cogsAccount.groupId)).length, 1, "one contra per group");
+  assert.equal(await balance(contra), -50);
+  await assert.rejects(() => svc.P.create({ finished: { stockId: other._id, qty: 1 }, costs: [{ accountId: contra._id, amount: 1 }] }, "tester"), { code: "INVALID_COST_ACCOUNT" });
+  await svc.P.reverse(p2._id, {}, "tester");
+  assert.equal(await balance(contra), -40);
+  assert.equal((await svc.StockReports.ledgerCheck({ asOn: today() })).lines.find((l) => l.key === "production").difference, 0);
+});
