@@ -154,6 +154,7 @@ app.use("/api/v1/goods-receipts", require("./routes/orderPurchase/goodsReceiptRo
 app.use("/api/v1/productions", require("./routes/stock/productionRoutes")); // productions: before adminRouter, like every new top-level GET
 app.use("/api/v1/job-work", require("./routes/stock/jobWorkRoutes")); // job work (subcontracting): before adminRouter, like every new top-level GET
 app.use("/api/v1/process-orders", require("./routes/stock/processOrderRoutes")); // process orders and the board: before adminRouter, like every new top-level GET
+app.use("/api/v1/process-routes", require("./routes/stock/processRouteRoutes")); // saved routes per product: before adminRouter, like every new top-level GET
 app.use("/api/v1/ifrs", require("./routes/reports/ifrsRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/dashboard-summary", require("./routes/reports/dashboardRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/opening-balances", require("./routes/financial/openingBalanceRoutes")); // before adminRouter, whose bare GET /:id would capture it

@@ -19,6 +19,9 @@ router.param("id", branchOfDocument(ProcessOrder)); // a head office working acr
 router.get("/board", requirePermission("inventory.view"), c.board);
 router.get("/assignees", requirePermission("inventory.view"), c.assignees);
 router.get("/last-steps", requirePermission("inventory.view"), c.lastSteps);
+router.get("/my-work", requirePermission("inventory.view"), c.myWork);
+router.get("/analysis", requirePermission("inventory.view"), c.analysis);
+router.get("/expense-vouchers", requirePermission("finance.view"), c.expenseVouchers);
 
 router.get("/", requirePermission("inventory.view"), c.list);
 router.post("/", requirePermission("inventory.adjust"), c.create);
@@ -33,5 +36,7 @@ router.post("/:id/reopen", requirePermission("inventory.adjust"), c.reopen);
 router.post("/:id/steps/:stepId/start", requirePermission("inventory.view"), c.startStep);
 router.post("/:id/steps/:stepId/complete", requirePermission("inventory.view"), c.completeStep);
 router.post("/:id/steps/:stepId/send", requirePermission("inventory.adjust"), c.sendStep);
+router.post("/:id/costs", requirePermission("inventory.adjust"), c.addCost);
+router.delete("/:id/costs/:costId", requirePermission("inventory.adjust"), c.removeCost);
 
 module.exports = router;

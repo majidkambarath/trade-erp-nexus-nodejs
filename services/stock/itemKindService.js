@@ -58,7 +58,8 @@ class ItemKindService {
     const ProductionOrder = require("../../models/modules/productionOrderModel");
     const JobWorkOrder = require("../../models/modules/jobWorkOrderModel");
     const ProcessOrder = require("../../models/modules/processOrderModel");
-    const [movements, batches, transactions, quotations, notes, productions, jobWork, processes] = await allBranches(() =>
+    const ProcessRoute = require("../../models/modules/processRouteModel");
+    const [movements, batches, transactions, quotations, notes, productions, jobWork, processes, routes] = await allBranches(() =>
       Promise.all([
         withSession(InventoryMovement.countDocuments({ stockId: stock.itemId }), session),
         withSession(StockBatch.countDocuments({ stockId: stock._id }), session),
@@ -68,9 +69,10 @@ class ItemKindService {
         withSession(ProductionOrder.countDocuments({ $or: [{ "finished.stockId": stock._id }, { "materials.stockId": stock._id }] }), session),
         withSession(JobWorkOrder.countDocuments({ $or: [{ "lines.rawStockId": stock._id }, { "lines.finishedStockId": stock._id }] }), session),
         withSession(ProcessOrder.countDocuments({ $or: [{ "finished.stockId": stock._id }, { "materials.stockId": stock._id }] }), session),
+        withSession(ProcessRoute.countDocuments({ $or: [{ "finished.stockId": stock._id }, { "materials.stockId": stock._id }] }), session),
       ])
     );
-    return { movements, batches, documents: transactions + quotations + notes + productions + jobWork + processes, transactions, quotations, deliveryNotes: notes, productions, jobWork, processes };
+    return { movements, batches, documents: transactions + quotations + notes + productions + jobWork + processes + routes, transactions, quotations, deliveryNotes: notes, productions, jobWork, processes, routes };
   }
 
   // Goods -> service needs an item nothing has happened to: no stock, no movement, no batch, no document.

@@ -20,6 +20,8 @@ const stepSchema = new mongoose.Schema({
   status: { type: String, enum: ["WAITING", "READY", "IN_PROGRESS", "DONE"], default: "WAITING" },
   qtyDone: { type: Number, default: 0 },
   qtyRejected: { type: Number, default: 0 },
+  rejectReason: { type: String, trim: true, maxlength: 80 }, // why units were rejected (the analysis groups by it)
+  readyAt: Date, // when the step became ready: waiting time is readyAt -> startedAt
   startedAt: Date,
   startedBy: String,
   doneAt: Date,
@@ -38,6 +40,19 @@ const processOrderSchema = new mongoose.Schema(
     finished: { stockId: { type: id, ref: "Stock", required: true }, itemId: String, itemName: String, qty: { type: Number, required: true, min: 0 } },
     materials: { type: [new mongoose.Schema({ stockId: { type: id, ref: "Stock", required: true }, itemId: String, itemName: String, qty: Number }, { _id: false })], default: [] },
     steps: { type: [stepSchema], default: [] },
+    // Costs recorded while the order runs (the coater's bill, labour, transport), optionally tied to the expense voucher that
+    // paid them. Nothing posts: Finish offers them as the production's cost lines.
+    costs: {
+      type: [new mongoose.Schema({
+        stepId: { type: id }, stepName: String,
+        accountId: { type: id, ref: "LedgerAccount", required: true }, accountCode: String, accountName: String,
+        amount: { type: Number, required: true, min: 0 },
+        narration: { type: String, trim: true, maxlength: 300 },
+        voucherId: { type: id, ref: "Voucher" }, voucherNo: String,
+        addedBy: String, addedAt: Date,
+      })],
+      default: [],
+    },
     notes: { type: String, trim: true, maxlength: 1000 },
     releasedAt: Date,
     completedAt: Date,
@@ -57,6 +72,9 @@ processOrderSchema.index({ status: 1, dueDate: 1 });
 processOrderSchema.index({ "steps.assigneeId": 1, status: 1 });
 processOrderSchema.index({ "finished.stockId": 1, createdAt: -1 });
 processOrderSchema.index({ createdAt: -1 });
+processOrderSchema.index({ "costs.voucherId": 1 });
+processOrderSchema.index({ completedAt: 1 });
+processOrderSchema.index({ "steps.doneAt": 1 });
 
 processOrderSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
 

@@ -5,6 +5,8 @@ const JobWorkOrder = require("../../models/modules/jobWorkOrderModel");
 const Stock = require("../../models/modules/stockModel");
 const Vendor = require("../../models/modules/vendorModel");
 const Admin = require("../../models/core/adminModel");
+const { Voucher } = require("../../models/modules/financial/financialModels");
+const { allBranches } = require("../../utils/tenantContext");
 const rules = require("../../utils/processOrders");
 const jobRules = require("../../utils/jobWork");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
@@ -42,6 +44,7 @@ class ProcessOrderService {
       current: step ? { _id: step._id, name: step.name, status: step.status, seq: step.seq } : null,
       readyToFinish: o.status === "OPEN" && ready,
       finishedQty: rules.finishedQty(o),
+      costTotal: Math.round((o.costs || []).reduce((t, c) => t + (Number(c.amount) || 0), 0) * 100) / 100,
       steps: (o.steps || []).map((s) => ({
         ...s,
         dueState: s.status === "DONE" ? "done" : rules.dueState(dayText(s.dueDate), today, tomorrow),
@@ -58,6 +61,7 @@ class ProcessOrderService {
         cancel: o.status === "OPEN" && !(o.steps || []).some((s) => s.mode === "job_work" && s.status === "IN_PROGRESS"),
         finish: o.status === "OPEN" && ready,
         reopen: o.status === "COMPLETED",
+        addCost: o.status === "OPEN",
       },
     };
   }
@@ -213,7 +217,7 @@ class ProcessOrderService {
     const o = await this.load(id, session);
     if (o.status !== "DRAFT") throw fail("Only a draft can be released", 409, "PROCESS_NOT_DRAFT");
     o.processNo = await NumberSeriesService.allocate("PRO", o.date, { session });
-    o.steps = rules.release(o.toObject().steps, o.finished.qty);
+    o.steps = rules.release(o.toObject().steps, o.finished.qty, new Date());
     o.status = "OPEN";
     o.releasedAt = new Date();
     o.updatedBy = String(by || "system");
@@ -254,12 +258,13 @@ class ProcessOrderService {
     if (problem) throw fail(problem.message, 400, problem.code);
     s.qtyDone = round3(input.qtyDone);
     s.qtyRejected = round3(Number(input.qtyRejected) || 0);
+    s.rejectReason = s.qtyRejected > 0 && input.rejectReason ? String(input.rejectReason).trim().slice(0, 80) : undefined;
     if (input.notes) s.notes = String(input.notes).trim().slice(0, 500);
     s.status = "DONE";
     if (!s.startedAt) s.startedAt = new Date();
     s.doneAt = new Date();
     s.doneBy = String(by || "system");
-    o.steps = rules.advance(o.toObject().steps, o.steps.findIndex((x) => String(x._id) === String(stepId)));
+    o.steps = rules.advance(o.toObject().steps, o.steps.findIndex((x) => String(x._id) === String(stepId)), new Date());
     o.updatedBy = String(by || "system");
     await o.save({ session });
     return o;
@@ -315,6 +320,7 @@ class ProcessOrderService {
       s.status = "DONE";
       s.qtyDone = round3(back / perUnit);
       s.qtyRejected = round3(returned / perUnit);
+      s.rejectReason = returned > 0 ? "Returned unprocessed by the job worker" : undefined;
       s.doneAt = new Date();
       s.doneBy = String(by || "system");
     } else {
@@ -326,7 +332,7 @@ class ProcessOrderService {
       s.doneAt = undefined;
       if (next && next.status === "READY") next.status = "WAITING";
     }
-    if (s.status === "DONE" && !wasDone) o.steps = rules.advance(o.toObject().steps, index);
+    if (s.status === "DONE" && !wasDone) o.steps = rules.advance(o.toObject().steps, index, new Date());
     o.updatedBy = String(by || "system");
     await o.save({ session });
   }
@@ -337,12 +343,120 @@ class ProcessOrderService {
     return o;
   }
 
+  // ---- costs recorded while it runs ----------------------------------------------------------------------
+
+  // What an expense voucher may still give: its net (without the tax, which is claimed back) less what open or finished
+  // process orders already took from it. A voucher of another kind, unapproved or not on the chart cannot be used.
+  // Read across every branch (allBranches): one bill must not be moved into two products, whichever branch made them.
+  static async voucherRoom(voucherId, { session, exceptOrderId = null } = {}) {
+    if (!isId(voucherId)) throw fail("Expense voucher not found", 404, "VOUCHER_NOT_FOUND");
+    const v = await allBranches(() => Voucher.findById(voucherId).select("voucherNo voucherType ledgerBased approvalStatus status expenseAccountId expenseAccountName subtotal totalAmount vatTotal date partyName description narration").session(session || null).lean());
+    if (!v || v.voucherType !== "expense" || !v.ledgerBased || !v.expenseAccountId) throw fail("Expense voucher not found", 404, "VOUCHER_NOT_FOUND");
+    if (String(v.status).toLowerCase() !== "approved") throw fail(`${v.voucherNo} is not approved yet: only a posted expense can be moved into a product`, 409, "VOUCHER_NOT_APPROVED");
+    const net = Math.round(((v.subtotal ?? (Number(v.totalAmount) || 0) - (Number(v.vatTotal) || 0)) || 0) * 100) / 100;
+    const users = await allBranches(() => ProcessOrder.find({ "costs.voucherId": v._id, status: { $ne: "CANCELLED" } }).select("processNo costs").session(session || null).lean());
+    let used = 0;
+    const usedBy = [];
+    for (const o of users) {
+      if (exceptOrderId && String(o._id) === String(exceptOrderId)) continue;
+      const amount = o.costs.filter((c) => String(c.voucherId) === String(v._id)).reduce((t, c) => t + (Number(c.amount) || 0), 0);
+      if (amount > 0) usedBy.push({ processNo: o.processNo, amount: Math.round(amount * 100) / 100 });
+      used += amount;
+    }
+    used = Math.round(used * 100) / 100;
+    return { voucher: v, net, used, left: Math.round((net - used) * 100) / 100, usedBy };
+  }
+
+  // Expense vouchers to pick a cost from (newest first), with what each still has to give.
+  static async expenseVouchers({ search } = {}) {
+    const q = { voucherType: "expense", ledgerBased: true, expenseAccountId: { $exists: true }, status: "approved" }; // a chart voucher posted (approvalStatus stays at its default)
+    const text = String(search || "").trim();
+    if (text) {
+      const rx = new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      q.$or = [{ voucherNo: rx }, { expenseAccountName: rx }, { partyName: rx }, { description: rx }, { narration: rx }];
+    }
+    const rows = await Voucher.find(q).select("voucherNo date expenseAccountId expenseAccountName subtotal totalAmount vatTotal partyName description").sort({ date: -1, _id: -1 }).limit(50).lean();
+    const ids = rows.map((r) => r._id);
+    const users = ids.length ? await allBranches(() => ProcessOrder.find({ "costs.voucherId": { $in: ids }, status: { $ne: "CANCELLED" } }).select("costs").lean()) : [];
+    const used = new Map();
+    for (const o of users) for (const c of o.costs) if (c.voucherId) used.set(String(c.voucherId), (used.get(String(c.voucherId)) || 0) + (Number(c.amount) || 0));
+    return rows.map((r) => {
+      const net = Math.round(((r.subtotal ?? (Number(r.totalAmount) || 0) - (Number(r.vatTotal) || 0)) || 0) * 100) / 100;
+      const u = Math.round((used.get(String(r._id)) || 0) * 100) / 100;
+      return { id: r._id, voucherNo: r.voucherNo, date: r.date, accountId: r.expenseAccountId, accountName: r.expenseAccountName, party: r.partyName || "", description: r.description || "", net, used: u, left: Math.round((net - u) * 100) / 100 };
+    });
+  }
+
+  // A cost recorded against an open order (and a step of it, if named). From a voucher: the account is the voucher's and
+  // the amount defaults to what it has left; more than that is refused, so one bill is never moved into products twice.
+  static addCost = withTransactionSession(async (id, input = {}, by, session) => {
+    const o = await this.openOrder(id, session);
+    const step = input.stepId ? this.stepOf(o, input.stepId) : null;
+    let accountId = input.accountId;
+    let amount = input.amount === "" || input.amount == null ? null : Number(input.amount);
+    let link = null;
+    if (input.voucherId) {
+      const room = await this.voucherRoom(input.voucherId, { session });
+      accountId = room.voucher.expenseAccountId;
+      if (amount == null) amount = room.left;
+      if (amount > room.left + 0.005) {
+        throw fail(`${room.voucher.voucherNo} has ${room.left.toFixed(2)} left to move${room.usedBy.length ? ` (${room.usedBy.map((u) => `${u.processNo} took ${u.amount.toFixed(2)}`).join(", ")})` : ""}`, 409, "VOUCHER_ALREADY_MOVED", { left: room.left, usedBy: room.usedBy });
+      }
+      link = { voucherId: room.voucher._id, voucherNo: room.voucher.voucherNo };
+    }
+    if (!(amount > 0)) throw fail("Enter the amount", 400, "INVALID_AMOUNT");
+    if (!accountId) throw fail("Choose the expense", 400, "INVALID_COST_ACCOUNT");
+    const [line] = await ProductionService.checkCosts([{ accountId, amount, narration: input.narration }], { session });
+    o.costs.push({ ...line, ...(link || {}), ...(step ? { stepId: step._id, stepName: step.name } : {}), addedBy: String(by || "system"), addedAt: new Date() });
+    o.updatedBy = String(by || "system");
+    await o.save({ session });
+    return o;
+  });
+
+  static removeCost = withTransactionSession(async (id, costId, by, session) => {
+    const o = await this.openOrder(id, session);
+    const c = o.costs.id(costId);
+    if (!c) throw fail("Cost not found", 404, "NOT_FOUND");
+    c.deleteOne();
+    o.updatedBy = String(by || "system");
+    await o.save({ session });
+    return o;
+  });
+
+  // ---- for one person, and over time ---------------------------------------------------------------------
+
+  // How many steps are waiting for, or being worked by, this person (the count beside the menu entry).
+  static async myWorkCount(me) {
+    if (!me) return 0;
+    const orders = await ProcessOrder.find({ status: "OPEN", "steps.assigneeId": String(me) }).select("steps.assigneeId steps.status steps.mode").lean();
+    return orders.reduce((t, o) => t + o.steps.filter((s) => String(s.assigneeId) === String(me) && s.mode === "in_house" && rules.OPEN_STEP.has(s.status)).length, 0);
+  }
+
+  // Lead time, on time, yield, and each step and worker's time, lateness and rejects over a period (default the last 30
+  // days). Reads the orders with anything finished in or near the period; the exact days are judged in the pure rules.
+  static async analysis({ from, to } = {}) {
+    const today = todayInOrg();
+    const end = toExpiryDay(to) || today;
+    const start = toExpiryDay(from) || addDays(end, -29);
+    if (start > end) throw fail("The period starts after it ends", 400, "INVALID_RANGE");
+    const lo = new Date(`${addDays(start, -1)}T00:00:00.000Z`);
+    const hi = new Date(`${addDays(end, 2)}T00:00:00.000Z`);
+    const orders = await ProcessOrder.find({ status: { $ne: "DRAFT" }, $or: [{ completedAt: { $gte: lo, $lt: hi } }, { "steps.doneAt": { $gte: lo, $lt: hi } }] })
+      .select("processNo status finished dueDate releasedAt completedAt steps").lean();
+    return rules.analysis(orders, { from: start, to: end, dayOf: (d) => orgDay(new Date(d)), dueDayOf: dayText });
+  }
+
   // ---- finishing -----------------------------------------------------------------------------------------
 
   // Every step done: ONE Production posts - the materials out at their cost, the product in at that cost plus the costs
   // moved in (coating, transport, ...), for the good units that came out of the last step.
+  // Without a `costs` list the costs recorded on the order while it ran are used.
   static async finish(id, input = {}, by) {
-    const costs = Array.isArray(input.costs) ? input.costs.filter((c) => c && (c.accountId || c.amount)) : [];
+    let costs = Array.isArray(input.costs) ? input.costs.filter((c) => c && (c.accountId || c.amount)) : null;
+    if (!costs) {
+      const stored = isId(id) ? await ProcessOrder.findById(id).select("costs").lean() : null;
+      costs = (stored?.costs || []).map((c) => ({ accountId: c.accountId, amount: c.amount, narration: [c.voucherNo, c.stepName, c.narration].filter(Boolean).join(" · ") || undefined }));
+    }
     const absorbedId = costs.length ? await ProductionService.absorbedAccount() : null; // may commit a chart top-up of its own
     return this.finishIn(id, { ...input, costs }, { absorbedId }, by);
   }

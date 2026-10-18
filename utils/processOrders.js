@@ -36,15 +36,16 @@ function validateOrder(input = {}) {
   return errors;
 }
 
-// Releasing: the first step is READY, the rest WAIT, each planned for the order's quantity.
-function release(steps, qty) {
-  return steps.map((s, i) => ({ ...s, seq: i + 1, plannedQty: round3(qty), status: i === 0 ? "READY" : "WAITING" }));
+// Releasing: the first step is READY, the rest WAIT, each planned for the order's quantity. `now` stamps when the first
+// step became ready (the analysis measures waiting from it).
+function release(steps, qty, now = undefined) {
+  return steps.map((s, i) => ({ ...s, seq: i + 1, plannedQty: round3(qty), status: i === 0 ? "READY" : "WAITING", ...(i === 0 && now ? { readyAt: now } : {}) }));
 }
 
-// The step after `index` becomes READY with what came out of this one (good units only).
-function advance(steps, index) {
+// The step after `index` becomes READY with what came out of this one (good units only), stamped `now`.
+function advance(steps, index, now = undefined) {
   const done = steps[index];
-  return steps.map((s, i) => (i === index + 1 && s.status === "WAITING" ? { ...s, status: "READY", plannedQty: round3(Number(done.qtyDone) || 0) } : s));
+  return steps.map((s, i) => (i === index + 1 && s.status === "WAITING" ? { ...s, status: "READY", plannedQty: round3(Number(done.qtyDone) || 0), ...(now ? { readyAt: now } : {}) } : s));
 }
 
 // Finishing an in-house step: the good quantity and the rejected; together no more than came in.
@@ -124,4 +125,131 @@ function board(orders = [], { today, tomorrow, dayOf, me = null } = {}) {
   };
 }
 
-module.exports = { MODES, OPEN_STEP, validateOrder, release, advance, checkCompletion, currentStep, allDone, finishedQty, dueState, board };
+// ---- saved routes ------------------------------------------------------------------------------------------
+// A route is a product's recipe and way through the shop, saved once: the materials for `batchQty` units and the
+// steps in order, each with who usually does it and how many days it usually takes. A new order is planned from it.
+const MAX_STEP_DAYS = 365;
+
+function validateRoute(input = {}) {
+  const errors = validateOrder({ finished: { stockId: input.finished?.stockId, qty: input.batchQty }, materials: input.materials, steps: input.steps })
+    .map((e) => (e.field === "finished.qty" ? { field: "batchQty", code: "INVALID_QTY", message: "Enter the quantity the materials are for" } : e));
+  (Array.isArray(input.steps) ? input.steps : []).forEach((s, i) => {
+    const d = s?.days === "" || s?.days == null ? 0 : num(s.days);
+    if (!(d >= 0 && d <= MAX_STEP_DAYS && Number.isInteger(d))) errors.push({ field: `steps.${i}.days`, code: "INVALID_DAYS", message: `Step ${i + 1}: days must be a whole number from 0 to ${MAX_STEP_DAYS}` });
+  });
+  return errors;
+}
+
+// An order planned from a route: the materials scaled to the quantity, each step due `days` after the one before
+// (calendar days from the order's day; a step of 0 days is due with the one before), the order due with its last step.
+// A route with no days at all plans no dates.
+function orderFromRoute(route, { qty, startDay, addDays }) {
+  const factor = Number(qty) / (Number(route.batchQty) || 1);
+  const anyDays = (route.steps || []).some((s) => Number(s.days) > 0);
+  let day = startDay;
+  const steps = (route.steps || []).map((s) => {
+    const d = Number(s.days) || 0;
+    day = addDays(day, d);
+    return {
+      name: s.name, mode: s.mode, days: d, dueDate: anyDays ? day : undefined,
+      assigneeId: s.assigneeId || undefined, assigneeName: s.assigneeName || undefined,
+      jobWorkerId: s.jobWorkerId ? idOf(s.jobWorkerId) : undefined, jobWorkerName: s.jobWorkerName || undefined,
+    };
+  });
+  return {
+    finished: { stockId: idOf(route.finished?.stockId), qty: round3(qty) },
+    materials: (route.materials || []).map((m) => ({ stockId: idOf(m.stockId), itemName: m.itemName, qty: round3(Number(m.qty) * factor) })),
+    steps,
+    dueDate: anyDays ? day : undefined,
+  };
+}
+
+// Why units were rejected at a step: offered as quick picks; anything else may be typed.
+const REJECT_REASONS = ["Dimension out of tolerance", "Surface defect", "Coating defect", "Bent or cracked", "Wrong material", "Damaged in handling", "Other"];
+
+// ---- analysis ------------------------------------------------------------------------------------------------
+// Over a period ("YYYY-MM-DD" from / to, the organisation's days): orders finished (lead time, on time, yield), every
+// step done (by step and by who did it: count, waiting and working time, late, rejects) and why units were rejected.
+// `dayOf(instant)` gives the organisation's day of a moment; `dueDayOf(date)` the day of a stored due date.
+const hoursBetween = (a, b) => (a && b ? Math.max(0, (new Date(b) - new Date(a)) / 3.6e6) : null);
+const avg = (list) => (list.length ? Math.round((list.reduce((t, x) => t + x, 0) / list.length) * 10) / 10 : null);
+const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
+
+function analysis(orders = [], { from, to, dayOf, dueDayOf = dayOf } = {}) {
+  const inPeriod = (instant) => {
+    if (!instant) return false;
+    const d = dayOf(instant);
+    return (!from || d >= from) && (!to || d <= to);
+  };
+  const finished = orders.filter((o) => o.status === "COMPLETED" && inPeriod(o.completedAt));
+  const lead = finished.map((o) => hoursBetween(o.releasedAt, o.completedAt)).filter((h) => h != null).map((h) => h / 24);
+  const withDue = finished.filter((o) => o.dueDate);
+  const onTime = withDue.filter((o) => dayOf(o.completedAt) <= dueDayOf(o.dueDate));
+  const ordered = finished.reduce((t, o) => t + (Number(o.finished?.qty) || 0), 0);
+  const made = finished.reduce((t, o) => t + finishedQty(o), 0);
+
+  const groups = { step: new Map(), who: new Map() };
+  const reasons = new Map();
+  const daily = new Map();
+  const bucket = (map, key, label, extra) => {
+    if (!map.has(key)) map.set(key, { key, label, ...extra, done: 0, good: 0, rejected: 0, wait: [], work: [], late: 0, withDue: 0 });
+    return map.get(key);
+  };
+  const dayRow = (d) => {
+    if (!daily.has(d)) daily.set(d, { day: d, stepsDone: 0, unitsFinished: 0 });
+    return daily.get(d);
+  };
+  for (const o of orders) {
+    for (const s of o.steps || []) {
+      if (s.status !== "DONE" || !inPeriod(s.doneAt)) continue;
+      const who = s.mode === "job_work" ? s.jobWorkerName || "Job worker" : s.assigneeName || "Not assigned";
+      const whoKey = `${s.mode}:${s.mode === "job_work" ? idOf(s.jobWorkerId) || who : s.assigneeId || who}`;
+      const rows = [bucket(groups.step, s.name, s.name, {}), bucket(groups.who, whoKey, who, { mode: s.mode })];
+      const wait = hoursBetween(s.readyAt, s.startedAt);
+      const work = hoursBetween(s.startedAt, s.doneAt);
+      const late = s.dueDate ? dayOf(s.doneAt) > dueDayOf(s.dueDate) : null;
+      for (const r of rows) {
+        r.done += 1;
+        r.good += Number(s.qtyDone) || 0;
+        r.rejected += Number(s.qtyRejected) || 0;
+        if (wait != null) r.wait.push(wait);
+        if (work != null) r.work.push(work);
+        if (late != null) {
+          r.withDue += 1;
+          if (late) r.late += 1;
+        }
+      }
+      if (Number(s.qtyRejected) > 0) {
+        const why = s.rejectReason || "Not given";
+        reasons.set(why, round3((reasons.get(why) || 0) + Number(s.qtyRejected)));
+      }
+      dayRow(dayOf(s.doneAt)).stepsDone += 1;
+    }
+  }
+  for (const o of finished) {
+    const row = dayRow(dayOf(o.completedAt));
+    row.unitsFinished = round3(row.unitsFinished + finishedQty(o));
+  }
+  const shape = (r) => ({
+    key: r.key, label: r.label, ...(r.mode ? { mode: r.mode } : {}), done: r.done, good: round3(r.good), rejected: round3(r.rejected),
+    rejectPct: pct(r.rejected, r.good + r.rejected), waitHours: avg(r.wait), workHours: avg(r.work),
+    late: r.late, withDue: r.withDue, latePct: pct(r.late, r.withDue),
+  });
+  const byDone = (a, b) => b.done - a.done || a.label.localeCompare(b.label);
+  return {
+    period: { from: from || null, to: to || null },
+    orders: {
+      finished: finished.length, unitsOrdered: round3(ordered), unitsMade: round3(made), yieldPct: pct(made, ordered),
+      avgLeadDays: avg(lead), withDue: withDue.length, onTime: onTime.length, onTimePct: pct(onTime.length, withDue.length),
+    },
+    steps: [...groups.step.values()].map(shape).sort(byDone),
+    people: [...groups.who.values()].map(shape).sort(byDone),
+    reasons: [...reasons.entries()].map(([reason, qty]) => ({ reason, qty })).sort((a, b) => b.qty - a.qty),
+    daily: [...daily.values()].sort((a, b) => a.day.localeCompare(b.day)),
+  };
+}
+
+module.exports = {
+  MODES, OPEN_STEP, MAX_STEP_DAYS, REJECT_REASONS, validateOrder, validateRoute, orderFromRoute, release, advance, checkCompletion,
+  currentStep, allDone, finishedQty, dueState, board, analysis,
+};

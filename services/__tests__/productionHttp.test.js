@@ -246,3 +246,41 @@ test("process orders over HTTP: the person a step is given to works it; someone 
   const actions = await as(() => M.ActivityLog.find({ entity: "ProcessOrder", entityId: draft.body._id }).lean());
   assert.deepEqual(actions.map((a) => a.action).sort(), ["PROCESS_ORDER_COMPLETED", "PROCESS_ORDER_CREATED", "PROCESS_ORDER_RELEASED", "PROCESS_STEP_DONE", "PROCESS_STEP_STARTED"]);
 });
+
+test("routes, my work, analysis and recorded costs over HTTP: reading needs stock rights, a voucher needs finance's", { skip }, async () => {
+  const route = { finished: { stockId: S.finished }, batchQty: 1, materials: [{ stockId: S.raw, qty: 1 }], steps: [{ name: "Bending", mode: "in_house", days: 2 }] };
+  await cannot("looker", "POST", "/process-routes", route);
+  const made = await api("owner", "POST", "/process-routes", route);
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  assert.equal((await api("owner", "POST", "/process-routes", route)).code, "ROUTE_EXISTS");
+  const plan = await api("looker", "GET", `/process-routes/plan?stockId=${S.finished}&qty=3`);
+  assert.equal(plan.status, 200, JSON.stringify(plan.data));
+  assert.deepEqual(plan.body.order.materials.map((m) => m.qty), [3]);
+  assert.equal((await api("looker", "GET", "/process-routes")).body.length, 1);
+
+  assert.equal((await api("looker", "GET", "/process-orders/my-work")).body.count, 0);
+  const analysis = await api("looker", "GET", "/process-orders/analysis");
+  assert.equal(analysis.status, 200, JSON.stringify(analysis.data));
+  assert.ok(analysis.body.orders.finished >= 1, "the order finished in the case before");
+
+  await cannot("stockonly", "GET", "/process-orders/expense-vouchers");
+  assert.equal((await api("owner", "GET", "/process-orders/expense-vouchers")).status, 200);
+  const draft = await api("owner", "POST", "/process-orders", { finished: { stockId: S.finished, qty: 1 }, materials: [{ stockId: S.raw, qty: 1 }], steps: [{ name: "Bending", mode: "in_house" }] });
+  const open = await api("owner", "POST", `/process-orders/${draft.body._id}/release`, {});
+  await cannot("looker", "POST", `/process-orders/${open.body._id}/costs`, { accountId: S.expense, amount: 5 });
+  await cannot("stockonly", "POST", `/process-orders/${open.body._id}/costs`, { voucherId: String(new mongoose.Types.ObjectId()) });
+  assert.equal((await api("owner", "POST", `/process-orders/${open.body._id}/costs`, { voucherId: String(new mongoose.Types.ObjectId()) })).code, "VOUCHER_NOT_FOUND");
+  const added = await api("stockonly", "POST", `/process-orders/${open.body._id}/costs`, { accountId: S.expense, amount: 5, narration: "labour" });
+  assert.equal(added.status, 200, JSON.stringify(added.data));
+  assert.equal(added.body.costTotal, 5);
+  const done = await api("owner", "POST", `/process-orders/${open.body._id}/steps/${open.body.steps[0]._id}/complete`, { qtyDone: 1 });
+  assert.equal(done.status, 200);
+  await cannot("stockonly", "POST", `/process-orders/${open.body._id}/finish`, {}); // the recorded cost would be moved in: finance.create
+  const warned = await api("maker", "POST", `/process-orders/${open.body._id}/finish`, {});
+  assert.equal(warned.code, "PRODUCTION_WARNINGS", "nothing was spent on that account: the tick is asked for, as on a production");
+  const fin = await api("maker", "POST", `/process-orders/${open.body._id}/finish`, { acknowledge: ["COST_EXCEEDS_SPEND"] });
+  assert.equal(fin.status, 200, JSON.stringify(fin.data));
+  assert.equal(fin.body.production.totals.costs, 5);
+  const actions = await as(() => M.ActivityLog.find({ entity: { $in: ["ProcessRoute", "ProcessOrder"] }, action: { $in: ["PROCESS_ROUTE_CREATED", "PROCESS_COST_ADDED"] } }).lean());
+  assert.deepEqual(actions.map((a) => a.action).sort(), ["PROCESS_COST_ADDED", "PROCESS_ROUTE_CREATED"]);
+});

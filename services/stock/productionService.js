@@ -177,26 +177,9 @@ class ProductionService {
 
   // ---- drafts --------------------------------------------------------------------------------------------
 
-  // Checks the input against the item master and the chart, and returns what is stored.
-  static async prepare(data, { session } = {}) {
-    const errors = rules.validate(data);
-    if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
-    const materials = rules.mergeMaterials(data.materials || []);
-    for (const m of [data.finished, ...materials]) {
-      if (!isId(m.stockId)) throw fail("Item not found", 400, "ITEM_NOT_FOUND");
-    }
-    const ids = [data.finished.stockId, ...materials.map((m) => m.stockId)];
-    const stocks = await Stock.find({ _id: { $in: ids } }).select("itemId itemName itemType status").session(session || null).lean();
-    const byId = new Map(stocks.map((s) => [String(s._id), s]));
-    const itemOf = (stockId, what) => {
-      const s = byId.get(String(stockId));
-      if (!s) throw fail("Item not found", 400, "ITEM_NOT_FOUND");
-      ItemKindService.assertStocked(s, what);
-      return s;
-    };
-    const finishedItem = itemOf(data.finished.stockId, "be made in a production");
-
-    const costs = data.costs || [];
+  // The cost lines a production (or a process order) may move into a product: active, postable EXPENSE accounts, never
+  // the accounts the posting itself uses. Returns what is stored for each line.
+  static async checkCosts(costs = [], { session } = {}) {
     const accountIds = costs.map((c) => String(c.accountId));
     if (accountIds.some((a) => !isId(a))) throw fail("Expense account not found", 400, "INVALID_COST_ACCOUNT");
     const accounts = accountIds.length
@@ -216,6 +199,30 @@ class ProductionService {
       if (reserved.has(String(a._id)) || a.accountName === CONTRA_NAME) throw fail(`Cost ${i + 1}: ${a.accountName} cannot be moved into a product's cost`, 400, "INVALID_COST_ACCOUNT");
       return { accountId: a._id, accountCode: a.accountCode, accountName: a.accountName, amount: costing.roundValue(Number(c.amount)), narration: c.narration ? String(c.narration).trim().slice(0, 300) : undefined };
     });
+    return storedCosts;
+  }
+
+
+  // Checks the input against the item master and the chart, and returns what is stored.
+  static async prepare(data, { session } = {}) {
+    const errors = rules.validate(data);
+    if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
+    const materials = rules.mergeMaterials(data.materials || []);
+    for (const m of [data.finished, ...materials]) {
+      if (!isId(m.stockId)) throw fail("Item not found", 400, "ITEM_NOT_FOUND");
+    }
+    const ids = [data.finished.stockId, ...materials.map((m) => m.stockId)];
+    const stocks = await Stock.find({ _id: { $in: ids } }).select("itemId itemName itemType status").session(session || null).lean();
+    const byId = new Map(stocks.map((s) => [String(s._id), s]));
+    const itemOf = (stockId, what) => {
+      const s = byId.get(String(stockId));
+      if (!s) throw fail("Item not found", 400, "ITEM_NOT_FOUND");
+      ItemKindService.assertStocked(s, what);
+      return s;
+    };
+    const finishedItem = itemOf(data.finished.stockId, "be made in a production");
+
+    const storedCosts = await ProductionService.checkCosts(data.costs || [], { session });
 
     const date = data.date ? dayOf(data.date) : dayOf(todayInOrg());
     if (!date) throw fail("Enter a valid date", 400, "INVALID_DATE");
