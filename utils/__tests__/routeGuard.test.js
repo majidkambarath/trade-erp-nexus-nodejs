@@ -106,9 +106,12 @@ test("the routes that need no permission are few, and each says why", () => {
     "routes/messaging/shareRoutes.js  GET /:token",
     "routes/messaging/shareRoutes.js  POST /:token/viewed",
   ], "the whole list of routes anyone may call without signing in: adding one is a decision, made here");
-  // a person's own profile and the status route (8), and the five routes of a person's own two-factor (routes/core/authRoutes.js:
-  // the account is the signed-in one and the password is asked for again); anything more should be a permission
-  assert.ok(exempt.length - open.length <= 13, "a person's own profile, the status route and their own two-factor; anything more should be a permission");
+  // a person's own profile and the status route (8), the five routes of a person's own two-factor (routes/core/authRoutes.js:
+  // the account is the signed-in one and the password is asked for again), and the four notification-feed routes
+  // (routes/core/notificationRoutes.js: a row's audience can name ANY permission key, so the ROUTE cannot gate on one
+  // fixed key without wrongly shutting out someone whose own feed holds a different kind of row - the service filters
+  // instead); anything more should be a permission
+  assert.ok(exempt.length - open.length <= 17, "a person's own profile, the status route, their own two-factor and their own notification feed; anything more should be a permission");
 });
 
 test("what a person may do to a document is decided by its type, and a stored document by its stored type", async () => {

@@ -57,6 +57,10 @@ const SIGNED_IN_ROUTES = [
   "PUT /api/v1/profile/me",
   "PUT /api/v1/profile/change-password", // their own password
   "POST /api/v1/profile/upload-image", // their own picture
+  "GET /api/v1/notifications", // a person's own notification feed - a row's audience can be any permission, so the route cannot gate on one
+  "GET /api/v1/notifications/unread-count",
+  "POST /api/v1/notifications/:id/read", // marking their own feed read
+  "POST /api/v1/notifications/read-all",
 ].sort();
 
 // Mutating routes a VIEWER may reach, and why. Everything else that changes something must refuse a viewer. The first group
