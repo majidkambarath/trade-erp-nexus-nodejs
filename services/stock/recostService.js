@@ -27,7 +27,7 @@ class RecostService {
       if (!stock || isService(stock)) continue; // a service has no cost pool to replay
       const later = await InventoryMovement.exists({
         stockId: stock.itemId,
-        referenceType: "Transaction",
+        referenceType: { $in: ["Transaction", "Production"] }, // a later production used the pool this one changes
         isReversed: false,
         referenceId: { $ne: transaction._id },
         date: { $gt: transaction.date || new Date() },
@@ -58,7 +58,7 @@ class RecostService {
 
     const movements = await InventoryMovement.find({
       stockId: stock.itemId,
-      referenceType: { $in: ["Transaction", "Adjustment"] },
+      referenceType: { $in: ["Transaction", "Adjustment", "Production"] },
       isReversed: false,
       referenceNumber: { $not: /^REV-/ }, // a reversal row and its original cancel out
     })
@@ -86,13 +86,18 @@ class RecostService {
     const deltas = new Map();
     for (let i = first; i < movements.length; i++) {
       const m = movements[i];
+      // A production's cost was fixed when it was posted (its finished item's cost is built from it and
+      // booked to the ledger), so a replay carries it through the pool as it stands: out like a sale at
+      // that cost, in like a purchase at that cost, and never a cost-of-goods difference.
+      const production = m.costBasis === "production";
       // Adjustments and write-offs move stock at the running average, like a sale / a sales return.
-      const basis =
-        !m.costBasis || m.costBasis === "adjustment" || m.costBasis === "opening"
+      const basis = production
+        ? (m.quantity < 0 ? "sale" : "purchase")
+        : !m.costBasis || m.costBasis === "adjustment" || m.costBasis === "opening"
           ? BASIS_BY_EVENT[m.eventType] || (m.quantity > 0 ? "salesReturn" : "sale")
           : m.costBasis;
       const qty = Math.abs(m.quantity);
-      const locked = isLocked(m.date);
+      const locked = production || isLocked(m.date);
 
       const args =
         basis === "purchase" || basis === "purchaseReturn"
@@ -112,12 +117,12 @@ class RecostService {
           {
             unitCost: r.rate,
             totalValue: r.cost,
-            costBasis: basis,
+            costBasis: production ? "production" : basis,
             rateBefore: before.avgRate,
             rateAfter: pool.avgRate,
             costPoolAfter: pool.costValue,
             poolQtyAfter: pool.quantity,
-            cogsAmount: basis === "sale" ? r.cost : m.cogsAmount,
+            cogsAmount: basis === "sale" && !production ? r.cost : m.cogsAmount,
           },
           { session }
         );

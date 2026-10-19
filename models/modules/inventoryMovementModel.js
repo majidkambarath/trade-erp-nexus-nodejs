@@ -35,14 +35,16 @@ const inventoryMovementSchema = new mongoose.Schema({
       "SALES_RETURN",       // Return from customer
       "DAMAGED_STOCK",      // Damaged/expired stock
       "TRANSFER_IN",        // Transfer from another location
-      "TRANSFER_OUT"        // Transfer to another location
+      "TRANSFER_OUT",       // Transfer to another location
+      "PRODUCTION_ISSUE",   // Material used up by a production (out at the average cost)
+      "PRODUCTION_RECEIPT"  // Finished item made by a production (in at materials + costs moved in)
     ],
     required: true,
   },
   
   referenceType: {
     type: String,
-    enum: ["Transaction", "Adjustment", "Transfer", "Initial"],
+    enum: ["Transaction", "Adjustment", "Transfer", "Initial", "Production"],
     required: true
   },
   
@@ -98,7 +100,7 @@ const inventoryMovementSchema = new mongoose.Schema({
   // it left behind, so it can be audited without replaying the ledger.
   costBasis: {
     type: String,
-    enum: ["purchase", "purchaseReturn", "sale", "salesReturn", "opening", "adjustment", null],
+    enum: ["purchase", "purchaseReturn", "sale", "salesReturn", "opening", "adjustment", "production", null],
     default: null
   },
   rateBefore: { type: Number, default: null },

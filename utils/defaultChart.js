@@ -74,6 +74,7 @@ const ACCOUNTS = [
   ["Utilities", "Operating Expenses", null],
   ["Bank Charges", "Operating Expenses", "bank-charges"],
   ["Card Processing Fees", "Operating Expenses", "card-charges"],
+  ["Production Costs Moved to Stock", "Operating Expenses", "production-absorbed"],
 ];
 
 // Which default group backs each group-kind posting key.

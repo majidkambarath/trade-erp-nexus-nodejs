@@ -1,3 +1,4 @@
+const orgLocale = require("../../utils/orgLocale");
 const mongoose = require("mongoose");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
@@ -5,6 +6,7 @@ const { BankMaster } = require("../../models/modules/banking/bankingModels");
 const AttachmentService = require("../core/attachmentService");
 const DocumentTypeService = require("./documentTypeService");
 const { resolveVat, resolveTerms, cleanWebsite, normalizeContacts, normalizeBankAccounts, normalizeDocuments } = require("../../utils/partyMaster");
+const { orgTaxTerms } = require("../../utils/countryRules");
 
 // The customer / vendor master data: VAT configuration, credit terms, contacts, bank accounts and
 // KYC documents. customerService and vendorService call `prepare` before they write and `finish`
@@ -27,7 +29,7 @@ class PartyMasterService {
     const dup = await Model.findOne({ $or: [{ [k.legacyTrn]: trn }, { "vat.trn": trn }], ...(excludeId ? { _id: { $ne: excludeId } } : {}) })
       .select("_id")
       .lean();
-    if (dup) throw new AppError(`TRN already in use by another ${k.noun}`, 400, "DUPLICATE_TRN");
+    if (dup) throw new AppError(`${orgTaxTerms().taxId} already in use by another ${k.noun}`, 400, "DUPLICATE_TRN");
   }
 
   // Bank rows that name a bank from the bank master get the bank's name from it.
@@ -57,7 +59,7 @@ class PartyMasterService {
       const stored = existing
         ? { status: existing.vat?.status, trn: existing.vat?.trn || existing[k.legacyTrn] || null, tradeLicenseNo: existing.vat?.tradeLicenseNo }
         : undefined;
-      const vat = resolveVat({ input: data.vat, legacyTrn: data[k.legacyTrn], existing: stored });
+      const vat = resolveVat({ input: data.vat, legacyTrn: data[k.legacyTrn], existing: stored, country: orgLocale.country() }); // TRN, GSTIN, ... by the organisation's country
       if (vat.trn && vat.trn !== (stored?.trn || null)) await this.assertUniqueTrn(kind, vat.trn, existing?._id);
       patch.vat = vat;
       patch[k.legacyTrn] = vat.trn;

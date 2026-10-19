@@ -38,6 +38,7 @@ const SOURCE_LABEL = {
   stock_adjustment: "Stock adjustment",
   stock_writeoff: "Stock write-off",
   cheque_clearance: "Cheque clearing",
+  production: "Production",
 };
 
 const fact = (label, value, type = "text") => (value === null || value === undefined || value === "" ? null : { label, value, type });
@@ -264,6 +265,22 @@ class VoucherAuditService {
         c ? fact("Accounts closed", c.accounts, "number") : null,
         c && year.closedAt ? fact("Closed on", year.closedAt, "datetime") : null,
       ];
+    } else if (kind === "production") {
+      // a production's own id is the voucherId: materials used and expenses moved into the item it made
+      const ProductionOrder = require("../../models/modules/productionOrderModel");
+      const p = await ProductionOrder.findById(id).lean();
+      if (p) {
+        if (p.status === "REVERSED") status = "reversed";
+        narration = p.notes || narration;
+        facts = [
+          fact("Item made", `${p.finished?.itemName || ""} x ${p.finished?.qty}`),
+          fact("Materials used", round2(p.totals?.materials), "money"),
+          ...(p.costs || []).map((c) => fact(`Moved in from ${c.accountName}`, round2(c.amount), "money")),
+          fact("Total cost", round2(p.totals?.total), "money"),
+          fact("Unit cost", p.totals?.unitCost, "money"),
+          p.reversedAt ? fact("Reversed on", p.reversedAt, "datetime") : null,
+        ];
+      }
     }
 
     const sourceActivity = [{ entityId: String(id) }];

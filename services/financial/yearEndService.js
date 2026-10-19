@@ -167,7 +167,11 @@ class YearEndService {
 
       const within = { $gte: fy.startDate, $lte: fy.endDate };
       const [documents, vouchers, rows, postingEnabled, retained, banks, stockFacts] = await Promise.all([
-        sessionOf(Transaction.countDocuments({ status: "DRAFT", isOpening: { $ne: true }, date: within }), session),
+        // draft trade documents and draft productions: either could never be posted once the period is locked
+        Promise.all([
+          sessionOf(Transaction.countDocuments({ status: "DRAFT", isOpening: { $ne: true }, date: within }), session),
+          sessionOf(require("../../models/modules/productionOrderModel").countDocuments({ status: "DRAFT", date: within }), session),
+        ]).then(([trade, production]) => trade + production),
         sessionOf(Voucher.countDocuments({ status: { $in: ["draft", "pending"] }, date: within }), session),
         this.balances(fy, { session }),
         AccountConfigService.isPostingEnabled({ session }),

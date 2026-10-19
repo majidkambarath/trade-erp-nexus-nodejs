@@ -39,6 +39,7 @@ const fmtMoney = (n, currency = orgLocale.baseCurrency()) => {
 };
 
 const periodText = (p) => (p?.from && p?.to ? `${fmtDay(p.from)} to ${fmtDay(p.to)}` : "");
+const { orgTaxTerms } = require("./countryRules");
 
 function subjectFor({ docType, documentNo, company, validUntil, period }) {
   const label = DOC_LABEL[docType] || "Document";
@@ -69,7 +70,7 @@ function factLine(d) {
 const companyLines = (c = {}) => {
   const address = [c.addressLine1, c.addressLine2].filter(Boolean).join(", ");
   const contact = [c.phoneNumber && `Tel ${c.phoneNumber}`, c.email, c.website].filter(Boolean).join("  |  ");
-  return [c.companyName, address, contact, c.vatNumber && `TRN ${c.vatNumber}`].filter(Boolean);
+  return [c.companyName, address, contact, c.vatNumber && `${orgTaxTerms().taxId} ${c.vatNumber}`].filter(Boolean);
 };
 
 function renderDocumentEmail(d) {
