@@ -7,6 +7,21 @@
 // so a role reads the way the product does. `view` is implied by every other action in its module.
 
 const MODULES = {
+  // Before a sale exists: the enquiry, the deal and the chasing of it. The pipeline advances itself from the real
+  // documents (a quotation sent, an invoice approved), so this module is the relationship, not the paperwork - and a
+  // person may hold it without holding Sales, which is why nothing here implies a sales permission.
+  crm: {
+    label: "CRM",
+    hint: "Leads, the sales pipeline, follow-ups and the automation behind them",
+    actions: {
+      view: "See leads, the pipeline and follow-ups",
+      create: "Add leads, deals and follow-ups",
+      edit: "Change a lead, deal or follow-up, and move a deal to another stage",
+      delete: "Delete a lead, deal or follow-up",
+      assign: "Give a lead or a deal to somebody else",
+      manage: "Change the pipeline stages and the automation settings",
+    },
+  },
   sales: {
     label: "Sales",
     hint: "Quotations, sales orders, delivery notes, sales returns and customers",
@@ -217,7 +232,7 @@ const BUILT_IN = {
     rank: 60,
     description: "Approves sales, purchases and vouchers, and runs stock. Does not manage people, settings or the books' setup.",
     permissions: only(
-      ...modules("sales", "purchase", "inventory"),
+      ...modules("crm", "sales", "purchase", "inventory"),
       "finance.view", "finance.create", "finance.edit", "finance.approve", "finance.delete", "finance.deletePosted",
       "banking.view", "accounts.view", "reports.view", "reports.financial"
     ),
@@ -239,14 +254,14 @@ const BUILT_IN = {
     name: "Operator",
     rank: 40,
     description: "Enters documents and stock. Cannot approve or delete anything.",
-    permissions: only("sales.create", "sales.edit", "purchase.create", "purchase.edit", "inventory.create", "inventory.edit", "inventory.adjust", "finance.create", "finance.edit", "reports.view"),
+    permissions: only("crm.create", "crm.edit", "sales.create", "sales.edit", "purchase.create", "purchase.edit", "inventory.create", "inventory.edit", "inventory.adjust", "finance.create", "finance.edit", "reports.view"),
   },
   sales: {
     key: "sales",
     name: "Sales executive",
     rank: 40,
-    description: "Raises quotations, orders and delivery notes and sends them to customers. Cannot approve.",
-    permissions: only("sales.create", "sales.edit", "sales.send", "inventory.view", "reports.view"),
+    description: "Chases leads and deals, raises quotations, orders and delivery notes and sends them to customers. Cannot approve.",
+    permissions: only("crm.create", "crm.edit", "crm.delete", "sales.create", "sales.edit", "sales.send", "inventory.view", "reports.view"),
   },
   purchase: {
     key: "purchase",
@@ -267,7 +282,7 @@ const BUILT_IN = {
     name: "Viewer",
     rank: 20,
     description: "Can look at everything except people, settings and the activity trail. Cannot change anything.",
-    permissions: only("sales.view", "purchase.view", "inventory.view", "finance.view", "banking.view", "accounts.view", "reports.view", "reports.financial"),
+    permissions: only("crm.view", "sales.view", "purchase.view", "inventory.view", "finance.view", "banking.view", "accounts.view", "reports.view", "reports.financial"),
   },
 };
 const BUILT_IN_KEYS = Object.keys(BUILT_IN);
@@ -424,6 +439,7 @@ function legacyPermissions(grants, rank = 0) {
 const SHORT = {
   view: "View", create: "Add", edit: "Edit", approve: "Approve", delete: "Delete", deletePosted: "Delete approved", send: "Send to customers", creditOverride: "Override credit limit",
   adjust: "Adjust stock", manage: "Manage", reconcile: "Reconcile", close: "Close periods", financial: "Financial reports", vat: "File VAT",
+  assign: "Assign to someone", "crm.manage": "Stages and automation",
   "settings.manage": "Change settings", "users.manage": "Manage people and roles", "audit.view": "Read the trail", "lookups.view": "Pick lists",
 };
 const shortName = (key) => SHORT[key] || SHORT[key.split(".")[1]] || key;

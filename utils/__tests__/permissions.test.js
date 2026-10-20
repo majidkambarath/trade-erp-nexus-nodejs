@@ -9,7 +9,9 @@ const lacks = (role, ...keys) => keys.every((k) => !p.can(p.resolveRole(role).pe
 
 test("the catalogue is consistent: every key is module.action, every implied key exists, no module is empty", () => {
   // 37 keys at first; "delete an approved document" (three modules) and the staff records (two) make 42
-  assert.ok(p.KEYS.length >= 30 && p.KEYS.length <= 45, `a size an administrator can read: ${p.KEYS.length}`);
+  // Raised from 45 to 50 when the CRM module was added (6 actions, 48 keys): the bound is a guard against the
+  // catalogue growing into something nobody can read in a role editor, not a law. Raise it again only deliberately.
+  assert.ok(p.KEYS.length >= 30 && p.KEYS.length <= 50, `a size an administrator can read: ${p.KEYS.length}`);
   for (const k of p.KEYS) assert.match(k, /^[a-z]+\.[A-Za-z]+$/, k);
   for (const [key, implied] of Object.entries(p.IMPLIES)) {
     assert.ok(p.isKey(key), `${key} is a real permission`);

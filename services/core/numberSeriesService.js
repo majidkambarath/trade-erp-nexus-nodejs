@@ -33,6 +33,9 @@ const SERIES = {
   JWC: { prefix: "JWC", numberLength: 4, label: "Job work challan" },
   // A process order: one product made through steps (cutting, bending, painting ...), in-house or at job workers.
   PRO: { prefix: "PRO", numberLength: 4, label: "Process order" },
+  // CRM: the enquiry before anybody is a customer, and the deal it becomes.
+  LD: { prefix: "LD", numberLength: 4, label: "Lead" },
+  OPP: { prefix: "OPP", numberLength: 4, label: "Opportunity" },
   // Opening balances (go-live): account balances, customer / vendor invoices carried over, stock.
   OBV: { prefix: "OBV", numberLength: 4, label: "Opening balance voucher" },
   OSI: { prefix: "OSI", numberLength: 4, label: "Opening sales invoice" },
