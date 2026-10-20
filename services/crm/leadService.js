@@ -294,6 +294,13 @@ class LeadService {
         contactPerson: rules.text(lead.name, 150),
         email: rules.text(lead.email, 150),
         phone: rules.text(lead.phone, 40),
+        // The person who made the enquiry becomes a real contact of the new customer. Before this they survived only
+        // as the flat `contactPerson` string, so the one human being anybody had actually spoken to was lost the
+        // moment the lead was qualified. PartyMasterService.finish mirrors this row into the CRM's Contact collection
+        // under the id the party generates for it (services/crm/contactService.js).
+        contacts: rules.text(lead.name, 100)
+          ? [{ name: rules.text(lead.name, 100), email: rules.text(lead.email, 120), phone: rules.text(lead.phone, 30), isPrimary: true }]
+          : undefined,
         billingAddress: rules.text(input?.billingAddress, 300),
         shippingAddress: rules.text(input?.shippingAddress, 300),
         creditLimit: rules.num(input?.creditLimit),

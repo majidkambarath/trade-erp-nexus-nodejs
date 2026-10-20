@@ -9,6 +9,7 @@ const OpportunityService = require("../../services/crm/opportunityService");
 const ActivityService = require("../../services/crm/activityService");
 const CrmSetupService = require("../../services/crm/crmSetupService");
 const CrmReportService = require("../../services/crm/crmReportService");
+const ContactService = require("../../services/crm/contactService");
 
 const by = (req) => req.admin?.id || "system";
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
@@ -17,6 +18,7 @@ const log = (req, action, entity, doc, summary, after) =>
 
 const leadWords = (l) => `${l.leadNo || "Lead"} (${l.name})`;
 const dealWords = (o) => `${o.opportunityNo || "Deal"} (${o.title})`;
+const contactWords = (c) => `${c.name}${c.designation ? `, ${c.designation}` : ""}`;
 
 // ---- the module's own screens ---------------------------------------------------------------------------
 
@@ -192,5 +194,40 @@ exports.completeActivity = catchAsync(async (req, res) => {
 exports.removeActivity = catchAsync(async (req, res) => {
   const activity = await ActivityService.remove(req.params.activityId, by(req));
   await log(req, "CRM_ACTIVITY_DELETED", "CrmActivity", activity, `${activity.subject} was deleted`);
+  ok(res, { deleted: true });
+});
+
+// ---- the dashboard, the log and the people ---------------------------------------------------------------
+
+exports.dashboard = catchAsync(async (req, res) => ok(res, await CrmReportService.dashboard({ adminId: req.admin?.id })));
+
+// The communications LOG, as against the follow-up worklist at /follow-ups: same rows, read newest-first and with
+// everything that ever happened rather than only what is still owed.
+exports.listActivities = catchAsync(async (req, res) =>
+  ok(res, await ActivityService.list({ status: "all", sort: "recent", ...req.query }, { adminId: req.admin?.id }))
+);
+
+exports.listContacts = catchAsync(async (req, res) => ok(res, await ContactService.list(req.query)));
+exports.getContact = catchAsync(async (req, res) => ok(res, await ContactService.getById(req.params.contactId)));
+
+exports.createContact = catchAsync(async (req, res) => {
+  const contact = await ContactService.create(req.body, by(req));
+  await log(req, "CRM_CONTACT_CREATED", "Contact", contact, `${contactWords(contact)} was added`, {
+    name: contact.name, email: contact.email, phone: contact.phone, customerId: contact.customerId, vendorId: contact.vendorId,
+  });
+  ok(res, ContactService.present(contact), 201);
+});
+
+exports.updateContact = catchAsync(async (req, res) => {
+  const contact = await ContactService.update(req.params.contactId, req.body, by(req));
+  await log(req, "CRM_CONTACT_UPDATED", "Contact", contact, `${contactWords(contact)} was changed`, {
+    name: contact.name, email: contact.email, phone: contact.phone, customerId: contact.customerId, vendorId: contact.vendorId,
+  });
+  ok(res, ContactService.present(contact));
+});
+
+exports.removeContact = catchAsync(async (req, res) => {
+  const contact = await ContactService.remove(req.params.contactId, by(req));
+  await log(req, "CRM_CONTACT_DELETED", "Contact", contact, `${contactWords(contact)} was removed`);
   ok(res, { deleted: true });
 });

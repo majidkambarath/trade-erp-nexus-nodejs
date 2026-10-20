@@ -151,7 +151,13 @@ function normalizeContacts(input) {
     if (!name) throw bad(`Contact ${n}: enter a name`, "CONTACT_NAME_REQUIRED");
     if (email && !EMAIL_RE.test(email)) throw bad(`Contact ${n}: that email address is not valid`, "INVALID_EMAIL");
     if (phone && !PHONE_RE.test(phone)) throw bad(`Contact ${n}: that phone number is not valid`, "INVALID_PHONE");
-    return { name, designation: text(c?.designation, 100), email, phone, isPrimary: Boolean(c?.isPrimary) };
+    // An _id already on the row is KEPT. A contact row has a stable id (partyMasterSchemas.js declares `{ _id: true }`)
+    // and things point at it - the CRM's own Contact record shares it, and every call logged against that person is
+    // filed under it. Dropping it here let Mongoose mint a new one on every save, so editing a contact's job title
+    // silently replaced the person and took their history with them.
+    const row = { name, designation: text(c?.designation, 100), email, phone, isPrimary: Boolean(c?.isPrimary) };
+    if (c?._id) row._id = c._id;
+    return row;
   });
   return settlePrimary(rows, "contact", "MULTIPLE_PRIMARY_CONTACTS");
 }

@@ -21,7 +21,9 @@ const LOST_REASONS = ["price", "competitor", "no_budget", "no_response", "not_ne
 const OPPORTUNITY_STATUS = ["OPEN", "WON", "LOST"];
 const STAGE_TYPES = ["open", "won", "lost"];
 const ASSIGNMENT_MODES = ["round_robin", "creator", "fixed"];
-const REGARDING_KINDS = ["lead", "opportunity", "customer"];
+// What a follow-up or a logged call can be ABOUT. "contact" is a person (models/modules/crm/contactModel.js):
+// a call belongs to whoever you actually spoke to, which is not always the deal.
+const REGARDING_KINDS = ["lead", "opportunity", "customer", "contact"];
 
 // The events the automation can actually be told about. Each one is a document changing state somewhere else in the
 // product; nothing here is invented or scheduled. `order_confirmed` is deliberately absent: a TradeOrder being
@@ -120,6 +122,42 @@ function validateLead(input = {}, { partial = false } = {}) {
   }
   if (has("expectedValue") && num(input.expectedValue) < 0) add("expectedValue", "LEAD_VALUE_NEGATIVE", "An expected value cannot be less than nothing");
   if (has("ownerId") && text(input.ownerId, 24) && !isId(input.ownerId)) add("ownerId", "LEAD_OWNER_INVALID", "That is not a person in this organisation");
+  return errors;
+}
+
+/**
+ * A person. The only thing that is really required is a name - a contact is often captured from a business card
+ * long before anybody knows their email address.
+ *
+ * A contact that belongs to a party is stored twice on purpose: once here and once in the party's own
+ * `contacts[]` array, under the SAME _id (see services/crm/contactService.js). So `customerId` and `vendorId`
+ * are mutually exclusive - a person works for one of them, and letting both be set would make the mirror
+ * ambiguous about which array owns the row.
+ */
+function validateContact(input = {}, { partial = false } = {}) {
+  const errors = [];
+  const add = err(errors);
+  const has = (k) => Object.prototype.hasOwnProperty.call(input || {}, k);
+
+  if (!partial || has("name")) {
+    if (!text(input.name, 100)) add("name", "CONTACT_NAME_REQUIRED", "Give the person a name");
+  }
+  if (has("email")) {
+    const email = text(input.email, 120);
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) add("email", "CONTACT_EMAIL_INVALID", "That email address does not look right");
+  }
+  if (has("customerId") && text(input.customerId, 24) && !isId(input.customerId)) {
+    add("customerId", "CONTACT_CUSTOMER_INVALID", "That is not a customer");
+  }
+  if (has("vendorId") && text(input.vendorId, 24) && !isId(input.vendorId)) {
+    add("vendorId", "CONTACT_VENDOR_INVALID", "That is not a supplier");
+  }
+  if (has("leadId") && text(input.leadId, 24) && !isId(input.leadId)) {
+    add("leadId", "CONTACT_LEAD_INVALID", "That is not an enquiry");
+  }
+  if (isId(input.customerId) && isId(input.vendorId)) {
+    add("vendorId", "CONTACT_TWO_PARTIES", "A person belongs to a customer or to a supplier, not to both");
+  }
   return errors;
 }
 
@@ -590,7 +628,7 @@ module.exports = {
   STAGE_TYPES, ASSIGNMENT_MODES, REGARDING_KINDS, EVENTS, SOURCE_LABEL, KIND_LABEL, LOST_LABEL, EVENT_LABEL,
   STARTER_STAGES, DEFAULT_SETTINGS,
   text, num, day, oneOf, isId, isObjectId,
-  validateLead, validateOpportunity, validateActivity, validateStages, validateSettings,
+  validateLead, validateOpportunity, validateActivity, validateContact, validateStages, validateSettings,
   normaliseStages, normaliseSettings,
   assignOwner, leadScore,
   moveKey, stageByKey, stageFor, orderOf, planAdvance, planUndo, planFollowUp,

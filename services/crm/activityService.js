@@ -41,8 +41,10 @@ class ActivityService {
    */
   static async list(query = {}, { adminId = null } = {}) {
     const q = {};
+    // The worklist wants what is still owed, so OPEN is the default and stays the default. The communications LOG
+    // wants everything that ever happened, which is what "all" says - and it has to be said explicitly.
     const status = rules.oneOf(query.status, rules.ACTIVITY_STATUS);
-    q.status = status || "OPEN";
+    if (rules.text(query.status, 10) !== "all") q.status = status || "OPEN";
 
     const kind = rules.oneOf(query.kind, rules.ACTIVITY_KINDS);
     if (kind) q.kind = kind;
@@ -66,7 +68,9 @@ class ActivityService {
     if (search) q.subject = { $regex: escape(search), $options: "i" };
 
     const limit = Math.min(300, Math.max(1, Math.round(rules.num(query.limit) || 200)));
-    const rows = await CrmActivity.find(q).sort({ dueAt: 1, createdAt: -1, _id: -1 }).limit(limit).lean();
+    // A worklist is ordered by what is owed soonest; a log by what happened last. Same rows, different question.
+    const order = rules.text(query.sort, 10) === "recent" ? { createdAt: -1, _id: -1 } : { dueAt: 1, createdAt: -1, _id: -1 };
+    const rows = await CrmActivity.find(q).sort(order).limit(limit).lean();
     return rows.map((r) => this.present(r));
   }
 
@@ -88,7 +92,7 @@ class ActivityService {
   static async parentOf(regarding, session) {
     const kind = rules.oneOf(regarding?.kind, rules.REGARDING_KINDS);
     const id = rules.text(regarding?.id, 24);
-    if (!kind || !rules.isId(id)) throw fail("A follow-up must be about a lead, a deal or a customer", 400, "ACTIVITY_REGARDING_INVALID");
+    if (!kind || !rules.isId(id)) throw fail("A follow-up must be about a lead, a deal, a customer or a person", 400, "ACTIVITY_REGARDING_INVALID");
     if (kind === "lead") {
       const lead = await Lead.findById(id).session(session || null).lean();
       if (!lead) throw fail("Lead not found", 404, "LEAD_NOT_FOUND");
@@ -98,6 +102,14 @@ class ActivityService {
       const opp = await Opportunity.findById(id).session(session || null).lean();
       if (!opp) throw fail("Deal not found", 404, "OPPORTUNITY_NOT_FOUND");
       return { kind, id, customerId: opp.customerId || null, ownerId: opp.ownerId || null, name: opp.title };
+    }
+    if (kind === "contact") {
+      // A call belongs to whoever you actually spoke to. The customer is carried across so the party's own CRM tab
+      // still shows it without a join through the person.
+      const Contact = require("../../models/modules/crm/contactModel");
+      const contact = await Contact.findById(id).select("name customerId").lean();
+      if (!contact) throw fail("Contact not found", 404, "CONTACT_NOT_FOUND");
+      return { kind, id, customerId: contact.customerId || null, ownerId: null, name: contact.name };
     }
     const Customer = require("../../models/modules/customerModel");
     const customer = await Customer.findById(id).select("customerName").lean();
@@ -303,6 +315,9 @@ class ActivityService {
    */
   static async touch(kind, id, session) {
     if (!rules.isId(id)) return;
+    // Only a lead and a deal keep a rollup of their own chasing. A customer and a person keep none, so there is
+    // nothing to recompute and three reads not worth doing.
+    if (kind !== "lead" && kind !== "opportunity") return;
     const oid = new mongoose.Types.ObjectId(String(id));
     const [next] = await CrmActivity.find({ "regarding.id": oid, status: "OPEN" })
       .sort({ dueAt: 1 })

@@ -28,7 +28,56 @@ async function runMigrations() {
   if (Object.keys(core).length) out.coreAssigned = core; // only reported when something was actually assigned
   const applied = await applyApprovedReturnsToTheirInvoices();
   if (applied) out.returnsApplied = applied;
+  const contacts = await backfillCrmContacts();
+  if (contacts) out.crmContactsBackfilled = contacts;
   return out;
+}
+
+// A contact used to be a line inside the party form and nothing else. The CRM gives a person their own record
+// (models/modules/crm/contactModel.js), and the two sides are kept in step by SHARING an id: the Contact _id is the
+// _id of the row in the party's own `contacts[]`. This copies the rows that existed before that collection did.
+//
+// Idempotent because every write is an upsert keyed on that shared id, so a repeat finds the same rows and changes
+// nothing; the CRM-only fields are only ever set on insert, so a person edited in the CRM is not reset by a restart.
+// Unscoped on purpose: it is a repair across every organisation, and each row carries the companyId of its own party.
+async function backfillCrmContacts() {
+  const Contact = require("../models/modules/crm/contactModel");
+  const why = "migration: give the people on customers and suppliers their own CRM records, across every organisation";
+  let done = 0;
+
+  for (const [modelName, field] of [["Customer", "customerId"], ["Vendor", "vendorId"]]) {
+    const Model = mongoose.model(modelName);
+    const parties = await runUnscoped(why, () =>
+      Model.find({ "contacts.0": { $exists: true } }).select("contacts companyId").lean()
+    );
+    const writes = [];
+    for (const party of parties) {
+      for (const row of party.contacts || []) {
+        if (!row?._id) continue;
+        writes.push({
+          updateOne: {
+            filter: { _id: row._id },
+            update: {
+              $set: {
+                name: row.name,
+                designation: row.designation || "",
+                email: row.email || "",
+                phone: row.phone || "",
+                isPrimary: Boolean(row.isPrimary),
+                [field]: party._id,
+              },
+              $setOnInsert: { companyId: party.companyId, createdBy: "system", notes: "", leadId: null },
+            },
+            upsert: true,
+          },
+        });
+      }
+    }
+    if (!writes.length) continue;
+    const result = await runUnscoped(why, () => Contact.bulkWrite(writes, { ordered: false }));
+    done += result?.upsertedCount || 0;
+  }
+  return done;
 }
 
 // A return used to leave the invoice it returned reading "Unpaid" for its full amount. Approved returns are now set against

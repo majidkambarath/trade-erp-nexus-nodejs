@@ -74,6 +74,69 @@ class CrmReportService {
       overdue,
     };
   }
+
+  /**
+   * The CRM's own landing page. The counters above, plus the three lists a salesperson opens the module to see:
+   * what is late, what is theirs today, and - the point of the whole module - which deals the DOCUMENTS moved on
+   * their own this week, each naming the quotation or invoice that did it.
+   *
+   * Everything here is derived. Nothing is stored for the dashboard and nothing is computed twice: the counters are
+   * `summary()` and the funnel is the same pure `rules.funnel` the pipeline board draws.
+   */
+  static async dashboard({ adminId = null } = {}) {
+    const ActivityService = require("./activityService");
+    const summary = await this.summary();
+    const today = summary.today;
+    const since = addDays(today, -7);
+    const stages = await CrmSetupService.stages();
+
+    const [late, mine, open, movedRows] = await Promise.all([
+      ActivityService.list({ due: "overdue", limit: 10 }),
+      rules.isId(adminId) ? ActivityService.list({ scope: "mine", due: "week", limit: 10 }, { adminId }) : Promise.resolve([]),
+      Opportunity.find({ status: "OPEN" })
+        .select("opportunityNo title customerId customerName value stageKey stageName probability expectedCloseDate ownerName")
+        .limit(CAP)
+        .lean(),
+      // A move the automation made, still standing (an undone one is history, not news). `autoMoves` is small, so the
+      // week is filtered in code rather than with a positional query nobody could read.
+      Opportunity.find({ "autoMoves.0": { $exists: true } })
+        .select("opportunityNo title customerName stageName autoMoves")
+        .sort({ updatedAt: -1 })
+        .limit(200)
+        .lean(),
+    ]);
+
+    const moved = [];
+    for (const deal of movedRows) {
+      for (const move of deal.autoMoves || []) {
+        if (move.undoneAt) continue;
+        const day = move.at ? new Date(move.at).toISOString().slice(0, 10) : null;
+        if (!day || day < since) continue;
+        moved.push({
+          dealId: String(deal._id),
+          opportunityNo: deal.opportunityNo,
+          title: deal.title,
+          customerName: deal.customerName,
+          event: move.event,
+          eventLabel: rules.EVENT_LABEL[move.event] || move.event,
+          from: move.from,
+          to: move.to,
+          stageName: deal.stageName,
+          docNo: move.docNo || "",
+          at: move.at,
+        });
+      }
+    }
+    moved.sort((a, b) => new Date(b.at) - new Date(a.at));
+
+    const weighted = (o) => rules.round2((rules.num(o.value) * rules.num(rules.stageByKey(stages, o.stageKey)?.probability)) / 100);
+    const topDeals = open
+      .map((o) => ({ ...o, _id: String(o._id), weighted: weighted(o) }))
+      .sort((a, b) => b.weighted - a.weighted)
+      .slice(0, 8);
+
+    return { ...summary, since, late, mine, moved: moved.slice(0, 8), topDeals, funnel: rules.funnel(stages, open) };
+  }
 }
 
 module.exports = CrmReportService;

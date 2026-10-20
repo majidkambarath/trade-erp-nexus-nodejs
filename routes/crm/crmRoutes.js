@@ -20,6 +20,7 @@ router.param("oppId", branchOfDocument(Opportunity));
 router.param("activityId", branchOfDocument(CrmActivity));
 
 // Fixed paths first: none of these may be read as an id.
+router.get("/dashboard", requirePermission("crm.view"), c.dashboard);
 router.get("/summary", requirePermission("crm.view"), c.summary);
 router.get("/analysis", requirePermission("crm.view"), c.analysis);
 router.get("/pipeline", requirePermission("crm.view"), c.pipeline);
@@ -62,7 +63,16 @@ router.post("/opportunities/:oppId/lose", requirePermission("crm.edit"), c.loseO
 router.post("/opportunities/:oppId/reopen", requirePermission("crm.edit"), c.reopenOpportunity);
 router.post("/opportunities/:oppId/assign", requirePermission("crm.assign"), c.assignOpportunity);
 
-// Activities (one follow-up).
+// People. Contact is a MASTER (no branchId), so there is deliberately no branchOfDocument on :contactId - unlike a
+// lead or a deal, a person is not owned by one branch and every branch sees the same address book.
+router.get("/contacts", requirePermission("crm.view"), c.listContacts);
+router.post("/contacts", requirePermission("crm.create"), c.createContact);
+router.get("/contacts/:contactId", requirePermission("crm.view"), c.getContact);
+router.put("/contacts/:contactId", requirePermission("crm.edit"), c.updateContact);
+router.delete("/contacts/:contactId", requirePermission("crm.delete"), c.removeContact);
+
+// Activities. GET is the communications log (everything that happened); the worklist is /follow-ups above.
+router.get("/activities", requirePermission("crm.view"), c.listActivities);
 router.post("/activities", requirePermission("crm.create"), c.createActivity);
 router.put("/activities/:activityId", requirePermission("crm.edit"), c.updateActivity);
 router.post("/activities/:activityId/done", requirePermission("crm.edit"), c.completeActivity);

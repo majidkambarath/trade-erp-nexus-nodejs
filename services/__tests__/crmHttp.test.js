@@ -268,3 +268,57 @@ test("the audit trail says what happened, in words a person can read", { skip },
   assert.ok(trail.body.rows.length >= 1, "and the lead's own screen can read it");
   assert.ok(trail.body.rows.every((r) => r.entity === "Lead"), "its own rows, nobody else's");
 });
+
+test("the dashboard and the communications log are crm.view", { skip }, async () => {
+  const board = await api("looker", "GET", "/crm/dashboard");
+  assert.equal(board.status, 200, JSON.stringify(board.data));
+  // It is the summary plus the three lists the module opens on.
+  for (const key of ["openLeads", "openDeals", "pipelineValue", "late", "mine", "moved", "topDeals", "funnel"]) {
+    assert.ok(key in board.body, `the dashboard answers ${key}`);
+  }
+  assert.ok(Array.isArray(board.body.moved), "what the documents moved by themselves");
+
+  const log = await api("looker", "GET", "/crm/activities");
+  assert.equal(log.status, 200);
+  assert.ok(Array.isArray(log.body));
+  // The log shows what is finished; the worklist never does.
+  const worklist = await api("looker", "GET", "/crm/follow-ups");
+  assert.equal(worklist.body.every((a) => a.status === "OPEN"), true);
+});
+
+test("people: reading needs crm.view, adding crm.create, changing crm.edit, removing crm.delete", { skip }, async () => {
+  const list = await api("looker", "GET", "/crm/contacts");
+  assert.equal(list.status, 200, JSON.stringify(list.data));
+
+  await cannot("looker", "POST", "/crm/contacts", { name: "Nobody" });
+  const made = await api("chaser", "POST", "/crm/contacts", { name: "Rajesh Kumar", designation: "Purchase Manager", phone: "0507778888" });
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  assert.equal(made.body.unlinked, true, "a person who belongs to no company yet");
+  const id = made.body._id;
+
+  const read = await api("looker", "GET", `/crm/contacts/${id}`);
+  assert.equal(read.status, 200);
+  assert.equal(read.body.name, "Rajesh Kumar");
+  assert.ok(Array.isArray(read.body.timeline), "their page carries what has been said to them");
+
+  await cannot("looker", "PUT", `/crm/contacts/${id}`, { designation: "Owner" });
+  const changed = await api("chaser", "PUT", `/crm/contacts/${id}`, { designation: "Head of Purchasing" });
+  assert.equal(changed.status, 200, JSON.stringify(changed.data));
+  assert.equal(changed.body.designation, "Head of Purchasing");
+  assert.equal(String(changed.body._id), String(id), "the same person, not a replacement");
+
+  // chaser holds create and edit but not delete.
+  await cannot("chaser", "DELETE", `/crm/contacts/${id}`);
+  const gone = await api("owner", "DELETE", `/crm/contacts/${id}`);
+  assert.equal(gone.status, 200);
+  assert.equal((await api("looker", "GET", `/crm/contacts/${id}`)).status, 404);
+});
+
+test("a bad person is refused cleanly, and another organisation's is simply not there", { skip }, async () => {
+  const bad = await api("chaser", "POST", "/crm/contacts", { email: "someone@nowhere.test" });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.code, "CONTACT_NAME_REQUIRED");
+  const missing = await api("looker", "GET", `/crm/contacts/${FAKE_ID}`);
+  assert.equal(missing.status, 404);
+  assert.equal(missing.code, "CONTACT_NOT_FOUND");
+});

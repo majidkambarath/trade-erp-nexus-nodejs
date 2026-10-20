@@ -1,6 +1,7 @@
 const orgLocale = require("../../utils/orgLocale");
 const mongoose = require("mongoose");
 const AppError = require("../../utils/AppError");
+const logger = require("../../utils/logger");
 const { getTenant } = require("../../utils/tenant");
 const { BankMaster } = require("../../models/modules/banking/bankingModels");
 const AttachmentService = require("../core/attachmentService");
@@ -107,8 +108,22 @@ class PartyMasterService {
     return patch;
   }
 
-  // After the party is saved: claim the files its document rows name, drop the ones no row names.
+  // After the party is saved: keep the CRM's own Contact records in step with the party's contact list, then claim
+  // the files its document rows name and drop the ones no row names.
+  //
+  // This is the one place every party write passes through (create and update, customer and vendor), which is why the
+  // contact mirror hangs here rather than in four services. services/crm/contactService.js owns the rule; it is
+  // required lazily because it requires this file back.
   static async finish(kind, party, patch, req) {
+    if (patch?.contacts !== undefined && party?._id) {
+      try {
+        await require("../crm/contactService").syncFromParty(party, kind);
+      } catch (error) {
+        // The party is already saved and this is outside its transaction, so a failed mirror must never report an
+        // error for a save that worked. The next read of that party's people heals it (ContactService.forParty).
+        logger.debug(`[crm] contact mirror for ${kind} ${party._id} did not run: ${error.message}`);
+      }
+    }
     if (!patch || patch.documents === undefined) return;
     await AttachmentService.syncPartyFiles(kindOf(kind).ownerType, party._id, patch.documents, req);
   }
