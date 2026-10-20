@@ -23,8 +23,10 @@ const ORG = arg("org");
 const UNDO = process.argv.includes("--undo");
 const MARK = "crm-demo"; // what every row this script writes is stamped with, so --undo is exact
 
-// Seven enquiries a fabrication and coating business would actually take, in the order they came in.
-const ENQUIRIES = [
+// Seven enquiries, in the order they came in. Which set is used follows the organisation's own country, because a
+// demo that offers powder coating to a Dubai grocer is worse than no demo at all: the names, the goods and the
+// amounts all have to look like the business the person is actually looking at.
+const FABRICATION = [
   { name: "Ramesh Iyer", company: "Sundaram Engineering Works", city: "Coimbatore", phone: "9842011234", email: "ramesh@sundaramworks.in",
     source: "referral", sourceNote: "Sent by Kumar at Precision Tools", interest: "Powder coating, 500 brackets a month", expectedValue: 185000 },
   { name: "Priya Nair", company: "Nair Metal Fabricators", city: "Kochi", phone: "9847022345", email: "priya@nairmetal.in",
@@ -40,6 +42,26 @@ const ENQUIRIES = [
   { name: "Imran Qureshi", company: "Qureshi Engineering", city: "Bengaluru", phone: "9845077890", email: "imran@qureshieng.in",
     source: "whatsapp", interest: "Job work, small batches", expectedValue: 76000 },
 ];
+
+// A UAE food wholesaler's enquiries: supermarkets, restaurants, catering and staff camps.
+const FOOD_TRADE = [
+  { name: "Khalid Al Mansoori", company: "Al Noor Fresh Market LLC", city: "Deira", phone: "0501234567", email: "khalid@alnoorfresh.ae",
+    source: "referral", sourceNote: "Sent by Al Madina Fresh", interest: "Monthly rice and oil for four branches", expectedValue: 118000 },
+  { name: "Reem Al Hashimi", company: "Zahra Catering Services LLC", city: "Abu Dhabi", phone: "0502345678", email: "reem@zahracatering.ae",
+    source: "website", interest: "Staff catering supply, dry goods", expectedValue: 96000 },
+  { name: "Suresh Menon", company: "Spice Route Restaurant LLC", city: "Bur Dubai", phone: "0503456789", email: "suresh@spiceroute.ae",
+    source: "walk_in", interest: "Bulk spices, rice and pulses", expectedValue: 38000 },
+  { name: "Aisha Abdullah", company: "Emirates Hypermarket LLC", city: "Sharjah", phone: "0504567890", email: "aisha@emirateshyper.ae",
+    source: "exhibition", sourceNote: "Met at Gulfood", interest: "Private-label flour, annual", expectedValue: 210000 },
+  { name: "George Thomas", company: "Blue Harbour Cafeteria", city: "Jebel Ali", phone: "0505678901", email: "george@blueharbour.ae",
+    source: "phone", interest: "Daily bread, dairy and tea", expectedValue: 26000 },
+  { name: "Noura Al Suwaidi", company: "Palm Residence Staff Camp", city: "Dubai", phone: "0506789012", email: "noura@palmresidence.ae",
+    source: "repeat", sourceNote: "Supplied them two seasons ago", interest: "Monthly dry goods for 400 staff", expectedValue: 74000 },
+  { name: "Imran Farooq", company: "Gulf Star Wholesale FZE", city: "Ajman", phone: "0507890123", email: "imran@gulfstarfze.ae",
+    source: "whatsapp", interest: "Cartons for re-export", expectedValue: 320000 },
+];
+
+const enquiriesFor = (country) => (String(country || "").toUpperCase() === "IN" ? FABRICATION : FOOD_TRADE);
 
 const day = (offset) => {
   const d = new Date();
@@ -58,7 +80,7 @@ async function wipe(M) {
   return made;
 }
 
-async function seed(M) {
+async function seed(M, ENQUIRIES) {
   const existing = await M.Lead.countDocuments({ createdBy: MARK });
   if (existing) {
     console.log(`${existing} demo enquiries are already here. Run with --undo first if you want them again.`);
@@ -119,7 +141,8 @@ async function seed(M) {
   const already = await Customer.findOne({ customerName: stalledLead.company }).select("_id").lean();
   const { opportunity: stalled } = await M.Lead_.qualify(
     String(stalledLead._id),
-    { value: 128000, expectedCloseDate: day(-9), ...(already ? { customerId: String(already._id) } : {}) },
+    // Its own enquiry's figure, not a made-up one: the amounts have to belong to the business being shown.
+    { value: stalledLead.expectedValue, expectedCloseDate: day(-9), ...(already ? { customerId: String(already._id) } : {}) },
     MARK
   );
   await M.Opp.updateOne(
@@ -223,7 +246,7 @@ async function main() {
       return;
     }
     console.log(`seeding ${org.legalName} (${org.baseCurrency})`);
-    const made = await seed(M);
+    const made = await seed(M, enquiriesFor(org.country));
     if (!made) return;
     await talk(M, made.leads, made.deals);
     await people(M, made.deals);
