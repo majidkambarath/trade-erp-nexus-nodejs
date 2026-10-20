@@ -199,6 +199,7 @@ exports.removeActivity = catchAsync(async (req, res) => {
 
 // ---- the dashboard, the log and the people ---------------------------------------------------------------
 
+exports.calendar = catchAsync(async (req, res) => ok(res, await CrmReportService.calendar(req.query)));
 exports.aging = catchAsync(async (req, res) => ok(res, await CrmReportService.aging()));
 exports.activityReport = catchAsync(async (req, res) => ok(res, await CrmReportService.activity(req.query)));
 

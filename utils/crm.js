@@ -609,7 +609,10 @@ function activityReport({ activities = [], today = null } = {}) {
     if (status === "DONE") {
       person.done += 1;
       kindRow.done += 1;
-      const when = day(a?.completedAt ? String(a.completedAt).slice(0, 10) : null);
+      // `completedDay` is resolved by the caller, in the ORGANISATION's calendar (a call finished at 01:00 in Dubai
+      // is still the previous day in UTC). It is not derived from `completedAt` here: a Date's string form is not a
+      // day, which is exactly the bug this replaced.
+      const when = day(a?.completedDay);
       if (when) byDay.set(when, (byDay.get(when) || 0) + 1);
     } else if (status === "OPEN") {
       person.open += 1;
@@ -630,6 +633,111 @@ function activityReport({ activities = [], today = null } = {}) {
     open: [...byPerson.values()].reduce((t, p) => t + p.open, 0),
     overdue: [...byPerson.values()].reduce((t, p) => t + p.overdue, 0),
   };
+}
+
+
+/**
+ * The last N days, one count per day, zero-filled. A day with nothing done is a bar of height nothing, not a gap:
+ * a quiet day is the thing a manager is looking for, and omitting it would draw a team that never rests.
+ */
+function pulse({ activities = [], today = null, days = 14 } = {}) {
+  const end = day(today);
+  if (!end) return [];
+  const counts = new Map();
+  for (const a of activities || []) {
+    if (oneOf(a?.status, ACTIVITY_STATUS) !== "DONE") continue;
+    const when = day(a?.completedDay);
+    if (when) counts.set(when, (counts.get(when) || 0) + 1);
+  }
+  const out = [];
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = addDaysTo(end, -i);
+    out.push({ day: d, count: counts.get(d) || 0 });
+  }
+  return out;
+}
+
+// A calendar day shifted by whole days, on the day string itself (never through a local clock).
+function addDaysTo(dayString, delta) {
+  const [y, m, d] = dayString.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
+}
+
+/**
+ * What goes on the calendar, as one flat list the screen can group by day. Three kinds, and the order matters:
+ *  - a follow-up, on the day it is DUE (or, once done, the day it was done - so the calendar is also a record);
+ *  - a deal, on its expected close day, while it is still open;
+ *  - an enquiry, on the day it came in. That last one is the noisiest, so the screen offers it as a layer that
+ *    starts switched off (the market's own advice: keep the month view uncluttered by default).
+ * Nothing here is stored. Only an OPEN follow-up is `movable`: a finished one is history, and a deal's close date
+ * is changed on the deal, where the reason can be recorded.
+ */
+function calendarItems({ activities = [], opportunities = [], leads = [], from = null, to = null, today = null } = {}) {
+  const lo = day(from);
+  const hi = day(to);
+  const asOn = day(today);
+  if (!lo || !hi) return [];
+  const within = (d) => Boolean(d) && d >= lo && d <= hi;
+  const items = [];
+
+  for (const a of activities || []) {
+    const status = oneOf(a?.status, ACTIVITY_STATUS) || "OPEN";
+    if (status === "CANCELLED") continue;
+    const when = status === "DONE" ? day(a?.completedDay) : day(a?.dueAt);
+    if (!within(when)) continue;
+    const kind = oneOf(a?.kind, ACTIVITY_KINDS) || "task";
+    items.push({
+      id: String(a?._id || ""),
+      type: "activity",
+      day: when,
+      title: text(a?.subject, 200),
+      sub: KIND_LABEL[kind] || kind,
+      kind,
+      status,
+      overdue: status === "OPEN" && Boolean(asOn) && when < asOn,
+      ownerId: a?.ownerId || null,
+      ownerName: text(a?.ownerName, 80),
+      regarding: a?.regarding || null,
+      movable: status === "OPEN",
+    });
+  }
+
+  for (const o of opportunities || []) {
+    if ((oneOf(o?.status, OPPORTUNITY_STATUS) || "OPEN") !== "OPEN") continue;
+    const when = day(o?.expectedCloseDate);
+    if (!within(when)) continue;
+    items.push({
+      id: String(o?._id || ""),
+      type: "deal",
+      day: when,
+      title: text(o?.title, 150),
+      sub: text(o?.customerName, 150),
+      value: round2(num(o?.value)),
+      stageName: text(o?.stageName, 60),
+      status: "OPEN",
+      overdue: Boolean(asOn) && when < asOn,
+      ownerName: text(o?.ownerName, 80),
+      movable: false,
+    });
+  }
+
+  for (const l of leads || []) {
+    const when = day(l?.createdDay);
+    if (!within(when)) continue;
+    items.push({
+      id: String(l?._id || ""),
+      type: "lead",
+      day: when,
+      title: text(l?.name, 150),
+      sub: text(l?.company, 150),
+      status: oneOf(l?.status, LEAD_STATUS) || "NEW",
+      overdue: false,
+      movable: false,
+    });
+  }
+
+  const order = { activity: 0, deal: 1, lead: 2 };
+  return items.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : order[a.type] - order[b.type] || a.title.localeCompare(b.title)));
 }
 
 function analysis({ leads = [], opportunities = [], activities = [], stages = [], today = null } = {}) {
@@ -734,5 +842,5 @@ module.exports = {
   normaliseStages, normaliseSettings,
   assignOwner, leadScore,
   moveKey, stageByKey, stageFor, orderOf, planAdvance, planUndo, planFollowUp,
-  diffDays, dueState, staleOf, weightedValue, round2, funnel, analysis, aging, activityReport, AGE_BANDS, followUpRange,
+  diffDays, dueState, staleOf, weightedValue, round2, funnel, analysis, aging, activityReport, pulse, calendarItems, AGE_BANDS, followUpRange,
 };

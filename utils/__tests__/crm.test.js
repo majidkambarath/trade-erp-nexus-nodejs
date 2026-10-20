@@ -370,10 +370,10 @@ test("aging measures from the day a deal entered its stage, not from when it was
 
 test("the communication report counts effort, and only what is OPEN can be late", () => {
   const rows = [
-    { kind: "call", status: "DONE", ownerName: "Asif", completedAt: "2026-10-18T06:00:00.000Z" },
-    { kind: "call", status: "DONE", ownerName: "Asif", completedAt: "2026-10-18T09:00:00.000Z" },
+    { kind: "call", status: "DONE", ownerName: "Asif", completedDay: "2026-10-18" },
+    { kind: "call", status: "DONE", ownerName: "Asif", completedDay: "2026-10-18" },
     { kind: "visit", status: "OPEN", ownerName: "Asif", dueAt: "2026-10-14" },
-    { kind: "note", status: "DONE", ownerName: "Maya", completedAt: "2026-10-19T06:00:00.000Z" },
+    { kind: "note", status: "DONE", ownerName: "Maya", completedDay: "2026-10-19" },
     { kind: "call", status: "OPEN", ownerName: "Maya", dueAt: "2026-10-25" },
     { kind: "call", status: "CANCELLED", ownerName: "Maya", dueAt: "2026-01-01" },
   ];
@@ -394,4 +394,56 @@ test("the communication report counts effort, and only what is OPEN can be late"
   assert.deepEqual(out.byDay.map((d) => d.day), ["2026-10-18", "2026-10-19"], "oldest day first");
   assert.equal(out.byDay[0].count, 2);
   assert.equal(out.byKind.every((k) => k.done || k.open), true, "a kind nobody used is left out");
+});
+
+test("a finished follow-up is placed by its resolved day - a Date's own string form is not a day", () => {
+  // What Mongo really hands back is a Date, and String(date) is "Tue Oct 20 2026 ...". An earlier version read that,
+  // got no day, and drew an empty "busiest day" for a team that had done three calls. The caller resolves the day in
+  // the organisation's calendar now; a row that arrives without one is simply not placed, never mis-placed.
+  const real = { kind: "call", status: "DONE", ownerName: "Asif", completedAt: new Date("2026-10-18T06:00:00.000Z") };
+  assert.equal(crm.activityReport({ activities: [real], today: "2026-10-20" }).byDay.length, 0, "no resolved day, so not placed");
+  const placed = crm.activityReport({ activities: [{ ...real, completedDay: "2026-10-18" }], today: "2026-10-20" });
+  assert.deepEqual(placed.byDay, [{ day: "2026-10-18", count: 1 }]);
+});
+
+test("the pulse is the last N days, every one of them, quiet days included", () => {
+  const rows = [
+    { status: "DONE", completedDay: "2026-10-20" },
+    { status: "DONE", completedDay: "2026-10-20" },
+    { status: "DONE", completedDay: "2026-10-18" },
+    { status: "OPEN", completedDay: "2026-10-19" },
+    { status: "DONE", completedDay: "2026-09-01" },
+  ];
+  const out = crm.pulse({ activities: rows, today: "2026-10-20", days: 5 });
+  assert.deepEqual(out.map((d) => d.day), ["2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19", "2026-10-20"]);
+  assert.deepEqual(out.map((d) => d.count), [0, 0, 1, 0, 2], "an open one is not done, and a day outside the window is not counted");
+  assert.equal(out.length, 5, "a quiet day is a bar of nothing, not a gap");
+});
+
+test("the calendar places follow-ups, deals and enquiries on their own days", () => {
+  const out = crm.calendarItems({
+    from: "2026-10-01",
+    to: "2026-10-31",
+    today: "2026-10-20",
+    activities: [
+      { _id: "a1", kind: "call", status: "OPEN", subject: "Chase the contract", dueAt: "2026-10-14", ownerName: "Asif" },
+      { _id: "a2", kind: "visit", status: "OPEN", subject: "Works visit", dueAt: "2026-10-25" },
+      { _id: "a3", kind: "note", status: "DONE", subject: "Met at the fair", completedDay: "2026-10-10" },
+      { _id: "a4", kind: "call", status: "CANCELLED", subject: "Dropped", dueAt: "2026-10-12" },
+      { _id: "a5", kind: "call", status: "OPEN", subject: "Next month", dueAt: "2026-11-02" },
+    ],
+    opportunities: [
+      { _id: "d1", title: "Rice contract", customerName: "Al Noor", value: 90000, status: "OPEN", expectedCloseDate: "2026-10-30" },
+      { _id: "d2", title: "Already won", customerName: "X", value: 1, status: "WON", expectedCloseDate: "2026-10-12" },
+    ],
+    leads: [{ _id: "l1", name: "Priya", company: "Nair Metal", status: "NEW", createdDay: "2026-10-05" }],
+  });
+  assert.deepEqual(out.map((i) => i.id), ["l1", "a3", "a1", "a2", "d1"], "by day, oldest first");
+  assert.equal(out.find((i) => i.id === "a1").overdue, true, "an open follow-up whose day has passed");
+  assert.equal(out.find((i) => i.id === "a2").overdue, false);
+  assert.equal(out.find((i) => i.id === "a3").movable, false, "a finished follow-up is history");
+  assert.equal(out.find((i) => i.id === "a1").movable, true, "an open one can be rescheduled");
+  assert.equal(out.find((i) => i.id === "d1").movable, false, "a close date is changed on the deal, where the reason is recorded");
+  assert.ok(!out.some((i) => ["a4", "a5", "d2"].includes(i.id)), "cancelled, out of range and already-won are all left off");
+  assert.deepEqual(crm.calendarItems({ from: "bad", to: "2026-10-31" }), [], "no range, no calendar");
 });

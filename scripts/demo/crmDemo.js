@@ -164,6 +164,13 @@ async function talk(M, leads, deals) {
     { kind: "whatsapp", subject: "Send the sample photographs", regarding: { kind: "lead", id: String(leads[5]._id) }, dueAt: day(-1) },
     { kind: "call", subject: "First call - find out what they coat", regarding: { kind: "lead", id: String(leads[6]._id) }, dueAt: day(0) },
     { kind: "meeting", subject: "Works visit with the production head", regarding: { kind: "opportunity", id: String(deals[2]._id) }, dueAt: day(2) },
+    // The weeks ahead, in different kinds and on different days, so the calendar and the board have a month to show
+    // rather than a cluster around today.
+    { kind: "visit", subject: "Site visit - measure up the first batch", regarding: { kind: "opportunity", id: String(deals[1]._id) }, dueAt: day(1) },
+    { kind: "call", subject: "Check the sample was received", regarding: { kind: "lead", id: String(leads[1]._id) }, dueAt: day(3) },
+    { kind: "email", subject: "Send the revised rate card", regarding: { kind: "opportunity", id: String(deals[2]._id) }, dueAt: day(6) },
+    { kind: "meeting", subject: "Review the trial batch together", regarding: { kind: "opportunity", id: String(deals[1]._id) }, dueAt: day(9) },
+    { kind: "task", subject: "Prepare the annual contract draft", regarding: { kind: "opportunity", id: String(deals[2]._id) }, dueAt: day(16) },
   ];
   let open = 0;
   let done = 0;
@@ -219,6 +226,16 @@ async function offers(M, deals) {
   console.log(`  ${second.quotationNo} sent and accepted -> that deal moved itself twice`);
 }
 
+// Enquiries came in over the last fortnight, not all this morning. Written to the raw collection because Mongoose
+// overwrites createdAt on any update through the model - there is no honest way to make the clock run backwards.
+async function arrivals(M, leads) {
+  const ago = [1, 2, 4, 6, 9, 12, 15];
+  for (const [i, lead] of leads.entries()) {
+    await M.Lead.collection.updateOne({ _id: lead._id }, { $set: { createdAt: new Date(Date.now() - ago[i % ago.length] * 86400000) } });
+  }
+  console.log("  spread the enquiries over the last fortnight");
+}
+
 async function main() {
   if (!ORG) throw new Error("say which organisation: --org=<code>");
   await mongoose.connect(process.env.MONGO_URI);
@@ -250,6 +267,7 @@ async function main() {
     if (!made) return;
     await talk(M, made.leads, made.deals);
     await people(M, made.deals);
+    await arrivals(M, made.leads);
     await offers(M, made.deals);
     console.log("done. Open CRM > Dashboard.");
   });

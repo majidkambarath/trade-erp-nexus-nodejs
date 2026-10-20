@@ -503,7 +503,15 @@ const reuseDetected = async (admin, session) => {
 //
 // Every refresh REPLACES the cookie (a new `jti`), so a copy of an old cookie is recognisable: it is neither the current token nor, for
 // a few seconds, the one just replaced (two tabs refreshing together). Anything else ends the session.
-// -> { accessToken, expiresIn, admin } and, when the cookie was replaced, { refreshToken, refreshExpiresAt } for the controller to set.
+//
+// The one just replaced is also how an honest browser looks when the answer that carried its new cookie never arrived: the page was
+// reloaded while the refresh was in flight (every page load refreshes, the access token lives in memory only), the tab was closed, the
+// server restarted. The server rotated, the browser still holds the old cookie. Answering that holder with an access token ALONE left
+// it with the old cookie, and the next refresh after the grace window then looked exactly like a stolen copy and ended the session.
+// So inside the window the holder is handed the CURRENT cookie again (same token id, same end date, nothing new is minted) and
+// carries on with the right one. A thief inside the window would get the same; that costs nothing the access token did not already
+// give, and the person's own next refresh is the one that exposes it (they and the thief then hold the same link of the chain).
+// -> { accessToken, expiresIn, admin } and, when the cookie was replaced or restored, { refreshToken, refreshExpiresAt } for the controller to set.
 const refreshAccessToken = async (refreshToken) => {
   if (!refreshToken || typeof refreshToken !== "string") throw endedSession();
 
@@ -517,13 +525,14 @@ const refreshAccessToken = async (refreshToken) => {
     throw endedSession();
 
   await assertOrganisationOpen(session.companyId);
-  const { admin, rotatedTo } = await runWithTenant({ companyId: session.companyId }, async () => {
+  const { admin, cookieJti } = await runWithTenant({ companyId: session.companyId }, async () => {
     const found = await Admin.findById(decoded.id);
     if (!found || !found.isActive || found.status !== "active")
       throw new AppError("Admin not found or inactive", 401, "ADMIN_INACTIVE");
 
     const presented = jtiOf(decoded.jti);
     let next = null;
+    let restored = null;
     if (presented === jtiOf(session.refreshJti)) {
       // The current cookie: replace it. One atomic swap, so of two requests carrying it exactly one rotates.
       const candidate = crypto.randomUUID();
@@ -543,8 +552,10 @@ const refreshAccessToken = async (refreshToken) => {
         throw endedSession();
       }
       await AuthSession.updateOne({ _id: session._id }, { lastSeenAt: new Date() });
+      // the cookie the browser should be holding by now (it may be the one that beat us, or one rotated a moment ago): hand it over again
+      restored = latest.refreshJti || null;
     }
-    return { admin: found, rotatedTo: next };
+    return { admin: found, cookieJti: next || restored };
   });
 
   const tokenPayload = {
@@ -557,9 +568,9 @@ const refreshAccessToken = async (refreshToken) => {
     branchId: admin.branchId,
   };
   // the replacement cookie ends when the session does (the sign-in's own fixed lifetime), not thirty days from now
-  const { accessToken, refreshToken: replacement } = generateTokens(tokenPayload, session._id, rotatedTo ? { jti: rotatedTo, refreshExp: Math.floor(session.expiresAt.getTime() / 1000) } : {});
+  const { accessToken, refreshToken: replacement } = generateTokens(tokenPayload, session._id, cookieJti ? { jti: cookieJti, refreshExp: Math.floor(session.expiresAt.getTime() / 1000) } : {});
 
-  return { accessToken, expiresIn: JWT_EXPIRES_IN, admin: admin.toJSON(), ...(rotatedTo ? { refreshToken: replacement, refreshExpiresAt: session.expiresAt } : {}) };
+  return { accessToken, expiresIn: JWT_EXPIRES_IN, admin: admin.toJSON(), ...(cookieJti ? { refreshToken: replacement, refreshExpiresAt: session.expiresAt } : {}) };
 };
 
 // Logout: revoke this browser's session. An expired or unsigned token has nothing to revoke.

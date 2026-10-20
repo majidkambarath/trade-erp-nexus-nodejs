@@ -346,3 +346,55 @@ test("the named reports are crm.view, and aging is as at today whatever dates ar
   assert.equal(backwards.status, 400);
   assert.equal(backwards.code, "INVALID_RANGE");
 });
+
+test("what was done today shows up on the pulse, the activity report and the calendar - from a real Date", { skip }, async () => {
+  // The case that was broken: Mongo hands back completedAt as a Date, and an earlier version turned that into a
+  // "day" with String(date).slice(0, 10), got nothing, and reported three finished calls as no busiest day.
+  const lead = await api("chaser", "POST", "/crm/leads", enquiry({ name: "Calendar Caller", phone: "0509998888" }));
+  assert.equal(lead.status, 201, JSON.stringify(lead.data));
+  const note = await api("chaser", "POST", "/crm/activities", { kind: "note", subject: "Rang about the rice", regarding: { kind: "lead", id: lead.body._id } });
+  assert.equal(note.status, 201, JSON.stringify(note.data));
+  assert.equal(note.body.status, "DONE", "a note is a thing that happened, so it is recorded finished");
+
+  const report = await api("looker", "GET", "/crm/reports/activity");
+  assert.ok(report.body.done >= 1);
+  assert.ok(report.body.byDay.length >= 1, "a finished follow-up is placed on a day");
+  assert.ok(report.body.byDay.every((d) => /^\d{4}-\d{2}-\d{2}$/.test(d.day)), "and every day is a real calendar day");
+
+  const board = await api("looker", "GET", "/crm/dashboard");
+  assert.equal(board.body.pulse.length, 14, "two weeks, every day, quiet ones included");
+  assert.ok(board.body.pulse.at(-1).count >= 1, "and today is on the end of it");
+  assert.ok(Array.isArray(board.body.leadSources) && board.body.leadSources.length >= 1);
+
+  const today = board.body.today;
+  const cal = await api("looker", "GET", `/crm/calendar?from=${today}&to=${today}`);
+  assert.equal(cal.status, 200, JSON.stringify(cal.data));
+  assert.ok(cal.body.items.some((i) => i.type === "activity" && i.title === "Rang about the rice" && i.status === "DONE" && i.movable === false));
+  assert.ok(cal.body.items.some((i) => i.type === "lead" && i.title === "Calendar Caller"), "an enquiry is placed on the day it came in");
+});
+
+test("the calendar is crm.view, needs a range, and refuses one too long to read", { skip }, async () => {
+  assert.equal((await api("looker", "GET", "/crm/calendar")).code, "INVALID_RANGE", "no range at all");
+  assert.equal((await api("looker", "GET", "/crm/calendar?from=2026-10-31&to=2026-10-01")).code, "INVALID_RANGE", "backwards");
+  const long = await api("looker", "GET", "/crm/calendar?from=2026-01-01&to=2026-12-31");
+  assert.equal(long.status, 400);
+  assert.equal(long.code, "RANGE_TOO_LONG");
+  assert.equal((await api("looker", "GET", "/crm/calendar?from=2026-10-01&to=2026-10-31")).status, 200);
+});
+
+test("a follow-up can be rescheduled and handed on with the ordinary edit - no special endpoint", { skip }, async () => {
+  const made = await api("chaser", "POST", "/crm/activities", { kind: "call", subject: "Move me", dueAt: "2026-10-21", regarding: { kind: "lead", id: S.lead } });
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  // chaser holds crm.edit, so dragging a card to another day is just this call.
+  const moved = await api("chaser", "PUT", `/crm/activities/${made.body._id}`, { dueAt: "2026-10-28" });
+  assert.equal(moved.status, 200, JSON.stringify(moved.data));
+  assert.equal(moved.body.dueAt, "2026-10-28");
+  // looker only holds crm.view: it cannot reschedule anything.
+  await cannot("looker", "PUT", `/crm/activities/${made.body._id}`, { dueAt: "2026-10-29" });
+  // and a finished one cannot be moved at all.
+  const done = await api("chaser", "POST", `/crm/activities/${made.body._id}/done`, { outcome: "spoke" });
+  assert.equal(done.status, 200, JSON.stringify(done.data));
+  const late = await api("chaser", "PUT", `/crm/activities/${made.body._id}`, { dueAt: "2026-11-02" });
+  assert.equal(late.status, 409);
+  assert.equal(late.code, "ACTIVITY_DONE");
+});

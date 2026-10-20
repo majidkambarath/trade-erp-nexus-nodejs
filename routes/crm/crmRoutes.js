@@ -24,6 +24,7 @@ router.get("/dashboard", requirePermission("crm.view"), c.dashboard);
 router.get("/summary", requirePermission("crm.view"), c.summary);
 router.get("/analysis", requirePermission("crm.view"), c.analysis);
 // The named reports. Fixed paths, declared with the rest of them: "/reports/..." can never be read as an id.
+router.get("/calendar", requirePermission("crm.view"), c.calendar);
 router.get("/reports/aging", requirePermission("crm.view"), c.aging);
 router.get("/reports/activity", requirePermission("crm.view"), c.activityReport);
 router.get("/pipeline", requirePermission("crm.view"), c.pipeline);

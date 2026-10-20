@@ -3,7 +3,13 @@ const logger = require("./logger");
 const TxRetry = require("./withTransactionSession");
 
 const errorHandler = (err, req, res, next) => {
-  logger.error("Error handler caught error", { name: err.name, message: err.message, code: err.code, stack: process.env.NODE_ENV === "production" ? undefined : err.stack });
+  // A refusal we chose to make (wrong password, an ended session, a permission, a validation) is the system working: one line, no stack,
+  // so a real fault (a 500, anything we did not throw on purpose) is not buried under people mistyping their password.
+  if (err.isOperational && (err.statusCode || 400) < 500) {
+    logger.warn(`Request refused: ${err.statusCode || 400} ${err.code || "APP_ERROR"} - ${err.message}`);
+  } else {
+    logger.error("Error handler caught error", { name: err.name, message: err.message, code: err.code, stack: process.env.NODE_ENV === "production" ? undefined : err.stack });
+  }
 
   // Mongoose validation errors
   if (err instanceof mongoose.Error.ValidationError) {

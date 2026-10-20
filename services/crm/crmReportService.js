@@ -6,7 +6,7 @@ const Lead = require("../../models/modules/crm/leadModel");
 const Opportunity = require("../../models/modules/crm/opportunityModel");
 const CrmActivity = require("../../models/modules/crm/crmActivityModel");
 const rules = require("../../utils/crm");
-const { todayInOrg, addDays } = require("../../utils/documentExpiry");
+const { todayInOrg, addDays, toExpiryDay } = require("../../utils/documentExpiry");
 const CrmSetupService = require("./crmSetupService");
 
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
@@ -168,7 +168,33 @@ class CrmReportService {
     }
     const trend = months.map((m) => totals.get(m));
 
-    return { ...summary, since, late, mine, moved: moved.slice(0, 8), topDeals, byOwner, trend, funnel: rules.funnel(stages, open) };
+    // Two weeks of finished follow-ups, and where this period's enquiries came from.
+    const pulseFrom = addDays(today, -13);
+    const [doneRows, sourceRows] = await Promise.all([
+      CrmActivity.find({
+        status: "DONE",
+        completedAt: { $gte: new Date(`${addDays(pulseFrom, -1)}T00:00:00.000Z`) },
+      })
+        .select("status completedAt")
+        .limit(CAP)
+        .lean(),
+      Lead.find({ createdAt: { $gte: new Date(`${addDays(today, -89)}T00:00:00.000Z`) } }).select("source status").limit(CAP).lean(),
+    ]);
+    const pulse = rules.pulse({
+      activities: doneRows.map((r) => ({ status: r.status, completedDay: r.completedAt ? toExpiryDay(r.completedAt) : null })),
+      today,
+      days: 14,
+    });
+    const sources = new Map();
+    for (const l of sourceRows) {
+      const key = rules.oneOf(l.source, rules.LEAD_SOURCES) || "other";
+      const row = sources.get(key) || { key, name: rules.SOURCE_LABEL[key] || key, value: 0 };
+      row.value += 1;
+      sources.set(key, row);
+    }
+    const leadSources = [...sources.values()].sort((a, b) => b.value - a.value);
+
+    return { ...summary, since, late, mine, moved: moved.slice(0, 8), topDeals, byOwner, trend, pulse, leadSources, funnel: rules.funnel(stages, open) };
   }
 
   /**
@@ -196,7 +222,50 @@ class CrmReportService {
       .select("kind status ownerName dueAt completedAt subject")
       .limit(CAP)
       .lean();
-    return { period: { from, to, today }, capped: rows.length >= CAP, ...rules.activityReport({ activities: rows, today }) };
+    // The day it was finished, in the ORGANISATION's calendar - not the UTC date of the instant.
+    const withDay = rows.map((r) => ({ ...r, completedDay: r.completedAt ? toExpiryDay(r.completedAt) : null }));
+    return { period: { from, to, today }, capped: rows.length >= CAP, ...rules.activityReport({ activities: withDay, today }) };
+  }
+
+  /**
+   * What is on the calendar between two days: follow-ups, deals closing and enquiries arriving, as one flat list the
+   * screen groups by day. The range is the caller's (a month grid is about six weeks), but it is capped: a calendar
+   * that can be asked for ten years answers nobody and reads everything.
+   */
+  static async calendar(query = {}) {
+    const today = todayInOrg();
+    const from = rules.day(query.from);
+    const to = rules.day(query.to);
+    if (!from || !to) throw fail("Say which days to show", 400, "INVALID_RANGE");
+    if (from > to) throw fail("The calendar cannot start after it ends", 400, "INVALID_RANGE");
+    if (rules.diffDays(from, to) > 70) throw fail("Ask for ten weeks or fewer at a time", 400, "RANGE_TOO_LONG");
+
+    // A finished follow-up is placed by when it was DONE, which is an instant: read a day either side and let the
+    // pure rule keep only what falls in the organisation's own days.
+    const slackFrom = new Date(`${addDays(from, -1)}T00:00:00.000Z`);
+    const slackTo = new Date(`${addDays(to, 1)}T23:59:59.999Z`);
+    const [activities, deals, leads] = await Promise.all([
+      CrmActivity.find({
+        $or: [{ status: "OPEN", dueAt: { $gte: from, $lte: to } }, { status: "DONE", completedAt: { $gte: slackFrom, $lte: slackTo } }],
+      })
+        .select("kind status subject dueAt completedAt ownerId ownerName regarding")
+        .limit(CAP)
+        .lean(),
+      Opportunity.find({ status: "OPEN", expectedCloseDate: { $gte: from, $lte: to } })
+        .select("title customerName value expectedCloseDate stageName ownerName status")
+        .limit(CAP)
+        .lean(),
+      Lead.find({ createdAt: { $gte: slackFrom, $lte: slackTo } }).select("name company status createdAt").limit(CAP).lean(),
+    ]);
+    const items = rules.calendarItems({
+      activities: activities.map((a) => ({ ...a, completedDay: a.completedAt ? toExpiryDay(a.completedAt) : null })),
+      opportunities: deals,
+      leads: leads.map((l) => ({ ...l, createdDay: toExpiryDay(l.createdAt) })),
+      from,
+      to,
+      today,
+    });
+    return { today, from, to, items };
   }
 }
 
