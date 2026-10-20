@@ -530,6 +530,108 @@ function funnel(stages = [], opportunities = []) {
  * The CRM's own report: what came in, what was done with it, and how well. A rate with nothing to measure is null,
  * never 0 - the same rule as the production analysis - so an empty month does not read as a total failure.
  */
+
+// ---- the two reports the pipeline alone cannot answer -------------------------------------------------------
+
+// How long an open deal has stood where it stands. Age is measured from `stageSinceDay` - the day it ENTERED its
+// current stage - not from when it was created: a deal that moved yesterday is not old, however long it has existed.
+const AGE_BANDS = [
+  { key: "0-7", label: "Up to a week", from: 0, to: 7 },
+  { key: "8-14", label: "1 to 2 weeks", from: 8, to: 14 },
+  { key: "15-30", label: "2 to 4 weeks", from: 15, to: 30 },
+  { key: "31-60", label: "1 to 2 months", from: 31, to: 60 },
+  { key: "60+", label: "Over 2 months", from: 61, to: Infinity },
+];
+
+const bandFor = (days) => AGE_BANDS.find((b) => days >= b.from && days <= b.to) || AGE_BANDS[AGE_BANDS.length - 1];
+
+/**
+ * Open deals by how long they have sat still. The question it answers is "what is quietly dying", which no count of
+ * the pipeline can tell you: a stage with ten deals looks healthy until you see that six of them have not moved in
+ * two months.
+ */
+function aging({ opportunities = [], stages = [], settings = {}, today = null } = {}) {
+  const asOn = day(today) || "1970-01-01";
+  const open = (opportunities || []).filter((o) => (oneOf(o?.status, OPPORTUNITY_STATUS) || "OPEN") === "OPEN");
+
+  const bands = AGE_BANDS.map((b) => ({ key: b.key, label: b.label, deals: 0, value: 0 }));
+  const rows = [];
+  for (const o of open) {
+    const since = day(o?.stageSinceDay) || day(o?.openedDay) || asOn;
+    const days = Math.max(0, diffDays(since, asOn));
+    const band = bandFor(days);
+    const row = bands.find((b) => b.key === band.key);
+    row.deals += 1;
+    row.value = round2(row.value + num(o?.value));
+    rows.push({
+      id: String(o?._id || ""),
+      opportunityNo: o?.opportunityNo || "",
+      title: o?.title || "",
+      customerName: o?.customerName || "",
+      stageKey: o?.stageKey || "",
+      stageName: stageByKey(stages, o?.stageKey)?.name || o?.stageName || "",
+      ownerName: o?.ownerName || "",
+      value: round2(num(o?.value)),
+      days,
+      band: band.key,
+      bandLabel: band.label,
+      stale: staleOf(o, settings, stages, asOn).isStale,
+      expectedCloseDate: o?.expectedCloseDate || null,
+      // A close date that has already passed on a deal still open is the loudest thing on this report.
+      overdueClose: Boolean(o?.expectedCloseDate && diffDays(o.expectedCloseDate, asOn) > 0),
+    });
+  }
+  rows.sort((a, b) => b.days - a.days);
+  const oldest = rows[0] ? rows[0].days : 0;
+  const average = rows.length ? Math.round((rows.reduce((t, r) => t + r.days, 0) / rows.length) * 10) / 10 : null;
+  return { bands, rows, oldest, average, stale: rows.filter((r) => r.stale).length, overdueClose: rows.filter((r) => r.overdueClose).length };
+}
+
+/**
+ * What the team actually did: calls, visits and messages over a period, by person and by kind. Separate from the
+ * pipeline on purpose - effort and outcome are different questions, and a quiet week shows here first.
+ */
+function activityReport({ activities = [], today = null } = {}) {
+  const asOn = day(today) || "1970-01-01";
+  const byKind = new Map(ACTIVITY_KINDS.map((k) => [k, { kind: k, label: KIND_LABEL[k] || k, done: 0, open: 0, overdue: 0 }]));
+  const byPerson = new Map();
+  const byDay = new Map();
+
+  for (const a of activities || []) {
+    const kind = oneOf(a?.kind, ACTIVITY_KINDS) || "task";
+    const status = oneOf(a?.status, ACTIVITY_STATUS) || "OPEN";
+    const who = text(a?.ownerName, 80) || "Nobody";
+    if (!byPerson.has(who)) byPerson.set(who, { key: who, name: who, done: 0, open: 0, overdue: 0, total: 0 });
+    const person = byPerson.get(who);
+    const kindRow = byKind.get(kind);
+
+    person.total += 1;
+    if (status === "DONE") {
+      person.done += 1;
+      kindRow.done += 1;
+      const when = day(a?.completedAt ? String(a.completedAt).slice(0, 10) : null);
+      if (when) byDay.set(when, (byDay.get(when) || 0) + 1);
+    } else if (status === "OPEN") {
+      person.open += 1;
+      kindRow.open += 1;
+      const late = day(a?.dueAt) && diffDays(a.dueAt, asOn) > 0;
+      if (late) {
+        person.overdue += 1;
+        kindRow.overdue += 1;
+      }
+    }
+  }
+
+  return {
+    byKind: [...byKind.values()].filter((k) => k.done || k.open),
+    byPerson: [...byPerson.values()].sort((a, b) => b.done - a.done),
+    byDay: [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([d, count]) => ({ day: d, count })),
+    done: [...byPerson.values()].reduce((t, p) => t + p.done, 0),
+    open: [...byPerson.values()].reduce((t, p) => t + p.open, 0),
+    overdue: [...byPerson.values()].reduce((t, p) => t + p.overdue, 0),
+  };
+}
+
 function analysis({ leads = [], opportunities = [], activities = [], stages = [], today = null } = {}) {
   const rate = (part, whole) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
   const openOf = (o) => (oneOf(o?.status, OPPORTUNITY_STATUS) || "OPEN") === "OPEN";
@@ -632,5 +734,5 @@ module.exports = {
   normaliseStages, normaliseSettings,
   assignOwner, leadScore,
   moveKey, stageByKey, stageFor, orderOf, planAdvance, planUndo, planFollowUp,
-  diffDays, dueState, staleOf, weightedValue, round2, funnel, analysis, followUpRange,
+  diffDays, dueState, staleOf, weightedValue, round2, funnel, analysis, aging, activityReport, AGE_BANDS, followUpRange,
 };

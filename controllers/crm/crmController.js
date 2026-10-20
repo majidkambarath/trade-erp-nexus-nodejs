@@ -199,6 +199,9 @@ exports.removeActivity = catchAsync(async (req, res) => {
 
 // ---- the dashboard, the log and the people ---------------------------------------------------------------
 
+exports.aging = catchAsync(async (req, res) => ok(res, await CrmReportService.aging()));
+exports.activityReport = catchAsync(async (req, res) => ok(res, await CrmReportService.activity(req.query)));
+
 exports.dashboard = catchAsync(async (req, res) => ok(res, await CrmReportService.dashboard({ adminId: req.admin?.id })));
 
 // The communications LOG, as against the follow-up worklist at /follow-ups: same rows, read newest-first and with

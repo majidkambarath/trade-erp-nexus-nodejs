@@ -325,3 +325,24 @@ test("a bad person is refused cleanly, and another organisation's is simply not 
   assert.equal(missing.status, 404);
   assert.equal(missing.code, "CONTACT_NOT_FOUND");
 });
+
+test("the named reports are crm.view, and aging is as at today whatever dates are sent", { skip }, async () => {
+  const aging = await api("looker", "GET", "/crm/reports/aging?from=2020-01-01&to=2020-12-31");
+  assert.equal(aging.status, 200, JSON.stringify(aging.data));
+  // It takes no range on purpose: how old a deal was in 2020 answers nothing anybody acts on.
+  assert.equal(aging.body.period, undefined);
+  assert.ok(Array.isArray(aging.body.bands) && aging.body.bands.length === 5);
+  assert.equal(aging.body.bands.reduce((t, b) => t + b.deals, 0), aging.body.rows.length, "every open deal is in exactly one band");
+
+  const activity = await api("looker", "GET", "/crm/reports/activity");
+  assert.equal(activity.status, 200, JSON.stringify(activity.data));
+  for (const key of ["byKind", "byPerson", "byDay", "done", "open", "overdue"]) {
+    assert.ok(key in activity.body, `the activity report answers ${key}`);
+  }
+  assert.ok(activity.body.period.from && activity.body.period.to, "it does read a period");
+
+  // Neither is a write, so nobody needs more than crm.view - and a backwards range is still refused cleanly.
+  const backwards = await api("looker", "GET", "/crm/reports/activity?from=2026-12-31&to=2026-01-01");
+  assert.equal(backwards.status, 400);
+  assert.equal(backwards.code, "INVALID_RANGE");
+});

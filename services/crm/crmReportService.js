@@ -170,6 +170,34 @@ class CrmReportService {
 
     return { ...summary, since, late, mine, moved: moved.slice(0, 8), topDeals, byOwner, trend, funnel: rules.funnel(stages, open) };
   }
+
+  /**
+   * Opportunity aging: open deals by how long they have stood where they stand. It is an "as at today" picture, not
+   * a period, so it takes no range - asking how old a deal was last month answers nothing anybody acts on.
+   */
+  static async aging() {
+    const today = todayInOrg();
+    const [stages, settings] = await Promise.all([CrmSetupService.stages(), CrmSetupService.settings()]);
+    const open = await Opportunity.find({ status: "OPEN" })
+      .select("opportunityNo title customerName stageKey stageName value ownerName stageSinceDay openedDay expectedCloseDate lastActivityDay nextActionAt")
+      .limit(CAP)
+      .lean();
+    return { today, capped: open.length >= CAP, ...rules.aging({ opportunities: open, stages, settings, today }) };
+  }
+
+  /** Communication activity: what was actually done over a period, by person and by kind. */
+  static async activity(query = {}) {
+    const { from, to, today } = this.period(query);
+    // Anything that happened in the window, plus everything still open: a follow-up owed is part of the picture
+    // of how the team is working, whenever it was written.
+    const rows = await CrmActivity.find({
+      $or: [{ completedAt: { $gte: new Date(`${from}T00:00:00.000Z`), $lte: new Date(`${to}T23:59:59.999Z`) } }, { status: "OPEN" }],
+    })
+      .select("kind status ownerName dueAt completedAt subject")
+      .limit(CAP)
+      .lean();
+    return { period: { from, to, today }, capped: rows.length >= CAP, ...rules.activityReport({ activities: rows, today }) };
+  }
 }
 
 module.exports = CrmReportService;

@@ -345,3 +345,53 @@ test("the starter pipeline is a pipeline, and every event it names is one the pr
   assert.deepEqual(named, ["quotation_sent", "quotation_accepted", "invoice_approved"], "all three events a document can raise are used");
   for (const event of crm.EVENTS) assert.ok(crm.EVENT_LABEL[event], `${event} has words a person can read`);
 });
+
+test("aging measures from the day a deal entered its stage, not from when it was born", () => {
+  const deals = [
+    { _id: "a", opportunityNo: "OPP-1", title: "Old", status: "OPEN", openedDay: "2026-01-01", stageSinceDay: "2026-10-18", value: 20000 },
+    { _id: "b", opportunityNo: "OPP-2", title: "Stuck", status: "OPEN", openedDay: "2026-09-01", stageSinceDay: "2026-08-04", value: 50000, expectedCloseDate: "2026-10-01" },
+    { _id: "c", opportunityNo: "OPP-3", title: "Won", status: "WON", stageSinceDay: "2026-01-01", value: 90000 },
+  ];
+  const out = crm.aging({ opportunities: deals, stages: [], settings: {}, today: "2026-10-20" });
+
+  // A deal that has existed since January but moved two days ago is NOT old: the question is how long it has
+  // stood still, which is the whole point of the report.
+  assert.equal(out.rows.find((r) => r.opportunityNo === "OPP-1").days, 2);
+  assert.equal(out.rows.find((r) => r.opportunityNo === "OPP-2").days, 77);
+  assert.equal(out.rows.length, 2, "a won deal is not aging; it is finished");
+  assert.equal(out.oldest, 77);
+  assert.equal(out.rows[0].opportunityNo, "OPP-2", "oldest first");
+  // A close date already past on a deal still open is the loudest thing here.
+  assert.equal(out.overdueClose, 1);
+  assert.equal(out.bands.find((b) => b.key === "60+").deals, 1);
+  assert.equal(out.bands.find((b) => b.key === "0-7").deals, 1);
+  assert.equal(out.bands.reduce((t, b) => t + b.deals, 0), 2, "every open deal falls in exactly one band");
+});
+
+test("the communication report counts effort, and only what is OPEN can be late", () => {
+  const rows = [
+    { kind: "call", status: "DONE", ownerName: "Asif", completedAt: "2026-10-18T06:00:00.000Z" },
+    { kind: "call", status: "DONE", ownerName: "Asif", completedAt: "2026-10-18T09:00:00.000Z" },
+    { kind: "visit", status: "OPEN", ownerName: "Asif", dueAt: "2026-10-14" },
+    { kind: "note", status: "DONE", ownerName: "Maya", completedAt: "2026-10-19T06:00:00.000Z" },
+    { kind: "call", status: "OPEN", ownerName: "Maya", dueAt: "2026-10-25" },
+    { kind: "call", status: "CANCELLED", ownerName: "Maya", dueAt: "2026-01-01" },
+  ];
+  const out = crm.activityReport({ activities: rows, today: "2026-10-20" });
+  assert.equal(out.done, 3);
+  assert.equal(out.open, 2);
+  assert.equal(out.overdue, 1, "the one open follow-up whose day has passed");
+
+  const asif = out.byPerson.find((p) => p.name === "Asif");
+  assert.deepEqual([asif.done, asif.open, asif.overdue], [2, 1, 1]);
+  assert.equal(out.byPerson[0].name, "Asif", "most done first");
+
+  // A cancelled follow-up is neither done nor owed, so it cannot be late.
+  const maya = out.byPerson.find((p) => p.name === "Maya");
+  assert.equal(maya.overdue, 0);
+  assert.equal(maya.total, 3, "it still happened, so it is still counted as hers");
+
+  assert.deepEqual(out.byDay.map((d) => d.day), ["2026-10-18", "2026-10-19"], "oldest day first");
+  assert.equal(out.byDay[0].count, 2);
+  assert.equal(out.byKind.every((k) => k.done || k.open), true, "a kind nobody used is left out");
+});

@@ -107,7 +107,27 @@ async function seed(M) {
   await M.Opp.updateOne({ _id: lostDeal._id }, { $set: { createdBy: MARK } });
   await M.Opp_.lose(String(lostDeal._id), { reason: "price", note: "Went with a local coater at a lower rate" }, MARK);
   console.log(`  won ${deals[0].opportunityNo}, lost ${lostDeal.opportunityNo}`);
-  return { leads, deals, lostDeal };
+
+  // A deal that has gone quiet. Everything else here happened today, so without one the aging report and the
+  // "gone quiet" counter would both read zero and say nothing at all. It gets a deal of its OWN rather than
+  // back-dating one the quotations move, and the dates are written directly because there is no honest way to
+  // make the clock run backwards through the services.
+  // Its OWN customer, deliberately. A quotation finds its deal by "the customer's one open deal", so parking this
+  // one beside a deal we are about to quote would leave two open deals on that customer and the hook would
+  // correctly refuse to guess - and then nothing would move by itself, which is the thing worth showing.
+  const stalledLead = leads[5];
+  const already = await Customer.findOne({ customerName: stalledLead.company }).select("_id").lean();
+  const { opportunity: stalled } = await M.Lead_.qualify(
+    String(stalledLead._id),
+    { value: 128000, expectedCloseDate: day(-9), ...(already ? { customerId: String(already._id) } : {}) },
+    MARK
+  );
+  await M.Opp.updateOne(
+    { _id: stalled._id },
+    { $set: { createdBy: MARK, stageSinceDay: day(-47), openedDay: day(-58), lastActivityDay: day(-41) } }
+  );
+  console.log(`  ${stalled.opportunityNo} has stood still for 47 days and its close date has passed`);
+  return { leads, deals, lostDeal, stalled };
 }
 
 // What was actually said. A note is recorded done the moment it is written; a call with a due date in the past is
