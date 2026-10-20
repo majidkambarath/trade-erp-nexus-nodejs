@@ -273,10 +273,13 @@ test("the dashboard and the communications log are crm.view", { skip }, async ()
   const board = await api("looker", "GET", "/crm/dashboard");
   assert.equal(board.status, 200, JSON.stringify(board.data));
   // It is the summary plus the three lists the module opens on.
-  for (const key of ["openLeads", "openDeals", "pipelineValue", "late", "mine", "moved", "topDeals", "funnel"]) {
+  for (const key of ["openLeads", "openDeals", "pipelineValue", "late", "mine", "moved", "topDeals", "byOwner", "trend", "funnel"]) {
     assert.ok(key in board.body, `the dashboard answers ${key}`);
   }
   assert.ok(Array.isArray(board.body.moved), "what the documents moved by themselves");
+  // Six months, every one of them: a month with nothing won is a point on the line, not a gap in it.
+  assert.equal(board.body.trend.length, 6);
+  assert.ok(board.body.trend.every((t) => typeof t.month === "string" && typeof t.value === "number"));
 
   const log = await api("looker", "GET", "/crm/activities");
   assert.equal(log.status, 200);

@@ -94,7 +94,7 @@ class CrmReportService {
       ActivityService.list({ due: "overdue", limit: 10 }),
       rules.isId(adminId) ? ActivityService.list({ scope: "mine", due: "week", limit: 10 }, { adminId }) : Promise.resolve([]),
       Opportunity.find({ status: "OPEN" })
-        .select("opportunityNo title customerId customerName value stageKey stageName probability expectedCloseDate ownerName")
+        .select("opportunityNo title customerId customerName value stageKey stageName probability expectedCloseDate ownerId ownerName")
         .limit(CAP)
         .lean(),
       // A move the automation made, still standing (an undone one is history, not news). `autoMoves` is small, so the
@@ -135,7 +135,40 @@ class CrmReportService {
       .sort((a, b) => b.weighted - a.weighted)
       .slice(0, 8);
 
-    return { ...summary, since, late, mine, moved: moved.slice(0, 8), topDeals, funnel: rules.funnel(stages, open) };
+    // Who is carrying what. Open deals only: this is a picture of the load, not of past performance.
+    const owners = new Map();
+    for (const deal of open) {
+      const key = deal.ownerName || "Unassigned";
+      const row = owners.get(key) || { key, name: key, deals: 0, value: 0, weighted: 0 };
+      row.deals += 1;
+      row.value += rules.num(deal.value);
+      row.weighted += weighted(deal);
+      owners.set(key, row);
+    }
+    const byOwner = [...owners.values()].sort((a, b) => b.value - a.value).slice(0, 8);
+
+    // Six months of deals won, by the month they closed in. One read, and the months with nothing still appear:
+    // a gap in a trend line is information, and leaving it out would draw a flattering lie.
+    const months = [];
+    const [y, mo] = today.split("-").map(Number);
+    for (let i = 5; i >= 0; i -= 1) {
+      const d = new Date(Date.UTC(y, mo - 1 - i, 1));
+      months.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
+    }
+    const wonRows = await Opportunity.find({ status: "WON", closedDay: { $gte: `${months[0]}-01` } })
+      .select("value closedDay")
+      .limit(CAP)
+      .lean();
+    const totals = new Map(months.map((m) => [m, { month: m, deals: 0, value: 0 }]));
+    for (const w of wonRows) {
+      const row = totals.get(String(w.closedDay || "").slice(0, 7));
+      if (!row) continue;
+      row.deals += 1;
+      row.value += rules.num(w.value);
+    }
+    const trend = months.map((m) => totals.get(m));
+
+    return { ...summary, since, late, mine, moved: moved.slice(0, 8), topDeals, byOwner, trend, funnel: rules.funnel(stages, open) };
   }
 }
 
