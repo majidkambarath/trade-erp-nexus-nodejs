@@ -196,8 +196,7 @@ class OpportunityService {
    * Where a deal goes, by hand or because a document moved it. Everything a stage change means is here: the copies a
    * list reads (name, probability), the day it moved, whether the deal is now closed, and the next follow-up.
    */
-  static async enterStage(doc, stage, { by = "system", session, reason = "", today = null } = {}) {
-    const stages = await CrmSetupService.stages({ session });
+  static async enterStage(doc, stage, { by = "system", session, today = null } = {}) {
     const settings = await CrmSetupService.settings({ session });
     const day = today || todayInOrg();
     doc.stageKey = stage.key;
@@ -218,8 +217,6 @@ class OpportunityService {
       await CrmActivity.updateMany({ "regarding.id": doc._id, status: "OPEN" }, { $set: { status: "CANCELLED" } }, { session });
       await ActivityService.touch("opportunity", doc._id, session);
     }
-    void stages;
-    void reason;
     return doc;
   }
 
@@ -235,7 +232,8 @@ class OpportunityService {
       doc.lostReason = rules.oneOf(input.lostReason, rules.LOST_REASONS);
       doc.lostNote = rules.text(input?.lostNote, 300);
     }
-    return OpportunityService.enterStage(doc, stage, { by, session, reason: rules.text(input?.note, 300) });
+    // The note is recorded by the controller's audit row; the stage change itself needs only where it is going.
+    return OpportunityService.enterStage(doc, stage, { by, session });
   });
 
   static lose = withTransactionSession(async (id, input, by, session) => {

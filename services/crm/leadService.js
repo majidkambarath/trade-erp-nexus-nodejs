@@ -132,7 +132,7 @@ class LeadService {
    * Somebody we may already know. A warning, never a refusal: the same person does enquire twice, and a CRM that
    * refuses the second enquiry loses the business. The screen shows what it found and lets the person decide.
    */
-  static async possibleDuplicates({ phone, email, name }) {
+  static async possibleDuplicates({ phone, email }) {
     const or = [];
     const tidyPhone = rules.text(phone, 40).replace(/\s+/g, "");
     if (tidyPhone.length >= 6) or.push({ phone: { $regex: escape(tidyPhone.slice(-8)) } });
@@ -146,7 +146,6 @@ class LeadService {
         .limit(5)
         .lean(),
     ]);
-    void name;
     return { leads, customers };
   }
 

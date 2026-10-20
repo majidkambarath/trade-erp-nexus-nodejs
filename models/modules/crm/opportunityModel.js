@@ -87,6 +87,9 @@ opportunitySchema.index({ customerId: 1, status: 1 });
 // the sales approval path, which is the hottest write in the product.
 opportunitySchema.index({ "links.quotationId": 1 });
 opportunitySchema.index({ "links.orderId": 1 });
+// An invoice raised from a quotation names it by NUMBER (`Transaction.quoteRef`), which is how the hook finds the deal
+// when the invoice itself was never linked - so that read is indexed too rather than scanning on the approval path.
+opportunitySchema.index({ "links.quotationNo": 1 });
 opportunitySchema.index({ createdAt: -1 });
 
 opportunitySchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });

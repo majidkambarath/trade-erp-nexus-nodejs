@@ -26,7 +26,12 @@ class CrmSetupService {
 
   /**
    * Seed the starter pipeline once. Two people opening the screen at the same moment race here; the unique index on
-   * { companyId, key } decides it, and the loser simply reads what the winner wrote, so neither sees an error.
+   * { companyId, key } decides it, and the loser simply reads what the winner wrote.
+   *
+   * INSIDE a caller's transaction the duplicate key is re-thrown instead, on purpose: a duplicate key aborts the whole
+   * transaction server-side, so swallowing it would leave the caller committing a transaction that no longer exists.
+   * Thrown, it is a transient failure that `withTransactionSession` retries on a fresh session - where the count now
+   * finds the stages the winner wrote. (The same trap as ActivityService.ensureAuto; see services/crm/crmHooks.js.)
    */
   static async ensureStarter({ session } = {}) {
     const { companyId } = getTenant();
@@ -38,7 +43,7 @@ class CrmSetupService {
         { session: session || undefined, ordered: true }
       );
     } catch (error) {
-      if (error?.code !== 11000) throw error; // somebody else seeded it between the count and the insert
+      if (error?.code !== 11000 || session) throw error; // somebody else seeded it between the count and the insert
     }
     return CrmStage.find({}).sort({ order: 1 }).session(session || null).lean();
   }

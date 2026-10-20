@@ -99,7 +99,7 @@ class NotificationChecksService {
         severity: "warning",
         title: `${deal.title} has gone quiet`,
         body: `Nothing for ${stale.days} days, on ${deal.stageName}.`,
-        link: "/crm",
+        link: "/crm/pipeline",
         dedupeKey,
         ...aim(deal.ownerId),
         now,
