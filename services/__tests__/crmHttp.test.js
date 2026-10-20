@@ -246,11 +246,50 @@ test("an organisation whose plan does not include the CRM is refused the module,
   assert.equal(rows, 0);
 });
 
+// The screen's ERP / CRM switch is drawn from exactly two things in this answer: whether the ORGANISATION bought the
+// module (status.modules.crm) and what the PERSON holds after the server has capped them to it (status.me.grants).
+// Pinned here so the two halves of the rule cannot drift apart: the front end hides on what this says.
+const crmKeys = (grants) => grants.filter((k) => k.startsWith("crm."));
+const statusOf = async (who) => (await api(who, "GET", "/organisation/status")).body;
+
+test("the status tells the screen who is offered the CRM: the organisation first, then the person", { skip }, async () => {
+  // an organisation on the Trade-only plan: not bought, so not even its owner holds a crm key
+  const trade = await statusOf("trade");
+  assert.equal(trade.modules.crm.on, false);
+  assert.deepEqual(trade.modules.crm.actions, []);
+  assert.deepEqual(crmKeys(trade.me.grants), [], "the owner of an organisation that did not buy it holds nothing of it");
+  assert.ok(trade.me.grants.includes("sales.view"), "and the ERP is untouched");
+
+  // an organisation that bought it: the owner holds all of it
+  const owner = await statusOf("owner");
+  assert.equal(owner.modules.crm.on, true);
+  assert.equal(owner.modules.crm.full, true);
+  assert.deepEqual(crmKeys(owner.me.grants).sort(), ["crm.assign", "crm.create", "crm.delete", "crm.edit", "crm.manage", "crm.view"]);
+
+  // ...and what each person holds is their own role's, never the organisation's
+  assert.deepEqual(crmKeys((await statusOf("looker")).me.grants), ["crm.view"]);
+  assert.deepEqual(crmKeys((await statusOf("chaser")).me.grants).sort(), ["crm.create", "crm.edit", "crm.view"]);
+
+  // a person in the same organisation whose role has no CRM at all: the organisation has it, they do not
+  await roleAndPerson("sales_only", ["sales.view"]);
+  const sales = await statusOf("sales_only");
+  assert.equal(sales.modules.crm.on, true, "the organisation bought it");
+  assert.deepEqual(crmKeys(sales.me.grants), [], "this person was given none of it, so they are not offered the switch");
+  assert.ok(sales.me.grants.includes("sales.view"));
+  await cannot("sales_only", "GET", "/crm/leads");
+});
+
 test("and it is sold per organisation: a module override turns it on with no change of plan", { skip }, async () => {
   await Org.update("trd", { moduleOverrides: { crm: true } });
   const now = await api("trade", "GET", "/crm/leads");
   assert.equal(now.status, 200, JSON.stringify(now.data));
   assert.deepEqual(now.body, [], "on the token they were already holding");
+
+  // the screen's rail follows on the next read of the status, with no sign-out: the switch appears
+  const status = await statusOf("trade");
+  assert.equal(status.modules.crm.on, true);
+  assert.ok(status.me.grants.includes("crm.view"));
+  assert.ok(status.me.grants.includes("sales.view"), "both halves, for the same person");
 });
 
 test("the audit trail says what happened, in words a person can read", { skip }, async () => {

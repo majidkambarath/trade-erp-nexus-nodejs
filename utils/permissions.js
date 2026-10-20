@@ -12,7 +12,7 @@ const MODULES = {
   // person may hold it without holding Sales, which is why nothing here implies a sales permission.
   crm: {
     label: "CRM",
-    hint: "Leads, the sales pipeline, follow-ups and the automation behind them",
+    hint: "The CRM workspace: leads, contacts, deals, follow-ups, calendar and reports, with an ERP / CRM switch for the people who hold it",
     actions: {
       view: "See leads, the pipeline and follow-ups",
       create: "Add leads, deals and follow-ups",
