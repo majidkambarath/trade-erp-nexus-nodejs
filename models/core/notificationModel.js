@@ -28,6 +28,10 @@ const notificationSchema = new mongoose.Schema(
     dedupeKey: { type: String, required: true, trim: true },
     audience: {
       permission: { type: String, default: null },
+      // One person, when the condition is theirs and nobody else's: "your follow-up is overdue" belongs to whoever
+      // owes it, not to everyone holding crm.view. Judged together with `permission`, so a row may be narrowed to one
+      // person who must ALSO hold the key (utils/notifications.js `visibleTo`).
+      adminId: { type: String, default: null },
     },
     readBy: { type: [String], default: [] },
     occurredAt: { type: Date, default: Date.now }, // last time the condition was (re)detected

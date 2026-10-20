@@ -157,7 +157,9 @@ class OrganisationService {
       const { code } = org;
       orgLocale.warm(org); // its own currency and zone for as long as its job runs
       try {
-        out.push({ code, result: await runWithTenant({ companyId: code, branchId: HEAD_OFFICE }, () => fn(code)) });
+        // The organisation row goes with the code: a job that serves only the organisations which bought a module
+        // (the CRM checks) needs the plan and its overrides to decide, and must not read them again per organisation.
+        out.push({ code, result: await runWithTenant({ companyId: code, branchId: HEAD_OFFICE }, () => fn(code, org)) });
       } catch (error) {
         console.error(`[${label}] ${code}:`, error.message);
         out.push({ code, error: error.message });

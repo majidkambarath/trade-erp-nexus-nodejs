@@ -12,6 +12,7 @@ const {
   quotationExpiry, defaultValidUntil, revisionNumber,
 } = require("../../utils/salesDocuments");
 const S = require("./salesDocumentSupport");
+const CrmHooks = require("../crm/crmHooks");
 
 // A quotation is an offer. It posts nothing and moves no stock; when the customer accepts, it is
 // converted into a DRAFT sales order (the invoice), priced by the same code at that day's tax rates.
@@ -147,6 +148,9 @@ class QuotationService {
       }],
       { session }
     );
+    // The customer's open CRM deal, if there is one, learns which quotation is being made against it: see
+    // services/crm/crmHooks.js. Nothing moves - a draft offer is not an offer the customer has seen.
+    await CrmHooks.onQuotationChanged(doc, { session, event: "created" });
     return doc;
   });
 
@@ -205,6 +209,7 @@ class QuotationService {
       );
     }
     await Quotation.deleteOne({ _id: doc._id }, { session });
+    await CrmHooks.onQuotationChanged(doc, { session, event: "deleted" });
     return { quotationNo: doc.quotationNo, status: doc.status, totalAmount: doc.totalAmount };
   });
 
@@ -236,6 +241,10 @@ class QuotationService {
     }
     doc.status = rule.to;
     await doc.save({ session });
+    // The CRM pipeline follows the offer: sending it and the customer accepting it each advance the deal, and a
+    // rejection takes those moves back (services/crm/crmHooks.js).
+    const CRM_EVENT = { send: "sent", accept: "accepted", reject: "rejected" };
+    if (CRM_EVENT[action]) await CrmHooks.onQuotationChanged(doc, { session, event: CRM_EVENT[action] });
     return doc;
   });
 
@@ -276,6 +285,7 @@ class QuotationService {
     old.status = "SUPERSEDED";
     old.supersededBy = { kind: "quotation", id: next._id, no: next.quotationNo };
     await old.save({ session });
+    await CrmHooks.onQuotationChanged(old, { session, event: "revised" });
     return { revision: next, superseded: old };
   });
 
@@ -326,6 +336,7 @@ class QuotationService {
       doc.acceptedBy = doc.acceptedBy || String(input?.acceptedBy || "").trim();
     }
     await doc.save({ session });
+    await CrmHooks.onQuotationChanged(doc, { session, event: "converted" });
     return { quotation: doc, salesOrder };
   });
 }

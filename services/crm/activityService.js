@@ -235,46 +235,66 @@ class ActivityService {
   }
 
   /**
-   * The automatic next action for a deal that has just entered a stage. Claimed by `dedupeKey`, so the same stage entry
-   * can be replayed - by a retried transaction, or by a document event arriving twice - without leaving two reminders.
-   * A duplicate key is the claim being lost, which is success, not an error.
+   * The automatic next action for a deal that has just entered a stage.
+   *
+   * Three rules, in this order:
+   *  - a follow-up a PERSON entered always wins: the automation never argues with somebody who has decided when to
+   *    ring next, so if any non-auto action is open, nothing is created;
+   *  - the automation's own placeholder from the stage the deal has just LEFT is replaced, not added to - a deal that
+   *    has moved to "Quotation sent" must be chased by that stage's clock, not by the one it came from;
+   *  - the same stage entered twice leaves one follow-up: `dedupeKey` is read BEFORE inserting rather than relying on
+   *    catching a duplicate key, because inside a transaction a duplicate key aborts the whole transaction and
+   *    catching it afterwards does not bring it back (that is how an approved invoice once failed to delete).
+   *    Re-entering a stage whose follow-up was cancelled when the deal closed revives it with a fresh due date.
    */
   static async ensureAuto({ opportunity, stage, settings, today, session }) {
-    const plan = rules.planFollowUp({
-      opportunity,
-      stage,
-      openActivities: await this.openFor(opportunity._id, session),
-      settings,
-      today,
-      ownerId: opportunity.ownerId,
-    });
-    if (!plan) return null;
+    if (settings && settings.autoFollowUp === false) return null;
+    if (!stage || stage.type !== "open") return null;
+
+    const open = await this.openFor(opportunity._id, session);
+    if (open.some((a) => !a.auto)) return null;
+
     const dedupeKey = `crm_stage:${opportunity._id}:${stage.key}`;
-    try {
-      const [made] = await CrmActivity.create(
-        [
-          {
-            kind: plan.kind,
-            subject: plan.subject,
-            regarding: { kind: "opportunity", id: opportunity._id },
-            customerId: opportunity.customerId || null,
-            ownerId: plan.ownerId,
-            ownerName: opportunity.ownerName || "",
-            dueAt: plan.dueAt,
-            status: "OPEN",
-            auto: true,
-            dedupeKey,
-            createdBy: "automation",
-            companyId: getTenant().companyId,
-          },
-        ],
+    const plan = rules.planFollowUp({ opportunity, stage, openActivities: [], settings, today, ownerId: opportunity.ownerId });
+    if (!plan) return null;
+
+    // The placeholders the automation left on earlier stages are done with.
+    const stale = open.filter((a) => a.auto && a.dedupeKey !== dedupeKey).map((a) => a._id);
+    if (stale.length) await CrmActivity.updateMany({ _id: { $in: stale } }, { $set: { status: "CANCELLED" } }, { session });
+
+    const existing = await CrmActivity.findOne({ dedupeKey }).session(session || null).lean();
+    if (existing) {
+      if (existing.status === "OPEN") return null; // this very stage entry already left its follow-up
+      await CrmActivity.updateOne(
+        { _id: existing._id },
+        { $set: { status: "OPEN", dueAt: plan.dueAt, ownerId: plan.ownerId, ownerName: opportunity.ownerName || "", completedAt: null, outcome: null, subject: plan.subject } },
         { session }
       );
-      return made;
-    } catch (error) {
-      if (error?.code === 11000) return null; // this stage entry already left its follow-up
-      throw error;
+      await this.touch("opportunity", opportunity._id, session);
+      return CrmActivity.findById(existing._id).session(session || null);
     }
+
+    const [made] = await CrmActivity.create(
+      [
+        {
+          kind: plan.kind,
+          subject: plan.subject,
+          regarding: { kind: "opportunity", id: opportunity._id },
+          customerId: opportunity.customerId || null,
+          ownerId: plan.ownerId,
+          ownerName: opportunity.ownerName || "",
+          dueAt: plan.dueAt,
+          status: "OPEN",
+          auto: true,
+          dedupeKey,
+          createdBy: "automation",
+          companyId: getTenant().companyId,
+        },
+      ],
+      { session }
+    );
+    await this.touch("opportunity", opportunity._id, session);
+    return made;
   }
 
   /**
