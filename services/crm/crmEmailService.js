@@ -160,8 +160,13 @@ class CrmEmailService {
 
     const { companyId } = getTenant();
     const settings = await Settings.load(companyId, { withSecrets: true });
-    if (!settings.enabled) throw fail("Sending is switched off. Turn it on in Settings, under Sending.", 409, "SENDING_DISABLED");
-    if (!settings.fromEmail) throw fail("No sender address is set. Set one in Settings, under Sending.", 409, "SENDER_NOT_SET");
+    // The `console` provider is the default and has nothing to configure: it records the letter and sends nothing,
+    // which the answer says plainly. Refusing there would leave the feature dead in every organisation that has not
+    // set up a mailbox, which is most of them on the first day. A REAL provider that is switched off or has no
+    // sender is a different thing - somebody meant to send and it would silently not go - so that is refused.
+    const live = settings.provider === "resend" || settings.provider === "smtp";
+    if (live && !settings.enabled) throw fail("Sending is switched off. Turn it on in Settings, under Sending.", 409, "SENDING_DISABLED");
+    if (live && !settings.fromEmail) throw fail("No sender address is set. Set one in Settings, under Sending.", 409, "SENDER_NOT_SET");
 
     const used = await this.sentInLastDay(companyId);
     if (used >= settings.dailyLimit) {
@@ -173,7 +178,9 @@ class CrmEmailService {
     const message = email.buildMessage(input, { values, signature });
 
     const payload = {
-      from: formatFrom(settings.fromName, settings.fromEmail),
+      // With no mailbox set up there is nothing to send from, so the record names the person who wrote it rather
+      // than an empty address. Nothing leaves the building in that case, so there is nothing to misaddress.
+      from: settings.fromEmail ? formatFrom(settings.fromName, settings.fromEmail) : sender.email || "",
       to: message.to,
       cc: message.cc,
       bcc: [],

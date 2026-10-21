@@ -7,8 +7,13 @@ source is a review blog rather than the vendor.
 
 > **Update, 21 October 2026 (later the same day): wave 3 is built.** A CRM-only organisation can now be created, qualify a lead,
 > open a deal, add its own colleagues, import its spreadsheet and keep files on a lead or a deal. What was done, and two things the
-> plan did not foresee, are in the "Wave 3 status" note under section 9. Everything else in this document describes the position
-> BEFORE that work, and the matrix in section 4 has not been redrawn: read the "Us" column as of the morning of 21 October.
+> plan did not foresee, are in the "Wave 3 status" note under section 9. **Two more have been closed since:** a meeting
+> scheduler that sends a real calendar invitation (with an optional Google Meet link from the organiser's own Google
+> account), and **sending email from the CRM** — written on the screen, kept on the lead's or deal's timeline, with the
+> organisation's own mailbox and templates. Email **sync** (reading replies) is still not built, and is deliberately a
+> separate decision: it needs either IMAP credentials or Gmail's restricted scope, which costs an annual third-party
+> security assessment. Everything else in this document describes the position BEFORE that work, and the matrix in
+> section 4 has not been redrawn: read the "Us" column as of the morning of 21 October.
 
 ---
 
@@ -138,7 +143,7 @@ integration has to be the product, not a feature list we half-match.
 | Duplicate detect / merge | ⚠️ warns only | ✅ merge | ✅ | ✅ cheapest tier | ✅ |
 | Attachments on a lead/deal | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Email two-way sync | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Send email from the CRM | ❌ | ✅ | ✅ | ✅ | ✅ |
+| Send email from the CRM | ✅ (21 Oct) | ✅ | ✅ | ✅ | ✅ |
 | Templates / open & click tracking | ❌ | ✅ | ✅ **free** | ✅ | ✅ |
 | Sequences / cadences | ❌ | ✅ | ✅ | ✅ | partial |
 | Web-to-lead form | ❌ | ✅ | ✅ | ✅ add-on | ✅ |
@@ -171,6 +176,8 @@ This is the cheapest item on the list and the most expensive to be without.
 **No email, anywhere.** Not sync, not send, not a template, not a tracked open. A salesperson's day is
 email; a CRM that cannot see it records half the relationship and asks them to type the other half in
 twice. This is the single largest gap and the main reason a CRM gets abandoned after a month.
+*Half-closed on 21 October: sending, templates and a signature are built, and every letter is kept on the
+record. Sync and open-tracking are not — see the update at the top, and the note under section 9.*
 
 **No web form.** "Where do leads come from?" has one answer today: somebody types them in.
 `LEAD_SOURCES` lists `website` but nothing on earth writes it.
@@ -340,6 +347,8 @@ Do this first. It is revenue already promised.
 | Attachments on a lead and a deal | Yes: the CRM's own door onto the existing storage; another module's file id is a 404 |
 | Decide (a) or (b) from section 7 | (b), as recommended: a hand-moved pipeline now; (a) comes with line items in wave 4 |
 | **Scheduled meetings with a calendar invitation** | Yes, added the same day: a meeting at a time, with attendees, a joining link the organiser pastes, and an .ics invitation that lands in the customer's own Gmail, Outlook or Apple calendar with Accept and Decline |
+| **A real Google Meet link** | Yes, added the same day: each salesperson connects their OWN Google account (Calendar API, one scope) and the meeting is minted in their diary. Optional throughout — everything above still works without it |
+| **Sending email from the CRM** | Yes, added the same day: written on the screen, sent from the organisation's own mailbox, kept on the lead's or deal's timeline with templates, a signature and placeholder filling |
 
 **Two things the plan did not foresee, found by reading the code and then proved by test.** First, qualifying was not the only
 blocker: the new-deal form chose its customer from the Sales customer master, so a CRM-only person could not open a deal either; it
@@ -355,10 +364,20 @@ the customer's Accept back either: that reply is an email to the organiser's own
 until a person records the answer. And the invitation only leaves the building if the organisation has set up Resend or
 SMTP; on the default setting the screen says "Recorded only" rather than claiming it was sent.
 
+**What sending email does NOT do, and say it in the demo.** It does not read replies. The customer's answer goes to the
+salesperson's own mailbox, so the CRM shows what we sent and nothing about what came back — there is deliberately no empty
+"reply" field, because one would read as "they have not answered". Sync needs either the customer's mailbox password over
+IMAP or Gmail's restricted scope, which carries an annual third-party security assessment: it is a decision to take
+deliberately, not a feature to slip in. There is also no open or click tracking (a tracking pixel is a privacy decision),
+no attachments on a CRM letter (the invoice's own Send does that), and no bulk or sequenced sending — the ten-recipient cap
+is deliberate, because more than that is a campaign and a different product. As with the meeting invitation, on the
+default setting nothing leaves the building and every screen says "Recorded only" rather than claiming it was sent.
+
 **How it was checked.** Eight of the rules above were broken one at a time on a copy of the backend and each was caught by the test
 that names it (qualify always asking Sales, the customer list leaking the whole customer, the file door opening any module's file, an
 import writing without being asked, duplicates not noticed, deleting a lead leaving its files, an import creating a task per lead,
-and the permission rule itself). The new screens were also driven in a real browser at phone, tablet and desktop width, which found
+and the permission rule itself), and four more for email (no HTML escaping, an unknown placeholder silently deleted, a
+signature added twice, and the daily send cap not counting CRM letters — which would have made this the way around it). The new screens were also driven in a real browser at phone, tablet and desktop width, which found
 and fixed one layout fault: the deal page was wider than a phone because of a long file name. Not yet covered by any test, and said
 plainly: a CRM-only organisation's day-to-day use over weeks, and a person choosing a real file on a real phone.
 
