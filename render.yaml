@@ -1,0 +1,55 @@
+# How the backend runs on Render, written down so production can be rebuilt from the repository.
+#
+# Read this before relying on it:
+#  - Render applies a render.yaml only through a Blueprint. Merging this file does NOT change a
+#    service that was created by hand in the dashboard. Treat it as the description to compare
+#    the dashboard against, and as what a Blueprint would create.
+#  - Secrets are never written here. `sync: false` makes Render ask for the value once, when the
+#    Blueprint creates the service.
+#  - `region` is left out on purpose: it cannot be changed after a service exists, so decide it
+#    deliberately before the first apply (nearest to the UAE among Render's: frankfurt, singapore).
+#  - Node version: .nvmrc / engines.node are used unless a NODE_VERSION variable is set in the
+#    dashboard, which wins over both.
+#  - Optional variables (defaults are fine) are listed at the bottom as comments.
+services:
+  - type: web
+    name: trade-erp-nexus-nodejs
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # The server refuses to start in production without these two (JWT_SECRET: 32+ characters,
+      # no placeholder).
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      # Warned about when missing. PLATFORM_JWT_SECRET must differ from JWT_SECRET. SECRET_BOX_KEY
+      # is 64 hex characters; set it BEFORE people enrol in two-factor, or recovery codes break.
+      - key: PLATFORM_JWT_SECRET
+        sync: false
+      - key: SECRET_BOX_KEY
+        sync: false
+      - key: PUBLIC_APP_URL
+        value: https://zarvia.onrender.com
+      # Pictures and logos
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      # Token lifetimes
+      - key: JWT_EXPIRES_IN
+        sync: false
+      - key: JWT_REFRESH_EXPIRES_IN
+        sync: false
+      # Optional: CORS_ORIGINS, TRUST_PROXY_HOPS, SESSION_COOKIE_SAMESITE, SUPPORT_CONTACT /
+      # SUPPORT_EMAIL, TWO_FACTOR_ISSUER, SYSTEM_MAIL_PROVIDER (console | resend | smtp) with
+      # SYSTEM_MAIL_FROM / _FROM_NAME / _REPLY_TO / _API_KEY / _SMTP_HOST|PORT|USER|PASS, and the
+      # limits (LOGIN_FAILURE_LIMIT, FORGOT_PASSWORD_IP_LIMIT, JSON_BODY_LIMIT, ...).
+      # Outbound SMTP is blocked on Render's free plan; use the resend provider there.

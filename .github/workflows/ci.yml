@@ -1,0 +1,88 @@
+# Continuous integration for the backend.
+#
+# Three jobs, from cheapest to most expensive:
+#   unit         426 tests that need no database at all (pure rules, the route guard, the tenant
+#                guard, the hardening checks). Verified to pass in a clean checkout with no .env.
+#   boot         a production-only install must load every module and reach listen().
+#   integration  the database suites against a throw-away single-node MongoDB replica set
+#                (transactions need a replica set). This is the part NOT yet run on GitHub: the
+#                commands were written to the same shape the suites use locally, but the first run
+#                is the real test of it.
+#
+# Nothing here touches the Atlas cluster, and no secret is needed.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Database-free tests
+        run: node --require ./utils/testSetup.js --test "utils/__tests__/*.test.js"
+
+  boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install exactly what production installs
+        run: npm ci --omit=dev
+      - name: The server loads every module and reaches listen()
+        run: |
+          # No database on purpose: the process then exits by design a moment after it listens.
+          export NODE_ENV=production PORT=39555
+          export JWT_SECRET="$(openssl rand -hex 32)" PLATFORM_JWT_SECRET="$(openssl rand -hex 32)"
+          export MONGO_URI="mongodb://127.0.0.1:1/ci?serverSelectionTimeoutMS=1500"
+          timeout 60 node server.js > boot.log 2>&1 || true
+          cat boot.log
+          grep -q "Server running" boot.log
+          ! grep -q -E "MODULE_NOT_FOUND|Cannot find module" boot.log
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Start MongoDB as a single-node replica set
+        run: |
+          docker run -d --name mongo -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+          for i in $(seq 1 30); do
+            docker exec mongo mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' && break
+            sleep 2
+          done
+          docker exec mongo mongosh --quiet --eval 'rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "127.0.0.1:27017" }] })'
+          for i in $(seq 1 30); do
+            docker exec mongo mongosh --quiet --eval 'rs.status().myState' | grep -q '^1$' && break
+            sleep 2
+          done
+      - name: Database tests
+        env:
+          MONGO_URI: mongodb://127.0.0.1:27017/zarvia_ci?replicaSet=rs0
+        run: node --require ./utils/testSetup.js --test --test-concurrency=3 "services/__tests__/*.test.js"

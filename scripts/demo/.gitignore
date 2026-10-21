@@ -1,0 +1,6 @@
+# Written next to the scripts by abc-lib.cjs while a build runs. They hold ids of records in
+# whatever organisation was built, so they must never be committed.
+abc-state.json
+abc-build.log
+abc-stop
+*.bak
