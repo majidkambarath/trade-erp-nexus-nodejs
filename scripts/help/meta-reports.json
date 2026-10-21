@@ -1,0 +1,203 @@
+{
+ "source": "Trade-ERP-Reports-and-Account-Mapping",
+ "drop": [
+  "1",
+  "Reports Logic, Account Configuration Mapping and Posting Flows"
+ ],
+ "sections": {
+  "2.1": {
+   "screens": [
+    "/accounting-setup"
+   ],
+   "questions": [
+    "what is the posting map",
+    "how are accounts mapped",
+    "account configuration"
+   ]
+  },
+  "2.2": {
+   "screens": [
+    "/accounting-setup"
+   ],
+   "questions": [
+    "what are the posting keys",
+    "what does vat-sales mean",
+    "which account does the system use"
+   ]
+  },
+  "2.3": {
+   "screens": [
+    "/chart-of-accounts"
+   ],
+   "questions": [
+    "what is the default chart of accounts",
+    "which accounts do I get"
+   ]
+  },
+  "2.4": {
+   "screens": [
+    "/chart-of-accounts"
+   ],
+   "questions": [
+    "what is a party account",
+    "where is the customer's account",
+    "account groups and roles"
+   ]
+  },
+  "2.5": {
+   "screens": [
+    "/chart-of-accounts"
+   ],
+   "questions": [
+    "is ledger posting on",
+    "why are my documents not in the ledger",
+    "catch up earlier documents"
+   ]
+  },
+  "2.6": {
+   "screens": [
+    "/accounting-setup"
+   ],
+   "questions": [
+    "can I change an account mapping",
+    "what happens if I remap an account"
+   ]
+  },
+  "2.7": {
+   "screens": [
+    "/accounting-setup"
+   ],
+   "questions": [
+    "what is a tax code",
+    "how do I add a VAT rate",
+    "reverse charge"
+   ]
+  },
+  "3.1": {
+   "questions": [
+    "what happens when I approve a document",
+    "how is a document reversed",
+    "what does approval post"
+   ]
+  },
+  "3.2": {
+   "screens": [
+    "/purchase-order"
+   ],
+   "questions": [
+    "what does a purchase invoice post",
+    "purchase accounting entries"
+   ]
+  },
+  "3.4": {
+   "screens": [
+    "/sales-order"
+   ],
+   "questions": [
+    "what does a sales invoice post",
+    "how is cost of goods booked",
+    "sales accounting entries"
+   ]
+  },
+  "3.6": {
+   "screens": [
+    "/receipt-voucher",
+    "/payment-voucher"
+   ],
+   "questions": [
+    "how is a receipt allocated",
+    "what is an advance",
+    "on account"
+   ]
+  },
+  "3.8": {
+   "screens": [
+    "/cheques"
+   ],
+   "questions": [
+    "how do cheques post",
+    "what is cheques in hand",
+    "a cheque bounced"
+   ]
+  },
+  "3.9": {
+   "questions": [
+    "how does a card sale post",
+    "card commission",
+    "settlement"
+   ]
+  },
+  "3.10": {
+   "screens": [
+    "/expense-voucher"
+   ],
+   "questions": [
+    "how does an expense with VAT post",
+    "input VAT on an expense"
+   ]
+  },
+  "3.14": {
+   "screens": [
+    "/stock"
+   ],
+   "questions": [
+    "how does a stock write-off post",
+    "manual stock adjustment accounting"
+   ]
+  },
+  "3.15": {
+   "screens": [
+    "/opening-balances"
+   ],
+   "questions": [
+    "how do opening balances post",
+    "opening balance equity"
+   ]
+  },
+  "4.1": {
+   "screens": [
+    "/financial-statements"
+   ],
+   "questions": [
+    "why is my trial balance out",
+    "what is on the trial balance",
+    "debits do not equal credits"
+   ]
+  },
+  "4.2": {
+   "screens": [
+    "/financial-statements"
+   ],
+   "questions": [
+    "how is gross profit calculated",
+    "profit and loss",
+    "why is my profit wrong"
+   ]
+  },
+  "4.3": {
+   "screens": [
+    "/financial-statements"
+   ],
+   "questions": [
+    "balance sheet",
+    "why does my balance sheet not balance"
+   ]
+  },
+  "4.4": {
+   "questions": [
+    "cash flow statement",
+    "how is cash flow calculated"
+   ]
+  },
+  "4.5": {
+   "screens": [
+    "/ledger-reports"
+   ],
+   "questions": [
+    "general ledger",
+    "account register",
+    "how do I see every entry on an account"
+   ]
+  }
+ }
+}

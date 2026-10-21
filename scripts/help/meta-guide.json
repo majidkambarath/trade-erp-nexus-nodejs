@@ -1,0 +1,244 @@
+{
+ "source": "Trade-ERP-Product-Guide",
+ "drop": [
+  "Appendix B",
+  "Document control",
+  "Trade ERP - Product Guide: Features, Flows, Reports and Roadmap"
+ ],
+ "sections": {
+  "1.1": {
+   "questions": [
+    "what is Zarvia",
+    "what does this system do",
+    "what is it for"
+   ]
+  },
+  "1.4": {
+   "questions": [
+    "how does a document travel",
+    "what happens when I approve something"
+   ]
+  },
+  "2.10": {
+   "questions": [
+    "how do I find a screen",
+    "what is the sidebar",
+    "how do I search for a page",
+    "keyboard shortcuts"
+   ]
+  },
+  "3.1": {
+   "screens": [
+    "/users"
+   ],
+   "questions": [
+    "what can each role do",
+    "who can approve"
+   ],
+   "review": "Predates the shipped RBAC. Roles ARE enforced by the server now: users and roles screen, per-module permissions, approval limits, roles per branch."
+  },
+  "3.2": {
+   "screens": [
+    "/users"
+   ],
+   "questions": [
+    "what does the server enforce",
+    "why was I refused",
+    "it will not let me"
+   ],
+   "review": "Rewrite against the shipped permission system."
+  },
+  "3.3": {
+   "screens": [
+    "/users"
+   ],
+   "questions": [
+    "what should each role see"
+   ],
+   "review": "Menu role names are cosmetic; the real boundary is the permission set."
+  },
+  "4.1": {
+   "screens": [
+    "/accounting-setup",
+    "/settings"
+   ],
+   "questions": [
+    "how do I set up a new company",
+    "where do I set the fiscal year",
+    "what is the posting map",
+    "first time setup"
+   ]
+  },
+  "4.2": {
+   "screens": [
+    "/customers",
+    "/vendors"
+   ],
+   "questions": [
+    "how do I add a customer",
+    "how do I add a supplier",
+    "where do I set a credit limit",
+    "how do I record a TRN"
+   ]
+  },
+  "4.3": {
+   "screens": [
+    "/stock"
+   ],
+   "questions": [
+    "how do I add an item",
+    "what is a category",
+    "what is a unit of measure",
+    "how do batches work",
+    "how do I add a service"
+   ]
+  },
+  "4.4": {
+   "screens": [
+    "/purchase-order",
+    "/purchase-orders",
+    "/goods-received"
+   ],
+   "questions": [
+    "how do I buy something",
+    "how do I enter a purchase invoice",
+    "how do I record goods received",
+    "procure to pay"
+   ],
+   "review": "Does not describe the order to goods-received to invoice flow added 12 Oct (Purchase: Orders, Goods received, Invoices)."
+  },
+  "4.5": {
+   "screens": [
+    "/sales-order",
+    "/sales-orders",
+    "/delivery-notes"
+   ],
+   "questions": [
+    "how do I raise an invoice",
+    "how do I sell something",
+    "how do I make a tax invoice",
+    "order to cash",
+    "why is my invoice headed sales order"
+   ],
+   "review": "Stale in three ways: the Send button now really emails the customer with the PDF and a link; the Sales > Orders / Delivery notes / Invoices flow added 12 Oct is not described; the heading now follows the party's VAT registration."
+  },
+  "4.6": {
+   "screens": [
+    "/sales-return",
+    "/purchase-return"
+   ],
+   "questions": [
+    "how do I return goods",
+    "how do I raise a credit note",
+    "customer sent goods back"
+   ]
+  },
+  "4.7": {
+   "screens": [
+    "/stock-reports",
+    "/batches"
+   ],
+   "questions": [
+    "how is cost calculated",
+    "what is weighted average cost",
+    "why is my stock value wrong",
+    "what is FEFO"
+   ]
+  },
+  "4.8": {
+   "screens": [
+    "/receipt-voucher",
+    "/payment-voucher"
+   ],
+   "questions": [
+    "how do I record a payment",
+    "how do I receive money",
+    "how do I settle an invoice",
+    "what is on account"
+   ]
+  },
+  "4.9": {
+   "screens": [
+    "/expense-voucher",
+    "/journal-voucher",
+    "/contra-voucher"
+   ],
+   "questions": [
+    "how do I record an expense",
+    "how do I pass a journal",
+    "what is a contra",
+    "how do I raise a debit note"
+   ]
+  },
+  "4.10": {
+   "screens": [
+    "/opening-balances"
+   ],
+   "questions": [
+    "how do I enter opening balances",
+    "how do I start using the system with old data",
+    "go live"
+   ]
+  },
+  "4.11": {
+   "screens": [
+    "/vat-return"
+   ],
+   "questions": [
+    "how do I file VAT",
+    "what is a tax code",
+    "how do I do the VAT return",
+    "VAT 201"
+   ]
+  },
+  "4.12": {
+   "questions": [
+    "what is e-invoicing",
+    "peppol",
+    "do I have to send e-invoices"
+   ]
+  },
+  "4.13": {
+   "screens": [
+    "/accounting-setup"
+   ],
+   "questions": [
+    "why does it say posting is closed",
+    "how do I close a month",
+    "how do I close the year",
+    "what is the audit log",
+    "document numbering"
+   ]
+  },
+  "9": {
+   "questions": [
+    "what does this word mean",
+    "glossary",
+    "what is a voucher"
+   ]
+  },
+  "Appendix A": {
+   "questions": [
+    "what are all the screens",
+    "list of pages",
+    "where is each screen"
+   ]
+  },
+  "8.1": {
+   "audience": "internal",
+   "review": "Roadmap and known-limitations wording from 5 Oct. Not served to clients: a status promise is a commitment, and several rows are now wrong."
+  },
+  "8.2": {
+   "audience": "internal",
+   "review": "Roadmap and known-limitations wording from 5 Oct. Not served to clients: a status promise is a commitment, and several rows are now wrong."
+  },
+  "8.3": {
+   "audience": "internal",
+   "review": "Roadmap and known-limitations wording from 5 Oct. Not served to clients: a status promise is a commitment, and several rows are now wrong."
+  },
+  "8.4": {
+   "audience": "internal",
+   "review": "Roadmap and known-limitations wording from 5 Oct. Not served to clients: a status promise is a commitment, and several rows are now wrong."
+  }
+ }
+}

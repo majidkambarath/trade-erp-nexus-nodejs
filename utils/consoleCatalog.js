@@ -36,7 +36,7 @@ const MODULE_INFO = {
   reports: { group: "money", sections: ["Dashboard", "Financial statements", "Ledger reports", "Trade analysis", "Ageing", "Stock reports", { feature: "ifrsStatements" }, { feature: "vatReturn" }, { feature: "einvoicing" }] },
   users: { group: "organisation", sections: ["Users", "Roles and permissions"] },
   staff: { group: "organisation", sections: ["Staff records"] },
-  settings: { group: "organisation", sections: ["Company profile", "Business rules", "Security", { feature: "multiBranch" }] },
+  settings: { group: "organisation", sections: ["Company profile", "Business rules", "Security", { feature: "multiBranch" }, { feature: "assistant" }] },
   audit: { group: "organisation", sections: ["Activity trail"] },
   lookups: { group: "core", sections: [] },
 };
@@ -53,6 +53,7 @@ const FEATURE_INFO = {
   ifrsStatements: { hint: "Statement of financial position, profit or loss, cash flows and notes" },
   einvoicing: { hint: "Electronic tax invoices sent to the tax authority" },
   messaging: { hint: "Email or WhatsApp an invoice to the customer with a secure link" },
+  assistant: { label: "Zarvia AI", hint: "An in-app assistant that answers the client's questions about Zarvia from our own documentation, and sends us what it cannot answer" },
   multiBranch: { hint: "More than one branch, each with its own documents and numbering" },
   production: { label: "Production", hint: "Materials and expenses moved into a product's cost, job work and process orders. Off for everyone unless switched on here" },
 };
