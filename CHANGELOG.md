@@ -1,5 +1,65 @@
 # Changelog
 
+## 1.4.0.0 — 21 October 2026
+
+Work that had been on branches since 17 October, plus the fixes from a security review of the live
+deployment. Frontend 1.4.0.0.
+
+### Security
+
+Found by reviewing the deployed system, and verified against it rather than reasoned about.
+
+- **`req.ip` was a Cloudflare address, not the visitor's — and a different one on each request.**
+  `GET /api/v1/health` answered `172.71.*`, `162.158.*`, `104.23.*` on successive calls. Counting proxy
+  hops is only right when the number is exactly the number of proxies that append to `X-Forwarded-For`,
+  and on Render there is at least one more than the two assumed. So **every per-address limit did
+  nothing** — failed sign-ins, failed refreshes, forgot and reset password, console sign-ins, the public
+  document link — because the key changed per request; and **every stored address was Cloudflare's**:
+  session sign-in records, `PasswordReset.requestedFrom`, share-link views and every audit row. The
+  per-account lock-out never depended on the address and was unaffected, which is why this was a loss of
+  defence in depth rather than a breach. The address now comes from Cloudflare's own `CF-Connecting-IP`,
+  which does not depend on the hop count: Cloudflare writes it and refuses a request that supplies its
+  own. `TRUST_PROXY_HOPS` is deliberately **not** raised — past the real number of proxies the client's
+  own header would win. Corrected in one place, because there were twelve readers of the address.
+  **Note: the limits now work for the first time, so a shared office address shares one allowance.**
+- **A list row no longer carries bank details, KYC files or party balances.** The transaction list read
+  the parties and items without a projection, so every row held the party's account numbers and IBANs,
+  its KYC document references, its credit limit and running balance, and each item's total cost value —
+  to anyone who may read the list. `.lean()` skips the schema's `toJSON`, so the projection was the only
+  place this could be fixed.
+- **Render counts as production even when `NODE_ENV` is missing**, the same rule the seed script already
+  used. Keyed on `NODE_ENV` alone, a deployment that lost the variable would have signed every token with
+  the development key written in the source.
+- **A leftover debug hook is gone** — it appended a line to an unrotated log file outside the repository
+  on every trade-document create and update, in production.
+
+### Added
+
+- **Production.** A `ProductionOrder` moves materials out at average cost and brings the finished item in
+  at materials plus the expenses that made it, so its sale books the true cost of goods; the moved costs
+  are offset by a contra account **in each expense's own group**, so gross profit stays right. Plus **job
+  work** (parts sent to an outside worker on a challan, received back finished), **process orders**
+  (several steps, each in house or sent out, with the owner's board), saved **routes** per product, costs
+  taken from the expense vouchers that paid them, and an analysis of lead time, on-time rate, yield and
+  rejects. An opt-in feature: no plan includes it unless an organisation is given it.
+- **A CRM.** Leads, opportunities, activities and a configurable pipeline — and **the pipeline moves
+  itself**: a quotation sent, accepted or rejected and an invoice approved, cancelled or deleted advance
+  the deal or put it back, each move claimed once and recorded. Contacts are the same people as the party
+  masters, sharing one id. Plus a communications log, a dashboard, seven reports, a calendar and four
+  scheduled checks on the notification feed. Sold per organisation: not in Standard or Trade-only.
+- **An in-app notification feed**, with a low-stock trigger and a registry of scheduled checks.
+- **The organisation's country decides the tax words** — GST and GSTIN for India, VAT and TRN for the UAE
+  — and the UAE VAT return and e-invoicing are refused elsewhere. Starter account names follow, and an
+  account created under the old name is renamed in place rather than duplicated.
+- **A demo generator** that follows the organisation's own country.
+
+### Internal
+
+- Node 22 pinned (`.nvmrc`, `engines`), a `Dockerfile`, a `render.yaml` describing the intended service,
+  and GitHub CI workflows.
+- An experiment that hid the backend's address behind the frontend was reverted: a static-site rewrite
+  destroys the visitor's IP address, which the limits and the audit trail depend on.
+
 ## 1.3.0.0 — 13 October 2026
 
 Modules are now sold per organisation. A customer can be given Sales, Purchase, Inventory and the dashboard and
