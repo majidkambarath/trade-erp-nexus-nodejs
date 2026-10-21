@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased — Zarvia AI
+
+An assistant inside the app that answers the questions clients currently ring us about, from our own
+product guide, and sends us what it cannot answer. On for every plan, because it exists to cut our
+support load and switching it off for a client works against us.
+
+### The content, which is the project
+
+- **The three Word guides were in no git repository at all.** They are now in `docs/help-source/`, and
+  `scripts/help/build.sh` turns them into 132 help topics in `docs/help/` — one per section, each with
+  the front matter the loader reads. Four pure steps, so correcting a guide and re-running reproduces
+  the corpus exactly.
+- **The build refuses to finish if the corpus names any code.** The guides cite files, services and
+  tests deliberately ("every statement names the key, function or test it relies on") and a client must
+  not read a word of it. With the declassifying step disabled, 43 of the 132 topics name code and the
+  build exits 1.
+- **The roadmap is withheld from clients.** A status promise made by an assistant is a commitment
+  nobody authorised, and several of its rows are now false. Nine topics carry a `review` note where the
+  5 October wording has been overtaken — roles and access still says role lists "are not applied", and
+  nothing in the corpus mentions the CRM, production or job work.
+
+### Answering
+
+- **A refusal is explained from the code the API already sends.** `utils/assistantCodes.js` holds 29 of
+  them with what happened, why, the first step, and who can actually resolve it — themselves, their
+  administrator, or only us. "It will not let me" is the commonest support question there is and it
+  needs no model to answer well. A test fails on any code the table explains but the API never sends.
+- **Retrieval is a deterministic score, not an embedding**, and it returns NOTHING when the corpus has
+  nothing to say. A question about production scores 15 against a topic on approving documents, and
+  handing that to a model invites an answer assembled from unrelated documentation. The screen a person
+  is on ranks topics but cannot qualify one, so a specific question is answered on its words.
+- **The system prompt is pinned to a hash**: it is the control over what the assistant will and will
+  not say, so changing it has to be a decision. It gives no tax or accounting advice, promises no
+  roadmap or price, invents no feature, never asks for a password, and hands over rather than guessing.
+- **It reads no business data in this version**, enforced by there being no tool that could. It answers
+  and it points at screens; a link to a screen the documentation does not name is refused twice, once by
+  the server and again by the browser.
+
 ## 1.4.0.0 — 21 October 2026
 
 Work that had been on branches since 17 October, plus the fixes from a security review of the live
