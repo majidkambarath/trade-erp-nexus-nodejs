@@ -61,6 +61,13 @@ const modulesExcept = (off = [], detail = {}) => ({
   ...detail,
 });
 
+/** Only the modules named are on; every other is off. `detail` sells one in part. For a plan that is one product, not the whole. */
+const modulesOnly = (on = [], detail = {}) => ({
+  ...Object.fromEntries(MODULE_KEYS.map((m) => [m, false])),
+  ...Object.fromEntries(on.map((m) => [m, true])),
+  ...detail,
+});
+
 // A limit of null means unlimited.
 const PLANS = {
   trial: {
@@ -92,6 +99,19 @@ const PLANS = {
     features: only("quotations", "deliveryNotes", "batches", "messaging"),
     modules: modulesExcept(["finance", "banking", "accounts", "audit", "crm"], { reports: ["view"] }),
     limits: { users: 10, branches: 2, documentsPerMonth: 2000 },
+  },
+  // The CRM and nothing else: leads, deals, contacts, follow-ups, calendar and reports, plus the two things any organisation
+  // needs to run it - its own people (users) and its own settings. No trade documents, no stock, no books.
+  //
+  // This is a WEAKER product than the CRM inside the ERP, and is sold as one: the pipeline in front of the paperwork moves
+  // itself from quotations and invoices (utils/crm.js EVENTS), and an organisation with neither moves its deals by hand. The
+  // automation is the reason to add the ERP. `documentsPerMonth: 0` says the plan holds no trade documents; moving up to a
+  // plan that does is a change of plan, not a module override.
+  crm: {
+    name: "CRM only",
+    features: only(),
+    modules: modulesOnly(["crm", "users", "settings"], { reports: ["view"] }),
+    limits: { users: 10, branches: 1, documentsPerMonth: 0 },
   },
   // For the organisation that existed before plans did, and for the developers' own testing.
   internal: {

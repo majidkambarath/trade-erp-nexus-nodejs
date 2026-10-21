@@ -447,3 +447,11 @@ test("the calendar places follow-ups, deals and enquiries on their own days", ()
   assert.ok(!out.some((i) => ["a4", "a5", "d2"].includes(i.id)), "cancelled, out of range and already-won are all left off");
   assert.deepEqual(crm.calendarItems({ from: "bad", to: "2026-10-31" }), [], "no range, no calendar");
 });
+
+test("qualifying a lead asks for the Sales key only where Sales was bought", () => {
+  // It makes a real customer. The CRM implies nothing in another module, so where Sales exists the Sales key is asked for;
+  // where it does not, nobody can hold that key and the CRM's own is the one that counts.
+  assert.equal(crm.qualifyPermission(true), "sales.create");
+  assert.equal(crm.qualifyPermission(false), "crm.create");
+  assert.equal(crm.qualifyPermission(undefined), "crm.create", "not knowing is the narrower question, never the broader");
+});

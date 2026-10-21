@@ -308,6 +308,15 @@ function normaliseSettings(input = {}) {
   };
 }
 
+/**
+ * The permission qualifying a lead asks for. It makes a real customer, so an organisation that BOUGHT Sales asks for the
+ * Sales key: the CRM implies nothing in another module, and a person who may not add customers must not add one through
+ * the CRM. An organisation that did NOT buy Sales has no such key to ask for - nobody in it can hold one - so the customer
+ * is simply a record of its own CRM and adding a lead's company is `crm.create`. Without this rule a CRM-only organisation
+ * could not qualify a single lead, the one act the module exists for.
+ */
+const qualifyPermission = (organisationHoldsSales) => (organisationHoldsSales ? "sales.create" : "crm.create");
+
 // ---- who gets it --------------------------------------------------------------------------------------------------
 
 /**
@@ -834,6 +843,7 @@ function followUpRange(scope, today) {
 }
 
 module.exports = {
+  qualifyPermission,
   LEAD_STATUS, LEAD_SOURCES, ACTIVITY_KINDS, ACTIVITY_STATUS, OUTCOMES, LOST_REASONS, OPPORTUNITY_STATUS,
   STAGE_TYPES, ASSIGNMENT_MODES, REGARDING_KINDS, EVENTS, SOURCE_LABEL, KIND_LABEL, LOST_LABEL, EVENT_LABEL,
   STARTER_STAGES, DEFAULT_SETTINGS,

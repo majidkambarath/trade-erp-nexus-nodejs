@@ -110,13 +110,20 @@ test("a customer's token cannot open the console, and a console token cannot ope
 
 test("the catalogue offers the plans, features, currencies, and says why a three-decimal currency is not offered", { skip }, async () => {
   const c = (await plat("GET", "/catalog")).body;
-  assert.deepEqual(c.plans.map((p) => p.code).sort(), ["internal", "premium", "standard", "trading", "trial"]);
+  assert.deepEqual(c.plans.map((p) => p.code).sort(), ["crm", "internal", "premium", "standard", "trading", "trial"]);
   assert.ok(c.features.some((f) => f.key === "einvoicing"));
   // the whole modules an organisation can be sold, each with its actions and the ones no plan can take away
   const finance = c.modules.find((m) => m.key === "finance");
   assert.ok(finance && finance.label === "Finance" && finance.actions.some((a) => a.action === "approve"));
   assert.deepEqual(c.modules.find((m) => m.key === "reports").alwaysOn, ["view"], "the first screen always opens");
   assert.deepEqual(c.plans.find((p) => p.code === "trading").modules.finance, false, "the trade-only plan has no books");
+  // the CRM-only plan sells the CRM, its own people and settings, and nothing of the trade - and the console is told so, not left to guess
+  const solo = c.plans.find((p) => p.code === "crm");
+  assert.equal(solo.name, "CRM only");
+  assert.deepEqual([solo.modules.crm, solo.modules.users, solo.modules.settings], [true, true, true]);
+  assert.deepEqual([solo.modules.sales, solo.modules.finance, solo.modules.inventory, solo.modules.purchase], [false, false, false, false]);
+  assert.deepEqual(solo.modules.reports, ["view"], "the dashboard the app lands on, and none of the statements");
+  assert.equal(solo.limits.documentsPerMonth, 0, "it holds no trade documents");
   assert.equal(c.plans.find((p) => p.code === "premium").modules.finance, true);
   assert.ok(c.currencies.some((x) => x.code === "AED") && c.currencies.some((x) => x.code === "SAR"));
   assert.ok(!c.currencies.some((x) => x.code === "KWD"));
@@ -215,6 +222,37 @@ test("the developer edits an organisation; what cannot change is refused", { ski
   assert.equal(reset.body.features.einvoicing, false, "back to the plan's setting");
   assert.equal(reset.body.limits.users, 10);
   assert.equal((await plat("GET", "/organisations/no-such-org")).status, 404);
+});
+
+test("the developer sells the CRM alone, and moving the organisation to a plan with the ERP swaps the doors", { skip }, async () => {
+  const made = await plat("POST", "/organisations", newOrg({
+    legalName: "Soloist Trading LLC",
+    code: "soloist",
+    planCode: "crm",
+    firstAdmin: { name: "Solo Owner", email: "owner@soloist.test", password: "owner-password-3" },
+  }));
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  assert.equal(made.body.organisation.planCode, "crm");
+  assert.equal(made.body.provisioning.complete, true, "it is provisioned like any other: chart, fiscal year, settings");
+  const detail = await plat("GET", "/organisations/soloist");
+  assert.equal(detail.body.modules.crm.full, true);
+  assert.equal(detail.body.modules.sales.on, false, "the detail says what it holds");
+  assert.equal(detail.body.limits.documentsPerMonth, 0);
+
+  const first = await erpLogin("owner@soloist.test", "owner-password-3");
+  await call("PUT", "/profile/change-password", { token: first, body: { currentPassword: "owner-password-3", newPassword: "owner-chose-this-3", confirmPassword: "owner-chose-this-3" } });
+  const token = await erpLogin("owner@soloist.test", "owner-chose-this-3");
+  const asOwner = (url) => call("GET", url, { token });
+  assert.equal((await asOwner("/crm/leads")).status, 200, "what it bought");
+  assert.equal((await asOwner("/customers/customers")).code, "MODULE_NOT_IN_PLAN", "and not what it did not");
+
+  // sold up to a plan with the trade: the same token now opens Sales and no longer the CRM, which Standard leaves out
+  const up = await plat("PATCH", "/organisations/soloist", { planCode: "standard" });
+  assert.equal(up.status, 200, JSON.stringify(up.data));
+  assert.equal(up.body.modules.sales.full, true);
+  assert.equal(up.body.modules.crm.on, false);
+  assert.equal((await asOwner("/customers/customers")).status, 200, "on the token it already holds");
+  assert.equal((await asOwner("/crm/leads")).code, "MODULE_NOT_IN_PLAN");
 });
 
 test("the developer sells modules: at creation, changed afterwards, and put back to the plan", { skip }, async () => {

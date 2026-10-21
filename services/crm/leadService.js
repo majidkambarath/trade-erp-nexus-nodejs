@@ -13,6 +13,7 @@ const CrmActivity = require("../../models/modules/crm/crmActivityModel");
 const Customer = require("../../models/modules/customerModel");
 const CustomerService = require("../customer/customerService");
 const rules = require("../../utils/crm");
+const importRules = require("../../utils/crmImport");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { todayInOrg } = require("../../utils/documentExpiry");
 const { getTenant } = require("../../utils/tenant");
@@ -156,7 +157,16 @@ class LeadService {
    * or whatever the organisation chose), it scores it, and it leaves a first follow-up due - so an enquiry can never be
    * taken and then forgotten, which is the one failure this module exists to prevent.
    */
-  static create = withTransactionSession(async (data, by, session) => {
+  static create(data, by, ...rest) {
+    return LeadService.createWith(data, by, {}, ...rest);
+  }
+
+  /**
+   * `create`, with a choice the enquiry form never makes: `followUp: false` leaves no "first contact" task behind. An import
+   * of two hundred old enquiries would otherwise put two hundred tasks on today's worklist for people who were contacted
+   * last year; the import asks the person (and says no unless they say yes). Everything else is exactly `create`.
+   */
+  static createWith = withTransactionSession(async (data, by, opts, session) => {
     const errors = rules.validateLead(data);
     if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
 
@@ -187,7 +197,7 @@ class LeadService {
     const { score, band } = rules.leadScore({ ...fields, contactCount: 0 }, today);
     const [doc] = await Lead.create([{ ...fields, score, band }], { session });
 
-    if (settings.autoFollowUp !== false) {
+    if (settings.autoFollowUp !== false && opts?.followUp !== false) {
       const [made] = await CrmActivity.create(
         [
           {
@@ -211,6 +221,45 @@ class LeadService {
     }
     return doc;
   });
+
+  /**
+   * A spreadsheet of enquiries. `dryRun` (the default: only an explicit false writes) reports what would happen - how many
+   * would be made, which rows are wrong and why, which we already hold - and touches nothing, so the person sees the result
+   * before it exists. Rows are made one at a time through the same `create` as the enquiry form, so each gets its number,
+   * its score and its owner exactly as a typed one does, and a row that fails is reported without stopping the rest.
+   * Running the same file twice is safe: the second time every row is a duplicate.
+   */
+  static async importMany(rows, by, { dryRun = true, allowDuplicates = false, followUp = false } = {}) {
+    const [leads, customers, owners] = await Promise.all([
+      Lead.find({}).select("email phone").limit(50000).lean(),
+      Customer.find({}).select("email phone").limit(50000).lean(),
+      CrmSetupService.owners(),
+    ]);
+    const held = (list) => ({
+      emails: new Set(list.map((x) => rules.text(x.email, 150).toLowerCase()).filter(Boolean)),
+      phones: new Set(list.map((x) => importRules.phoneTail(x.phone)).filter(Boolean)),
+    });
+    const plan = importRules.planLeadImport(rows, { existing: { leads: held(leads), customers: held(customers) }, owners, allowDuplicates });
+    if (plan.error) throw fail(plan.error.message, 400, plan.error.code);
+
+    const issues = importRules.issuesOf(plan.rows);
+    if (dryRun) {
+      return { dryRun: true, summary: plan.summary, issues, sample: plan.rows.filter((r) => r.status === "create").slice(0, 5).map((r) => r.fields) };
+    }
+
+    const created = [];
+    const failed = [];
+    for (const r of plan.rows) {
+      if (r.status !== "create") continue;
+      try {
+        const doc = await LeadService.createWith(r.fields, by, { followUp });
+        created.push({ line: r.line, id: String(doc._id), leadNo: doc.leadNo });
+      } catch (e) {
+        failed.push({ line: r.line, code: e.code || "IMPORT_ROW_FAILED", message: e.message });
+      }
+    }
+    return { dryRun: false, summary: { ...plan.summary, created: created.length, failed: failed.length }, created, issues, failed };
+  }
 
   static update = withTransactionSession(async (id, data, by, session) => {
     const doc = await LeadService.openOne(id, session);

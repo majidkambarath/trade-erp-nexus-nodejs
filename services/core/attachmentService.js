@@ -80,7 +80,9 @@ class AttachmentService {
   }
 
   // file: { originalname, buffer, size } (multer memory storage)
-  static async save(file, { uploadedBy, label, req } = {}) {
+  // `owner` ({ type, id }) writes the owner with the row, for a caller that links nothing afterwards (the CRM's leads and deals
+  // hold no list of files; the owner is the only link). Everything else about a save is unchanged.
+  static async save(file, { uploadedBy, label, req, owner } = {}) {
     const { ext, mime } = this.validate(file);
     const { companyId } = getTenant(req);
     const year = String(new Date().getFullYear());
@@ -93,6 +95,7 @@ class AttachmentService {
       size: file.buffer.length,
       uploadedBy: uploadedBy ? String(uploadedBy) : null,
       label,
+      ...(owner?.type && owner?.id ? { ownerType: owner.type, ownerId: owner.id } : {}),
     };
 
     if (storageChoice() === "cloudinary") {
