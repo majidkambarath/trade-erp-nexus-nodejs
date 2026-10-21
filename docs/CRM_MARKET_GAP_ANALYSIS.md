@@ -145,7 +145,7 @@ integration has to be the product, not a feature list we half-match.
 | WhatsApp | ⚠️ a source value only | ✅ | partner | partner | partner |
 | Telephony / click-to-call | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Call transcription / summary | ❌ | ✅ | ✅ | ✅ | ❌ |
-| Meeting scheduler link | ❌ | ✅ | ✅ **free** | ✅ | ✅ |
+| Meeting scheduler link | ✅ **closed 21 Oct** | ✅ | ✅ **free** | ✅ | ✅ |
 | Workflow rule builder | ⚠️ stage table | ✅ Blueprint | ✅ | ✅ | ✅ |
 | Approval process | ❌ (ERP has one) | ✅ | ✅ | ❌ | ✅ |
 | Forecast / quotas / territories | ❌ | ✅ | ✅ | ⚠️ forecast view | partial |
@@ -192,7 +192,7 @@ custom fields the answer to "can it track X" is no, forever, and the salesperson
 - **No attachments.** The signed quotation, the site photo, the spec sheet live in somebody's email.
 - **No WhatsApp**, in a product sold in the UAE and India where it is the main sales channel. It is a
   value in two enums and nothing else.
-- **No telephony, no meeting link, no sequences.**
+- **No telephony and no sequences.** (A meeting scheduler with a real calendar invitation was built on 21 October; see the wave 3 status note.)
 
 ### Strategic — they decide which markets we can enter at all
 
@@ -339,6 +339,7 @@ Do this first. It is revenue already promised.
 | CSV / Excel import of leads and of people | Yes: previewed first, never written by accident, safe to run twice, audited without the rows |
 | Attachments on a lead and a deal | Yes: the CRM's own door onto the existing storage; another module's file id is a 404 |
 | Decide (a) or (b) from section 7 | (b), as recommended: a hand-moved pipeline now; (a) comes with line items in wave 4 |
+| **Scheduled meetings with a calendar invitation** | Yes, added the same day: a meeting at a time, with attendees, a joining link the organiser pastes, and an .ics invitation that lands in the customer's own Gmail, Outlook or Apple calendar with Accept and Decline |
 
 **Two things the plan did not foresee, found by reading the code and then proved by test.** First, qualifying was not the only
 blocker: the new-deal form chose its customer from the Sales customer master, so a CRM-only person could not open a deal either; it
@@ -346,6 +347,13 @@ now reads a narrow CRM-owned list (an id, a name, a code, nothing of the custome
 organisation had no way to add colleagues, because People lives in the ERP rail they are not offered: Users and roles is now also a
 Team tab under CRM Setup. Also: Settings no longer offers "Business rules" and "Invoice bank details" to an organisation that makes
 no invoice.
+
+**What the meeting scheduler does NOT do, and it matters when demonstrating it.** It does not mint a Google Meet link:
+the organiser pastes their own Meet, Zoom or Teams link, because a genuine Meet link cannot be created without
+connecting a Google account (OAuth, a Google Cloud project, and Google's review of a sensitive scope). It does not read
+the customer's Accept back either: that reply is an email to the organiser's own mailbox, so the CRM shows "Invited"
+until a person records the answer. And the invitation only leaves the building if the organisation has set up Resend or
+SMTP; on the default setting the screen says "Recorded only" rather than claiming it was sent.
 
 **How it was checked.** Eight of the rules above were broken one at a time on a copy of the backend and each was caught by the test
 that names it (qualify always asking Sales, the customer list leaking the whole customer, the file door opening any module's file, an

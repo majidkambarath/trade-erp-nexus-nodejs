@@ -13,6 +13,7 @@ const CrmSetupService = require("../../services/crm/crmSetupService");
 const CrmReportService = require("../../services/crm/crmReportService");
 const ContactService = require("../../services/crm/contactService");
 const CrmAttachmentService = require("../../services/crm/crmAttachmentService");
+const MeetingService = require("../../services/crm/meetingService");
 
 const by = (req) => req.admin?.id || "system";
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
@@ -274,6 +275,55 @@ exports.removeContact = catchAsync(async (req, res) => {
   await log(req, "CRM_CONTACT_DELETED", "Contact", contact, `${contactWords(contact)} was removed`);
   ok(res, { deleted: true });
 });
+
+// ---- meetings ------------------------------------------------------------------------------------------------
+//
+// A meeting is an activity of kind "meeting" with a time, attendees and an invitation, so these sit beside the
+// activity handlers and use the same `:activityId` parameter (and therefore the same branch loading).
+//
+// The invitation's outcome is reported, never thrown: a meeting that is booked but whose email did not leave is still
+// booked, and the screen says which happened.
+
+const meetingWords = (m) => `${m.subject}${m.meeting?.timeRange ? ` at ${m.meeting.timeRange}` : ""}`;
+
+exports.scheduleMeeting = catchAsync(async (req, res) => {
+  const out = await MeetingService.schedule(req.body, by(req), req);
+  await log(req, "CRM_MEETING_SCHEDULED", "CrmActivity", { _id: out.meeting._id }, `${meetingWords(out.meeting)} was arranged`, {
+    startAt: out.meeting.meeting?.startAt, attendees: (out.meeting.meeting?.attendees || []).length, invited: Boolean(out.invite?.sent),
+  });
+  ok(res, out, 201);
+});
+
+exports.rescheduleMeeting = catchAsync(async (req, res) => {
+  const out = await MeetingService.reschedule(req.params.activityId, req.body, by(req), req);
+  await log(req, "CRM_MEETING_MOVED", "CrmActivity", { _id: out.meeting._id }, `${meetingWords(out.meeting)} was moved`, {
+    startAt: out.meeting.meeting?.startAt, told: Boolean(out.invite?.sent),
+  });
+  ok(res, out);
+});
+
+exports.cancelMeeting = catchAsync(async (req, res) => {
+  const out = await MeetingService.cancel(req.params.activityId, req.body, by(req), req);
+  await log(req, "CRM_MEETING_CANCELLED", "CrmActivity", { _id: out.meeting._id }, `${out.meeting.subject} was called off`, { told: Boolean(out.invite?.sent) });
+  ok(res, out);
+});
+
+// Sending the invitation again: after setting the email up, or because somebody lost it.
+exports.inviteToMeeting = catchAsync(async (req, res) => {
+  const doc = await MeetingService.load(req.params.activityId);
+  const sent = await MeetingService.invite(doc, by(req), { note: rules.text(req.body?.note, 500) });
+  await log(req, "CRM_MEETING_INVITED", "CrmActivity", doc, `The invitation to ${doc.subject} was sent again`, { sent: Boolean(sent.sent), to: (sent.to || []).length });
+  ok(res, { meeting: MeetingService.present(doc), invite: sent });
+});
+
+// What the customer said. Their Accept arrives in the organiser's own mailbox, which we do not read, so a person
+// records it here rather than the system inventing an answer from silence.
+exports.recordRsvp = catchAsync(async (req, res) => {
+  const doc = await MeetingService.recordRsvp(req.params.activityId, req.body, by(req));
+  ok(res, MeetingService.present(doc));
+});
+
+exports.meetingsOnDay = catchAsync(async (req, res) => ok(res, await MeetingService.onDay(req.query.day, { ownerId: req.query.ownerId })));
 
 // ---- files on a lead or a deal -------------------------------------------------------------------------------
 //

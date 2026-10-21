@@ -74,6 +74,48 @@ class NotificationChecksService {
   }
 
   /**
+   * A meeting about to start, told to its owner. Unlike a follow-up, which is a thing owed on a DAY, a meeting has an
+   * hour: being told about it tomorrow is useless, and being told a week early is noise. So the window is the next
+   * couple of hours, and the alert resolves by itself once the meeting has begun.
+   */
+  static async checkCrmMeetings(now = new Date()) {
+    const CrmActivity = require("../../models/modules/crm/crmActivityModel");
+    const meetings = require("../../utils/meetings");
+    const orgLocale = require("../../utils/orgLocale");
+    const zone = orgLocale.timezone();
+    const soon = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+    const rows = await CrmActivity.find({
+      kind: "meeting",
+      status: "OPEN",
+      "meeting.cancelledAt": null,
+      "meeting.startAt": { $gte: now, $lte: soon },
+    })
+      .select("subject ownerId meeting.startAt meeting.endAt meeting.timezone meeting.joinUrl")
+      .limit(200)
+      .lean();
+
+    const active = [];
+    for (const row of rows) {
+      const dedupeKey = `crm_meeting:${row._id}`;
+      active.push(dedupeKey);
+      const at = meetings.timeIn(row.meeting.startAt, row.meeting.timezone || zone);
+      const minutes = Math.max(0, Math.round((new Date(row.meeting.startAt).getTime() - now.getTime()) / 60000));
+      await NotificationService.raise({
+        kind: "crm_meeting",
+        severity: "info",
+        title: minutes <= 15 ? `Starting at ${at}: ${row.subject}` : `At ${at} today: ${row.subject}`,
+        body: row.meeting.joinUrl ? "A joining link is on the meeting." : "",
+        link: "/crm/calendar",
+        dedupeKey,
+        ...aim(row.ownerId),
+        now,
+      });
+    }
+    await NotificationService.resolveMissing({ kind: "crm_meeting", activeDedupeKeys: active, now });
+    return { checked: rows.length };
+  }
+
+  /**
    * A deal nothing has happened to for longer than its stage allows. Told once per deal, to its owner, and resolved by
    * itself the moment somebody does something - which is the point: the alert is the absence of activity, so activity
    * must end it.
@@ -192,6 +234,7 @@ class NotificationChecksService {
   static CHECKS = [
     { key: "lowStock", module: "inventory", run: (now) => NotificationChecksService.checkLowStock(now) },
     { key: "crmFollowUps", module: "crm", run: (now) => NotificationChecksService.checkCrmFollowUps(now) },
+    { key: "crmMeetings", module: "crm", run: (now) => NotificationChecksService.checkCrmMeetings(now) },
     { key: "crmStaleDeals", module: "crm", run: (now) => NotificationChecksService.checkStaleDeals(now) },
     { key: "crmUncontactedLeads", module: "crm", run: (now) => NotificationChecksService.checkUncontactedLeads(now) },
     { key: "crmQuotationsExpiring", module: "crm", run: (now) => NotificationChecksService.checkQuotationsExpiring(now) },

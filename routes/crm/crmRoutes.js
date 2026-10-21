@@ -89,6 +89,16 @@ router.post("/opportunities/:oppId/assign", requirePermission("crm.assign"), c.a
 
 // People. Contact is a MASTER (no branchId), so there is deliberately no branchOfDocument on :contactId - unlike a
 // lead or a deal, a person is not owned by one branch and every branch sees the same address book.
+// Meetings: an activity with a time, attendees and an invitation. Booking one is adding (crm.create); moving it,
+// calling it off, inviting again and recording an answer are all changing one (crm.edit). The fixed path first, so
+// "day" is never read as an id.
+router.get("/meetings/day", requirePermission("crm.view"), c.meetingsOnDay);
+router.post("/meetings", requirePermission("crm.create"), c.scheduleMeeting);
+router.put("/meetings/:activityId", requirePermission("crm.edit"), c.rescheduleMeeting);
+router.post("/meetings/:activityId/cancel", requirePermission("crm.edit"), c.cancelMeeting);
+router.post("/meetings/:activityId/invite", requirePermission("crm.edit"), c.inviteToMeeting);
+router.post("/meetings/:activityId/rsvp", requirePermission("crm.edit"), c.recordRsvp);
+
 router.post("/contacts/import", requirePermission("crm.create"), c.importContacts);
 router.get("/contacts", requirePermission("crm.view"), c.listContacts);
 router.post("/contacts", requirePermission("crm.create"), c.createContact);

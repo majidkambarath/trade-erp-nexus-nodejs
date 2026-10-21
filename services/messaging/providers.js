@@ -2,7 +2,8 @@
 //
 //   send(message, { apiKey, timeoutMs, fetch }) -> { messageId, raw }
 //
-// where message = { from, to[], cc[], bcc[], replyTo, subject, html, text, attachments[], idempotencyKey }
+// where message = { from, to[], cc[], bcc[], replyTo, subject, html, text, attachments[], icalEvent?, idempotencyKey }
+// and icalEvent = { method, content, filename } for a meeting invitation (services/crm/meetingMailer.js)
 // and throws ProviderError({ retryable, code }) on failure. A temporary fault is retryable; a refusal
 // (bad key, unverified sender, refused address) is not and waits for a person.
 //
@@ -61,7 +62,16 @@ const resendProvider = {
     if (message.bcc?.length) body.bcc = message.bcc;
     if (message.replyTo) body.reply_to = message.replyTo;
     if (message.attachments?.length) {
-      body.attachments = message.attachments.map((a) => ({ filename: a.filename, content: Buffer.from(a.content).toString("base64") }));
+      // A CALENDAR part needs two things an ordinary attachment does not: `content_type`, because without it Resend
+      // serves the file as a generic download and no mail client offers to put it in a diary, and RAW text rather than
+      // base64, which Resend has been reported to mishandle for .ics. Everything else - a PDF invoice, which is what
+      // this path carries every day - is sent EXACTLY as it was before meetings existed: Resend derives its type from
+      // the filename, and the live sending path is not worth changing for nothing.
+      body.attachments = message.attachments.map((a) => {
+        const calendar = /text\/calendar/i.test(a.contentType || "");
+        if (!calendar) return { filename: a.filename, content: Buffer.from(a.content).toString("base64") };
+        return { filename: a.filename, content: Buffer.from(a.content).toString("utf8"), content_type: a.contentType };
+      });
     }
 
     let res;
@@ -126,6 +136,10 @@ const smtpProvider = {
         from: message.from, to: message.to, cc: message.cc?.length ? message.cc : undefined, bcc: message.bcc?.length ? message.bcc : undefined,
         replyTo: message.replyTo, subject: message.subject, html: message.html, text: message.text,
         attachments: (message.attachments || []).map((a) => ({ filename: a.filename, content: Buffer.from(a.content), contentType: a.contentType || "application/pdf" })),
+        // A calendar invitation is not an attachment: nodemailer puts `icalEvent` in BOTH a
+        // `text/calendar; method=REQUEST` alternative and an .ics attachment, and it is that alternative which makes
+        // Gmail and Outlook draw their own Accept and Decline buttons. Absent for every ordinary message.
+        ...(message.icalEvent ? { icalEvent: { method: message.icalEvent.method || "REQUEST", filename: message.icalEvent.filename || "invite.ics", content: message.icalEvent.content } } : {}),
         messageId: stableMessageId(message.idempotencyKey, message.from),
       });
       return { messageId: info.messageId || null, raw: { accepted: info.accepted || [], rejected: info.rejected || [], response: String(info.response || "").slice(0, 200) } };
