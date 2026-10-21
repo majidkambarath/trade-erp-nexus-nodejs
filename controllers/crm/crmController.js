@@ -14,6 +14,7 @@ const CrmReportService = require("../../services/crm/crmReportService");
 const ContactService = require("../../services/crm/contactService");
 const CrmAttachmentService = require("../../services/crm/crmAttachmentService");
 const MeetingService = require("../../services/crm/meetingService");
+const GoogleCalendarService = require("../../services/crm/googleCalendarService");
 
 const by = (req) => req.admin?.id || "system";
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
@@ -321,6 +322,31 @@ exports.inviteToMeeting = catchAsync(async (req, res) => {
 exports.recordRsvp = catchAsync(async (req, res) => {
   const doc = await MeetingService.recordRsvp(req.params.activityId, req.body, by(req));
   ok(res, MeetingService.present(doc));
+});
+
+// ---- a person's own Google account ---------------------------------------------------------------------------
+//
+// Each person connects their OWN account: the Meet link is minted by it and the event lands in their own diary. So
+// these are self-service - they act on the signed-in person and take no id - and `crm.view` is enough, because
+// connecting your own calendar is not an act upon anybody else.
+//
+// Google redirects the BROWSER back, and this app signs requests with a token held in the tab rather than a cookie,
+// so the address Google returns to is a page of the app; that page hands the code here with its own token.
+
+exports.googleStatus = catchAsync(async (req, res) => ok(res, await GoogleCalendarService.status(by(req))));
+
+exports.googleStart = catchAsync(async (req, res) => ok(res, { url: GoogleCalendarService.startUrl(by(req), { email: req.admin?.email }) }));
+
+exports.googleConnect = catchAsync(async (req, res) => {
+  const status = await GoogleCalendarService.connect({ code: req.body?.code, state: req.body?.state, adminId: by(req) });
+  await log(req, "CRM_GOOGLE_CONNECTED", "Admin", { _id: req.admin?.id }, `A Google account was connected for meetings${status.email ? ` (${status.email})` : ""}`, { email: status.email });
+  ok(res, status);
+});
+
+exports.googleDisconnect = catchAsync(async (req, res) => {
+  await GoogleCalendarService.disconnect(by(req));
+  await log(req, "CRM_GOOGLE_DISCONNECTED", "Admin", { _id: req.admin?.id }, "The Google account was disconnected from meetings");
+  ok(res, await GoogleCalendarService.status(by(req)));
 });
 
 exports.meetingsOnDay = catchAsync(async (req, res) => ok(res, await MeetingService.onDay(req.query.day, { ownerId: req.query.ownerId })));

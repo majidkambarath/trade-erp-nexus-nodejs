@@ -92,6 +92,13 @@ router.post("/opportunities/:oppId/assign", requirePermission("crm.assign"), c.a
 // Meetings: an activity with a time, attendees and an invitation. Booking one is adding (crm.create); moving it,
 // calling it off, inviting again and recording an answer are all changing one (crm.edit). The fixed path first, so
 // "day" is never read as an id.
+// A person's own Google account: self-service, so crm.view is enough - connecting your own calendar acts on nobody
+// else. Declared before "/meetings/:activityId" so none of these is read as an id.
+router.get("/google/status", requirePermission("crm.view"), c.googleStatus);
+router.post("/google/start", requirePermission("crm.view"), c.googleStart);
+router.post("/google/connect", requirePermission("crm.view"), c.googleConnect);
+router.post("/google/disconnect", requirePermission("crm.view"), c.googleDisconnect);
+
 router.get("/meetings/day", requirePermission("crm.view"), c.meetingsOnDay);
 router.post("/meetings", requirePermission("crm.create"), c.scheduleMeeting);
 router.put("/meetings/:activityId", requirePermission("crm.edit"), c.rescheduleMeeting);

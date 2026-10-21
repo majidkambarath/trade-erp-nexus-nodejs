@@ -22,6 +22,7 @@ const tz = require("../../utils/tz");
 const ActivityService = require("./activityService");
 const CrmSetupService = require("./crmSetupService");
 const MeetingMailer = require("./meetingMailer");
+const GoogleCalendarService = require("./googleCalendarService");
 
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
 
@@ -124,9 +125,11 @@ class MeetingService {
     if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
 
     const doc = await MeetingService.write(input, by, zone);
-    const result = MeetingService.present(doc);
+    // Google first, so the Meet link it mints is in the invitation that goes out a moment later. It is deliberately
+    // outside the transaction and cannot fail the booking: a meeting with no link is a meeting, a lost booking is not.
+    const google = input.googleMeet === true ? await MeetingService.addGoogleLink(doc) : null;
     const sent = rules.text(input.notify, 10) === "false" || input.notify === false ? null : await MeetingService.invite(doc, by, { note: rules.text(input.note, 500) });
-    return { meeting: result, invite: sent, clashes: await MeetingService.clashes(doc) };
+    return { meeting: MeetingService.present(doc), invite: sent, google, clashes: await MeetingService.clashes(doc) };
   }
 
   /** The database half of booking, in one transaction. */
@@ -156,8 +159,9 @@ class MeetingService {
     if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
 
     const doc = await MeetingService.move(id, input, by, zone);
+    const google = await MeetingService.syncGoogle(doc);
     const sent = input.notify === false ? null : await MeetingService.invite(doc, by, { note: rules.text(input.note, 500) });
-    return { meeting: MeetingService.present(doc), invite: sent, clashes: await MeetingService.clashes(doc) };
+    return { meeting: MeetingService.present(doc), invite: sent, google, clashes: await MeetingService.clashes(doc) };
   }
 
   static move = withTransactionSession(async (id, input, by, zone, session) => {
@@ -195,8 +199,9 @@ class MeetingService {
   /** Call it off: the attendees are told, and the activity is cancelled so it leaves the worklist. */
   static async cancel(id, input = {}, by, req) {
     const doc = await MeetingService.off(id, by);
+    const google = await MeetingService.syncGoogle(doc, { cancelled: true });
     const sent = input.notify === false ? null : await MeetingService.invite(doc, by, { method: "CANCEL" });
-    return { meeting: MeetingService.present(doc), invite: sent };
+    return { meeting: MeetingService.present(doc), invite: sent, google };
   }
 
   static off = withTransactionSession(async (id, by, session) => {
@@ -225,6 +230,56 @@ class MeetingService {
     await doc.save({ session });
     return doc;
   });
+
+  // ---- Google ------------------------------------------------------------------------------------------------
+
+  /**
+   * Put the meeting in the organiser's own Google Calendar and take the Meet link it mints.
+   *
+   * It never throws and never undoes anything: if Google refuses, the meeting keeps whatever link the person typed
+   * (usually none) and the answer says why, so the screen can tell them rather than silently showing no link.
+   */
+  static async addGoogleLink(doc) {
+    const m = doc.meeting;
+    const owner = doc.ownerId;
+    if (!rules.isId(owner)) return { ok: false, error: "A meeting needs an owner before Google can hold it." };
+
+    const out = await GoogleCalendarService.createEvent(owner, {
+      subject: doc.subject,
+      description: doc.notes || "",
+      startAt: m.startAt,
+      endAt: m.endAt,
+      timezone: m.timezone,
+      location: m.where === "in_person" ? m.location : "",
+      attendees: m.attendees,
+      requestId: m.uid, // our own identity for the meeting: one conference per meeting, never reused across two
+    });
+    if (!out.ok) return out;
+
+    const set = { "meeting.google": { eventId: out.event.id, htmlLink: out.event.htmlLink, connectedAs: owner } };
+    // Only take Google's link if the person did not paste one of their own: theirs is the deliberate choice.
+    if (out.meetLink && !m.joinUrl) set["meeting.joinUrl"] = out.meetLink;
+    await CrmActivity.updateOne({ _id: doc._id }, { $set: set });
+    doc.meeting.google = set["meeting.google"];
+    if (set["meeting.joinUrl"]) doc.meeting.joinUrl = out.meetLink;
+    return out;
+  }
+
+  /** Keep Google in step when a meeting moves, and take it out of the diary when it is called off. Never fatal. */
+  static async syncGoogle(doc, { cancelled = false } = {}) {
+    const g = doc.meeting?.google;
+    if (!g?.eventId || !g.connectedAs) return null;
+    if (cancelled) return GoogleCalendarService.deleteEvent(g.connectedAs, g.eventId);
+    return GoogleCalendarService.updateEvent(g.connectedAs, g.eventId, {
+      subject: doc.subject,
+      description: doc.notes || "",
+      startAt: doc.meeting.startAt,
+      endAt: doc.meeting.endAt,
+      timezone: doc.meeting.timezone,
+      location: doc.meeting.where === "in_person" ? doc.meeting.location : "",
+      attendees: doc.meeting.attendees,
+    });
+  }
 
   // ---- the invitation ------------------------------------------------------------------------------------------
 

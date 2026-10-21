@@ -47,6 +47,13 @@ const meetingSchema = new mongoose.Schema(
     sequence: { type: Number, default: 0, min: 0 },
 
     attendees: { type: [attendeeSchema], default: [] },
+    // The event in the organiser's own Google Calendar, when their account is connected and they asked for a Meet
+    // link. Absent otherwise, and absent on every meeting booked before Google was connected.
+    google: {
+      eventId: { type: String, default: null },
+      htmlLink: { type: String, default: null },
+      connectedAs: { type: String, default: null }, // whose calendar it is in, so a changed person is noticed
+    },
     invite: {
       sentAt: { type: Date, default: null },
       sentBy: { type: String, default: null },

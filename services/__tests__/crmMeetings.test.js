@@ -116,6 +116,7 @@ test("an organisation in Dubai, a lead, and the people who will use this", { ski
   assert.equal(contact.status, 201, JSON.stringify(contact.data));
   S.contact = contact.body._id;
   S.colleague = (await api("owner", "GET", "/crm/owners")).body.find((o) => o.name === "chaser").id;
+  S.noGoogleOwner = (await api("owner", "GET", "/crm/owners")).body.find((o) => o.name === "looker").id;
 });
 
 const booking = (over = {}) => ({
@@ -304,6 +305,108 @@ test("a meeting booked before this existed, with only a day, still works", { ski
   const list = await api("chaser", "GET", "/crm/follow-ups?view=all");
   assert.ok(list.body.some((a) => String(a._id) === String(old._id)), "and still on the worklist");
   assert.equal((await api("chaser", "PUT", `/crm/meetings/${old._id}`, { time: "10:00" })).code, "NOT_A_MEETING", "but it is not one this can move");
+});
+
+// ---- Google -------------------------------------------------------------------------------------------------
+//
+// The connection itself is proved in googleCalendar.test.js with the network replaced. What matters HERE is that a
+// meeting survives whatever Google does: the link is taken when it comes, and the booking stands when it does not.
+
+// These three call the service IN THIS PROCESS, not over HTTP. The server under test is a separate process holding
+// the real Google client, so a stub installed here could never reach it; the HTTP route is covered by the case below
+// and the connection itself by googleCalendar.test.js.
+
+/** Replace Google for one test, and always put it back. */
+async function withGoogle(answer, fn) {
+  const Google = require("../crm/googleCalendarService");
+  const previous = Google._http;
+  const calls = [];
+  Google.useHttp(async (url, options) => {
+    calls.push(url);
+    if (url.includes("oauth2.googleapis.com/token")) {
+      return { ok: true, status: 200, body: { access_token: "at", refresh_token: "rt", expires_in: 3600, scope: "https://www.googleapis.com/auth/calendar.events" } };
+    }
+    return typeof answer === "function" ? answer(url, options) : answer;
+  });
+  try {
+    return await fn(calls);
+  } finally {
+    Google.useHttp(previous);
+  }
+}
+
+/** The owner these use, with a connection written straight in: connecting is proved in googleCalendar.test.js. */
+async function connectedOwner() {
+  const GoogleAccount = require("../../models/modules/crm/googleAccountModel");
+  const { encrypt } = require("../../utils/secretBox");
+  process.env.GOOGLE_CLIENT_ID = "cid.apps.googleusercontent.com";
+  process.env.GOOGLE_CLIENT_SECRET = "secret";
+  process.env.PUBLIC_APP_URL = "https://app.test";
+  const admin = await as(() => M.Admin.findOne({ email: "chaser@meet.test" }).lean());
+  await as(() =>
+    GoogleAccount.updateOne(
+      { adminId: String(admin._id) },
+      { $set: { adminId: String(admin._id), email: "chaser@gmail.test", accessTokenEnc: encrypt("at"), refreshTokenEnc: encrypt("rt"), expiresAt: new Date(Date.now() + 3600000), connectedAt: new Date(), revokedAt: null, lastError: null }, $setOnInsert: { companyId: "meet" } },
+      { upsert: true }
+    )
+  );
+  return String(admin._id);
+}
+
+const schedule = (owner, over = {}) => {
+  const MeetingService = require("../crm/meetingService");
+  return as(() =>
+    MeetingService.schedule(
+      { subject: "Google meeting", regarding: { kind: "lead", id: S.lead }, day: "2026-12-10", time: "10:00", minutes: 30, where: "online", joinUrl: "", attendees: [{ kind: "contact", id: S.contact }], ownerId: owner, notify: false, googleMeet: true, ...over },
+      owner
+    )
+  );
+};
+
+test("a Meet link Google makes is put on the meeting, and the event is remembered", { skip }, async () => {
+  const owner = await connectedOwner();
+  const out = await withGoogle({ ok: true, status: 200, body: { id: "ev-9", htmlLink: "https://calendar.google.com/x", hangoutLink: "https://meet.google.com/zzz-yyyy-xxx" } }, (calls) =>
+    schedule(owner).then((r) => ({ r, calls }))
+  );
+  assert.equal(out.r.google.ok, true, JSON.stringify(out.r.google));
+  assert.equal(out.r.google.meetLink, "https://meet.google.com/zzz-yyyy-xxx");
+  assert.ok(out.calls.some((u) => u.includes("conferenceDataVersion=1")), "without this Google returns no link at all");
+
+  const stored = await as(() => M.CrmActivity.findById(out.r.meeting._id).lean());
+  assert.equal(stored.meeting.joinUrl, "https://meet.google.com/zzz-yyyy-xxx", "the link Google made is the meeting's link");
+  assert.equal(stored.meeting.google.eventId, "ev-9");
+  assert.equal(String(stored.meeting.google.connectedAs), owner, "whose calendar it is in");
+});
+
+test("a link the person typed is kept, even when Google offers one", { skip }, async () => {
+  const owner = await connectedOwner();
+  const out = await withGoogle({ ok: true, status: 200, body: { id: "ev-10", hangoutLink: "https://meet.google.com/google-made" } }, () =>
+    schedule(owner, { day: "2026-12-11", joinUrl: "https://zoom.example.com/mine" })
+  );
+  assert.equal(out.google.ok, true);
+  const stored = await as(() => M.CrmActivity.findById(out.meeting._id).lean());
+  assert.equal(stored.meeting.joinUrl, "https://zoom.example.com/mine", "the person's deliberate choice wins");
+  assert.equal(stored.meeting.google.eventId, "ev-10", "and the event is still in their diary");
+});
+
+test("Google refusing the link never loses the meeting", { skip }, async () => {
+  const owner = await connectedOwner();
+  const out = await withGoogle({ ok: false, status: 503, body: { error: { message: "Backend error" } } }, () => schedule(owner, { day: "2026-12-12" }));
+  assert.equal(out.google.ok, false);
+  assert.match(out.google.error, /could not be reached/i);
+  const stored = await as(() => M.CrmActivity.findById(out.meeting._id).lean());
+  assert.ok(stored, "the meeting exists");
+  assert.equal(stored.meeting.joinUrl, "", "with no link, which the screen says");
+  assert.ok(!stored.meeting.google?.eventId, "and nothing pretending to be a Google event");
+});
+
+test("over HTTP, asking for a Meet link where Google is not set up still arranges the meeting", { skip }, async () => {
+  // The server under test has no Google app configured, which is the state of most installations: asking for a
+  // link must be answered honestly and must not cost anybody their booking.
+  const made = await api("chaser", "POST", "/crm/meetings", booking({ subject: "Nobody connected", day: "2026-12-13", time: "10:00", joinUrl: "", googleMeet: true, ownerId: S.noGoogleOwner }));
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  assert.equal(made.body.google.ok, false);
+  assert.match(made.body.google.error, /not connected/i);
 });
 
 test("the trail says what was arranged, moved and called off", { skip }, async () => {
