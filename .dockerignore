@@ -7,7 +7,10 @@ uploads
 .git
 .github
 node_modules
-docs
+docs/*
+# ...except the help corpus: Zarvia AI answers from it at runtime, so an image without it
+# loads zero topics and every answer becomes "I have nothing reliable to tell you".
+!docs/help
 scripts
 **/__tests__
 Dockerfile
