@@ -12,6 +12,7 @@ const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 const { round2 } = require("../../utils/accounting");
 const { todayInOrg, addDays } = require("../../utils/documentExpiry");
+const { orgTaxTerms } = require("../../utils/countryRules");
 
 // Card settlement. A card sale is booked on the day it is made, net of the processing fee the card
 // master says it costs: Dr bank (net) + Dr card processing fees (fee) against the sale. The acquirer
@@ -112,7 +113,7 @@ class CardSettlementService {
     if (!ids.length) throw new AppError("Choose the card sales this payment settles", 400, "RECEIPTS_REQUIRED");
     const extra = round2(Number(extraCommission) || 0);
     const vatAmount = round2(Number(vat) || 0);
-    if (extra < 0 || vatAmount < 0) throw new AppError("Commission and VAT cannot be negative", 400, "INVALID_AMOUNT");
+    if (extra < 0 || vatAmount < 0) throw new AppError(`Commission and ${orgTaxTerms().tax} cannot be negative`, 400, "INVALID_AMOUNT");
 
     return tx(async (session) => {
       const line = await R.BankStatementLine.findOne({ _id: lineId, companyId, accountId, state: "open" }).session(session).lean();
@@ -150,7 +151,7 @@ class CardSettlementService {
         let code = null;
         if (vatAmount > 0) {
           code = await TaxCode.findOne({ companyId, isDefault: true, isActive: true, kind: "standard" }).session(session).lean();
-          if (!code) throw new AppError("There is no default standard-rated tax code to put the VAT on", 422, "TAX_CODE_REQUIRED");
+          if (!code) throw new AppError(`There is no default standard-rated tax code to put the ${orgTaxTerms().tax} on`, 422, "TAX_CODE_REQUIRED");
         }
         adjustment = await FinancialService.createVoucher({
           voucherType: "expense", ledgerBased: true, date: new Date(`${line.day}T00:00:00.000Z`),
@@ -163,7 +164,7 @@ class CardSettlementService {
         }, by, session, { req });
       } else if (diff < 0) {
         // the acquirer kept LESS than the books carried: the fee booked at the sale was too high
-        if (extra !== 0 || vatAmount !== 0) throw new AppError("The bank paid more than the books expected, so there is no extra commission or VAT", 409, "DIFFERENCE_NOT_EXPLAINED");
+        if (extra !== 0 || vatAmount !== 0) throw new AppError(`The bank paid more than the books expected, so there is no extra commission or ${orgTaxTerms().tax}`, 409, "DIFFERENCE_NOT_EXPLAINED");
         const back = fromCents(-diff);
         adjustment = await FinancialService.createVoucher({
           voucherType: "journal", date: new Date(`${line.day}T00:00:00.000Z`), narration: `Card settlement ${line.day}: fee booked at the sale was ${back.toFixed(2)} too high`,
@@ -173,7 +174,7 @@ class CardSettlementService {
           ],
         }, by, session, { req });
       } else if (extra !== 0 || vatAmount !== 0) {
-        throw new AppError("The bank paid exactly what the books expected, so there is no extra commission or VAT", 409, "DIFFERENCE_NOT_EXPLAINED");
+        throw new AppError(`The bank paid exactly what the books expected, so there is no extra commission or ${orgTaxTerms().tax}`, 409, "DIFFERENCE_NOT_EXPLAINED");
       }
 
       const parts = [...entries];

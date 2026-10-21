@@ -50,13 +50,16 @@ const DAY = 86400000;
 const QTY_EPS = 0.0005;
 const MAX_LEDGER_ROWS = 5000;
 
-const BUCKETS = ["purchases", "purchaseReturns", "sales", "salesReturns", "writeOffs", "adjustments"];
+const BUCKETS = ["purchases", "purchaseReturns", "sales", "salesReturns", "writeOffs", "adjustments", "production"];
 const BUCKET_OF_EVENT = {
   PURCHASE_RECEIVE: "purchases",
   PURCHASE_RETURN: "purchaseReturns",
   SALES_DISPATCH: "sales",
   SALES_RETURN: "salesReturns",
   DAMAGED_STOCK: "writeOffs",
+  // signed like adjustments: materials used go out, the item made comes in (net = the costs moved into stock)
+  PRODUCTION_ISSUE: "production",
+  PRODUCTION_RECEIPT: "production",
   // INITIAL_STOCK, STOCK_ADJUSTMENT, TRANSFER_IN / TRANSFER_OUT -> adjustments
 };
 const OUT_BUCKETS = new Set(["purchaseReturns", "sales", "writeOffs"]);
@@ -66,6 +69,7 @@ const EVENT_LABEL = {
   PURCHASE_RECEIVE: "Purchase", PURCHASE_RETURN: "Purchase return", SALES_DISPATCH: "Sale", SALES_RETURN: "Sales return",
   INITIAL_STOCK: "Opening stock", OPENING_STOCK: "Opening stock", STOCK_ADJUSTMENT: "Stock adjustment", DAMAGED_STOCK: "Write-off",
   TRANSFER_IN: "Transfer in", TRANSFER_OUT: "Transfer out",
+  PRODUCTION_ISSUE: "Used in production", PRODUCTION_RECEIPT: "Made in production",
 };
 
 // Live movements only (see the note above).
@@ -244,6 +248,7 @@ const SOURCES = [
   { key: "sales", label: "Cost of goods sold", bucket: "sales", types: ["sales_order"] },
   { key: "salesReturns", label: "Sales returns", bucket: "salesReturns", types: ["sales_return"] },
   { key: "writeOffs", label: "Stock write-offs", bucket: "writeOffs", types: ["stock_writeoff"] },
+  { key: "production", label: "Production", bucket: "production", types: ["production"], note: "Materials used and items made by productions. A difference here is a production posted while ledger posting was off (materials only): enter a journal against the Inventory account to bring the ledger in line." },
 ];
 
 // The stock value against the Inventory account (config key inventory-asset) at the end of a day.
@@ -413,7 +418,7 @@ class StockReportsService {
   // ---------------------------------------------------------------- 2. Stock movement summary
 
   // Opening, what came in and went out by kind, and closing - for quantity and for value.
-  //   closing = opening + purchases + salesReturns + adjustments - purchaseReturns - sales - writeOffs
+  //   closing = opening + purchases + salesReturns + adjustments + production - purchaseReturns - sales - writeOffs
   // `adjustments` is signed (opening-stock entries and manual corrections can go either way).
   static async movement({ from, to, categoryId, search, includeZero = false } = {}) {
     const w = span({ from, to, defaultFrom: monthStart() });

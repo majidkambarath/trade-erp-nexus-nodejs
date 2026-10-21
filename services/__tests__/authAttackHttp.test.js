@@ -405,11 +405,11 @@ test("two tabs refreshing together are fine; a stolen cookie replayed later ends
   const original = login.cookie;
   const first = await call("POST", "/refresh-token", { cookie: original, body: {} }); // the owner's tab
   assert.equal(first.status, 200);
-  // within the grace window the OLD cookie still answers (the second tab had not yet picked up the new one), but only once more,
-  // and it does not rotate again
+  // within the grace window the OLD cookie still answers (the second tab had not yet picked up the new one), and it does not rotate
+  // again: it is handed the cookie the first tab already got, so both tabs end up holding the same, current one
   const second = await call("POST", "/refresh-token", { cookie: original, body: {} });
   assert.equal(second.status, 200, `a second tab was refused inside the grace window: ${second.text.slice(0, 160)}`);
-  assert.equal(second.cookie, null, "inside the grace window the old token earns an access token, not a new cookie");
+  assert.equal(second.cookie, first.cookie, "inside the grace window the old token is handed the current cookie, not a newer one");
   assert.equal((await call("GET", "/organisation/status", { token: second.body.accessToken })).status, 200);
   // the thief replays it later (the clock is moved on in the session row rather than waited for: the database is far away)
   await as("atk", () => M.Session.updateOne({ adminId: u.id }, { $set: { rotatedAt: new Date(Date.now() - (GRACE + 30) * 1000) } }));
@@ -425,6 +425,37 @@ test("two tabs refreshing together are fine; a stolen cookie replayed later ends
   assert.ok(audit.some((a) => String(a.summary).includes(u.email)), "and it is in the organisation's trail");
   // the person signs in again as normal
   assert.equal((await signIn(u.email)).status, 200);
+});
+
+// The page was reloaded while a refresh was in flight (every page load refreshes: the access token lives in memory), so the server
+// rotated and the browser never received the new cookie. It still holds the old one. Before, the retry inside the grace window earned
+// an access token and NO cookie, so the browser kept the stale one and its next refresh after the window looked like a stolen copy:
+// the session was ended and the person mailed "A sign-in was ended for your safety".
+test("a refresh whose answer never reached the browser does not cost the person their session", { skip }, async () => {
+  const u = await fresh("lost");
+  const login = await signIn(u.email);
+  const stale = login.cookie;
+  const lost = await call("POST", "/refresh-token", { cookie: stale, body: {} }); // the server rotated; the browser never saw this answer
+  assert.equal(lost.status, 200);
+  const retry = await call("POST", "/refresh-token", { cookie: stale, body: {} }); // the reloaded page asks again with what it still holds
+  assert.equal(retry.status, 200, `the retry was refused: ${retry.text.slice(0, 160)}`);
+  assert.ok(retry.cookie, "the retry is given a cookie, or the browser keeps the stale one");
+  assert.equal(claimsOf(tokenOf(retry.cookie)).jti, claimsOf(tokenOf(lost.cookie)).jti, "and it is the CURRENT one, not another link of the chain");
+  assert.equal(claimsOf(tokenOf(retry.cookie)).exp, claimsOf(tokenOf(lost.cookie)).exp, "with the session's own end date, not a longer one");
+  assert.notEqual(retry.cookie, stale);
+  // the grace window passes; the browser now holds the cookie it was handed, and that one is simply the current token
+  await as("atk", () => M.Session.updateOne({ adminId: u.id }, { $set: { rotatedAt: new Date(Date.now() - (GRACE + 30) * 1000) } }));
+  const later = await call("POST", "/refresh-token", { cookie: retry.cookie, body: {} });
+  assert.equal(later.status, 200, `the session ended after a lost answer: ${later.text.slice(0, 160)}`);
+  assert.equal((await call("GET", "/organisation/status", { token: later.body.accessToken })).status, 200);
+  const row = (await as("atk", () => M.Session.find({ adminId: u.id }).lean()))[0];
+  assert.equal(row.revokedAt ?? null, null, "the session was never revoked");
+  const audit = await as("atk", () => M.Activity.find({ action: "SESSION_REFRESH_REUSE_DETECTED" }).lean());
+  assert.ok(!audit.some((a) => String(a.summary).includes(u.email)), "and no theft was recorded against an honest reload");
+  // what stays true: the stale cookie, kept by someone, is still refused once the window is over
+  const replay = await call("POST", "/refresh-token", { cookie: stale, body: {} });
+  assert.equal(replay.status, 401, "the stale cookie worked after the grace window");
+  assert.equal(replay.code, "SESSION_REVOKED");
 });
 
 test("an old cookie from before rotation existed (no token id on its session) is accepted once and replaced", { skip }, async () => {

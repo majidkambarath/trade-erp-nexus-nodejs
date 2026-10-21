@@ -10,6 +10,7 @@ const { PROVIDERS, formatFrom } = require("./providers");
 const { companyFor } = require("./documentSource");
 const { ProviderError } = require("../../utils/providerError");
 const { checkSmtpTarget } = require("../../utils/smtp");
+const { orgTaxTerms } = require("../../utils/countryRules");
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DOMAIN = /^(?=.{3,120}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
@@ -72,7 +73,7 @@ class SettingsService {
         ? [{ key: "sender-login", label: "The sender address is the mailbox you log in with (most mail servers insist on it)", ok: !s.smtpUser || !s.smtpUser.includes("@") || String(s.fromEmail || "").toLowerCase() === s.smtpUser.toLowerCase(), blocking: false }]
         : [{ key: "domain", label: "The sender domain is the one verified at the email service", ok: !resend || (Boolean(s.verifiedDomain) && onDomain(s.fromEmail, s.verifiedDomain)), blocking: resend }]),
       { key: "company", label: "Your company name is set (Settings, Company)", ok: Boolean(company.companyName), blocking: false },
-      { key: "trn", label: "Your TRN is set, because a tax invoice must show it", ok: Boolean(company.vatNumber), blocking: false },
+      { key: "trn", label: `Your ${orgTaxTerms().taxId} is set, because a tax invoice must show it`, ok: Boolean(company.vatNumber), blocking: false },
     ];
     return { checks, ready: checks.filter((c) => c.blocking).every((c) => c.ok), provider: s.provider };
   }

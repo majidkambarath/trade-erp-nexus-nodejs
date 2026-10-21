@@ -8,6 +8,7 @@ const { ensurePartyAccount } = require("./partyAccounts");
 const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
+const { orgTaxTerms } = require("../../utils/countryRules");
 
 // Journal, contra, expense, debit-note and credit-note vouchers posted to the CHART OF ACCOUNTS
 // (ledger accounts), so they show up in the Trial Balance, the account ledgers and the statements
@@ -139,11 +140,11 @@ class LedgerVoucherService {
 
     let { vatPercent, vatAmount, taxCodeId } = await vatFor(data.taxCodeId, net, date, { session, req });
     if (vatGiven !== null) {
-      if (!taxCodeId) throw new AppError("Choose the tax code the VAT is for", 400, "TAX_CODE_REQUIRED");
+      if (!taxCodeId) throw new AppError(`Choose the tax code the ${orgTaxTerms().tax} is for`, 400, "TAX_CODE_REQUIRED");
       // `vatCoversEarlierAmount`: the VAT also covers an amount booked before (the acquirer's VAT on a
       // commission whose fee went in at the sale), so it is not net x rate and is taken as given
       if (!vatOnly && !data.vatCoversEarlierAmount && Math.abs(vatGiven - vatAmount) > 0.02 + 1e-9) {
-        throw new AppError(`VAT on ${net.toFixed(2)} should be about ${vatAmount.toFixed(2)}, not ${vatGiven.toFixed(2)}`, 400, "VAT_MISMATCH");
+        throw new AppError(`${orgTaxTerms().tax} on ${net.toFixed(2)} should be about ${vatAmount.toFixed(2)}, not ${vatGiven.toFixed(2)}`, 400, "VAT_MISMATCH");
       }
       vatAmount = vatGiven;
     }

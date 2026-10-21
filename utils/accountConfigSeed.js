@@ -38,6 +38,8 @@ const SEED = [
   k("bank-charges", "Bank charges", "EXPENSE", "account"),
   k("bank-interest", "Bank interest income", "INCOME", "account"),
   k("stock-adjustment", "Stock adjustment", "EXPENSE", "account"),
+  // production: expenses put into a product's cost are credited here, so each expense account keeps what was spent on it
+  k("production-absorbed", "Production costs moved to stock", "EXPENSE", "account"),
   k("inventory-asset", "Inventory (stock on hand)", "ASSET", "account"),
   k("opening-balance-equity", "Opening balance equity", "EQUITY", "account"),
   // year-end closing: where a year's profit (or loss) goes when the year is closed

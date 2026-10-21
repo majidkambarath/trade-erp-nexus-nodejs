@@ -94,6 +94,22 @@ const companySettingsSchema = new mongoose.Schema(
     // required (services/financial/currencyService.js).
     baseCurrency: { type: String, default: "AED", uppercase: true, trim: true },
     fxTolerancePercent: { type: Number, default: 5, min: 0, max: 100 },
+    // How the CRM's automation behaves. The pipeline STAGES are their own master (models/modules/crm/crmStageModel.js);
+    // these are the organisation-wide settings beside them, read and written through /crm/settings (crm.view /
+    // crm.manage) rather than the accounting settings route, so the screen and the permission match. Defaults and
+    // validation are utils/crm.js DEFAULT_SETTINGS / validateSettings - nothing here repeats them.
+    crm: {
+      autoAdvance: { type: Boolean, default: true }, // a document moves the deal by itself
+      autoFollowUp: { type: Boolean, default: true }, // entering a stage leaves a next action behind
+      assignmentMode: { type: String, enum: ["round_robin", "creator", "fixed"], default: "round_robin" },
+      fixedOwnerId: { type: String, default: null },
+      uncontactedHours: { type: Number, default: 24, min: 1, max: 720 },
+      staleDays: { type: Number, default: 14, min: 1, max: 365 },
+      quotationExpiryDays: { type: Number, default: 3, min: 0, max: 60 },
+      // Round robin walks the people in a fixed order; this is who got the last one, so a changing list does not
+      // restart at the top (utils/crm.js `assignOwner`).
+      lastAssignedOwnerId: { type: String, default: null },
+    },
   },
   { timestamps: true }
 );

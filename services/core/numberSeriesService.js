@@ -27,6 +27,15 @@ const SERIES = {
   CN: { prefix: "CN", numberLength: 4, label: "Credit note" },
   WO: { prefix: "WO", numberLength: 4, label: "Stock write-off" },
   SA: { prefix: "SA", numberLength: 4, label: "Stock adjustment" },
+  // A production: materials used up and expenses moved into the cost of the item it made.
+  PRD: { prefix: "PRD", numberLength: 4, label: "Production" },
+  // Job work: the delivery challan our parts go out on to an outside job worker (a coater).
+  JWC: { prefix: "JWC", numberLength: 4, label: "Job work challan" },
+  // A process order: one product made through steps (cutting, bending, painting ...), in-house or at job workers.
+  PRO: { prefix: "PRO", numberLength: 4, label: "Process order" },
+  // CRM: the enquiry before anybody is a customer, and the deal it becomes.
+  LD: { prefix: "LD", numberLength: 4, label: "Lead" },
+  OPP: { prefix: "OPP", numberLength: 4, label: "Opportunity" },
   // Opening balances (go-live): account balances, customer / vendor invoices carried over, stock.
   OBV: { prefix: "OBV", numberLength: 4, label: "Opening balance voucher" },
   OSI: { prefix: "OSI", numberLength: 4, label: "Opening sales invoice" },

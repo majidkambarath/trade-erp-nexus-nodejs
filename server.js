@@ -157,6 +157,10 @@ app.use("/api/v1/stock-reports", require("./routes/reports/stockReportRoutes"));
 app.use("/api/v1/trade-reports", require("./routes/reports/tradeReportRoutes")); // before adminRouter, like every new top-level GET
 app.use("/api/v1/trade-orders", require("./routes/orderPurchase/tradeOrderRoutes")); // sales and purchase orders: commitments, no posting
 app.use("/api/v1/goods-receipts", require("./routes/orderPurchase/goodsReceiptRoutes")); // goods received: before adminRouter, like every new top-level GET
+app.use("/api/v1/productions", require("./routes/stock/productionRoutes")); // productions: before adminRouter, like every new top-level GET
+app.use("/api/v1/job-work", require("./routes/stock/jobWorkRoutes")); // job work (subcontracting): before adminRouter, like every new top-level GET
+app.use("/api/v1/process-orders", require("./routes/stock/processOrderRoutes")); // process orders and the board: before adminRouter, like every new top-level GET
+app.use("/api/v1/process-routes", require("./routes/stock/processRouteRoutes")); // saved routes per product: before adminRouter, like every new top-level GET
 app.use("/api/v1/ifrs", require("./routes/reports/ifrsRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/dashboard-summary", require("./routes/reports/dashboardRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/opening-balances", require("./routes/financial/openingBalanceRoutes")); // before adminRouter, whose bare GET /:id would capture it
@@ -172,6 +176,8 @@ app.use("/api/v1/messaging", require("./routes/messaging/messagingRoutes")); // 
 app.use("/api/v1/access", require("./routes/core/accessRoutes")); // people and roles; before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/organisation", require("./routes/core/organisationRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/approvals", require("./routes/core/approvalRoutes")); // what waits for the signed-in person's approval; before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/notifications", require("./routes/core/notificationRoutes")); // the in-app feed; before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/crm", require("./routes/crm/crmRoutes")); // leads, the pipeline and follow-ups; before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/auth", require("./routes/core/authRoutes")); // forgot / reset password, the second sign-in step, two-factor; before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/platform", require("./routes/platform/platformRoutes")); // the developer console: its own people and its own tokens, never a customer's
 app.use("/api/v1/share", require("./routes/messaging/shareRoutes")); // PUBLIC (no login): the document link a customer opens
@@ -217,3 +223,10 @@ setInterval(() => {
   EInvoiceService.processDue().catch((err) => console.error("[einvoice] background pass failed:", err.message));
   MessagingService.processDue().catch((err) => console.error("[messaging] background pass failed:", err.message));
 }, 60000).unref();
+
+// Notification checks (Stage 4 automation): a slower cadence than the retries above - a stock level does
+// not need checking every minute, and a fresh scan of every item per organisation is real work.
+const NotificationChecksService = require("./services/core/notificationChecksService");
+setInterval(() => {
+  NotificationChecksService.processDue().catch((err) => console.error("[notifications] background pass failed:", err.message));
+}, 300000).unref();

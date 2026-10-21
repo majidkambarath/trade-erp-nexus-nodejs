@@ -3,6 +3,7 @@
 // organisation and nobody else's. The rules themselves (what a plan includes, what counts as room) are the pure
 // functions in utils/plans.js.
 const Organisation = require("../../models/core/organisationModel");
+const { countryFeatures, hasCountryFeature, featureAppliesIn, countryOf } = require("../../utils/countryRules");
 const Admin = require("../../models/core/adminModel");
 const Branch = require("../../models/core/branchModel");
 const Transaction = require("../../models/modules/transactionModel");
@@ -66,7 +67,7 @@ class UsageService {
   // For a service that is not behind a router with the gate on it (a payment mode, say).
   static async assertFeature(key, org = null) {
     org = org || (await this.organisation());
-    if (!plans.hasFeature(org, key)) throw featureError(org, key);
+    if (!hasCountryFeature(org, key)) throw featureError(org, key);
     return org;
   }
 
@@ -74,10 +75,10 @@ class UsageService {
   // closed, not past the end of the subscription (or read-only), and - when the job belongs to an optional
   // feature - with that feature switched on. A cross-organisation read by design: it returns codes only.
   static async liveCodes({ feature = null, now = new Date() } = {}) {
-    const found = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code status planCode subscription featureOverrides").lean();
+    const found = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code status planCode subscription featureOverrides country").lean();
     const live = new Set(
       found
-        .filter((o) => plans.subscriptionState(o, now).canWrite && (!feature || plans.hasFeature(o, feature)))
+        .filter((o) => plans.subscriptionState(o, now).canWrite && (!feature || hasCountryFeature(o, feature)))
         .map((o) => o.code)
     );
     // Single-company compatibility mode: the original company has no registry row (see organisation()), and is live.
@@ -113,7 +114,7 @@ class UsageService {
       support: { contact: process.env.SUPPORT_CONTACT || process.env.SUPPORT_EMAIL || null },
       organisation: { code: org.code, legalName: org.legalName, country: org.country, baseCurrency: org.baseCurrency, timezone: org.timezone, planCode: org.planCode, planName: plans.PLANS[org.planCode]?.name || org.planCode },
       subscription: plans.subscriptionState(org, now),
-      features: plans.effectiveFeatures(org),
+      features: countryFeatures(org), // the plan's, less what does not apply in the organisation's country (utils/countryRules.js)
       // The modules the organisation bought, so a screen can say "not included in your plan" instead of blaming the
       // person's role. What they may do inside them is still me.grants, which is already capped to this.
       modules: plans.effectiveModules(org),
@@ -125,6 +126,9 @@ class UsageService {
 }
 
 function featureError(org, key) {
+  if (!featureAppliesIn(countryOf(org), key)) {
+    return new AppError(`${plans.FEATURES[key]?.label || key} is for organisations in the UAE.`, 403, "FEATURE_NOT_FOR_COUNTRY", { feature: key, country: countryOf(org) });
+  }
   return new AppError(`${plans.FEATURES[key]?.label || key} is not included in this organisation's plan.`, 403, "FEATURE_NOT_IN_PLAN", { feature: key, plan: org?.planCode || null });
 }
 

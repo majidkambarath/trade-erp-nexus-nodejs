@@ -9,6 +9,13 @@ const { parseExpiry, diffDays } = require("./documentExpiry");
 const VAT_STATUSES = ["registered", "unregistered", "exempt", "designated_zone"];
 const TRN_REQUIRED_FOR = new Set(["registered", "designated_zone"]);
 const TRN_RE = /^\d{15}$/;
+// The party's tax number follows the ORGANISATION's country: a UAE TRN, an Indian GSTIN, else a plain tax number.
+const TAX_ID_RULES = {
+  AE: { label: "TRN", registered: "VAT", re: TRN_RE, message: "A UAE TRN is exactly 15 digits" },
+  IN: { label: "GSTIN", registered: "GST", re: /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/, message: "A GSTIN is 15 characters: the 2-digit state code, the 10-character PAN, then 3 more (e.g. 27ABCDE1234F1Z5)" },
+};
+const OTHER_TAX_ID = { label: "Tax number", registered: "tax", re: /^[A-Z0-9]{5,20}$/, message: "A tax number is 5 to 20 letters and digits" };
+const taxIdRule = (country) => TAX_ID_RULES[String(country || "AE").toUpperCase()] || OTHER_TAX_ID;
 const SWIFT_RE = /^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/; // BIC8 / BIC11
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
 const PHONE_RE = /^\+?[\d\s()-]{7,20}$/;
@@ -20,10 +27,10 @@ const text = (v, max) => String(v ?? "").trim().slice(0, max);
 // ---- VAT ---------------------------------------------------------------------------------------
 
 const normalizeTrn = (v) => {
-  const s = String(v ?? "").replace(/[\s-]/g, "");
+  const s = String(v ?? "").replace(/[\s-]/g, "").toUpperCase();
   return s || null;
 };
-const isValidTrn = (v) => TRN_RE.test(String(v ?? ""));
+const isValidTrn = (v, country) => taxIdRule(country).re.test(String(v ?? ""));
 
 // Works out the VAT block to store.
 //   input      the `vat` object of the request (or undefined)
@@ -33,7 +40,8 @@ const isValidTrn = (v) => TRN_RE.test(String(v ?? ""));
 // A party with a TRN and no stated status is "registered"; one with neither is "unregistered".
 // The 15-digit rule is applied when the TRN or the status changes, so editing something unrelated
 // on an older record with a loose TRN is not blocked.
-function resolveVat({ input, legacyTrn, existing } = {}) {
+function resolveVat({ input, legacyTrn, existing, country } = {}) {
+  const rule = taxIdRule(country);
   const prev = existing || {};
   const prevStatus = prev.status || (prev.trn ? "registered" : "unregistered");
   const given = input && input.trn !== undefined ? input.trn : legacyTrn;
@@ -51,12 +59,12 @@ function resolveVat({ input, legacyTrn, existing } = {}) {
   const changed = !existing || trn !== (prev.trn || null) || status !== prevStatus;
   if (changed) {
     if (TRN_REQUIRED_FOR.has(status)) {
-      if (!trn) throw bad("Enter the TRN of a VAT-registered party", "TRN_REQUIRED");
-      if (!isValidTrn(trn)) throw bad("A UAE TRN is exactly 15 digits", "INVALID_TRN");
+      if (!trn) throw bad(`Enter the ${rule.label} of a ${rule.registered}-registered party`, "TRN_REQUIRED");
+      if (!isValidTrn(trn, country)) throw bad(rule.message, "INVALID_TRN");
     } else if (status === "unregistered" && trn) {
       throw bad("An unregistered party has no TRN. Remove it, or choose Registered.", "TRN_NOT_ALLOWED");
-    } else if (trn && !isValidTrn(trn)) {
-      throw bad("A UAE TRN is exactly 15 digits", "INVALID_TRN");
+    } else if (trn && !isValidTrn(trn, country)) {
+      throw bad(rule.message, "INVALID_TRN");
     }
   }
 
@@ -143,7 +151,13 @@ function normalizeContacts(input) {
     if (!name) throw bad(`Contact ${n}: enter a name`, "CONTACT_NAME_REQUIRED");
     if (email && !EMAIL_RE.test(email)) throw bad(`Contact ${n}: that email address is not valid`, "INVALID_EMAIL");
     if (phone && !PHONE_RE.test(phone)) throw bad(`Contact ${n}: that phone number is not valid`, "INVALID_PHONE");
-    return { name, designation: text(c?.designation, 100), email, phone, isPrimary: Boolean(c?.isPrimary) };
+    // An _id already on the row is KEPT. A contact row has a stable id (partyMasterSchemas.js declares `{ _id: true }`)
+    // and things point at it - the CRM's own Contact record shares it, and every call logged against that person is
+    // filed under it. Dropping it here let Mongoose mint a new one on every save, so editing a contact's job title
+    // silently replaced the person and took their history with them.
+    const row = { name, designation: text(c?.designation, 100), email, phone, isPrimary: Boolean(c?.isPrimary) };
+    if (c?._id) row._id = c._id;
+    return row;
   });
   return settlePrimary(rows, "contact", "MULTIPLE_PRIMARY_CONTACTS");
 }
@@ -222,7 +236,7 @@ function normalizeDocuments(input, typesById = new Map()) {
 
 module.exports = {
   VAT_STATUSES, TRN_RE, SWIFT_RE, STANDARD_TERMS, DEFAULT_TERMS, MAX_CREDIT_DAYS,
-  normalizeTrn, isValidTrn, resolveVat, cleanWebsite,
+  normalizeTrn, isValidTrn, resolveVat, cleanWebsite, TAX_ID_RULES, OTHER_TAX_ID, taxIdRule,
   termsToDays, isValidTerms, daysToTerms, resolveTerms,
   normalizeContacts, isValidSwift, normalizeBankAccounts, normalizeDocuments, settlePrimary,
 };

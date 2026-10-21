@@ -122,6 +122,18 @@ test("the catalogue offers the plans, features, currencies, and says why a three
   assert.ok(!c.currencies.some((x) => x.code === "KWD"));
   assert.ok(c.unsupportedCurrencies.includes("KWD"));
   assert.ok(c.timezones.includes("Asia/Dubai"));
+  // India is offered by the name the console suggests for it, and a zone the server would refuse is not offered at all
+  assert.ok(c.timezones.includes("Asia/Kolkata") && !c.timezones.includes("Asia/Calcutta"));
+  assert.ok(!c.timezones.includes("America/New_York"), "west of UTC is refused when the organisation is made");
+  // the console draws each optional feature inside the module it belongs to, and says who gets a module
+  const production = c.features.find((f) => f.key === "production");
+  assert.equal(production.module, "inventory");
+  assert.equal(production.optIn, true);
+  assert.ok(c.features.every((f) => f.module && f.hint), "no feature is left loose or unexplained");
+  assert.deepEqual(c.features.find((f) => f.key === "einvoicing").onlyIn, ["AE"]);
+  assert.ok(c.modules.every((m) => m.group && Array.isArray(m.sections)));
+  assert.ok(c.groups.some((g) => g.key === "trade"));
+  assert.deepEqual(c.roles.find((r) => r.key === "viewer").modules.sales, ["view"]);
 });
 
 test("a new organisation arrives complete: its own books in the chosen currency, a head office, and a working first administrator", { skip }, async () => {

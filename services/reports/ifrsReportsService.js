@@ -8,6 +8,7 @@ const { naturalBalance, round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
 const currencyCatalog = require("../../utils/currencyCatalog");
 const orgLocale = require("../../utils/orgLocale");
+const { orgTaxTerms } = require("../../utils/countryRules");
 
 // IFRS statements read straight from the general ledger, so they cannot disagree with the Trial
 // Balance, the Balance Sheet or the Profit and loss screens:
@@ -866,12 +867,12 @@ class IfrsReportsService {
           ? {
               title: "Value added tax",
               rows: [
-                { key: "output", label: "Output VAT payable", ...pair(cur.vat.output, prev?.vat?.output, hasPrevious) },
+                { key: "output", label: `Output ${orgTaxTerms().tax} payable`, ...pair(cur.vat.output, prev?.vat?.output, hasPrevious) },
                 // shown only when there is some: a company that never bought under the reverse charge sees the two lines it always did
                 ...(cur.vat.reverseCharge || prev?.vat?.reverseCharge
-                  ? [{ key: "reverseCharge", label: "Reverse-charge VAT payable (self-assessed)", ...pair(cur.vat.reverseCharge, prev?.vat?.reverseCharge, hasPrevious) }]
+                  ? [{ key: "reverseCharge", label: `Reverse-charge ${orgTaxTerms().tax} payable (self-assessed)`, ...pair(cur.vat.reverseCharge, prev?.vat?.reverseCharge, hasPrevious) }]
                   : []),
-                { key: "input", label: "Input VAT recoverable", ...pair(cur.vat.input, prev?.vat?.input, hasPrevious) },
+                { key: "input", label: `Input ${orgTaxTerms().tax} recoverable`, ...pair(cur.vat.input, prev?.vat?.input, hasPrevious) },
               ],
               net: pair(net(cur), prev ? net(prev) : 0, hasPrevious),
             }

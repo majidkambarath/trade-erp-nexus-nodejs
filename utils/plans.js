@@ -24,10 +24,14 @@ const FEATURES = {
   einvoicing: { label: "E-invoicing", paths: ["/einvoice"] },
   messaging: { label: "Send documents to customers", paths: ["/messaging"] },
   multiBranch: { label: "More than one branch", paths: [] },
+  // Opt-in: in NO plan, not even "all features". Off is the normal state; the developer switches it on for an
+  // organisation that makes products (a feature override), and only then does Inventory > Production exist.
+  production: { label: "Production (materials and expenses into a product's cost)", paths: ["/productions"], optIn: true },
 };
 const FEATURE_KEYS = Object.keys(FEATURES);
 
-const ALL = Object.fromEntries(FEATURE_KEYS.map((k) => [k, true]));
+// every feature but the opt-in ones, which an organisation only ever gets by an override
+const ALL = Object.fromEntries(FEATURE_KEYS.map((k) => [k, !FEATURES[k].optIn]));
 const only = (...keys) => Object.fromEntries(FEATURE_KEYS.map((k) => [k, keys.includes(k)]));
 
 // ---- modules: the parts of the product an organisation has bought ------------------------------------------
@@ -66,10 +70,12 @@ const PLANS = {
     modules: ALL_MODULES,
     limits: { users: 3, branches: 1, documentsPerMonth: 200 },
   },
+  // CRM is the one module a plan has to be bought up to: the trade documents and the books are the product, the
+  // pipeline in front of them is what Premium adds. An organisation on Standard that wants it gets a module override.
   standard: {
     name: "Standard",
     features: only("quotations", "deliveryNotes", "batches", "banking", "currencies", "vatReturn", "messaging"),
-    modules: ALL_MODULES,
+    modules: modulesExcept(["crm"]),
     limits: { users: 10, branches: 3, documentsPerMonth: 2000 },
   },
   premium: {
@@ -84,7 +90,7 @@ const PLANS = {
   trading: {
     name: "Trade only",
     features: only("quotations", "deliveryNotes", "batches", "messaging"),
-    modules: modulesExcept(["finance", "banking", "accounts", "audit"], { reports: ["view"] }),
+    modules: modulesExcept(["finance", "banking", "accounts", "audit", "crm"], { reports: ["view"] }),
     limits: { users: 10, branches: 2, documentsPerMonth: 2000 },
   },
   // For the organisation that existed before plans did, and for the developers' own testing.

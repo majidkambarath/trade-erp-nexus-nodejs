@@ -17,7 +17,15 @@ exports.createStock = catchAsync(async (req, res) => {
 });
 
 exports.getAllStock = catchAsync(async (req, res) => {
-  const stocks = await StockService.getAllStock(req.query);
+  let stocks = await StockService.getAllStock(req.query);
+  // what is out with job workers (a coater): still on hand in the books, shown beside the level (utils/jobWork.js)
+  const away = await require("../../services/stock/jobWorkService").withJobWorker();
+  if (away.size) {
+    stocks = stocks.map((s) => {
+      const qty = away.get(String(s._id));
+      return qty ? { ...(s.toObject ? s.toObject() : s), withJobWorker: qty } : s;
+    });
+  }
 
   res.status(200).json({
     status: "success",

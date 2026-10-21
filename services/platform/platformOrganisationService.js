@@ -18,6 +18,7 @@ const currencies = require("../../utils/currencyCatalog");
 const { runWithTenant, runUnscoped } = require("../../utils/tenantContext");
 const { permissionsFor } = require("../../utils/adminPermissions");
 const roles = require("../../utils/permissions");
+const consoleCatalog = require("../../utils/consoleCatalog");
 const RoleService = require("../core/roleService");
 const UserService = require("../core/userService");
 const UsageService = require("../core/usageService");
@@ -71,20 +72,21 @@ class PlatformOrganisationService {
   static catalog() {
     return {
       plans: Object.entries(plans.PLANS).map(([code, p]) => ({ code, name: p.name, trialDays: p.trialDays || null, features: p.features, modules: p.modules, limits: p.limits })),
-      features: Object.entries(plans.FEATURES).map(([key, f]) => ({ key, label: f.label })),
-      // The whole modules an organisation can be sold, each with its own actions and which of them can never be
-      // switched off (the pick lists, the company settings, the first screen): the console draws exactly this.
-      modules: plans.MODULE_KEYS.map((key) => ({
-        key,
-        label: roles.MODULES[key].label,
-        hint: roles.MODULES[key].hint,
-        actions: Object.entries(roles.MODULES[key].actions).map(([action, label]) => ({ action, label })),
-        alwaysOn: plans.ALWAYS_ON.filter((k) => k.startsWith(`${key}.`)).map((k) => k.slice(key.length + 1)),
-      })),
+      // Each optional feature is filed under the module it is a screen of (Production under Inventory), with what it
+      // does and where it applies; the console draws it inside that module, not in a flat list.
+      features: consoleCatalog.featureCatalogue(),
+      // The whole modules an organisation can be sold, each with its own actions (named and explained), which of them
+      // can never be switched off (the pick lists, the company settings, the first screen), the screens it includes
+      // and the group it is drawn under: the console draws exactly this.
+      modules: consoleCatalog.moduleCatalogue(),
+      groups: consoleCatalog.GROUPS,
+      // What each ready-made role holds in each module, so the console can say who will get what is being sold.
+      roles: consoleCatalog.roleCatalogue(),
       limits: plans.LIMIT_KEYS,
       currencies: currencies.list(),
       unsupportedCurrencies: currencies.THREE_DECIMAL,
-      timezones: typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [],
+      // Only zones the books can be kept in (the server refuses any west of UTC), under their current IANA names.
+      timezones: consoleCatalog.zoneList(),
       accountTypes: ["super_admin", "admin", "manager", "operator", "viewer"],
     };
   }

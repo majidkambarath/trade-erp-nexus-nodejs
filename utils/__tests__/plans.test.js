@@ -160,17 +160,26 @@ test("a module is the organisation's ceiling: the plan's set, its own overrides,
   const actionsOf = (org, m) => p.moduleActions(org, m);
 
   // every full plan holds every module whole
-  for (const code of ["trial", "standard", "premium", "internal"]) {
+  for (const code of ["trial", "premium", "internal"]) {
     const org = { planCode: code };
     for (const m of p.MODULE_KEYS) assert.deepEqual(actionsOf(org, m), [...p.MODULE_ACTIONS[m]].sort(), `${code} holds all of ${m}`);
     assert.deepEqual(p.entitledKeys(org), perms.KEYS.slice().sort(), `${code} holds every permission key`);
   }
+
+  // Standard is everything the trade and the books need, and CRM is the one module it does not include: it is sold
+  // up to Premium, or switched on for one organisation with a module override.
+  const standard = { planCode: "standard" };
+  assert.deepEqual(actionsOf(standard, "crm"), [], "Standard does not include CRM");
+  for (const m of p.MODULE_KEYS.filter((x) => x !== "crm")) assert.deepEqual(actionsOf(standard, m), [...p.MODULE_ACTIONS[m]].sort(), `standard holds all of ${m}`);
+  assert.deepEqual(p.entitledKeys(standard), perms.KEYS.filter((k) => !k.startsWith("crm.")).sort(), "standard holds every key but CRM's");
+  assert.deepEqual(actionsOf({ planCode: "standard", moduleOverrides: { crm: true } }, "crm"), [...p.MODULE_ACTIONS.crm].sort(), "and an override sells it");
 
   // the trade-only plan: no books, and Reports only as far as looking
   const trade = { planCode: "trading" };
   assert.deepEqual(actionsOf(trade, "finance"), []);
   assert.deepEqual(actionsOf(trade, "accounts"), []);
   assert.deepEqual(actionsOf(trade, "banking"), []);
+  assert.deepEqual(actionsOf(trade, "crm"), []);
   assert.deepEqual(actionsOf(trade, "reports"), ["view"], "it may look, not read the statements");
   assert.deepEqual(actionsOf(trade, "sales"), [...p.MODULE_ACTIONS.sales].sort());
   assert.equal(p.moduleAllows(trade, "reports.financial"), false);

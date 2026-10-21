@@ -1,10 +1,13 @@
+const orgLocale = require("../../utils/orgLocale");
 const mongoose = require("mongoose");
 const AppError = require("../../utils/AppError");
+const logger = require("../../utils/logger");
 const { getTenant } = require("../../utils/tenant");
 const { BankMaster } = require("../../models/modules/banking/bankingModels");
 const AttachmentService = require("../core/attachmentService");
 const DocumentTypeService = require("./documentTypeService");
 const { resolveVat, resolveTerms, cleanWebsite, normalizeContacts, normalizeBankAccounts, normalizeDocuments } = require("../../utils/partyMaster");
+const { orgTaxTerms } = require("../../utils/countryRules");
 
 // The customer / vendor master data: VAT configuration, credit terms, contacts, bank accounts and
 // KYC documents. customerService and vendorService call `prepare` before they write and `finish`
@@ -27,7 +30,7 @@ class PartyMasterService {
     const dup = await Model.findOne({ $or: [{ [k.legacyTrn]: trn }, { "vat.trn": trn }], ...(excludeId ? { _id: { $ne: excludeId } } : {}) })
       .select("_id")
       .lean();
-    if (dup) throw new AppError(`TRN already in use by another ${k.noun}`, 400, "DUPLICATE_TRN");
+    if (dup) throw new AppError(`${orgTaxTerms().taxId} already in use by another ${k.noun}`, 400, "DUPLICATE_TRN");
   }
 
   // Bank rows that name a bank from the bank master get the bank's name from it.
@@ -57,7 +60,7 @@ class PartyMasterService {
       const stored = existing
         ? { status: existing.vat?.status, trn: existing.vat?.trn || existing[k.legacyTrn] || null, tradeLicenseNo: existing.vat?.tradeLicenseNo }
         : undefined;
-      const vat = resolveVat({ input: data.vat, legacyTrn: data[k.legacyTrn], existing: stored });
+      const vat = resolveVat({ input: data.vat, legacyTrn: data[k.legacyTrn], existing: stored, country: orgLocale.country() }); // TRN, GSTIN, ... by the organisation's country
       if (vat.trn && vat.trn !== (stored?.trn || null)) await this.assertUniqueTrn(kind, vat.trn, existing?._id);
       patch.vat = vat;
       patch[k.legacyTrn] = vat.trn;
@@ -105,8 +108,22 @@ class PartyMasterService {
     return patch;
   }
 
-  // After the party is saved: claim the files its document rows name, drop the ones no row names.
+  // After the party is saved: keep the CRM's own Contact records in step with the party's contact list, then claim
+  // the files its document rows name and drop the ones no row names.
+  //
+  // This is the one place every party write passes through (create and update, customer and vendor), which is why the
+  // contact mirror hangs here rather than in four services. services/crm/contactService.js owns the rule; it is
+  // required lazily because it requires this file back.
   static async finish(kind, party, patch, req) {
+    if (patch?.contacts !== undefined && party?._id) {
+      try {
+        await require("../crm/contactService").syncFromParty(party, kind);
+      } catch (error) {
+        // The party is already saved and this is outside its transaction, so a failed mirror must never report an
+        // error for a save that worked. The next read of that party's people heals it (ContactService.forParty).
+        logger.debug(`[crm] contact mirror for ${kind} ${party._id} did not run: ${error.message}`);
+      }
+    }
     if (!patch || patch.documents === undefined) return;
     await AttachmentService.syncPartyFiles(kindOf(kind).ownerType, party._id, patch.documents, req);
   }

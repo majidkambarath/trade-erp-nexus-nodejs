@@ -24,6 +24,7 @@ const CreditLog = require("../../models/modules/CreditLog");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const DocumentLinks = require("./deliveryNoteLinks");
 const ReceiptLinks = require("./receiptLinks");
+const CrmHooks = require("../crm/crmHooks");
 const ShareService = require("../messaging/shareService");
 const ItemKindService = require("../stock/itemKindService");
 const kinds = require("../../utils/itemKinds");
@@ -471,6 +472,8 @@ class TransactionService {
       // Delivery notes and quotations that pointed at this order are released.
       await DocumentLinks.onSalesOrderChanged(transaction, { session, deleted: true });
       await ReceiptLinks.onPurchaseInvoiceChanged(transaction, { session, deleted: true });
+      // The CRM deal this invoice won is put back where it was: see services/crm/crmHooks.js.
+      await CrmHooks.onSalesDocumentReversed(transaction, { session });
       // The online link a customer was sent no longer points at anything that exists. Fire and forget:
       // failing to withdraw it must never fail the delete.
       ShareService.revokeFor("Transaction", transaction._id, "The document was deleted");
@@ -582,6 +585,10 @@ class TransactionService {
       // (rejected, cancelled); a converted quotation is released if its order was rejected or cancelled.
       await DocumentLinks.onSalesOrderChanged(transaction, { session });
       await ReceiptLinks.onPurchaseInvoiceChanged(transaction, { session });
+      // And the CRM deal behind it is won, or put back if this was a rejection or a cancellation. This line is
+      // deliberately HERE and not earlier: an approval that is only the first of two returns above (line ~535), so a
+      // deal is never won by a document still waiting for its second approver.
+      await CrmHooks.onSalesDocumentProcessed(transaction, { session });
 
       return transaction;
     }
