@@ -193,3 +193,23 @@ test("the screen ranks a topic but cannot qualify one", () => {
   assert.ok(vague.length > 0, "a vague question on a specific screen is answerable");
   assert.ok(vague.every((h) => h.screens.includes("/vat-return")), "and only by topics about that screen");
 });
+
+test("the questions offered on a screen come from the documentation, and read as questions", () => {
+  const pool = [
+    { id: "a", title: "Order to cash", screens: ["/sales-order"], tags: [], review: "", source: "",
+      questions: ["how do I raise an invoice", "order to cash", "how do I sell something", "lpo"],
+      body: "x".repeat(200) },
+    { id: "b", title: "Elsewhere", screens: ["/stock"], tags: [], review: "", source: "",
+      questions: ["how do I add an item"], body: "x".repeat(200) },
+  ];
+  const out = corpus.suggestionsFor("/sales-order", { topics: pool });
+  // Only this screen's, only the ones that ask something, shortest first, and each a real question.
+  assert.deepEqual(out, ["How do I sell something?", "How do I raise an invoice?"]);
+  // "order to cash" earns its place in retrieval and reads as nonsense on a button; "lpo" is a
+  // fragment. Neither is offered.
+  assert.ok(!out.some((q) => /order to cash|lpo/i.test(q)));
+  assert.deepEqual(corpus.suggestionsFor("", { topics: pool }), [], "no screen, nothing to suggest");
+  assert.deepEqual(corpus.suggestionsFor("/nowhere", { topics: pool }), []);
+  // and the real corpus answers for a real screen
+  assert.ok(corpus.suggestionsFor("/sales-order").length > 0);
+});

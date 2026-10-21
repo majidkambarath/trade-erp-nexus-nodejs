@@ -21,7 +21,10 @@ exports.mine = catchAsync(async (req, res) => {
 // What this screen is about, so the panel can open with something useful before anything is asked.
 exports.screenTip = catchAsync(async (req, res) => {
   const screen = String(req.query.screen || "");
-  res.status(200).json({ success: true, data: { screen, topics: corpus.forScreen(screen) } });
+  res.status(200).json({
+    success: true,
+    data: { screen, topics: corpus.forScreen(screen), suggestions: corpus.suggestionsFor(screen) },
+  });
 });
 
 exports.getSettings = catchAsync(async (req, res) => {

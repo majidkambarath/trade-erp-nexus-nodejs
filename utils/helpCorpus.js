@@ -254,6 +254,37 @@ const forScreen = (screen, { topics = null } = {}) =>
     .map((t) => ({ id: t.id, title: t.title, screens: t.screens }))
     .sort((a, b) => a.title.localeCompare(b.title));
 
+/**
+ * Questions worth offering on a screen, taken from the documentation itself.
+ *
+ * Every topic's front matter carries the phrasings people actually use, so the suggestions are
+ * whatever the guide already says this screen is about - they grow as the corpus does, and there is
+ * no second list to keep in step with it. Shortest first: a short question reads as a button, and a
+ * long one reads as a paragraph nobody taps.
+ */
+function suggestionsFor(screen, { limit = 4, topics = null } = {}) {
+  if (!screen) return [];
+  const asked = (topics || all())
+    .filter((t) => (t.screens || []).includes(screen))
+    .flatMap((t) => t.questions || [])
+    .map((q) => String(q).trim())
+    .filter(Boolean);
+  // Some phrasings in the front matter are search keywords rather than questions ("order to cash",
+  // "VAT 201"). They earn their place in retrieval and read as nonsense on a button, so a phrasing
+  // that actually asks something is offered first, and a bare two-word fragment not at all.
+  const ASKS = /^(how|why|what|where|when|which|who|can|do|does|is|are|should) /i;
+  const seen = new Set();
+  const unique = asked.filter((q) => (seen.has(q.toLowerCase()) ? false : seen.add(q.toLowerCase())));
+  // Only a phrasing that asks something is offered. A screen with none offers fewer buttons, which
+  // is better than padding with a keyword nobody would tap.
+  return unique
+    .filter((q) => ASKS.test(q))
+    .sort((x, y) => x.length - y.length)
+    .slice(0, limit)
+    .map((q) => (q.endsWith("?") ? q : `${q}?`))
+    .map((q) => q.charAt(0).toUpperCase() + q.slice(1));
+}
+
 /** Cut a body down without ending mid-sentence, and say so when something was dropped. */
 function excerpt(body, maxChars) {
   const s = String(body || "");
@@ -265,4 +296,4 @@ function excerpt(body, maxChars) {
 
 const byId = (id, { topics = null } = {}) => (topics || all()).find((t) => t.id === id) || null;
 
-module.exports = { HELP_DIR, parseFrontMatter, read, all, stats, reload, pick, forScreen, excerpt, byId, words, scoreTopic, W };
+module.exports = { HELP_DIR, parseFrontMatter, read, all, stats, reload, pick, forScreen, suggestionsFor, excerpt, byId, words, scoreTopic, W };
