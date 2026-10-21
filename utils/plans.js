@@ -27,6 +27,10 @@ const FEATURES = {
   // Opt-in: in NO plan, not even "all features". Off is the normal state; the developer switches it on for an
   // organisation that makes products (a feature override), and only then does Inventory > Production exist.
   production: { label: "Production (materials and expenses into a product's cost)", paths: ["/productions"], optIn: true },
+  // Deliberately NOT opt-in: it exists to cut OUR support load, so switching it off for a client
+  // works against us. A per-organisation override is the kill switch for one client, not the way
+  // it is sold. Every plan gets it, trial included.
+  assistant: { label: "Zarvia AI assistant", paths: ["/assistant"] },
 };
 const FEATURE_KEYS = Object.keys(FEATURES);
 
@@ -66,7 +70,7 @@ const PLANS = {
   trial: {
     name: "Trial",
     trialDays: 14,
-    features: only("quotations", "deliveryNotes", "batches"),
+    features: only("quotations", "deliveryNotes", "batches", "assistant"),
     modules: ALL_MODULES,
     limits: { users: 3, branches: 1, documentsPerMonth: 200 },
   },
@@ -74,7 +78,7 @@ const PLANS = {
   // pipeline in front of them is what Premium adds. An organisation on Standard that wants it gets a module override.
   standard: {
     name: "Standard",
-    features: only("quotations", "deliveryNotes", "batches", "banking", "currencies", "vatReturn", "messaging"),
+    features: only("quotations", "deliveryNotes", "batches", "banking", "currencies", "vatReturn", "messaging", "assistant"),
     modules: modulesExcept(["crm"]),
     limits: { users: 10, branches: 3, documentsPerMonth: 2000 },
   },
@@ -89,7 +93,7 @@ const PLANS = {
   // read it. Add the modules back one at a time for a customer who grows into them.
   trading: {
     name: "Trade only",
-    features: only("quotations", "deliveryNotes", "batches", "messaging"),
+    features: only("quotations", "deliveryNotes", "batches", "messaging", "assistant"),
     modules: modulesExcept(["finance", "banking", "accounts", "audit", "crm"], { reports: ["view"] }),
     limits: { users: 10, branches: 2, documentsPerMonth: 2000 },
   },

@@ -10,6 +10,7 @@ const AppError = require("./utils/AppError");
 const vendorRouter = require("./routes/vendor/vendorRouter");
 const customerRouter = require("./routes/customer/customerRouter"); // Add customer router
 const adminRouter = require("./routes/core/adminRouter");
+const assistantRouter = require("./routes/assistant/assistantRoutes");
 const stockRouter = require("./routes/stock/stockRouter");
 const uomRouter = require("./routes/unit/uomRouter");
 const transactionRouter = require("./routes/orderPurchase/transactionRouter");
@@ -149,6 +150,7 @@ app.get("/api/v1/health", (req, res) => {
 // Two-segment path, so adminRouter's bare GET /:id cannot capture it; mounted first anyway.
 app.use("/api/v1/accounting", accountingSetupRouter);
 app.use("/api/v1/accounting", require("./routes/financial/partyAccountRoutes"));
+app.use("/api/v1/assistant", assistantRouter); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/banking", bankingRouter); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/einvoice", einvoiceRouter);
 app.use("/api/v1/batches", batchRouter); // before adminRouter, whose bare GET /:id would capture it
