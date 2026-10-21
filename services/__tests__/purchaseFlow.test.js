@@ -298,3 +298,46 @@ test("the order lists the invoices made from what was received, with where each 
   const fresh = await svc.Orders.create({ kind: "purchase", partyId: mill._id, items: [line(rice, 1, 10)] }, "tester");
   assert.deepEqual((await svc.Orders.getById(fresh._id)).invoices, [], "an order nothing was invoiced against lists none");
 });
+
+// These three reads had no projection, so a list row carried the party's bank account numbers and IBANs, its KYC
+// document names, its credit limit and its running balance - to anyone who may read the list at all. None of it is
+// read from a list row (the party account page loads the party from its own endpoint). The item's costValue goes with
+// them; purchasePrice deliberately stays, because the order forms show it as a "Cost" column.
+test("a list row carries no bank details, KYC files or party balances", { skip }, async () => {
+  // getAllTransactions joins each item's unit with mongoose.model("UOM"), which only exists once something has
+  // required that model. The server loads every model at start-up; a test suite has to say so.
+  require("../../models/modules/uomModel");
+  await svc.Vendor.updateOne({ _id: mill._id }, {
+    $set: {
+      bankAccounts: [{ bankName: "Leak Bank", accountNumber: "9999888877776666", iban: "AE070331234567890123456", accountHolder: "Gulf Mill" }],
+      documents: [{ type: "Trade licence", number: "TL-LEAK-1", fileName: "licence.pdf" }],
+      creditLimit: 250000,
+      cashBalance: -4321,
+    },
+  });
+  await svc.Stock.updateOne({ _id: rice._id }, { $set: { costValue: 87654, purchasePrice: 19.5 } });
+
+  const { transactions } = await svc.Tx.getAllTransactions({ type: "purchase_order" });
+  const row = transactions.find((t) => String(t.partyId) === String(mill._id) && (t.items || []).length);
+  assert.ok(row, "a purchase invoice for this vendor with lines");
+
+  // the party: enough to name and address them, and nothing that belongs to the finance screens
+  for (const hidden of ["bankAccounts", "documents", "creditLimit", "cashBalance", "totalSpent"]) {
+    assert.equal(row.party[hidden], undefined, `party.${hidden} must not ride along on a list row`);
+  }
+  assert.equal(row.party.vendorName, "Gulf Mill", "what the row is for is still there");
+  assert.equal(row.party.paymentTerms, "Net 30", "the due date is worked out from this");
+  assert.equal(row.partyName, "Gulf Mill");
+
+  // nothing anywhere in the response, however nested: the whole payload is searched, not just the fields above
+  const whole = JSON.stringify(transactions);
+  for (const secret of ["9999888877776666", "AE070331234567890123456", "TL-LEAK-1", "licence.pdf", "87654"]) {
+    assert.ok(!whole.includes(secret), `"${secret}" reached the list`);
+  }
+
+  // the line still carries what the screens read, and the deliberate exception
+  const withRice = row.items.find((i) => String(i.itemId) === String(rice._id)) || row.items[0];
+  assert.equal(withRice.stockDetails.costValue, undefined, "the total cost on hand is read nowhere");
+  assert.equal(withRice.stockDetails.purchasePrice, 19.5, "the order forms show this as a Cost column: a product decision, not an accident");
+  assert.equal(withRice.stockDetails.itemName, "Rice 5kg");
+});

@@ -766,10 +766,20 @@ const logAmount = balanceEffect;
       const customerIds = idsOf(docs.filter((d) => d.partyType === "Customer").map((d) => d.partyId));
       const vendorIds = idsOf(docs.filter((d) => d.partyType !== "Customer").map((d) => d.partyId));
       const itemIds = idsOf(docs.flatMap((d) => (d.items || []).map((i) => i && i.itemId)));
+      // What a LIST row is allowed to carry. These three reads had no projection at all, so every row of every page
+      // carried the party's bank account numbers and IBANs, its KYC document names and attachment ids, its credit
+      // limit and running balance - to anyone holding sales.view or purchase.view. None of it is read from a list
+      // row: the party account page loads the party from its own endpoint (creditPosition in
+      // partyAccountUtils.js), and the customers screen gets totalSpent from the customers list. `contacts` and
+      // `credit` stay: the screens do read those. Note .lean() skips the schema's toJSON, so hiding a field there
+      // would not have helped. Item cost: costValue is read nowhere and goes; purchasePrice (the weighted-average
+      // unit cost) STAYS because the order forms display it as a "Cost" / "System price" column and dropping it
+      // would silently read 0 - see "cost prices on a list row" in CLAUDE.md for the decision that owes an answer.
+      const PARTY_HIDE = "-bankAccounts -documents -creditLimit -cashBalance -totalSpent";
       const [customers, vendors, stocks] = await Promise.all([
-        customerIds.length ? Customer.find({ _id: { $in: customerIds } }).lean() : [],
-        vendorIds.length ? Vendor.find({ _id: { $in: vendorIds } }).lean() : [],
-        itemIds.length ? Stock.find({ _id: { $in: itemIds } }).lean() : [],
+        customerIds.length ? Customer.find({ _id: { $in: customerIds } }).select(PARTY_HIDE).lean() : [],
+        vendorIds.length ? Vendor.find({ _id: { $in: vendorIds } }).select(PARTY_HIDE).lean() : [],
+        itemIds.length ? Stock.find({ _id: { $in: itemIds } }).select("-costValue").lean() : [],
       ]);
       const UOM = mongoose.model("UOM");
       const unitIds = idsOf(stocks.map((st) => st.unitOfMeasure));
