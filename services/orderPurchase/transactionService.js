@@ -19,8 +19,6 @@ const ReturnService = require("./returnService");
 const BatchService = require("../stock/batchService");
 const CreditControlService = require("../financial/creditControlService");
 const ApprovalPolicyService = require("../core/approvalPolicyService");
-const fs = require("fs");
-const path = require("path");
 const DebitLog = require("../../models/modules/DebitLog");
 const CreditLog = require("../../models/modules/CreditLog");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
@@ -33,26 +31,6 @@ const orgLocale = require("../../utils/orgLocale");
 const { listPeriod, condition: periodCondition } = require("../../utils/listPeriod");
 const Customer = require("../../models/modules/customerModel");
 const Vendor = require("../../models/modules/vendorModel");
-
-function logInbound(tag, payload) {
-  try {
-    const logDir = path.join(__dirname, "..", "..", "..", "logs");
-    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-    const file = path.join(logDir, `transaction-inbound.log`);
-    const entry = {
-      ts: new Date().toISOString(),
-      tag,
-      id: payload?._id || payload?.id || null,
-      type: payload?.type || null,
-      docno: payload?.docno ?? null,
-      lpono: payload?.lpono ?? null,
-      discount: payload?.discount ?? null,
-    };
-    fs.appendFileSync(file, JSON.stringify(entry) + "\n", "utf8");
-  } catch (_) {
-    /* ignore */
-  }
-}
 
 // ---------- Helpers ----------
 // Approving, rejecting or cancelling is what moves stock, books the ledger and runs credit control, so
@@ -170,10 +148,6 @@ class TransactionService {
   // Create Transaction
   static createTransaction = withTransactionSession(
     async (data, createdBy, session) => {
-      // DEBUG inbound snapshot for create
-      try {
-        logInbound("createTransaction:incoming", data);
-      } catch (_) {}
       const {
         transactionNo, // ADD: Destructure incoming transactionNo
         type,
@@ -336,10 +310,6 @@ class TransactionService {
   // Update Transaction
   static updateTransaction = withTransactionSession(
     async (id, data, createdBy, session) => {
-      // DEBUG inbound snapshot for update
-      try {
-        logInbound("updateTransaction:incoming", { id, ...data });
-      } catch (_) {}
       const transaction = await Transaction.findById(id).session(session);
       if (!transaction) throw new AppError("Transaction not found", 404);
       if (this.isProcessed(transaction.status))

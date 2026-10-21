@@ -8,7 +8,13 @@ const DEV_FALLBACK = "your-secret-key";
 const MIN_SECRET_LENGTH = 32;
 const WEAK = new Set([DEV_FALLBACK, "secret", "changeme", "change-me", "password", "jwt-secret", "jwtsecret", "supersecret", "mysecret", "test", "12345678", "your-secret", "secret-key"]);
 
-const isProduction = (env = process.env) => env.NODE_ENV === "production";
+// Render counts as production even when NODE_ENV was forgotten, the same rule as utils/seedPlan.js and
+// utils/allowedOrigins.js. Keying this on NODE_ENV alone made the ONE check that matters most the weakest:
+// with the variable missing, every fatal check below returned nothing and jwtSecret() handed back the
+// DEV_FALLBACK that is printed in this file, so anyone who read the repository could mint a token for any
+// account of any organisation. (It is set on the live service today - HSTS proves it - so this closes a
+// latent hole, not an open one.)
+const isProduction = (env = process.env) => env.NODE_ENV === "production" || env.RENDER === "true";
 
 // Is this a key worth signing with? -> a reason, or null.
 function weakness(secret) {
