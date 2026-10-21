@@ -180,3 +180,16 @@ test("the screen tip lists what that screen is about", () => {
   assert.deepEqual(tips.map((t) => t.title), ["Customers and vendors"]);
   assert.deepEqual(corpus.forScreen("", { topics: POOL }), []);
 });
+
+test("the screen ranks a topic but cannot qualify one", () => {
+  // Asked while standing on Accounting setup, about something the corpus has no word about. Before
+  // the screen was demoted to a ranking signal this came back with four confident topics about
+  // setting up a company, because every topic on the screen collected the screen's 20 points.
+  assert.deepEqual(corpus.pick("how do I set up production", { screen: "/accounting-setup" }), []);
+  assert.deepEqual(corpus.pick("how do I do job work", { screen: "/stock" }), []);
+  // The same screen still answers a question with no words worth scoring, which is the whole
+  // reason the screen is a signal at all.
+  const vague = corpus.pick("what do I do here", { screen: "/vat-return" });
+  assert.ok(vague.length > 0, "a vague question on a specific screen is answerable");
+  assert.ok(vague.every((h) => h.screens.includes("/vat-return")), "and only by topics about that screen");
+});

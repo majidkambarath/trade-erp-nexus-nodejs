@@ -153,6 +153,7 @@ const STOP = new Set([
   "a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "do", "does", "for", "from", "i",
   "if", "in", "is", "it", "its", "me", "my", "not", "of", "on", "or", "our", "that", "the", "then",
   "there", "these", "this", "to", "was", "we", "what", "when", "which", "with", "you", "your",
+  "here", "now", "please", "help",
 ]);
 
 const words = (s) =>
@@ -198,11 +199,18 @@ function scoreTopic(topic, { tokens, phrase, screen }) {
   hit(topic.questions.join(" "), W.question, "questions");
   hit(topic.tags.join(" "), W.tag, "tags");
   hit(topic.body, W.body, "body", W.bodyCap);
+  const lexical = score;
+  let onScreen = false;
   if (screen && topic.screens.includes(screen)) {
     score += W.screen;
+    onScreen = true;
     why.push(`this is the ${screen} screen`);
-    }
-  return { score, why };
+  }
+  // `lexical` is the score from the person's own words alone. It is kept apart because the screen
+  // must not be able to QUALIFY a topic, only rank it: otherwise every question asked on a screen
+  // collects that screen's topics, and "how do I set up production" asked on Accounting setup comes
+  // back with four confident topics about something else entirely.
+  return { score, lexical, onScreen, why };
 }
 
 /**
@@ -228,7 +236,7 @@ function pick(question, { screen = "", limit = 4, maxChars = 6000, minScore = 20
   if (!pool.length || (!tokens.length && !screen)) return [];
   const scored = pool
     .map((t) => ({ topic: t, ...scoreTopic(t, { tokens, phrase, screen }) }))
-    .filter((s) => s.score >= minScore)
+    .filter((s) => s.lexical >= minScore || (s.onScreen && s.lexical === 0 && tokens.length <= 2))
     .sort((a, b) => b.score - a.score || a.topic.title.localeCompare(b.topic.title))
     .slice(0, limit);
   let left = maxChars;
