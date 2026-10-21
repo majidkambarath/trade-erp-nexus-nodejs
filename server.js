@@ -41,9 +41,15 @@ const port = process.env.PORT || 4444;
 app.disable("x-powered-by");
 const proxyHops = require("./utils/trustProxy").trustProxyHops();
 app.set("trust proxy", proxyHops);
-if (process.env.NODE_ENV === "production") console.log(`[security] trusting ${proxyHops} proxy hop(s) for the client address; check GET /api/v1/health -> yourAddress`);
+if (process.env.NODE_ENV === "production") {
+  const cf = require("./middleware/clientAddress").trustCloudflareHeader() ? " and Cloudflare's CF-Connecting-IP" : "";
+  console.log(`[security] trusting ${proxyHops} proxy hop(s)${cf} for the client address; check GET /api/v1/health -> yourAddress`);
+}
 
 // Middleware
+// First, before anything can read it: req.ip is the visitor's address and not Cloudflare's, which is what
+// counting proxy hops alone gives on Render (middleware/clientAddress.js explains why and what was measured).
+app.use(require("./middleware/clientAddress"));
 app.use(require("./middleware/securityHeaders"));
 app.use(express.static("public"));
 // Body sizes: 1 MB of JSON for anyone, a larger one only for the few routes that need it and only with a valid access token
