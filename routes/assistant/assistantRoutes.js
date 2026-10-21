@@ -18,6 +18,7 @@ router.post("/ask", signedIn(reason), c.ask);
 router.get("/mine", signedIn(reason), c.mine);
 router.get("/screen", signedIn(reason), c.screenTip);
 router.post("/messages/:id/helpful", signedIn(reason), c.rate);
+router.post("/escalate", signedIn(reason), c.escalate);
 
 router.get("/usage", requirePermission(["settings.view", "settings.manage"]), c.usage);
 router.get("/settings", requirePermission(["settings.view", "settings.manage"]), c.getSettings);

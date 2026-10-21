@@ -14,6 +14,8 @@ const orgLocale = require("../../utils/orgLocale");
 const { getTenant } = require("../../utils/tenant");
 const { encrypt, decrypt } = require("../../utils/secretBox");
 const { orgTaxTerms } = require("../../utils/countryRules");
+const systemMailer = require("../core/systemMailer");
+const { SupportRequest } = require("../../models/platform/supportRequestModel");
 const { AssistantSettings, AssistantConversation, AssistantMessage, AssistantUsageDay } = require("../../models/modules/assistant/assistantModels");
 
 // What we say when we will not answer. Each one is a plain sentence, because a person reading it is
@@ -200,9 +202,28 @@ class AssistantService {
       escalation: ctx.escalation,
     });
 
+    // The assistant asked for a person. Done after the message is written, so the request can name
+    // it, and the whole turn is still returned even if the hand-over itself fails.
+    let supportRequestId = "";
+    if (ctx.escalation) {
+      try {
+        const handed = await this.handOver(
+          { question: ctx.escalation.question || asked, summary: ctx.escalation.summary, messageId: String(saved._id), screen, errorCode, citations, conversationId: String(saved.conversationId) },
+          req
+        );
+        supportRequestId = handed.supportRequestId;
+      } catch (err) {
+        // Never swallow this silently in the answer: if we could not take the question, say so.
+        text = `${text}
+
+(I could not pass that on just now - please contact the team directly.)`;
+      }
+    }
+
     return {
       conversationId: String(saved.conversationId),
       messageId: String(saved._id),
+      supportRequestId,
       answer: text,
       citations,
       links: ctx.links,
@@ -211,6 +232,74 @@ class AssistantService {
       canEscalate: outcome !== "answered" && !ctx.escalation,
       escalated: Boolean(ctx.escalation),
     };
+  }
+
+  /**
+   * Hand a question to us. Called by the assistant's own ask_support tool and by the button a
+   * person presses when the answer did not help.
+   *
+   * The row goes on the PLATFORM side, so it lands in one queue across every organisation - which
+   * is the whole point, and the reason it carries the organisation's code rather than being scoped
+   * to it. The mail is best effort: systemMailer never throws and never changes an answer, so a
+   * mail server having a bad morning cannot lose the request.
+   */
+  static async handOver({ question, summary = "", messageId = "", screen = "", errorCode = "", citations = [], conversationId = "" } = {}, req) {
+    const { companyId } = getTenant(req);
+    const admin = req.admin || {};
+    const org = req.organisation || {};
+    const asked = String(question || "").trim().slice(0, MAX_QUESTION);
+    if (!asked) throw new AppError("There is no question to pass on.", 400, "QUESTION_REQUIRED");
+
+    // The few turns before this one, so whoever picks it up does not have to ask what happened.
+    let transcript = [];
+    if (conversationId && mongoose.isValidObjectId(conversationId)) {
+      const rows = await AssistantMessage.find({ conversationId }).sort({ createdAt: -1 }).limit(4).select("question answer createdAt");
+      transcript = rows.reverse().map((r) => ({ question: r.question, answer: r.answer, at: r.createdAt }));
+    }
+
+    const row = await SupportRequest.create({
+      organisation: companyId,
+      organisationName: org.displayName || org.legalName || "",
+      adminId: String(admin._id || admin.id || ""),
+      personName: admin.name || "",
+      personEmail: admin.email || "",
+      role: admin.roleName || admin.roleKey || admin.type || "",
+      screen, errorCode,
+      question: asked,
+      aiSummary: String(summary || "").slice(0, 500),
+      citations: (citations || []).map((c) => ({ title: c.title })).slice(0, 6),
+      transcript,
+      messageId: String(messageId || ""),
+    });
+
+    if (messageId && mongoose.isValidObjectId(messageId)) {
+      await AssistantMessage.updateOne({ _id: messageId }, { $set: { supportRequestId: String(row._id) } });
+    }
+    this.notify(row).catch(() => {});
+    return { supportRequestId: String(row._id) };
+  }
+
+  /** Tell us there is one waiting. Never awaited by the answer, and never able to fail it. */
+  static async notify(row) {
+    const to = process.env.SUPPORT_CONTACT || process.env.SUPPORT_EMAIL || "";
+    if (!to) return { ok: false, provider: "none" };
+    const lines = [
+      `${row.personName || "Somebody"} at ${row.organisationName || row.organisation} asked:`,
+      "",
+      row.question,
+      "",
+      row.screen ? `Screen: ${row.screen}` : "",
+      row.errorCode ? `They had just been refused with: ${row.errorCode}` : "",
+      row.aiSummary ? `Zarvia AI's own summary: ${row.aiSummary}` : "",
+      row.personEmail ? `Reply to: ${row.personEmail}` : "",
+      "",
+      `Organisation: ${row.organisation}`,
+    ].filter(Boolean);
+    return systemMailer.send({
+      to,
+      subject: `Zarvia AI could not answer: ${String(row.question).slice(0, 80)}`,
+      text: lines.join("\n"),
+    });
   }
 
   /** Write the turn: its conversation, its message, and what it cost. */

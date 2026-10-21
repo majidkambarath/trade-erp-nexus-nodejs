@@ -79,3 +79,21 @@ exports.createBranch = catchAsync(async (req, res) => ok(res, await Orgs.createB
 exports.updateBranch = catchAsync(async (req, res) => ok(res, await Orgs.updateBranch(req.params.code, req.params.branch, req.body || {}, ctx(req))));
 
 exports.audit = catchAsync(async (req, res) => ok(res, await Orgs.auditLog({ organisation: req.query.organisation, page: req.query.page, limit: req.query.limit })));
+
+// ---- the queue of questions Zarvia AI could not answer ------------------------------------------
+const SupportQueueService = require("../../services/platform/supportQueueService");
+
+exports.supportRequests = catchAsync(async (req, res) => {
+  const data = await SupportQueueService.list({ status: req.query.status, organisation: req.query.organisation, limit: req.query.limit });
+  res.status(200).json({ success: true, data });
+});
+
+exports.supportRequest = catchAsync(async (req, res) => {
+  const data = await SupportQueueService.get(req.params.id);
+  res.status(200).json({ success: true, data });
+});
+
+exports.updateSupportRequest = catchAsync(async (req, res) => {
+  const data = await SupportQueueService.update(req.params.id, req.body || {}, req.platformUser?.email || "");
+  res.status(200).json({ success: true, data });
+});

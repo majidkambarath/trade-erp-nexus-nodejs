@@ -47,4 +47,9 @@ router.patch("/organisations/:code/branches/:branch", c.updateBranch);
 
 router.get("/audit", c.audit);
 
+// The questions Zarvia AI could not answer, from every organisation at once.
+router.get("/support-requests", c.supportRequests);
+router.get("/support-requests/:id", c.supportRequest);
+router.patch("/support-requests/:id", c.updateSupportRequest);
+
 module.exports = router;

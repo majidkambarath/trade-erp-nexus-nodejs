@@ -111,7 +111,7 @@ test("the routes that need no permission are few, and each says why", () => {
   // (routes/core/notificationRoutes.js: a row's audience can name ANY permission key, so the ROUTE cannot gate on one
   // fixed key without wrongly shutting out someone whose own feed holds a different kind of row - the service filters
   // instead); anything more should be a permission
-  assert.ok(exempt.length - open.length <= 19, "a person's own profile, the status route, their own two-factor, their own notification feed and the four in-app help routes (every signed-in person may ask Zarvia AI a question whatever their role, and no permission key is held by all of them); anything more should be a permission");
+  assert.ok(exempt.length - open.length <= 20, "a person's own profile, the status route, their own two-factor, their own notification feed and the five in-app help routes (every signed-in person may ask Zarvia AI a question whatever their role, and no permission key is held by all of them); anything more should be a permission");
 });
 
 test("what a person may do to a document is decided by its type, and a stored document by its stored type", async () => {

@@ -38,3 +38,8 @@ exports.usage = catchAsync(async (req, res) => {
   const data = await AssistantService.usage(req, { from: req.query.from, to: req.query.to });
   res.status(200).json({ success: true, data });
 });
+
+exports.escalate = catchAsync(async (req, res) => {
+  const data = await AssistantService.handOver(req.body || {}, req);
+  res.status(201).json({ success: true, data });
+});
