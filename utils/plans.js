@@ -113,7 +113,10 @@ const PLANS = {
   // plan that does is a change of plan, not a module override.
   crm: {
     name: "CRM only",
-    features: only(),
+    // The assistant is the one feature a CRM-only organisation still gets: it answers how the
+    // product works, which is as true of the CRM as of the books, and it exists to cut OUR support
+    // load - the plan a customer is on has no bearing on that.
+    features: only("assistant"),
     modules: modulesOnly(["crm", "users", "settings"], { reports: ["view"] }),
     limits: { users: 10, branches: 1, documentsPerMonth: 0 },
   },
