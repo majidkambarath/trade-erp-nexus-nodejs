@@ -109,6 +109,24 @@ const companySettingsSchema = new mongoose.Schema(
       // Round robin walks the people in a fixed order; this is who got the last one, so a changing list does not
       // restart at the top (utils/crm.js `assignOwner`).
       lastAssignedOwnerId: { type: String, default: null },
+      // The email templates a salesperson picks from, and the signature put at the foot of every letter. Managed
+      // apart from the automation settings above (services/crm/crmEmailService.js), so saving those cannot lose
+      // these and `normaliseSettings` keeps its fixed key set. Absent means "offer the starters", not "none".
+      emailTemplates: {
+        type: [
+          new mongoose.Schema(
+            {
+              key: { type: String, trim: true, maxlength: 40 },
+              name: { type: String, trim: true, maxlength: 80 },
+              subject: { type: String, trim: true, maxlength: 200 },
+              body: { type: String, maxlength: 10000 },
+            },
+            { _id: false }
+          ),
+        ],
+        default: undefined,
+      },
+      emailSignature: { type: String, maxlength: 1000, default: "" },
     },
   },
   { timestamps: true }

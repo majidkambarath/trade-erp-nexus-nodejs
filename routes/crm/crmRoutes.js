@@ -99,6 +99,13 @@ router.post("/google/start", requirePermission("crm.view"), c.googleStart);
 router.post("/google/connect", requirePermission("crm.view"), c.googleConnect);
 router.post("/google/disconnect", requirePermission("crm.view"), c.googleDisconnect);
 
+// Email: writing to a customer from the CRM. Sending is adding to the record (crm.create); the organisation's own
+// templates are configuration, so saving them is crm.manage, like the stages and the automation settings.
+router.get("/email/templates", requirePermission("crm.view"), c.emailTemplates);
+router.put("/email/templates", requirePermission("crm.manage"), c.saveEmailTemplates);
+router.get("/email/recipients", requirePermission("crm.view"), c.emailRecipients);
+router.post("/email/send", requirePermission("crm.create"), c.sendEmail);
+
 router.get("/meetings/day", requirePermission("crm.view"), c.meetingsOnDay);
 router.post("/meetings", requirePermission("crm.create"), c.scheduleMeeting);
 router.put("/meetings/:activityId", requirePermission("crm.edit"), c.rescheduleMeeting);

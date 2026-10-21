@@ -14,6 +14,7 @@ const CrmReportService = require("../../services/crm/crmReportService");
 const ContactService = require("../../services/crm/contactService");
 const CrmAttachmentService = require("../../services/crm/crmAttachmentService");
 const MeetingService = require("../../services/crm/meetingService");
+const CrmEmailService = require("../../services/crm/crmEmailService");
 const GoogleCalendarService = require("../../services/crm/googleCalendarService");
 
 const by = (req) => req.admin?.id || "system";
@@ -275,6 +276,34 @@ exports.removeContact = catchAsync(async (req, res) => {
   const contact = await ContactService.remove(req.params.contactId, by(req));
   await log(req, "CRM_CONTACT_DELETED", "Contact", contact, `${contactWords(contact)} was removed`);
   ok(res, { deleted: true });
+});
+
+// ---- email ---------------------------------------------------------------------------------------------------
+//
+// Writing to a customer from here, so the letter lands on their record beside the calls. The outcome is REPORTED,
+// never thrown, for the same reason a meeting invitation is: whether it left the building is something the person
+// needs told plainly, and a 500 would tell them nothing and lose what they wrote.
+
+exports.emailTemplates = catchAsync(async (req, res) => ok(res, await CrmEmailService.templates()));
+
+exports.saveEmailTemplates = catchAsync(async (req, res) => {
+  const out = await CrmEmailService.saveTemplates(req.body);
+  await log(req, "CRM_EMAIL_TEMPLATES_SAVED", "CompanySettings", null, `The CRM's email templates were saved (${out.templates.length})`, {
+    templates: out.templates.map((t) => t.name),
+  });
+  ok(res, out);
+});
+
+exports.emailRecipients = catchAsync(async (req, res) =>
+  ok(res, await CrmEmailService.recipientsFor({ kind: req.query.kind, id: req.query.id }))
+);
+
+exports.sendEmail = catchAsync(async (req, res) => {
+  const out = await CrmEmailService.send(req.body, by(req), req);
+  await log(req, "CRM_EMAIL_SENT", "CrmActivity", { _id: out.activity._id }, `An email "${out.activity.subject}" was sent to ${out.activity.email?.to?.join(", ") || "nobody"}`, {
+    to: out.activity.email?.to, sent: out.sent, provider: out.provider,
+  });
+  ok(res, out, 201);
 });
 
 // ---- meetings ------------------------------------------------------------------------------------------------

@@ -66,6 +66,27 @@ const meetingSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// An email that was written and sent from the CRM. Absent on every other kind of activity, like `meeting` above.
+//
+// What was SENT is kept, not what a template says today: a template edited next month must not rewrite the history of
+// what a customer was told. There is no `reply` field, and there deliberately is not one - we do not read anybody's
+// mailbox, so a reply we have not seen must never be implied by an empty field.
+const emailSchema = new mongoose.Schema(
+  {
+    to: { type: [String], default: [] },
+    cc: { type: [String], default: [] },
+    from: { type: String, trim: true, default: "" },
+    replyTo: { type: String, trim: true, default: "" },
+    body: { type: String, default: "" }, // as sent, placeholders already filled
+    templateKey: { type: String, trim: true, default: null }, // which template it started from, if any
+    sentAt: { type: Date, default: null },
+    sentBy: { type: String, default: null },
+    provider: { type: String, default: null }, // "console" means it was recorded and nothing left the building
+    error: { type: String, default: null },
+  },
+  { _id: false }
+);
+
 const crmActivitySchema = new mongoose.Schema(
   {
     kind: { type: String, enum: crm.ACTIVITY_KINDS, required: true },
@@ -92,6 +113,10 @@ const crmActivitySchema = new mongoose.Schema(
     // Set only on a meeting (kind "meeting"); `dueAt` above stays the DAY it falls on, so everything that reads a day -
     // the worklist, the board, overdue, aging, the reports, the calendar - is untouched by a meeting having a time.
     meeting: { type: meetingSchema, default: undefined },
+
+    // Set only on an email sent from here (kind "email"). An email LOGGED by hand - somebody recording that they
+    // wrote from Outlook - is the same kind with no `email` block, and the screen tells the two apart by its absence.
+    email: { type: emailSchema, default: undefined },
 
     auto: { type: Boolean, default: false }, // the automation left it, not a person
     dedupeKey: { type: String, default: null },
