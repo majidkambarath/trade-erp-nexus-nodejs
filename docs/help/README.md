@@ -28,6 +28,21 @@ silently throws the edit away.
    those, and `build.sh` **refuses to finish** if any survive. Posting keys (`vat-sales`, `cogs`)
    are deliberately kept — they are configuration names a client sees in Accounting setup.
 
+## Writing a topic by hand
+
+The guides do not cover everything. 27 of the app's 63 screens are named by a topic; quotations,
+the CRM, production, job work and process orders are in none of them, so the assistant correctly
+says it has nothing written about those screens.
+
+To close a gap, add a file named **`extra-<topic>.md`** with the same front matter. `build.sh`
+removes only the generated `guide-*` and `accounting-*` files, so a hand-written one survives a
+rebuild - which is the whole reason for the prefix. Set `source` to say it was written by hand and
+when, since there is no guide behind it to correct.
+
+Write it for the person using Zarvia, not for us: what the thing is, how it travels, what it will
+not do. The `questions` list matters as much as the body - those are the words people type, and
+they are what puts the topic in front of them.
+
 ## Known staleness (21 Oct 2026)
 
 The guides were written on 5 October and have not caught up with what shipped since. Nine topics
