@@ -17,6 +17,9 @@ const settingsSchema = new mongoose.Schema(
     companyId: { type: String, required: true, unique: true },
     enabled: { type: Boolean, default: true },
     provider: { type: String, enum: PROVIDERS, default: "echo" },
+    // Set when somebody picks a provider on purpose. Until then the service prefers the real one
+    // whenever a key exists, so a client is never served canned stub answers as if they were real.
+    providerChosen: { type: Boolean, default: false },
     // Write-only, encrypted with utils/secretBox.js, never returned by the API. Normally unset:
     // we pay for this, so the key lives in the environment. The field exists for a large client
     // who wants their own account.

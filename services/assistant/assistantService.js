@@ -31,11 +31,25 @@ const WONT = {
 const MAX_QUESTION = prompt.MAX_QUESTION;
 
 class AssistantService {
-  /** The organisation's settings, with the defaults the schema declares when it has none. */
+  /**
+   * The organisation's settings, with the defaults the schema declares when it has none.
+   *
+   * The stored default provider is `echo`, which answers canned text and needs no account. That is
+   * right for a test and wrong for a client: they would read a stub answer believing it was real.
+   * So an organisation that has never chosen gets the real provider the moment a key exists, and
+   * `testMode` says plainly when it does not - the same honesty as messaging's "Record only".
+   */
   static async settings(companyId, { withKey = false } = {}) {
     const q = AssistantSettings.findOne({ companyId });
-    const row = await (withKey ? q.select("+apiKeyEnc") : q);
-    return row || new AssistantSettings({ companyId });
+    const row = (await (withKey ? q.select("+apiKeyEnc") : q)) || new AssistantSettings({ companyId });
+    row.provider = this.resolveProvider(row);
+    return row;
+  }
+
+  /** The rule above, as a function, so it is a test rather than a database. */
+  static resolveProvider({ providerChosen = false, provider = "echo", apiKeyEnc = "" } = {}, env = process.env) {
+    if (providerChosen) return provider;
+    return apiKeyEnc || env.ASSISTANT_API_KEY ? "anthropic" : "echo";
   }
 
   /** The key, if this organisation brought its own; otherwise ours from the environment. */
@@ -228,6 +242,9 @@ class AssistantService {
       citations,
       links: ctx.links,
       outcome,
+      // True while the stub provider is answering: the panel says so, because a canned answer that
+      // looks real is worse than no assistant.
+      testMode: settings.provider === "echo",
       // Offered whenever we did not actually answer, so the way out is always one tap away.
       canEscalate: outcome !== "answered" && !ctx.escalation,
       escalated: Boolean(ctx.escalation),
@@ -379,6 +396,7 @@ class AssistantService {
     if (body.provider !== undefined) {
       if (!ai.PROVIDERS[body.provider]) throw new AppError("That is not an AI provider we support.", 400, "PROVIDER_UNKNOWN");
       s.provider = body.provider;
+      s.providerChosen = true;
     }
     if (body.model !== undefined) {
       if (!ai.isModel(body.model)) throw new AppError("That is not a model we support.", 400, "MODEL_NOT_SUPPORTED");

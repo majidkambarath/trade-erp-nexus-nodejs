@@ -214,3 +214,19 @@ test("the SDK is given an explicit timeout and no retries of its own", () => {
   assert.match(src, /timeout: timeoutMs/, "milliseconds in this SDK, and the default is ten minutes");
   assert.match(src, /require\("@anthropic-ai\/sdk"\)/, "required lazily so the server boots without it");
 });
+
+// ---- which provider answers ----------------------------------------------------------------------
+
+test("a client is never served canned stub answers as if they were real", () => {
+  const AssistantService = require("../assistant/assistantService");
+  const pick = (row, env) => AssistantService.resolveProvider(row, env);
+  // nothing configured anywhere: the stub, and the answer carries testMode so the panel says so
+  assert.equal(pick({}, {}), "echo");
+  // our key in the environment is enough: an organisation that never chose gets the real one
+  assert.equal(pick({}, { ASSISTANT_API_KEY: "sk-ant-x" }), "anthropic");
+  // or their own key, saved against the organisation
+  assert.equal(pick({ apiKeyEnc: "v1:..." }, {}), "anthropic");
+  // but a deliberate choice always stands, in either direction
+  assert.equal(pick({ providerChosen: true, provider: "echo" }, { ASSISTANT_API_KEY: "sk-ant-x" }), "echo");
+  assert.equal(pick({ providerChosen: true, provider: "anthropic" }, {}), "anthropic");
+});
