@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const toolkit = require("../toolkit");
+const toolkit = require("../assistant/toolkit");
 
 const POOL = [
   { id: "t1", title: "Order to cash", source: "", screens: ["/sales-order"], tags: [], review: "",
@@ -14,7 +14,7 @@ const POOL = [
 
 test("there is no tool that reads a client's books, and this file performs no query", () => {
   assert.deepEqual(toolkit.definitions().map((d) => d.name), ["search_help", "open_screen", "ask_support"]);
-  const src = fs.readFileSync(path.join(__dirname, "..", "toolkit.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "assistant", "toolkit.js"), "utf8");
   for (const forbidden of ["findOne", "aggregate(", "countDocuments", "updateOne", "insertMany", "mongoose"]) {
     assert.ok(!src.includes(forbidden), `the toolkit uses ${forbidden}`);
   }

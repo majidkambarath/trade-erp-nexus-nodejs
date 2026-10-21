@@ -1,7 +1,7 @@
 // The AI provider registry and the provider that needs no account. Pure: no network, no key.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const ai = require("../aiProviders");
+const ai = require("../assistant/aiProviders");
 
 const echo = ai.providerFor("echo");
 const ask = (text, extra = {}) =>
