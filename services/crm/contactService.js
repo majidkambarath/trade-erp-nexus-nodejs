@@ -18,6 +18,7 @@ const Contact = require("../../models/modules/crm/contactModel");
 const CrmActivity = require("../../models/modules/crm/crmActivityModel");
 const PartyMaster = require("../masters/partyMasterService");
 const rules = require("../../utils/crm");
+const importRules = require("../../utils/crmImport");
 const { getTenant } = require("../../utils/tenant");
 const logger = require("../../utils/logger");
 
@@ -81,6 +82,53 @@ class ContactService {
     const limit = Math.min(300, Math.max(1, Math.round(rules.num(query.limit) || 200)));
     const rows = await Contact.find(q).sort({ name: 1, _id: 1 }).limit(limit).lean();
     return rows.map((r) => this.present(r));
+  }
+
+  /**
+   * A spreadsheet of people. The same shape as `LeadService.importMany`: `dryRun` is the default and writes nothing, rows are
+   * made one at a time through `create` (so a person linked to a customer is mirrored into the customer's own contacts under
+   * one shared id, exactly as one typed in), and a row that fails is reported without stopping the rest.
+   *
+   * A row's company is matched to a customer by name here, in one query for all the names the file mentions: case and
+   * spacing are ignored, one match links the person, none leaves them unlinked, two is refused (importRules decides).
+   */
+  static async importMany(rows, by, { dryRun = true, unmatched = "import" } = {}) {
+    const Customer = PARTIES.customer.model();
+    const asked = Array.isArray(rows) ? rows : [];
+    const names = [...new Set(asked.map((r) => rules.text(r?.company, 150)).filter(Boolean))];
+    const [customers, existingRows] = await Promise.all([
+      names.length ? Customer.find({ customerName: { $in: names } }).collation({ locale: "en", strength: 2 }).select("customerName").limit(2000).lean() : [],
+      Contact.find({}).select("email phone name customerId").limit(50000).lean(),
+    ]);
+    const existing = {
+      emails: new Set(existingRows.map((c) => rules.text(c.email, 120).toLowerCase()).filter(Boolean)),
+      phones: new Set(existingRows.map((c) => importRules.phoneTail(c.phone)).filter(Boolean)),
+      names: new Set(existingRows.map((c) => `${importRules.norm(c.name)}|${c.customerId ? String(c.customerId) : ""}`)),
+    };
+    const plan = importRules.planContactImport(rows, {
+      customers: customers.map((c) => ({ id: String(c._id), name: c.customerName })),
+      existing,
+      unmatched: unmatched === "skip" ? "skip" : "import",
+    });
+    if (plan.error) throw fail(plan.error.message, 400, plan.error.code);
+
+    const issues = importRules.issuesOf(plan.rows);
+    if (dryRun) {
+      return { dryRun: true, summary: plan.summary, issues, sample: plan.rows.filter((r) => r.status === "create").slice(0, 5).map((r) => r.fields) };
+    }
+
+    const created = [];
+    const failed = [];
+    for (const r of plan.rows) {
+      if (r.status !== "create") continue;
+      try {
+        const doc = await ContactService.create(r.fields, by);
+        created.push({ line: r.line, id: String(doc._id), name: doc.name });
+      } catch (e) {
+        failed.push({ line: r.line, code: e.code || "IMPORT_ROW_FAILED", message: e.message });
+      }
+    }
+    return { dryRun: false, summary: { ...plan.summary, created: created.length, failed: failed.length }, created, issues, failed };
   }
 
   static async load(id, session) {

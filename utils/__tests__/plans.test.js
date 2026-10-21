@@ -263,3 +263,54 @@ test("the role editor is drawn without what the organisation cannot hold", () =>
   assert.deepEqual(whole.find((m) => m.key === "reports").actions.map((a) => a.action), ["view", "financial", "vat"]);
   assert.deepEqual(perms.catalogue(null), whole, "no ceiling is the whole catalogue, as it was before modules");
 });
+
+// ---- the CRM-only plan -------------------------------------------------------------------------------------------
+
+test("the CRM-only plan sells the CRM, its own people and its own settings - and not one trade module", () => {
+  const crmOnly = { planCode: "crm" };
+  const m = p.effectiveModules(crmOnly);
+  for (const on of ["crm", "users", "settings"]) assert.equal(m[on].full, true, `${on} is sold whole`);
+  assert.deepEqual(m.reports.actions, ["view"], "the dashboard the app lands on, and nothing of the statements");
+  assert.deepEqual(m.lookups.actions, ["view"], "the pick lists every form fills itself from");
+  for (const off of ["sales", "purchase", "inventory", "finance", "banking", "accounts", "staff", "audit"]) {
+    assert.equal(m[off].on, false, `${off} was never sold, and not even the owner can hold it`);
+  }
+});
+
+test("a CRM-only organisation can add customers through the CRM but holds no Sales key to do it with", () => {
+  const crmOnly = { planCode: "crm" };
+  assert.equal(p.moduleAllows(crmOnly, "sales.create"), false);
+  assert.equal(p.moduleAllows(crmOnly, "crm.create"), true);
+  assert.equal(p.moduleAllows(crmOnly, "users.manage"), true, "its owner can add the colleagues who will use it");
+  assert.equal(p.moduleAllows(crmOnly, "finance.view"), false);
+  assert.equal(p.moduleAllows(crmOnly, "crm.manage"), true);
+  assert.ok(!p.entitledKeys(crmOnly).some((k) => /^(sales|purchase|inventory|finance|banking|accounts)\./.test(k)), "the ceiling lists no trade key");
+});
+
+test("the CRM-only plan holds no trade documents and no optional feature, and one branch", () => {
+  assert.deepEqual(p.effectiveLimits({ planCode: "crm" }), { users: 10, branches: 1, documentsPerMonth: 0 });
+  // No add-on the customer BUYS comes with it. The assistant is the one exception, and it is not an
+  // add-on: it answers how the product works and exists to cut our own support load, so the plan a
+  // customer is on has no bearing on it. It is on for every plan, this one included.
+  const crmFeatures = p.effectiveFeatures({ planCode: "crm" });
+  assert.ok(Object.entries(crmFeatures).every(([k, v]) => v === false || k === "assistant"), "no add-on comes with it");
+  assert.equal(crmFeatures.assistant, true, "a CRM-only client still gets help with the product");
+  assert.equal(p.checkLimit({ planCode: "crm" }, "documentsPerMonth", 0).ok, false, "the first trade document is refused");
+});
+
+test("the plans that already existed still answer exactly as they did", () => {
+  // The CRM-only plan was added beside them; none of these may have moved.
+  assert.equal(p.effectiveModules({ planCode: "standard" }).crm.on, false);
+  assert.equal(p.effectiveModules({ planCode: "trading" }).crm.on, false);
+  assert.equal(p.effectiveModules({ planCode: "premium" }).crm.full, true);
+  assert.equal(p.effectiveModules({ planCode: "premium" }).sales.full, true);
+  assert.equal(p.effectiveModules({ planCode: "standard" }).sales.full, true);
+  assert.deepEqual(p.PLAN_CODES, ["trial", "standard", "premium", "trading", "crm", "internal"]);
+});
+
+test("the developer can add a module to a CRM-only organisation, and its plan does not change", () => {
+  const withSales = { planCode: "crm", moduleOverrides: { sales: ["view", "create"] } };
+  assert.equal(p.moduleAllows(withSales, "sales.create"), true);
+  assert.equal(p.moduleAllows(withSales, "sales.approve"), false, "only the actions that were sold");
+  assert.equal(p.moduleAllows({ planCode: "crm" }, "sales.create"), false, "and another organisation on the plan is untouched");
+});

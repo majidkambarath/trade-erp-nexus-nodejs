@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="data:,">
+<style>:root{color-scheme:light}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>CRM Gap Report</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<style>
+/* Layout: a report read top to bottom - a short summary, one filterable table that carries the detail, then what comes next.
+   Look: the product's own (graphite, a champagne-gold accent, Inter in three weights). Status colours are semantic and separate from the accent. */
+:root {
+  --bg: #f5f6f7; --surface: #ffffff; --ink: #1c1d21; --muted: #5a5e66; --line: #dfe2e6; --soft: #eceef1;
+  --accent: #8a6a1f; --accent-ink: #ffffff; --accent-soft: #f3ead2;
+  --ahead: #1b5fa8; --ahead-bg: #e4eefa;
+  --good: #1d7448; --good-bg: #e3f3ea;
+  --bad: #b3261e; --bad-bg: #fbe8e6;
+  --warn: #8a5a00; --warn-bg: #fcefd2;
+  --neutral: #4a4e57; --neutral-bg: #e9ebee;
+  --focus: #1b5fa8;
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121316; --surface: #1a1c20; --ink: #ecedef; --muted: #a2a6ae; --line: #2d3036; --soft: #23262b;
+    --accent: #d9b45f; --accent-ink: #1c1d21; --accent-soft: #302a18;
+    --ahead: #7db4f0; --ahead-bg: #172a41;
+    --good: #6fcf9b; --good-bg: #14301f;
+    --bad: #f19a93; --bad-bg: #3a1b19;
+    --warn: #e8c071; --warn-bg: #362a0f;
+    --neutral: #b4b8c0; --neutral-bg: #2a2d33;
+    --focus: #7db4f0;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121316; --surface: #1a1c20; --ink: #ecedef; --muted: #a2a6ae; --line: #2d3036; --soft: #23262b;
+  --accent: #d9b45f; --accent-ink: #1c1d21; --accent-soft: #302a18;
+  --ahead: #7db4f0; --ahead-bg: #172a41;
+  --good: #6fcf9b; --good-bg: #14301f;
+  --bad: #f19a93; --bad-bg: #3a1b19;
+  --warn: #e8c071; --warn-bg: #362a0f;
+  --neutral: #b4b8c0; --neutral-bg: #2a2d33;
+  --focus: #7db4f0;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 15px; line-height: 1.55; -webkit-font-smoothing: antialiased;
+  padding-block: 28px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 44px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+h1 { font-size: clamp(28px, 4.4vw, 40px); line-height: 1.12; }
+h2 { font-size: 20px; line-height: 1.25; }
+h3 { font-size: 15px; }
+p { margin: 0; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+.eyebrow { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+header { display: flex; flex-direction: column; gap: 14px; max-width: 780px; }
+.lead { font-size: 17px; color: var(--muted); max-width: 65ch; }
+section { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.sub { color: var(--muted); max-width: 70ch; }
+
+/* the summary: one bar, the same seven statuses the table uses */
+.bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; gap: 2px; background: var(--soft); }
+.seg { min-width: 4px; }
+.seg-ahead { background: var(--ahead); } .seg-level { background: var(--neutral); opacity: .55; } .seg-closed { background: var(--good); }
+.seg-demo { background: var(--bad); } .seg-serious { background: var(--warn); } .seg-market { background: var(--bad); opacity: .55; } .seg-choice { background: var(--line); }
+.legend { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px 20px; }
+.legend li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.legend .lab { flex: 1; min-width: 0; color: var(--muted); }
+.legend .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.dot-ahead { background: var(--ahead); } .dot-level { background: var(--neutral); opacity: .55; } .dot-closed { background: var(--good); }
+.dot-demo { background: var(--bad); } .dot-serious { background: var(--warn); } .dot-market { background: var(--bad); opacity: .55; } .dot-choice { background: var(--line); }
+.summary-note { font-size: 17px; max-width: 70ch; }
+.summary-note b { font-weight: 600; }
+
+.chip { display: inline-block; white-space: nowrap; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; }
+.chip-ahead { color: var(--ahead); background: var(--ahead-bg); }
+.chip-level, .chip-choice { color: var(--neutral); background: var(--neutral-bg); }
+.chip-closed { color: var(--good); background: var(--good-bg); }
+.chip-demo { color: var(--bad); background: var(--bad-bg); }
+.chip-market { color: var(--bad); background: transparent; box-shadow: inset 0 0 0 1.5px var(--bad); }
+.chip-serious { color: var(--warn); background: var(--warn-bg); }
+
+/* strengths */
+.strengths { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; } /* four cards: 4 across, then 2 by 2, then 1 - never three and an orphan */
+.strength { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.strength p { color: var(--muted); font-size: 14px; }
+
+/* the table */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.f { font: inherit; font-size: 13px; font-weight: 500; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 7px 13px; min-height: 36px; cursor: pointer; }
+.f .n { color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 4px; }
+.f[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.f[aria-pressed="true"] .n { color: inherit; opacity: .75; }
+.table-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+thead th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; }
+tbody td, tbody th[scope="row"] { padding: 12px 14px; border-top: 1px solid var(--line); vertical-align: top; text-align: left; font-weight: 400; }
+tbody th[scope="row"] { font-weight: 600; min-width: 190px; }
+td { min-width: 150px; }
+td:nth-child(2) { min-width: 0; }
+tr.group th { padding: 14px 14px 10px; font-size: 13px; font-weight: 600; background: var(--soft); border-top: 1px solid var(--line); text-align: left; }
+tr.group .n { color: var(--muted); font-weight: 500; margin-left: 6px; font-variant-numeric: tabular-nums; }
+tbody:first-of-type tr.group th { border-top: 0; }
+
+/* two lists side by side */
+.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.panel ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.panel li { color: var(--ink); }
+.panel.then { border-left: 4px solid var(--bad); }
+.panel.now { border-left: 4px solid var(--good); }
+
+/* what comes next */
+.waves { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.wave { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.wave.done { border-color: var(--good); }
+.wave header { max-width: none; gap: 4px; }
+.wave .when { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.wave.done .when { color: var(--good); }
+.wave ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+
+.markets { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.market { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.market p { color: var(--muted); font-size: 14px; }
+
+.trust { background: var(--accent-soft); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+.trust ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.foot { color: var(--muted); font-size: 13px; }
+
+/* phone: each row of the table becomes a labelled block, so nothing has to scroll sideways */
+@media (max-width: 760px) {
+  .table-wrap { overflow: visible; background: transparent; border: 0; border-radius: 0; }
+  table, tbody, tr, th, td { display: block; }
+  thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  tbody { margin-bottom: 18px; }
+  tr.group th { border-radius: 10px; border-top: 0; margin-bottom: 8px; }
+  tbody tr:not(.group) { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; padding: 6px 0; }
+  tbody td, tbody th[scope="row"] { border-top: 0; padding: 6px 14px; min-width: 0; }
+  tbody th[scope="row"] { font-size: 15px; padding-top: 10px; }
+  td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; margin-bottom: 1px; }
+  td[data-label="Status"]::before { display: none; }
+}
+@media (prefers-reduced-motion: no-preference) { .f { transition: background-color .12s, color .12s; } }
+</style>
+</head>
+<body>
+
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">CRM &middot; position on 21 October 2026</span>
+    <h1>CRM Gap Report</h1>
+    <p class="lead">How the CRM compares with Zoho, Pipedrive, HubSpot and Odoo, what was closed on 21 October, and what is still open.</p>
+  </header>
+
+  <section aria-labelledby="glance">
+    <h2 id="glance">At a glance</h2>
+    <p class="summary-note"><b>36 capabilities checked.</b> The CRM is level with or ahead of the market on 7, closed 8 gaps on 21 October, and has 18 still open. 4 of those are noticed in the first ten minutes of a demo, and 4 keep a whole market closed.</p>
+    <div class="bar" role="img" aria-label="36 capabilities by status"><span class="seg seg-ahead" style="flex:4" title="Ahead: 4"></span><span class="seg seg-level" style="flex:3" title="Level: 3"></span><span class="seg seg-closed" style="flex:8" title="Closed 21 Oct: 8"></span><span class="seg seg-demo" style="flex:4" title="Open: loses a demo: 4"></span><span class="seg seg-serious" style="flex:10" title="Open: 10"></span><span class="seg seg-market" style="flex:4" title="Open: blocks a market: 4"></span><span class="seg seg-choice" style="flex:3" title="By choice: 3"></span></div>
+    <ul class="legend">
+<li><span class="dot dot-ahead"></span><span class="lab">Ahead</span><span class="num">4</span></li>
+<li><span class="dot dot-level"></span><span class="lab">Level</span><span class="num">3</span></li>
+<li><span class="dot dot-closed"></span><span class="lab">Closed 21 Oct</span><span class="num">8</span></li>
+<li><span class="dot dot-demo"></span><span class="lab">Open: loses a demo</span><span class="num">4</span></li>
+<li><span class="dot dot-serious"></span><span class="lab">Open</span><span class="num">10</span></li>
+<li><span class="dot dot-market"></span><span class="lab">Open: blocks a market</span><span class="num">4</span></li>
+<li><span class="dot dot-choice"></span><span class="lab">By choice</span><span class="num">3</span></li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="strong">
+    <h2 id="strong">What no competitor does the same way</h2>
+    <p class="sub">The pipeline is wired to the accounts. That is the product, and the gaps below are measured against it.</p>
+    <div class="strengths">
+      <div class="strength"><h3>It moves itself</h3><p>A quotation sent, an offer accepted and an invoice approved move the deal. Each move names the document behind it, and an undone move stays on record.</p></div>
+      <div class="strength"><h3>Won at the real figure</h3><p>A won deal takes the approved invoice's total, so the forecast and the books agree.</p></div>
+      <div class="strength"><h3>One set of people</h3><p>A contact is the same record in the CRM and on the customer, under one id.</p></div>
+      <div class="strength"><h3>It will not guess</h3><p>With two open deals for one customer, an invoice moves neither. A person decides.</p></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="gaps">
+    <h2 id="gaps">Every capability, and where it stands</h2>
+    <p class="sub">Choose a status to see only those rows. The market column is directional, see the last section.</p>
+    <div class="filters" role="group" aria-label="Filter by status">
+<button type="button" class="f" aria-pressed="true" data-f="all">All <span class="n">34</span></button>
+<button type="button" class="f" aria-pressed="false" data-f="ahead">Ahead <span class="n">4</span></button>
+<button type="button" class="f" aria-pressed="false" data-f="level">Level <span class="n">3</span></button>
+<button type="button" class="f" aria-pressed="false" data-f="closed">Closed 21 Oct <span class="n">6</span></button>
+<button type="button" class="f" aria-pressed="false" data-f="demo">Open: loses a demo <span class="n">4</span></button>
+<button type="button" class="f" aria-pressed="false" data-f="serious">Open <span class="n">10</span></button>
+<button type="button" class="f" aria-pressed="false" data-f="market">Open: blocks a market <span class="n">4</span></button>
+<button type="button" class="f" aria-pressed="false" data-f="choice">By choice <span class="n">3</span></button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Capability</th><th scope="col">Status</th><th scope="col">Where it stands</th><th scope="col">The market</th><th scope="col">What it costs</th></tr></thead>
+<tbody data-status="ahead">
+<tr class="group"><th colspan="5" scope="colgroup">Where it is ahead of the market <span class="n">4</span></th></tr>
+<tr><th scope="row" data-label="Capability">A pipeline that moves from real documents</th><td data-label="Status"><span class="chip chip-ahead">Ahead</span></td><td data-label="Where it stands">A sent quotation, an accepted offer and an approved invoice move the deal by themselves. Every move names the document that caused it, and an undone move stays on record.</td><td data-label="The market">Others make you build rules that watch a field somebody has to remember to change.</td><td data-label="What it costs">This is the reason to buy it.</td></tr>
+<tr><th scope="row" data-label="Capability">Won at the invoice&#x27;s own total</th><td data-label="Status"><span class="chip chip-ahead">Ahead</span></td><td data-label="Where it stands">The deal&#x27;s value becomes the approved invoice&#x27;s total.</td><td data-label="The market">The value is whatever a person typed.</td><td data-label="What it costs">The forecast and the accounts cannot disagree.</td></tr>
+<tr><th scope="row" data-label="Capability">Lead to customer, with an account in the books</th><td data-label="Status"><span class="chip chip-ahead">Ahead</span></td><td data-label="Where it stands">Qualifying makes a real customer and its ledger account in one step.</td><td data-label="The market">A stand-alone CRM creates a contact and leaves the accounts to another product.</td><td data-label="What it costs">No second system to keep in step.</td></tr>
+<tr><th scope="row" data-label="Capability">One set of people</th><td data-label="Status"><span class="chip chip-ahead">Ahead</span></td><td data-label="Where it stands">A contact is the same record in the CRM and in the customer&#x27;s own contact list.</td><td data-label="The market">Two systems that are synced, and drift apart.</td><td data-label="What it costs">Nobody types a person twice.</td></tr>
+</tbody>
+<tbody data-status="level">
+<tr class="group"><th colspan="5" scope="colgroup">Where it is level with the market <span class="n">3</span></th></tr>
+<tr><th scope="row" data-label="Capability">Pipeline board with configurable stages</th><td data-label="Status"><span class="chip chip-level">Level</span></td><td data-label="Where it stands">Stages, a chance of closing, and a warning when a deal goes quiet.</td><td data-label="The market">Every CRM has this.</td><td data-label="What it costs">Nothing to fix.</td></tr>
+<tr><th scope="row" data-label="Capability">Reports</th><td data-label="Status"><span class="chip chip-level">Level</span></td><td data-label="Where it stands">Seven named reports, a dashboard, a board and a calendar.</td><td data-label="The market">Most also offer a report builder, which this does not.</td><td data-label="What it costs">A client who wants a report of their own asks us for it.</td></tr>
+<tr><th scope="row" data-label="Capability">Time on the current stage</th><td data-label="Status"><span class="chip chip-level">Level</span></td><td data-label="Where it stands">Aging counts days on the stage a deal is on now, not since it was created.</td><td data-label="The market">Pipedrive calls it deal rotting.</td><td data-label="What it costs">Nothing to fix.</td></tr>
+</tbody>
+<tbody data-status="closed">
+<tr class="group"><th colspan="5" scope="colgroup">Closed on 21 October <span class="n">8</span></th></tr>
+<tr><th scope="row" data-label="Capability">Sold on its own</th><td data-label="Status"><span class="chip chip-closed">Closed 21 Oct</span></td><td data-label="Where it stands">A CRM-only plan: the CRM, the organisation&#x27;s own people and settings, and nothing of the trade.</td><td data-label="The market">Stand-alone CRMs are most of the market.</td><td data-label="What it costs">Opens clients who do not want an ERP.</td></tr>
+<tr><th scope="row" data-label="Capability">Qualify a lead without the Sales module</th><td data-label="Status"><span class="chip chip-closed">Closed 21 Oct</span></td><td data-label="Where it stands">Asks for the CRM&#x27;s own permission where Sales was not bought, and Sales&#x27; where it was.</td><td data-label="The market">Not applicable.</td><td data-label="What it costs">Before this, a CRM-only client could not qualify a single lead.</td></tr>
+<tr><th scope="row" data-label="Capability">Choose a customer for a deal without Sales</th><td data-label="Status"><span class="chip chip-closed">Closed 21 Oct</span></td><td data-label="Where it stands">The deal form reads a short CRM-owned list: name and code, nothing of the customer&#x27;s money.</td><td data-label="The market">Not applicable.</td><td data-label="What it costs">It used to need Sales access, and showed the whole customer record.</td></tr>
+<tr><th scope="row" data-label="Capability">Add colleagues in a CRM-only organisation</th><td data-label="Status"><span class="chip chip-closed">Closed 21 Oct</span></td><td data-label="Where it stands">A Team tab under CRM Setup.</td><td data-label="The market">Standard.</td><td data-label="What it costs">Without it the owner could not invite anyone.</td></tr>
+<tr><th scope="row" data-label="Capability">Import a spreadsheet</th><td data-label="Status"><span class="chip chip-closed">Closed 21 Oct</span></td><td data-label="Where it stands">CSV or Excel, for leads and for people. Columns are guessed from the headings, a preview shows what will happen, nothing is written until it is confirmed, and the same file can be run twice.</td><td data-label="The market">Pipedrive includes import in its cheapest plan.</td><td data-label="What it costs">A client with a spreadsheet can start on the first day.</td></tr>
+<tr><th scope="row" data-label="Capability">Files on a lead or a deal</th><td data-label="Status"><span class="chip chip-closed">Closed 21 Oct</span></td><td data-label="Where it stands">Upload, list, download and remove, up to 25 a record.</td><td data-label="The market">Standard.</td><td data-label="What it costs">Signed quotations and specifications stop living in somebody&#x27;s email.</td></tr>
+<tr><th scope="row" data-label="Capability">Meetings with a calendar invitation</th><td data-label="Status"><span class="chip chip-closed">Closed 21 Oct</span></td><td data-label="Where it stands">A meeting at a time, with attendees, and an invitation that lands in the customer&#x27;s own Gmail, Outlook or Apple calendar with Accept and Decline. A real Google Meet link where the salesperson has connected their own Google account.</td><td data-label="The market">HubSpot and Pipedrive both sell a meeting link.</td><td data-label="What it costs">Arranging a meeting no longer leaves the CRM.</td></tr>
+<tr><th scope="row" data-label="Capability">Sending email from the CRM</th><td data-label="Status"><span class="chip chip-closed">Closed 21 Oct</span></td><td data-label="Where it stands">Written on the screen, sent from the organisation&#x27;s own mailbox, kept on the lead&#x27;s or deal&#x27;s timeline, with templates, a signature and placeholders filled from what we hold.</td><td data-label="The market">Standard everywhere.</td><td data-label="What it costs">Half of the largest gap. Reading replies is still open, below.</td></tr>
+</tbody>
+<tbody data-status="demo">
+<tr class="group"><th colspan="5" scope="colgroup">Open, and a buyer notices in the first ten minutes <span class="n">4</span></th></tr>
+<tr><th scope="row" data-label="Capability">Email: reading replies, and open tracking</th><td data-label="Status"><span class="chip chip-demo">Open: loses a demo</span></td><td data-label="Where it stands">Sending, templates and a signature are built (21 Oct) and every letter is on the record. Replies are not read and opens are not tracked. Sync needs either the mailbox password over IMAP or Gmail&#x27;s restricted scope, which carries an annual paid security assessment — a decision to take deliberately.</td><td data-label="The market">Standard. HubSpot tracks opens in its free plan, and Pipedrive syncs email from its Growth plan.</td><td data-label="What it costs">The largest gap. A CRM that cannot see email records half the relationship.</td></tr>
+<tr><th scope="row" data-label="Capability">A web form that creates leads</th><td data-label="Status"><span class="chip chip-demo">Open: loses a demo</span></td><td data-label="Where it stands">None. Leads are typed in or imported.</td><td data-label="The market">Zoho has web forms. Pipedrive sells them inside LeadBooster.</td><td data-label="What it costs">A lead from the website has no way in.</td></tr>
+<tr><th scope="row" data-label="Capability">Custom fields</th><td data-label="Status"><span class="chip chip-demo">Open: loses a demo</span></td><td data-label="Where it stands">None.</td><td data-label="The market">Pipedrive includes them in its cheapest plan. Zoho adds custom modules.</td><td data-label="What it costs">Every business has one field that matters only to it.</td></tr>
+<tr><th scope="row" data-label="Capability">Line items on a deal, and a quote from a deal</th><td data-label="Status"><span class="chip chip-demo">Open: loses a demo</span></td><td data-label="Where it stands">A deal has one value. Quotations are raised on the ERP side.</td><td data-label="The market">Pipedrive keeps a product catalogue from its cheapest plan. Zoho adds price books and quote configuration.</td><td data-label="What it costs">No forecast by product, no quote from a deal, and no way to make the automation work for a CRM-only client.</td></tr>
+</tbody>
+<tbody data-status="serious">
+<tr class="group"><th colspan="5" scope="colgroup">Open, and a serious gap beside the cheapest competitor <span class="n">10</span></th></tr>
+<tr><th scope="row" data-label="Capability">A deal in another currency</th><td data-label="Status"><span class="chip chip-serious">Open</span></td><td data-label="Where it stands">Base currency only.</td><td data-label="The market">Freshsales advertises more than 150 currencies.</td><td data-label="What it costs">A company selling abroad cannot state a deal in the customer&#x27;s money.</td></tr>
+<tr><th scope="row" data-label="Capability">A company record</th><td data-label="Status"><span class="chip chip-serious">Open</span></td><td data-label="Where it stands">A lead&#x27;s company is text. A customer&#x27;s own page exists only on the Sales side.</td><td data-label="The market">Zoho and HubSpot hold a company with its people and deals.</td><td data-label="What it costs">A CRM-only person cannot open a customer&#x27;s page.</td></tr>
+<tr><th scope="row" data-label="Capability">Merge duplicates</th><td data-label="Status"><span class="chip chip-serious">Open</span></td><td data-label="Where it stands">Finds likely duplicates and warns. Cannot join them.</td><td data-label="The market">Pipedrive merges from its cheapest plan.</td><td data-label="What it costs">Duplicates stay.</td></tr>
+<tr><th scope="row" data-label="Capability">WhatsApp</th><td data-label="Status"><span class="chip chip-serious">Open</span></td><td data-label="Where it stands">A lead source and a kind of follow-up. No conversation inside the CRM.</td><td data-label="The market">Zoho has WhatsApp Business. WhatsApp CRMs are common in the UAE and India.</td><td data-label="What it costs">The main sales channel in the home markets is outside the product.</td></tr>
+<tr><th scope="row" data-label="Capability">Calls, meeting links, sequences</th><td data-label="Status"><span class="chip chip-serious">Open</span></td><td data-label="Where it stands">None.</td><td data-label="The market">Pipedrive logs calls from its cheapest plan, and adds a meeting scheduler and sequences in Growth.</td><td data-label="What it costs">Follow-ups are tracked, but nothing helps a person do them.</td></tr>
+<tr><th scope="row" data-label="Capability">Forecast, targets, territories</th><td data-label="Status"><span class="chip chip-serious">Open</span></td><td data-label="Where it stands">A weighted pipeline value. No target per person or area.</td><td data-label="The market">Zoho forecasts by territory. Pipedrive has a forecast view.</td><td data-label="What it costs">A sales manager cannot set or follow a target.</td></tr>
+<tr><th scope="row" data-label="Capability">AI: scoring, summaries, drafting</th><td data-label="Status"><span class="chip chip-serious">Open</span></td><td data-label="Where it stands">A fixed scoring rule that can be read line by line. No generated text.</td><td data-label="The market">Treated as table stakes in 2026. Buyers also ask for a log of what an AI agent did.</td><td data-label="What it costs">Reads as behind. The readable scoring is worth keeping beside any model.</td></tr>
+<tr><th scope="row" data-label="Capability">A native mobile app</th><td data-label="Status"><span class="chip chip-serious">Open</span></td><td data-label="Where it stands">An installable web app.</td><td data-label="The market">Pipedrive and Zoho ship iOS and Android apps with call logging.</td><td data-label="What it costs">Weaker offline, and no call capture.</td></tr>
+<tr><th scope="row" data-label="Capability">Service tickets</th><td data-label="Status"><span class="chip chip-serious">Open</span></td><td data-label="Where it stands">None.</td><td data-label="The market">Zoho Desk and HubSpot Service Hub.</td><td data-label="What it costs">After-sales stays in another tool.</td></tr>
+<tr><th scope="row" data-label="Capability">A marketplace of connectors</th><td data-label="Status"><span class="chip chip-serious">Open</span></td><td data-label="Where it stands">An API, and no listed connectors.</td><td data-label="The market">Pipedrive lists more than 500 integrations. In one 2026 survey, 72% of buyers rated a ready connector list important.</td><td data-label="What it costs">Every integration is a project.</td></tr>
+</tbody>
+<tbody data-status="market">
+<tr class="group"><th colspan="5" scope="colgroup">Open, and it keeps a whole market closed <span class="n">4</span></th></tr>
+<tr><th scope="row" data-label="Capability">GDPR: consent, erasure, retention</th><td data-label="Status"><span class="chip chip-market">Open: blocks a market</span></td><td data-label="Where it stands">None.</td><td data-label="The market">Required for EU customers. Zoho ships GDPR settings and data-subject-request tools.</td><td data-label="What it costs">Closed to Europe and the UK.</td></tr>
+<tr><th scope="row" data-label="Capability">A choice of where data is held</th><td data-label="Status"><span class="chip chip-market">Open: blocks a market</span></td><td data-label="Where it stands">One region.</td><td data-label="The market">EU buyers increasingly ask for EU hosting.</td><td data-label="What it costs">Closed to Europe.</td></tr>
+<tr><th scope="row" data-label="Capability">ISO 27001 and SOC 2</th><td data-label="Status"><span class="chip chip-market">Open: blocks a market</span></td><td data-label="Where it stands">Neither.</td><td data-label="The market">Asked in procurement. SOC 2 mostly by US buyers, ISO 27001 by European and public-sector buyers.</td><td data-label="What it costs">Closed to the US and to larger European buyers.</td></tr>
+<tr><th scope="row" data-label="Capability">Arabic, right-to-left, other languages</th><td data-label="Status"><span class="chip chip-market">Open: blocks a market</span></td><td data-label="Where it stands">English only.</td><td data-label="The market">Freshsales advertises more than ten languages. Zoho supports many regional ones.</td><td data-label="What it costs">A gap in the home market.</td></tr>
+</tbody>
+<tbody data-status="choice">
+<tr class="group"><th colspan="5" scope="colgroup">Left out on purpose <span class="n">3</span></th></tr>
+<tr><th scope="row" data-label="Capability">Drag a card to change its stage</th><td data-label="Status"><span class="chip chip-choice">By choice</span></td><td data-label="Where it stands">A deal moves because a document moved, or because a person records a reason.</td><td data-label="The market">Standard drag and drop.</td><td data-label="What it costs">Kept on purpose. It keeps the pipeline honest.</td></tr>
+<tr><th scope="row" data-label="Capability">A rule builder</th><td data-label="Status"><span class="chip chip-choice">By choice</span></td><td data-label="Where it stands">The stage table is the setup.</td><td data-label="The market">Zoho Blueprint and workflow rules.</td><td data-label="What it costs">Revisit when a real client is blocked by it.</td></tr>
+<tr><th scope="row" data-label="Capability">Campaigns and mass email</th><td data-label="Status"><span class="chip chip-choice">By choice</span></td><td data-label="Where it stands">Not offered.</td><td data-label="The market">Zoho Campaigns. Pipedrive Campaigns as an add-on.</td><td data-label="What it costs">A different product. The answer is no.</td></tr>
+</tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="solo">
+    <h2 id="solo">Selling the CRM on its own</h2>
+    <p class="sub">Some clients will buy the CRM and nothing else. Until 21 October that did not work.</p>
+    <div class="pair">
+      <div class="panel then">
+        <h3>Before</h3>
+        <ul>
+          <li>Qualifying a lead needed the Sales module, so it failed for a CRM-only client.</li>
+          <li>The new-deal form could not choose a customer without Sales access.</li>
+          <li>No plan sold the CRM alone.</li>
+          <li>The owner landed on an ERP dashboard of zeros and could not add colleagues.</li>
+        </ul>
+      </div>
+      <div class="panel now">
+        <h3>Now</h3>
+        <ul>
+          <li>A CRM-only plan, with its own people and settings.</li>
+          <li>Qualifying, opening a deal and adding colleagues all work without Sales.</li>
+          <li>The owner lands on the CRM dashboard.</li>
+          <li>Import a spreadsheet, and keep files on a lead or a deal.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="sub"><b>One limit remains.</b> The automation reacts to quotations and invoices, which a CRM-only client does not raise, so they move deals by hand. The recommendation is to sell it as exactly that and make the automation the reason to add the ERP.</p>
+  </section>
+
+  <section aria-labelledby="next">
+    <h2 id="next">What comes next</h2>
+    <p class="sub">Durations are estimates.</p>
+    <div class="waves">
+      <div class="wave done"><header><span class="when">Done 21 Oct</span><h3>Make it sellable on its own</h3></header>
+        <ul><li>CRM-only plan</li><li>Qualify, deal form and Team without Sales</li><li>Spreadsheet import</li><li>Files on leads and deals</li></ul></div>
+      <div class="wave"><header><span class="when">Next, about 4 to 6 weeks</span><h3>Pass the first ten minutes</h3></header>
+        <ul><li>Email: reading replies, and open tracking (sending is built)</li><li>Web form, custom fields</li><li>Line items and a quote from a deal</li><li>Deal currency, merge duplicates, company record</li><li>WhatsApp</li></ul></div>
+      <div class="wave"><header><span class="when">Then, about 6 to 10 weeks</span><h3>Open Europe</h3></header>
+        <ul><li>GDPR: consent, erasure, retention</li><li>Arabic and right-to-left</li><li>A second hosting region</li><li>ISO 27001, then SOC 2, and a penetration test</li></ul></div>
+      <div class="wave"><header><span class="when">After, about 4 to 8 weeks</span><h3>Stand apart</h3></header>
+        <ul><li>AI with a log of what it did</li><li>Forecast and targets</li><li>Service tickets</li><li>A native or offline mobile app</li></ul></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="markets">
+    <h2 id="markets">Selling in other markets</h2>
+    <div class="markets">
+      <div class="market"><h3>Gulf, India, Asia, Africa</h3><span class="chip chip-closed">Open now</span><p>The same small-business shape already served. What helps most: WhatsApp, Arabic, deal currency and tax by country. No certificate is needed to sell.</p></div>
+      <div class="market"><h3>Europe and the UK</h3><span class="chip chip-market">Closed for now</span><p>Needs recorded consent, erasure that reaches every related record, retention rules and EU hosting. ISO 27001 is what larger buyers ask for.</p></div>
+      <div class="market"><h3>United States</h3><span class="chip chip-serious">Heaviest</span><p>Expects SOC 2 Type 2 and a larger feature set: forecasting, territories, custom fields and many integrations. Treat it as a decision for 2027.</p></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="trust">
+    <div class="trust">
+      <h2 id="trust">How far to trust this</h2>
+      <ul>
+        <li>The CRM's own column was read from its code on 21 October 2026.</li>
+        <li>Zoho and Pipedrive were read from each vendor's own feature pages.</li>
+        <li>HubSpot, Salesforce, Odoo and Freshsales come from review and comparison sites, some written by vendors or their partners. Treat those as directional, and check the vendor's own page before quoting any cell to a customer.</li>
+        <li>Prices and plan tiers change often and are left out on purpose.</li>
+      </ul>
+      <p class="foot">Sources:
+        <a href="https://www.zoho.com/crm/crmplus/complete-feature-list.html" target="_blank" rel="noopener">Zoho feature list</a> &middot;
+        <a href="https://support.pipedrive.com/en/article/what-features-do-the-pipedrive-plans-have" target="_blank" rel="noopener">Pipedrive plans</a> &middot;
+        <a href="https://sell.g2.com/g2-2026-ai-agents-insight-report" target="_blank" rel="noopener">G2 AI agents report</a> &middot;
+        <a href="https://docs.frappe.io/erpnext/CRM.md" target="_blank" rel="noopener">ERPNext CRM notice</a> &middot;
+        <a href="https://freshworks.com/crm/features/multi-currency-multi-language" target="_blank" rel="noopener">Freshsales currencies and languages</a>
+      </p>
+    </div>
+  </section>
+</div>
+
+<script>
+// Filter the table by status. Every row is visible until a chip is chosen; this only hides, it never builds anything.
+(function () {
+  var chips = document.querySelectorAll(".f");
+  var groups = document.querySelectorAll("tbody[data-status]");
+  chips.forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      var want = chip.getAttribute("data-f");
+      chips.forEach(function (c) { c.setAttribute("aria-pressed", c === chip ? "true" : "false"); });
+      groups.forEach(function (g) { g.hidden = !(want === "all" || g.getAttribute("data-status") === want); });
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

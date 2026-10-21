@@ -308,6 +308,15 @@ function normaliseSettings(input = {}) {
   };
 }
 
+/**
+ * The permission qualifying a lead asks for. It makes a real customer, so an organisation that BOUGHT Sales asks for the
+ * Sales key: the CRM implies nothing in another module, and a person who may not add customers must not add one through
+ * the CRM. An organisation that did NOT buy Sales has no such key to ask for - nobody in it can hold one - so the customer
+ * is simply a record of its own CRM and adding a lead's company is `crm.create`. Without this rule a CRM-only organisation
+ * could not qualify a single lead, the one act the module exists for.
+ */
+const qualifyPermission = (organisationHoldsSales) => (organisationHoldsSales ? "sales.create" : "crm.create");
+
 // ---- who gets it --------------------------------------------------------------------------------------------------
 
 /**
@@ -366,6 +375,15 @@ function leadScore(lead = {}, today = null) {
   const band = score >= 70 ? "hot" : score >= 40 ? "warm" : "cold";
   return { score, band };
 }
+
+/** "14:30" on the clock of the zone a meeting was booked in. Kept here so the calendar and the worklist say the same. */
+const meetingTime = (startAt, zone) => {
+  try {
+    return new Intl.DateTimeFormat("en-GB", { timeZone: zone || "UTC", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(startAt));
+  } catch {
+    return "";
+  }
+};
 
 // ---- the automation ------------------------------------------------------------------------------------------------
 
@@ -683,6 +701,7 @@ function calendarItems({ activities = [], opportunities = [], leads = [], from =
   for (const a of activities || []) {
     const status = oneOf(a?.status, ACTIVITY_STATUS) || "OPEN";
     if (status === "CANCELLED") continue;
+    if (a?.meeting?.cancelledAt) continue; // a meeting called off is not on anybody's calendar
     const when = status === "DONE" ? day(a?.completedDay) : day(a?.dueAt);
     if (!within(when)) continue;
     const kind = oneOf(a?.kind, ACTIVITY_KINDS) || "task";
@@ -698,7 +717,12 @@ function calendarItems({ activities = [], opportunities = [], leads = [], from =
       ownerId: a?.ownerId || null,
       ownerName: text(a?.ownerName, 80),
       regarding: a?.regarding || null,
-      movable: status === "OPEN",
+      // A meeting has an hour; everything else is owed on a day. `time` is what a chip leads with and what the day's
+      // agenda sorts by, and it is absent on a follow-up, which is how a screen tells the two apart.
+      ...(a?.meeting?.startAt
+        ? { time: meetingTime(a.meeting.startAt, a.meeting.timezone), online: a.meeting.where !== "in_person", hasLink: Boolean(a.meeting.joinUrl) }
+        : {}),
+      movable: status === "OPEN" && !a?.meeting?.startAt, // a meeting is moved by its own dialog: a drop cannot set an hour
     });
   }
 
@@ -834,6 +858,7 @@ function followUpRange(scope, today) {
 }
 
 module.exports = {
+  qualifyPermission,
   LEAD_STATUS, LEAD_SOURCES, ACTIVITY_KINDS, ACTIVITY_STATUS, OUTCOMES, LOST_REASONS, OPPORTUNITY_STATUS,
   STAGE_TYPES, ASSIGNMENT_MODES, REGARDING_KINDS, EVENTS, SOURCE_LABEL, KIND_LABEL, LOST_LABEL, EVENT_LABEL,
   STARTER_STAGES, DEFAULT_SETTINGS,

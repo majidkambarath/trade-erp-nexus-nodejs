@@ -77,6 +77,25 @@ class OpportunityService {
   }
 
   /** The board: every stage with the deals on it, and what the pipeline is worth. */
+  /**
+   * The customers a deal can be opened on: an id, a name and a code, and nothing else. The deal form used to read the
+   * customer master itself, which asks for a Sales permission - a CRM-only organisation has none to give - and hands
+   * over the whole record, credit limit and balance included, to a person who only wanted to choose one. This is the
+   * CRM's own narrow read (like `owners`): enough to pick, no more.
+   */
+  static async customerChoices(query = {}) {
+    const q = {};
+    const search = rules.text(query.search, 80);
+    if (search) {
+      const rx = { $regex: escape(search), $options: "i" };
+      q.$or = [{ customerName: rx }, { customerId: rx }];
+    }
+    if (rules.text(query.status, 10) !== "all") q.status = { $ne: "Inactive" };
+    const limit = Math.min(500, Math.max(1, Math.round(rules.num(query.limit) || 200)));
+    const rows = await Customer.find(q).select("customerName customerId status").sort({ customerName: 1, _id: 1 }).limit(limit).lean();
+    return rows.map((r) => ({ id: String(r._id), name: r.customerName || "", code: r.customerId || "", active: r.status !== "Inactive" }));
+  }
+
   static async pipeline(query = {}) {
     const [stages, settings] = await Promise.all([CrmSetupService.stages(), CrmSetupService.settings()]);
     const q = { status: "OPEN" };

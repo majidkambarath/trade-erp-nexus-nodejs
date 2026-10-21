@@ -1,5 +1,117 @@
 # Changelog
 
+## 1.5.0.0 — 21 October 2026
+
+Two things a client meets on their first day and we could not answer for: a CRM that can be sold
+without the ERP, and an assistant that answers the questions they currently ring us about. Plus the
+parts of a salesperson's day the CRM could not see - arranging a meeting, and writing to a customer.
+Frontend 1.5.0.0.
+
+### The CRM sold on its own
+
+- **A `crm` plan ("CRM only").** The CRM, the organisation's own people and settings, and nothing of
+  the trade. Four separate things stopped this working before, each found by reading the code rather
+  than by trying it: qualifying a lead asked for `sales.create`, which such an organisation cannot
+  hold, so it could not qualify one enquiry; the new-deal form read the Sales customer master, so it
+  could not even choose a customer; no plan sold the CRM alone; and its owner landed on an ERP
+  dashboard of zeros with nowhere to add the colleagues who would use it.
+- **It is a weaker product, and is sold as one.** All three automation events are ERP documents, so a
+  CRM-only client raises none and moves its deals by hand. That is the recorded decision: sell it
+  honestly, and make the self-moving pipeline the reason to add the ERP.
+- **Import a spreadsheet**, of leads or of people: columns guessed from the headings, previewed first,
+  never written unless asked, safe to run twice, and audited with counts but never a name or a number.
+  An import leaves no first-contact tasks unless the person asks for them - two hundred old enquiries
+  must not land on today's worklist.
+- **Files on a lead or a deal**, through a door of the CRM's own onto the existing storage. The
+  accounting attachments route answers to finance and sales keys a CRM-only organisation does not hold,
+  and widening it would have handed them every voucher's and invoice's files.
+
+### Meetings, with a calendar invitation
+
+- **A meeting at a time**, with the people who will be there and a joining link the organiser pastes
+  (their own Meet room, Zoom or Teams), and an invitation that lands in the customer's own Gmail,
+  Outlook or Apple calendar with Accept and Decline.
+- **A meeting is the follow-up it always was**, with a time added, so the worklist, the calendar, the
+  timeline, the deal and the reports needed no change - 33 places read the day, and none of them learns
+  that a meeting now has an hour.
+- **The invitation is built against RFC 5545** and the fiddly parts are tests: folding at 75 **octets**
+  rather than characters (an Arabic subject is multi-byte, and folding by character count splits one in
+  half and arrives as mojibake), and keeping the same UID with a higher sequence when a meeting moves -
+  send a new one and the attendee's calendar files a second meeting instead of replacing the first.
+- **Resend was dropping what a calendar part needs.** Attachments were mapped without their content
+  type, so an `.ics` arrived as a generic download and no mail client offered Accept. Only the calendar
+  part changed; the existing test that pins the invoice request byte for byte still passes untouched.
+- **We cannot see the answer.** The customer's Accept is an email to the organiser's own mailbox, which
+  we do not read, so the screen says "Invited" until a person records it.
+
+### A real Google Meet link, if the salesperson wants one
+
+- **Each person connects their own Google account** (Calendar API, one scope) and the meeting is minted
+  in their own diary. Optional throughout: without it everything above still works.
+- **Two Google rules decide whether this can work at all**, both confirmed before building: an app left
+  in "Testing" has its refresh token expired after seven days, so the consent screen must be published;
+  and ordinary Gmail accounts force an "External" app, which until Google reviews it shows a warning
+  screen and is capped at 100 connected accounts.
+- **Nothing Google does can lose a meeting.** The link is fetched after the booking has committed and
+  never throws; a refusal leaves the meeting with whatever link the person typed, and says why.
+- **No npm package was added**: four REST calls behind one injectable function, which is also why it is
+  proved by tests on a machine with no Google account.
+
+### Writing to a customer from the CRM
+
+- **The letter is written here and kept on the lead's or deal's timeline**, beside the calls, with
+  templates, a signature and placeholders filled from what we already hold. A salesperson had to leave
+  for Outlook to send one email, and nothing of that conversation came back.
+- **It is not two-way email, and no screen implies it is.** There is deliberately no empty "reply"
+  field, because one reads as "they have not answered". Reading replies needs either the mailbox
+  password over IMAP or Gmail's restricted scope, which carries an annual third-party security
+  assessment: a decision to take deliberately, not a feature to slip in.
+- **Document sending and CRM letters share one daily allowance.** A second uncounted door would simply
+  be the way around the cap.
+- **The message goes out before the record is written.** A record written first and a send that then
+  fails leaves the timeline claiming something the customer never got.
+- **An unknown placeholder is left exactly as written**, so the person proof-reading sees
+  `{{customer.trn}}` and fixes it; quietly deleting it would send a sentence with a hole.
+- **With no mailbox set up nothing leaves the building, and every screen says "Recorded only."**
+
+### Zarvia AI
+
+An assistant inside the app that answers the questions clients currently ring us about, from our own
+product guide, and sends us what it cannot answer. On for every plan, because it exists to cut our
+support load and switching it off for a client works against us.
+
+#### The content, which is the project
+
+- **The three Word guides were in no git repository at all.** They are now in `docs/help-source/`, and
+  `scripts/help/build.sh` turns them into 132 help topics in `docs/help/` — one per section, each with
+  the front matter the loader reads. Four pure steps, so correcting a guide and re-running reproduces
+  the corpus exactly.
+- **The build refuses to finish if the corpus names any code.** The guides cite files, services and
+  tests deliberately ("every statement names the key, function or test it relies on") and a client must
+  not read a word of it. With the declassifying step disabled, 43 of the 132 topics name code and the
+  build exits 1.
+- **The roadmap is withheld from clients.** A status promise made by an assistant is a commitment
+  nobody authorised, and several of its rows are now false. Nine topics carry a `review` note where the
+  5 October wording has been overtaken — roles and access still says role lists "are not applied", and
+  nothing in the corpus mentions the CRM, production or job work.
+
+#### Answering
+
+- **A refusal is explained from the code the API already sends.** `utils/assistantCodes.js` holds 29 of
+  them with what happened, why, the first step, and who can actually resolve it — themselves, their
+  administrator, or only us. "It will not let me" is the commonest support question there is and it
+  needs no model to answer well. A test fails on any code the table explains but the API never sends.
+- **Retrieval is a deterministic score, not an embedding**, and it returns NOTHING when the corpus has
+  nothing to say. A question about production scores 15 against a topic on approving documents, and
+  handing that to a model invites an answer assembled from unrelated documentation. The screen a person
+  is on ranks topics but cannot qualify one, so a specific question is answered on its words.
+- **The system prompt is pinned to a hash**: it is the control over what the assistant will and will
+  not say, so changing it has to be a decision. It gives no tax or accounting advice, promises no
+  roadmap or price, invents no feature, never asks for a password, and hands over rather than guessing.
+- **It reads no business data in this version**, enforced by there being no tool that could. It answers
+  and it points at screens; a link to a screen the documentation does not name is refused twice, once by
+  the server and again by the browser.
+
 ## 1.4.0.0 — 21 October 2026
 
 Work that had been on branches since 17 October, plus the fixes from a security review of the live

@@ -248,7 +248,7 @@ class CrmReportService {
       CrmActivity.find({
         $or: [{ status: "OPEN", dueAt: { $gte: from, $lte: to } }, { status: "DONE", completedAt: { $gte: slackFrom, $lte: slackTo } }],
       })
-        .select("kind status subject dueAt completedAt ownerId ownerName regarding")
+        .select("kind status subject dueAt completedAt ownerId ownerName regarding meeting.startAt meeting.endAt meeting.timezone meeting.cancelledAt meeting.joinUrl meeting.where")
         .limit(CAP)
         .lean(),
       Opportunity.find({ status: "OPEN", expectedCloseDate: { $gte: from, $lte: to } })

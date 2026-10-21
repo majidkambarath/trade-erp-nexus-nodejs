@@ -12,6 +12,80 @@
 const mongoose = require("mongoose");
 const tenantPlugin = require("../../../utils/tenantPlugin");
 const crm = require("../../../utils/crm");
+const meetings = require("../../../utils/meetings");
+
+// Somebody invited to a meeting: a contact (the customer's side) or a colleague (ours). The name and the email are a
+// SNAPSHOT taken when the invitation went out - a contact who later changes their address does not silently rewrite
+// what we sent, and an attendee whose record is deleted still shows on the meeting that happened.
+const attendeeSchema = new mongoose.Schema(
+  {
+    kind: { type: String, enum: meetings.ATTENDEE_KINDS, required: true },
+    id: { type: String, required: true },
+    name: { type: String, trim: true, default: "" },
+    email: { type: String, trim: true, lowercase: true, default: "" },
+    // The customer's answer arrives by email in the ORGANISER's own mailbox, which we do not read, so this is recorded
+    // by a person. It is never guessed from silence.
+    rsvp: { type: String, enum: meetings.RSVP, default: "invited" },
+  },
+  { _id: false }
+);
+
+// A scheduled meeting. Absent on every other kind of activity - no default, the pattern `closedShort` uses - so a call
+// or a note is exactly the document it was before this existed.
+const meetingSchema = new mongoose.Schema(
+  {
+    startAt: { type: Date, required: true },
+    endAt: { type: Date, required: true },
+    timezone: { type: String, required: true }, // the zone it was booked in: what the organiser saw on the form
+    where: { type: String, enum: meetings.WHERE, default: "online" },
+    location: { type: String, trim: true, maxlength: 300, default: "" },
+    joinUrl: { type: String, trim: true, maxlength: 500, default: "" },
+
+    // The iCalendar identity. `uid` is minted once and NEVER changes; every change raises `sequence`. Send a changed
+    // meeting with a new uid and the attendee's calendar keeps the old one and adds a second.
+    uid: { type: String, required: true },
+    sequence: { type: Number, default: 0, min: 0 },
+
+    attendees: { type: [attendeeSchema], default: [] },
+    // The event in the organiser's own Google Calendar, when their account is connected and they asked for a Meet
+    // link. Absent otherwise, and absent on every meeting booked before Google was connected.
+    google: {
+      eventId: { type: String, default: null },
+      htmlLink: { type: String, default: null },
+      connectedAs: { type: String, default: null }, // whose calendar it is in, so a changed person is noticed
+    },
+    invite: {
+      sentAt: { type: Date, default: null },
+      sentBy: { type: String, default: null },
+      count: { type: Number, default: 0, min: 0 }, // how many invitations have gone out, the first and every change
+      provider: { type: String, default: null }, // which account sent it; "console" means nothing left the building
+      lastError: { type: String, default: null },
+    },
+    cancelledAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
+// An email that was written and sent from the CRM. Absent on every other kind of activity, like `meeting` above.
+//
+// What was SENT is kept, not what a template says today: a template edited next month must not rewrite the history of
+// what a customer was told. There is no `reply` field, and there deliberately is not one - we do not read anybody's
+// mailbox, so a reply we have not seen must never be implied by an empty field.
+const emailSchema = new mongoose.Schema(
+  {
+    to: { type: [String], default: [] },
+    cc: { type: [String], default: [] },
+    from: { type: String, trim: true, default: "" },
+    replyTo: { type: String, trim: true, default: "" },
+    body: { type: String, default: "" }, // as sent, placeholders already filled
+    templateKey: { type: String, trim: true, default: null }, // which template it started from, if any
+    sentAt: { type: Date, default: null },
+    sentBy: { type: String, default: null },
+    provider: { type: String, default: null }, // "console" means it was recorded and nothing left the building
+    error: { type: String, default: null },
+  },
+  { _id: false }
+);
 
 const crmActivitySchema = new mongoose.Schema(
   {
@@ -36,6 +110,14 @@ const crmActivitySchema = new mongoose.Schema(
     completedBy: { type: String, default: null },
     outcome: { type: String, enum: [...crm.OUTCOMES, null], default: null },
 
+    // Set only on a meeting (kind "meeting"); `dueAt` above stays the DAY it falls on, so everything that reads a day -
+    // the worklist, the board, overdue, aging, the reports, the calendar - is untouched by a meeting having a time.
+    meeting: { type: meetingSchema, default: undefined },
+
+    // Set only on an email sent from here (kind "email"). An email LOGGED by hand - somebody recording that they
+    // wrote from Outlook - is the same kind with no `email` block, and the screen tells the two apart by its absence.
+    email: { type: emailSchema, default: undefined },
+
     auto: { type: Boolean, default: false }, // the automation left it, not a person
     dedupeKey: { type: String, default: null },
 
@@ -54,6 +136,8 @@ crmActivitySchema.index({ ownerId: 1, status: 1, dueAt: 1 });
 crmActivitySchema.index({ status: 1, dueAt: 1 });
 crmActivitySchema.index({ customerId: 1, createdAt: -1 });
 crmActivitySchema.index({ createdAt: -1 });
+// The day's meetings in order, and the reminder pass ("what starts in the next few minutes").
+crmActivitySchema.index({ "meeting.startAt": 1, status: 1 });
 
 crmActivitySchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
 

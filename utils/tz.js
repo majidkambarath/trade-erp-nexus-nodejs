@@ -165,4 +165,6 @@ function supportedZone(zone) {
     : { ok: true };
 }
 
-module.exports = { UTC, validZone, supportedZone, offsetMinutes, dayOf, todayIn, dayStart, dayEnd, endOfDay, noonOf, yearOf, monthStartDay, addDays, isRealDay, boundOf };
+// `wallToInstant` is exported for utils/meetings.js: a meeting is booked at a wall-clock time in the organisation's zone
+// and stored as an instant, which is exactly this. Nothing else about it changed.
+module.exports = { UTC, validZone, supportedZone, offsetMinutes, wallToInstant, dayOf, todayIn, dayStart, dayEnd, endOfDay, noonOf, yearOf, monthStartDay, addDays, isRealDay, boundOf };

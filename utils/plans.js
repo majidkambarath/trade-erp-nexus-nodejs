@@ -27,6 +27,10 @@ const FEATURES = {
   // Opt-in: in NO plan, not even "all features". Off is the normal state; the developer switches it on for an
   // organisation that makes products (a feature override), and only then does Inventory > Production exist.
   production: { label: "Production (materials and expenses into a product's cost)", paths: ["/productions"], optIn: true },
+  // Deliberately NOT opt-in: it exists to cut OUR support load, so switching it off for a client
+  // works against us. A per-organisation override is the kill switch for one client, not the way
+  // it is sold. Every plan gets it, trial included.
+  assistant: { label: "Zarvia AI assistant", paths: ["/assistant"] },
 };
 const FEATURE_KEYS = Object.keys(FEATURES);
 
@@ -61,12 +65,19 @@ const modulesExcept = (off = [], detail = {}) => ({
   ...detail,
 });
 
+/** Only the modules named are on; every other is off. `detail` sells one in part. For a plan that is one product, not the whole. */
+const modulesOnly = (on = [], detail = {}) => ({
+  ...Object.fromEntries(MODULE_KEYS.map((m) => [m, false])),
+  ...Object.fromEntries(on.map((m) => [m, true])),
+  ...detail,
+});
+
 // A limit of null means unlimited.
 const PLANS = {
   trial: {
     name: "Trial",
     trialDays: 14,
-    features: only("quotations", "deliveryNotes", "batches"),
+    features: only("quotations", "deliveryNotes", "batches", "assistant"),
     modules: ALL_MODULES,
     limits: { users: 3, branches: 1, documentsPerMonth: 200 },
   },
@@ -74,7 +85,7 @@ const PLANS = {
   // pipeline in front of them is what Premium adds. An organisation on Standard that wants it gets a module override.
   standard: {
     name: "Standard",
-    features: only("quotations", "deliveryNotes", "batches", "banking", "currencies", "vatReturn", "messaging"),
+    features: only("quotations", "deliveryNotes", "batches", "banking", "currencies", "vatReturn", "messaging", "assistant"),
     modules: modulesExcept(["crm"]),
     limits: { users: 10, branches: 3, documentsPerMonth: 2000 },
   },
@@ -89,9 +100,25 @@ const PLANS = {
   // read it. Add the modules back one at a time for a customer who grows into them.
   trading: {
     name: "Trade only",
-    features: only("quotations", "deliveryNotes", "batches", "messaging"),
+    features: only("quotations", "deliveryNotes", "batches", "messaging", "assistant"),
     modules: modulesExcept(["finance", "banking", "accounts", "audit", "crm"], { reports: ["view"] }),
     limits: { users: 10, branches: 2, documentsPerMonth: 2000 },
+  },
+  // The CRM and nothing else: leads, deals, contacts, follow-ups, calendar and reports, plus the two things any organisation
+  // needs to run it - its own people (users) and its own settings. No trade documents, no stock, no books.
+  //
+  // This is a WEAKER product than the CRM inside the ERP, and is sold as one: the pipeline in front of the paperwork moves
+  // itself from quotations and invoices (utils/crm.js EVENTS), and an organisation with neither moves its deals by hand. The
+  // automation is the reason to add the ERP. `documentsPerMonth: 0` says the plan holds no trade documents; moving up to a
+  // plan that does is a change of plan, not a module override.
+  crm: {
+    name: "CRM only",
+    // The assistant is the one feature a CRM-only organisation still gets: it answers how the
+    // product works, which is as true of the CRM as of the books, and it exists to cut OUR support
+    // load - the plan a customer is on has no bearing on that.
+    features: only("assistant"),
+    modules: modulesOnly(["crm", "users", "settings"], { reports: ["view"] }),
+    limits: { users: 10, branches: 1, documentsPerMonth: 0 },
   },
   // For the organisation that existed before plans did, and for the developers' own testing.
   internal: {
