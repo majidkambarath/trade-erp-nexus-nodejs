@@ -10,9 +10,18 @@
 // door). Too HIGH a number lets a client choose its address by writing the header (no per-address limit at all, as before). The
 // per-account lock-out does not depend on the address either way.
 //
-// On Render a request passes Cloudflare and then Render's own proxy before the app, which is two hops. That is the default when the
-// RENDER variable is present; TRUST_PROXY_HOPS overrides it. Check it after a deploy: GET /api/v1/health answers `yourAddress`, the address
-// the server believes the request came from - it should be YOUR address, and should not change when you add a forged X-Forwarded-For.
+// On Render a request passes Cloudflare and then Render's own proxy before the app, which was assumed to be two hops. That is the
+// default when the RENDER variable is present; TRUST_PROXY_HOPS overrides it.
+//
+// MEASURED 21 Oct 2026: two is NOT enough. The live service answered `yourAddress` as a Cloudflare address (172.71.*, 162.158.*,
+// 104.23.*) on every call and a different one each time, so there is at least one more appending hop than this assumed. Deliberately
+// left at 2 anyway: it is wrong on the SAFE side (every visitor looks like our proxy, and a forged X-Forwarded-For provably does not
+// move it), and raising it is the dangerous direction - past the number of proxies that really append, the client's own header wins.
+// The visitor's address now comes from Cloudflare's CF-Connecting-IP instead (middleware/clientAddress.js), which does not depend on
+// this count at all; what is here is the fallback for a request that arrives without that header.
+//
+// Still worth checking after a deploy: GET /api/v1/health answers `yourAddress` - it should be YOUR address, should not change when
+// you add a forged X-Forwarded-For, and should not vary between calls.
 function trustProxyHops(env = process.env) {
   const raw = env.TRUST_PROXY_HOPS;
   if (raw !== undefined && String(raw).trim() !== "") {

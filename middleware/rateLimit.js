@@ -6,11 +6,14 @@
 // There is no timer: stale windows are swept as new requests arrive, so nothing needs unref().
 const AppError = require("../utils/AppError");
 
-// The address the request came from, as EXPRESS decides it (req.ip) and nowhere else. server.js tells Express how many proxies of ours
-// sit in front of it (TRUST_PROXY_HOPS): with none, req.ip is the connecting socket and X-Forwarded-For is ignored; with N, Express
-// counts N addresses in from the RIGHT of that header, which is where our own proxies write, and takes the next one. The LEFT-most entry,
-// which this function used to take, is whatever the client chose to send: rotating it gave every request a fresh allowance, so the
-// per-address limits (sign-in failures, reset requests, the public document link) could be walked around by anyone.
+// The address the request came from: `req.ip` and nowhere else. Two things decide what that is, in order:
+//   - middleware/clientAddress.js, mounted first in server.js, sets it to Cloudflare's CF-Connecting-IP where we know Cloudflare is in
+//     front of us. Without this, counting hops alone landed on a Cloudflare address that ROTATED per request, so every limit below
+//     shared one changing allowance - i.e. no limit at all (measured against the live service, 21 Oct 2026).
+//   - otherwise Express decides it from TRUST_PROXY_HOPS: with none, the connecting socket, and X-Forwarded-For ignored; with N, Express
+//     counts N addresses in from the RIGHT of that header, which is where our own proxies write, and takes the next one.
+// The LEFT-most entry, which this function used to take, is whatever the client chose to send: rotating it gave every request a fresh
+// allowance, so the per-address limits (sign-in failures, reset requests, the public document link) could be walked around by anyone.
 const clientIp = (req) => req.ip || req.socket?.remoteAddress || "unknown";
 
 // A shortened address for storing as evidence: enough to show a view happened, not a tracking record.

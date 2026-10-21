@@ -29,9 +29,11 @@ const DB = `erp_e2e_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const PORT = 3300 + Math.floor(Math.random() * 150);
 const PORT_B = PORT + 150; // tiny failure limit, the proxy not trusted
 const PORT_C = PORT + 300; // tiny failure limit, ONE proxy hop trusted
+const PORT_D = PORT + 450; // tiny failure limit, no proxy hop, but Cloudflare's CF-Connecting-IP trusted (plays Render)
 const BASE = `http://127.0.0.1:${PORT}/api/v1`;
 const BASE_B = `http://127.0.0.1:${PORT_B}/api/v1`;
 const BASE_C = `http://127.0.0.1:${PORT_C}/api/v1`;
+const BASE_D = `http://127.0.0.1:${PORT_D}/api/v1`;
 const ROOT = path.resolve(__dirname, "..", "..");
 const CAPTURE = path.join(os.tmpdir(), `auth-attack-mail-${process.pid}-${Date.now()}.jsonl`);
 const PASSWORD = "12312312";
@@ -156,6 +158,7 @@ test.before(async () => {
   start(PORT);
   start(PORT_B, { LOGIN_FAILURE_LIMIT: "5", REFRESH_FAILURE_LIMIT: "5", TRUST_PROXY_HOPS: "0" });
   start(PORT_C, { LOGIN_FAILURE_LIMIT: "5", TRUST_PROXY_HOPS: "1" });
+  start(PORT_D, { LOGIN_FAILURE_LIMIT: "5", TRUST_PROXY_HOPS: "0", TRUST_CF_CONNECTING_IP: "1" });
   await mongoose.connect(process.env.MONGO_URI.replace(/\/([^/?]*)\?/, `/${DB}?`));
   M = {
     Admin: require("../../models/core/adminModel"),
@@ -170,6 +173,7 @@ test.before(async () => {
   await waitUp(BASE);
   await waitUp(BASE_B);
   await waitUp(BASE_C);
+  await waitUp(BASE_D);
 });
 test.after(async () => {
   if (skip) return;
@@ -639,6 +643,33 @@ test("behind ONE trusted proxy the address is what that proxy saw, not what the 
   const health = await call("GET", "/health", { base: BASE_C, headers: { "X-Forwarded-For": "1.2.3.4, 198.51.100.55" } });
   assert.equal(health.data.yourAddress, "198.51.100.55");
   assert.equal((await call("GET", "/health", { base: BASE_B, headers: { "X-Forwarded-For": "1.2.3.4" } })).data.yourAddress, "127.0.0.1", "with no trusted proxy the header is ignored");
+});
+
+// Counting hops is only right when the number is EXACTLY the number of proxies that append. On Render it was not: the live
+// service reported a Cloudflare address, a different one per request, so every per-address limit shared one rotating
+// allowance and every stored address was Cloudflare's. Behind Cloudflare the visitor's address is CF-Connecting-IP, which
+// Cloudflare writes itself and refuses to let a client supply.
+test("behind Cloudflare the address is the visitor's, and the throttle counts per visitor", { skip }, async () => {
+  const cf = (ip) => ({ base: BASE_D, headers: { "CF-Connecting-IP": ip } });
+
+  assert.equal((await call("GET", "/health", cf("203.0.113.9"))).data.yourAddress, "203.0.113.9");
+  // not one address: Express's own answer stands rather than a value somebody prepended
+  assert.equal((await call("GET", "/health", cf("203.0.113.9, 1.2.3.4"))).data.yourAddress, "127.0.0.1", "a list is not an address");
+  assert.equal((await call("GET", "/health", cf("evil.example"))).data.yourAddress, "127.0.0.1", "a host name is not an address");
+  // the proxy chain must not be able to override it either
+  assert.equal((await call("GET", "/health", { base: BASE_D, headers: { "CF-Connecting-IP": "203.0.113.9", "X-Forwarded-For": "1.2.3.4" } })).data.yourAddress, "203.0.113.9");
+
+  // the assertion that proves the limiter key really moved: one visitor is shut out, another is not
+  let refused = null;
+  for (let i = 0; i < 14 && !refused; i += 1) {
+    const r = await signIn(`nobody-e${i}@attack.test`, "wrong-password-1", cf("198.51.100.120"));
+    if (r.status === 429) refused = r;
+  }
+  assert.ok(refused, "repeated failures from one visitor were not slowed");
+  assert.equal((await signIn("nobody-f@attack.test", "wrong-password-1", cf("198.51.100.121"))).status, 401, "a different visitor keeps their own allowance");
+
+  // and where Cloudflare is NOT in front of us the header is just something a client wrote
+  assert.equal((await call("GET", "/health", { base: BASE_B, headers: { "CF-Connecting-IP": "1.2.3.4" } })).data.yourAddress, "127.0.0.1");
 });
 
 test("failed refreshes are slowed per address as well", { skip }, async () => {

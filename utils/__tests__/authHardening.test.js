@@ -78,6 +78,34 @@ test("how many proxies are trusted: none by default, two on Render, whatever the
   assert.equal(trustProxyHops({ TRUST_PROXY_HOPS: "" }), 0, "empty means unset");
 });
 
+// Counting proxy hops alone landed on a CLOUDFLARE address on the live service - a different one per request - so every
+// per-address limit shared one rotating allowance and every stored address was Cloudflare's. The visitor's address comes
+// from Cloudflare's own header instead; this pins the two rules that make that safe.
+test("the visitor's address comes from CF-Connecting-IP, and only where Cloudflare is in front of us", () => {
+  const { cloudflareClientIp, trustCloudflareHeader } = require("../../middleware/clientAddress");
+  const req = (value) => ({ headers: value === undefined ? {} : { "cf-connecting-ip": value } });
+
+  // one address, taken as given
+  assert.equal(cloudflareClientIp(req("203.0.113.9")), "203.0.113.9");
+  assert.equal(cloudflareClientIp(req("  203.0.113.9  ")), "203.0.113.9");
+  assert.equal(cloudflareClientIp(req("2001:db8::1")), "2001:db8::1");
+
+  // anything that is not exactly one address leaves Express's own answer standing, which is what this replaced.
+  // A list is what Node gives when the header arrives twice - someone trying to prepend their own choice.
+  for (const bad of [undefined, "", "   ", "203.0.113.9, 1.2.3.4", "evil.example", "not-an-ip", "999.1.1.1",
+                     "203.0.113.9:443", ["1.2.3.4", "5.6.7.8"], 12345, null, "x".repeat(200)]) {
+    assert.equal(cloudflareClientIp(req(bad)), null, `should not be read as an address: ${String(bad)}`);
+  }
+
+  // the gate: off Cloudflare that header is a free pass to name your own address, so it is off unless we know better
+  assert.equal(trustCloudflareHeader({}), false, "a laptop and the spawned test servers must not trust it");
+  assert.equal(trustCloudflareHeader({ RENDER: "true" }), true, "all *.onrender.com traffic transits Cloudflare");
+  assert.equal(trustCloudflareHeader({ RENDER: "true", TRUST_CF_CONNECTING_IP: "0" }), false, "a kill switch that needs no code deploy");
+  assert.equal(trustCloudflareHeader({ TRUST_CF_CONNECTING_IP: "true" }), true, "another Cloudflare-fronted host");
+  assert.equal(trustCloudflareHeader({ RENDER: "true", TRUST_CF_CONNECTING_IP: "" }), true, "empty means unset");
+  for (const bad of ["maybe", "2", "-1"]) assert.throws(() => trustCloudflareHeader({ TRUST_CF_CONNECTING_IP: bad }), /TRUST_CF_CONNECTING_IP/, bad);
+});
+
 test("an access token says it is one, a refresh token says it is another, and only HS256 is read", () => {
   const { generateTokens, verifyToken } = require("../../services/core/adminService");
   const { accessToken, refreshToken, jti } = generateTokens({ id: "64b64b64b64b64b64b64b64b", email: "a@b.co", type: "viewer" }, "sid-1");
