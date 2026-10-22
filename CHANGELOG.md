@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.5.0.2 — 22 October 2026
+
+Two endpoints the screens had grown to need, the routes the assistant and the CRM sign in through,
+and the help topics written by hand. Frontend 1.5.0.2.
+
+### Added
+
+- **The company's own accounts at a bank** (`GET /banking/banks/:id/accounts`, `banking.view` or
+  `accounts.view`): the chart accounts held at one bank, with a count per bank for the list. A bank
+  account is a chart account under the Bank group, so reading one is the chart's key, not a new one.
+- **The transaction list carries `pricing` and `charges`.** A printed invoice reads the server's own
+  figures (`utils/documentTotals.js`); without them a sheet printed from a LIST row summed the lines
+  and lost the header charges, the header discount and the round-off.
+- **Signed-in routes for the AI assistant and the CRM**, declared as such so the route-guard test -
+  which fails any route under `/api/v1` with neither a permission nor a stated reason - still passes.
+
+### Fixed
+
+- **The server would not boot** where the filesystem is case-sensitive: `utils/AppError` was required
+  with a lower-case `a`. Windows and macOS did not care; a Linux container did.
+
+### Internal
+
+- The help topics for the dashboard, the CRM and Quotations are written by hand rather than generated.
+- CI: the integration job is given the secrets a clean checkout has no `.env` for.
+
 ## 1.5.0.0 — 21 October 2026
 
 Two things a client meets on their first day and we could not answer for: a CRM that can be sold
