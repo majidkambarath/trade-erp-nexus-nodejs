@@ -6,6 +6,8 @@ const FiscalYearService = require("../../services/core/fiscalYearService");
 const YearEndService = require("../../services/financial/yearEndService");
 const PeriodCloseService = require("../../services/financial/periodCloseService");
 const NumberSeriesService = require("../../services/core/numberSeriesService");
+const VoucherTypeService = require("../../services/core/voucherTypeService");
+const NumberRegisterService = require("../../services/core/numberRegisterService");
 const PostingService = require("../../services/financial/postingService");
 const AuditService = require("../../services/core/auditService");
 
@@ -64,4 +66,38 @@ exports.closeMonth = catchAsync(async (req, res) => ok(res, await PeriodCloseSer
 exports.reopenMonth = catchAsync(async (req, res) => ok(res, await PeriodCloseService.reopen(req.params.id, req.params.month, req)));
 
 // --- number series ---
-exports.listNumberSeries = catchAsync(async (req, res) => ok(res, await NumberSeriesService.list(req)));
+exports.listNumberSeries = catchAsync(async (req, res) => ok(res, await NumberSeriesService.list(req, { series: req.query.series })));
+
+// --- voucher types: how every kind of document is named and numbered ---
+exports.listVoucherTypes = catchAsync(async (req, res) =>
+  ok(res, {
+    types: await VoucherTypeService.list(req, { kind: req.query.kind, active: req.query.active, q: req.query.q }),
+    branches: await VoucherTypeService.branches(req),
+  })
+);
+exports.createVoucherType = catchAsync(async (req, res) => {
+  const made = await VoucherTypeService.create(req.body, req);
+  await AuditService.log({ req, action: "VOUCHER_TYPE_CREATED", entity: "VoucherType", entityId: made._id, summary: made.name + " (" + made.key + ")", after: made });
+  ok(res, made, 201);
+});
+exports.updateVoucherType = catchAsync(async (req, res) => {
+  const before = await VoucherTypeService.get(req.params.key, req);
+  const saved = await VoucherTypeService.update(req.params.key, req.body, req);
+  await AuditService.log({ req, action: "VOUCHER_TYPE_UPDATED", entity: "VoucherType", entityId: saved._id, summary: saved.name + " (" + saved.key + ")", before, after: saved });
+  ok(res, saved);
+});
+exports.removeVoucherType = catchAsync(async (req, res) => {
+  const gone = await VoucherTypeService.remove(req.params.key, req);
+  await AuditService.log({ req, action: "VOUCHER_TYPE_DELETED", entity: "VoucherType", entityId: null, summary: gone.name + " (" + gone.key + ")", before: gone });
+  ok(res, gone);
+});
+exports.voucherTypeUsage = catchAsync(async (req, res) => ok(res, await VoucherTypeService.usage(req.params.key, req)));
+
+// --- the register of numbers given out, and whether a sequence is unbroken ---
+exports.numberRegister = catchAsync(async (req, res) =>
+  ok(res, {
+    ...(await NumberRegisterService.list(req, req.query)),
+    summary: await NumberRegisterService.summary(req, { series: req.query.series }),
+  })
+);
+exports.numberGaps = catchAsync(async (req, res) => ok(res, await NumberRegisterService.gaps(req, req.query)));

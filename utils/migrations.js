@@ -30,6 +30,8 @@ async function runMigrations() {
   if (applied) out.returnsApplied = applied;
   const contacts = await backfillCrmContacts();
   if (contacts) out.crmContactsBackfilled = contacts;
+  const held = await markVoucherNumbersHeld();
+  if (held) out.voucherNumbersMarkedHeld = held;
   return out;
 }
 
@@ -138,4 +140,26 @@ async function assignCoreToOriginalOrganisation() {
   return done;
 }
 
-module.exports = { runMigrations, assignCoreToOriginalOrganisation };
+/**
+ * A voucher's number is unique within an organisation, and that index now counts only the vouchers that
+ * still HOLD their number (models/modules/financial/financialModels.js `numberReleased`), so a number
+ * handed back after a deletion can be given to the next voucher.
+ *
+ * A voucher written before that field existed does not match the index's partial filter at all, which
+ * would leave it OUT of the index and take away the very uniqueness the index is there for. This puts
+ * the flag on every one of them, then rebuilds the index: Mongoose only ever adds indexes, so the old
+ * unconditional one has to be dropped here.
+ *
+ * Idempotent: the filter is the marker, so a second run matches nothing. Unscoped on purpose - it is a
+ * repair across every organisation, and each row carries its own companyId.
+ */
+async function markVoucherNumbersHeld() {
+  const { Voucher } = require("../models/modules/financial/financialModels");
+  await Voucher.init();
+  const why = "migration: mark every voucher as still holding its number, across every organisation";
+  const r = await runUnscoped(why, () => Voucher.updateMany({ numberReleased: { $exists: false } }, { $set: { numberReleased: false } }));
+  await Voucher.syncIndexes(); // drops the old unconditional unique index and builds the partial one
+  return r.modifiedCount;
+}
+
+module.exports = { runMigrations, assignCoreToOriginalOrganisation, markVoucherNumbersHeld };

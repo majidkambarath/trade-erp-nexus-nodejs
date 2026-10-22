@@ -181,35 +181,26 @@ class TransactionService {
       await FiscalYearService.assertPostingAllowed(date || new Date(), { session });
       if (!items?.length) throw new AppError("Items are required", 400);
 
-      logger.debug("Service: Incoming transactionNo:", transactionNo); // TEMP LOG: Track incoming
-
-      // FIX: Conditionally set transactionNo - use incoming if provided, else auto-generate
-      let finalTransactionNo = transactionNo?.trim();
-      if (!finalTransactionNo) {
-        finalTransactionNo = await NumberSeriesService.allocate(
-          NumberSeriesService.forTransactionType(type),
-          date || new Date(),
-          { session }
-        );
-        logger.debug(
-          "Service: Auto-generated transactionNo:",
-          finalTransactionNo
-        ); // TEMP LOG
+      // The number: allocated, or - for a caller that supplies one - claimed through the governed
+      // override path.
+      //
+      // NOTE this is not reachable from a request body: controllers/orderPurchase/transactionController.js
+      // strips `transactionNo` before it gets here, and the mass-assignment sweep pins that ("the body
+      // chose the number"). It is for internal callers, and no caller passes one today.
+      //
+      // A supplied number used to be taken with nothing but a uniqueness check, and the counter was left
+      // where it was - so the automatic series would walk up to the same number months later and fail on
+      // the unique index. Now the voucher type has to allow a typed number at all, and the counter is
+      // FLOATED past it (services/core/numberSeriesService.js claimManual).
+      const series = NumberSeriesService.forTransactionType(type);
+      const typed = transactionNo && String(transactionNo).trim();
+      let finalTransactionNo;
+      if (!typed) {
+        finalTransactionNo = await NumberSeriesService.allocate(series, date || new Date(), { session, docType: "Transaction" });
       } else {
-        logger.debug(
-          "Service: Using incoming transactionNo:",
-          finalTransactionNo
-        ); // TEMP LOG
-        // Validate uniqueness (prevent duplicates)
-        const existing = await Transaction.findOne({
-          transactionNo: finalTransactionNo,
-        }).session(session);
-        if (existing) {
-          throw new AppError(
-            `Transaction number ${finalTransactionNo} already exists`,
-            400
-          );
-        }
+        const existing = await Transaction.findOne({ transactionNo: typed }).session(session);
+        if (existing) throw new AppError(`Transaction number ${typed} already exists`, 400);
+        finalTransactionNo = await NumberSeriesService.claimManual(series, typed, date || new Date(), { session, docType: "Transaction" });
       }
 
       // Stock availability check disabled for order capture
@@ -469,6 +460,21 @@ class TransactionService {
       }
 
       await Transaction.findByIdAndDelete(id).session(session);
+
+      // The number goes on record as deleted. A document the customer has already been SENT keeps its
+      // number whatever its type allows: it is in somebody else's hands. There is no e-invoice test
+      // here on purpose - an e-invoiced document is refused deletion outright above (EINVOICE_SENT), so
+      // by this line there is nothing lodged with the tax authority to protect. Everything else follows
+      // the voucher type's own rule, which refuses re-use for sales invoices, returns and notes anyway.
+      const sentToCustomer = Boolean(transaction.lastSend);
+      await NumberSeriesService.release({
+        number: transaction.transactionNo,
+        reason: sentToCustomer ? "Document deleted after it had been sent to the customer" : "Document deleted",
+        retire: sentToCustomer,
+        by: createdBy,
+        session,
+      });
+
       // Delivery notes and quotations that pointed at this order are released.
       await DocumentLinks.onSalesOrderChanged(transaction, { session, deleted: true });
       await ReceiptLinks.onPurchaseInvoiceChanged(transaction, { session, deleted: true });
