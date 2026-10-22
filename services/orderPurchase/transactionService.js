@@ -760,9 +760,15 @@ const logAmount = balanceEffect;
       // single aggregation that looked a stock item up (and its unit inside it) once per document LINE: a page of 100 invoices
       // made hundreds of lookups on the database server, and two people on the list at once made each other wait for many
       // seconds. The page and the count are independent reads, so they run together.
+      // `pricing` and `charges` are on this list because the lists PRINT: the Download, the Send attachment and the
+      // invoice screen opened from a row all build the sheet from the row (utils/documentTotals.js). Without them the
+      // printout falls back to summing the lines, which drops the header charges, the header discount and the round-off:
+      // an invoice of 200 less 10 discount plus 60 courier printed 190 beside a list row reading 250. Both are small
+      // (one flat object; a charge is a line of text and two numbers), so this is not the per-line lookup that made
+      // this read slow.
       const FIELDS =
         "transactionNo type partyId partyType partyTypeRef vendorReference date deliveryDate returnDate expectedDispatch status totalAmount " +
-        "docno lpono discount paidAmount outstandingAmount creditedAmount returnOf items terms notes quoteRef linkedRef creditNoteIssued " +
+        "docno lpono discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
         "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals";
       const [docs, total] = await Promise.all([
         Transaction.find(query).select(FIELDS).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),

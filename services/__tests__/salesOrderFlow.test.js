@@ -30,6 +30,7 @@ test.before(async () => {
     Vendor: require("../../models/modules/vendorModel"),
     Stock: require("../../models/modules/stockModel"),
     Note: require("../../models/modules/deliveryNoteModel"),
+    UOM: require("../../models/modules/uomModel"), // the list read resolves each item's unit
     ...require("../../models/modules/financial/financialModels"),
   };
   await mongoose.connection.syncIndexes();
@@ -166,4 +167,21 @@ test("a delivered note can also be invoiced on its own from the notes list, as b
   const out = await svc.Notes.createInvoice({ deliveryNoteIds: [String(n._id)] }, "tester");
   assert.equal(out.salesOrder.items[0].qty, 2);
   assert.equal(out.salesOrder.totalAmount, 31.5);
+});
+
+// The lists PRINT: Download, the Send attachment and the invoice screen opened from a row all build the printed
+// sheet out of the list row (frontend utils/documentTotals.js). A row without `pricing` falls back to summing the
+// lines, so the header charges, the header discount and the round-off vanish from the paper while the Amount column
+// beside it still reads the real total - an invoice of 200 less 10 discount plus 60 courier printed 190 beside a row
+// reading 250.
+test("a list row carries the figures the printed invoice needs", { skip }, async () => {
+  const { transactions } = await svc.Tx.getAllTransactions({ type: "sales_order", search: invoice1.transactionNo });
+  const row = transactions.find((t) => String(t._id) === String(invoice1._id));
+  assert.ok(row, "the invoice is on its own list");
+  assert.equal(row.charges.length, 1, "the freight is on the row");
+  assert.equal(row.charges[0].description, "Freight");
+  assert.equal(row.pricing.chargesNet, 20);
+  assert.equal(row.pricing.grandTotal, row.totalAmount, "the row prints what the Amount column shows");
+  const lines = (row.items || []).reduce((t, i) => t + (i.taxableAmount || 0) + (i.vatAmount || 0), 0);
+  assert.notEqual(Math.round(lines * 100), Math.round(row.totalAmount * 100), "summing the lines is NOT the total: that is why pricing is on the row");
 });
