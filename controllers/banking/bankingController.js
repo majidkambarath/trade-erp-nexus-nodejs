@@ -12,6 +12,8 @@ exports.paymentOptions = catchAsync(async (req, res) => ok(res, await PaymentMod
 
 // --- banks ---
 exports.listBanks = catchAsync(async (req, res) => ok(res, await BankMasterService.list(req, req.query)));
+// The company's own accounts at one bank: the chart accounts whose bank details name it.
+exports.listBankAccounts = catchAsync(async (req, res) => ok(res, await BankMasterService.accounts(req.params.id, req)));
 exports.createBank = catchAsync(async (req, res) => {
   const bank = await BankMasterService.create(req.body, req);
   await AuditService.log({ req, action: "BANK_CREATED", entity: "BankMaster", entityId: bank._id, summary: `${bank.bankCode} ${bank.bankName}` });

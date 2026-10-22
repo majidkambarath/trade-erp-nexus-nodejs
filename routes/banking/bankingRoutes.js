@@ -20,6 +20,9 @@ router.use(requireFeature("banking"));
 router.use("/reconciliation", requireFeature("reconciliation"), require("./reconciliationRoutes"));
 
 router.get("/banks", requirePermission(["banking.view","lookups.view"]), c.listBanks);
+// The accounts at one bank carry their balances, so this one is not open to the lookups floor the
+// list is: reading the chart is accounts.view, and banking.view is the banking screens' own key.
+router.get("/banks/:id/accounts", requirePermission(["banking.view","accounts.view"]), c.listBankAccounts);
 router.post("/banks", requirePermission("banking.manage"), c.createBank);
 router.put("/banks/:id", requirePermission("banking.manage"), c.updateBank);
 

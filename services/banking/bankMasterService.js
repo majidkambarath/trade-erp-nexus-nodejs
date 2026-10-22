@@ -13,7 +13,44 @@ class BankMasterService {
     const filter = { companyId };
     if (active === "true" || active === true) filter.isActive = true;
     if (q) filter.$or = [{ bankName: new RegExp(escapeRe(q), "i") }, { bankCode: new RegExp(escapeRe(q), "i") }];
-    return BankMaster.find(filter).sort({ bankName: 1 }).lean();
+    const [banks, counts] = await Promise.all([BankMaster.find(filter).sort({ bankName: 1 }).lean(), this.accountCounts()]);
+    // How many of the company's own bank accounts name each bank. A bank with none is the one that
+    // still needs its account in the chart, which is the whole reason somebody added the bank.
+    return banks.map((b) => ({ ...b, accounts: counts.get(String(b._id)) || { total: 0, active: 0 } }));
+  }
+
+  // One grouped read over the chart: the bank accounts by the bank they name. The tenant plugin
+  // scopes the aggregation, so this counts only this organisation's accounts.
+  static async accountCounts() {
+    const rows = await LedgerAccount.aggregate([
+      { $match: { "bank.bankId": { $ne: null } } },
+      { $group: { _id: "$bank.bankId", total: { $sum: 1 }, active: { $sum: { $cond: [{ $ne: ["$isActive", false] }, 1, 0] } } } },
+    ]);
+    return new Map(rows.map((r) => [String(r._id), { total: r.total, active: r.active }]));
+  }
+
+  // The company's own accounts at one bank: the chart accounts whose bank details name it. Inactive
+  // ones are listed too - a switched-off account is part of why a bank refuses to be switched off.
+  static async accounts(id, req) {
+    const bank = await this.get(id, req); // 404 for another organisation's bank, before anything else is read
+    const byId = new Map([[String(bank._id), bank]]);
+    const rows = await LedgerAccount.find({ "bank.bankId": bank._id })
+      .select("accountCode accountName groupId isActive allowDirectPosting currentBalance bank")
+      .sort({ accountCode: 1 })
+      .lean();
+    return {
+      bank: { _id: bank._id, bankName: bank.bankName, bankCode: bank.bankCode, swiftCode: bank.swiftCode || "", isActive: bank.isActive !== false },
+      accounts: rows.map((a) => ({
+        _id: a._id,
+        accountCode: a.accountCode,
+        accountName: a.accountName,
+        groupId: a.groupId,
+        isActive: a.isActive !== false,
+        allowDirectPosting: a.allowDirectPosting !== false,
+        balance: a.currentBalance || 0,
+        bank: this.describeAccountBank(a.bank, byId),
+      })),
+    };
   }
 
   static async get(id, req) {
