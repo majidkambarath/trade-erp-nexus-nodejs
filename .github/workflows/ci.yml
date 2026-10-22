@@ -82,6 +82,18 @@ jobs:
             docker exec mongo mongosh --quiet --eval 'rs.status().myState' | grep -q '^1$' && break
             sleep 2
           done
+      - name: Secrets the suites need (throw-away, generated per run)
+        run: |
+          # There is no .env in a clean checkout, and services/__tests__/support/httpHarness.js loads
+          # one by absolute path, so these are simply absent in CI while they are always present on a
+          # developer machine. Four suites forge tokens with process.env.JWT_SECRET directly, and
+          # jsonwebtoken throws "secretOrPrivateKey must have a value" on undefined; securityHeadersHttp
+          # spawns a NODE_ENV=production child that REFUSES to start on a weak or placeholder key, and
+          # the secret box (messaging keys, two-factor secrets, recovery-code hashes) needs its own.
+          echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "PLATFORM_JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "SECRET_BOX_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
       - name: Database tests
         env:
           MONGO_URI: mongodb://127.0.0.1:27017/zarvia_ci?replicaSet=rs0
