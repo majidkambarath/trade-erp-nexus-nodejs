@@ -61,6 +61,14 @@ const SIGNED_IN_ROUTES = [
   "GET /api/v1/notifications/unread-count",
   "POST /api/v1/notifications/:id/read", // marking their own feed read
   "POST /api/v1/notifications/read-all",
+  // Zarvia AI, in-app help: every signed-in person may ask whatever their role, which is the point of
+  // help - a Viewer who cannot open it is not helped, and no permission key is held by every role.
+  // It reads no business data in this version, so being signed in is the whole requirement.
+  "POST /api/v1/assistant/ask",
+  "GET /api/v1/assistant/mine",
+  "GET /api/v1/assistant/screen",
+  "POST /api/v1/assistant/messages/:id/helpful",
+  "POST /api/v1/assistant/escalate",
 ].sort();
 
 // Mutating routes a VIEWER may reach, and why. Everything else that changes something must refuse a viewer. The first group
@@ -68,6 +76,18 @@ const SIGNED_IN_ROUTES = [
 const VIEWER_MAY_REACH = new Set([
   ...SIGNED_IN_ROUTES.filter((k) => !k.startsWith("GET ")),
   "POST /api/v1/uom/convert", // converting a quantity between units: arithmetic, stores nothing (inventory.view)
+  // A person's own Google Calendar connection (crm.view): the OAuth handshake and its undo act upon
+  // nobody else and change no business data - the tokens are that person's own.
+  "POST /api/v1/crm/google/start",
+  "POST /api/v1/crm/google/connect",
+  "POST /api/v1/crm/google/disconnect",
+  // Working one's OWN process step (inventory.view at the route): deliberate, so a shop-floor person on a
+  // view-only role can start and finish the steps given to them. The real decision needs the record, so it
+  // is assertMayWorkStep in the controller: without inventory.adjust, anyone who is not the step's
+  // assignee is refused 403 PERMISSION_DENIED. (d) below proves the refusal; this list only says the
+  // route is reachable.
+  "POST /api/v1/process-orders/:id/steps/:stepId/start",
+  "POST /api/v1/process-orders/:id/steps/:stepId/complete",
 ]);
 
 // ---- the nine built-in roles, as people
@@ -108,7 +128,12 @@ test.before(async () => {
   call = H.makeCaller(stack.base);
   const Admin = require("../../models/core/adminModel");
   const Role = require("../../models/core/roleModel");
-  const made = await stack.Org.create({ legalName: "Sweep Trading", code: "sweep", country: "AE", baseCurrency: "AED", timezone: "Asia/Dubai", planCode: "premium" });
+  const made = await stack.Org.create({ legalName: "Sweep Trading", code: "sweep", country: "AE", baseCurrency: "AED", timezone: "Asia/Dubai", planCode: "premium",
+    // `production` is opt-in (utils/plans.js): ALL leaves it out, so NO plan grants it, premium included.
+    // Without the override its routes refuse with FEATURE_NOT_IN_PLAN before the permission gate is
+    // reached, and the role sweeps below cannot judge them. The sweep exists to judge permissions, so it
+    // holds every feature its routes need.
+    featureOverrides: { production: true } });
   assert.equal(made.provisioning.complete, true, "the organisation is fully provisioned");
   for (const [who, key] of ROLES) {
     const legacy = perms.LEGACY_TYPES.includes(key);
