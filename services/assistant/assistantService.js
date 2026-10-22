@@ -4,7 +4,7 @@
 // Nothing here writes a client's business data, and there is no path by which it could: the only
 // tools are in services/assistant/toolkit.js and none of them queries a collection.
 const mongoose = require("mongoose");
-const AppError = require("../../utils/appError");
+const AppError = require("../../utils/AppError");
 const corpus = require("../../utils/helpCorpus");
 const codes = require("../../utils/assistantCodes");
 const prompt = require("../../utils/assistantPrompt");

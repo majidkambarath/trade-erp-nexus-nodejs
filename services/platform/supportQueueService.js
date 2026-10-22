@@ -4,7 +4,7 @@
 // one queue over all of them is the whole point. Nothing here reads a client's business data - a
 // request carries the question, the screen, the refusal code and the few turns before it, which is
 // what makes it answerable without going into their books.
-const AppError = require("../../utils/appError");
+const AppError = require("../../utils/AppError");
 const { SupportRequest, STATUSES } = require("../../models/platform/supportRequestModel");
 
 const OPEN_STATES = ["NEW", "OPEN"];
