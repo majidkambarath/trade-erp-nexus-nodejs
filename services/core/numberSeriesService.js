@@ -156,6 +156,20 @@ class NumberSeriesService {
   }
 
   /**
+   * The number for a new document: the one a person typed where its type allows that, else the next one
+   * from the counter. The ONE entry point every document service calls, so a quotation, a delivery note,
+   * a goods receipt and an invoice cannot drift apart on what a typed number means.
+   *
+   * A typed number is refused outright unless the voucher type says `auto_override` (every type is
+   * `auto` until somebody changes it), so a number arriving in a request body is never quietly honoured.
+   */
+  static async numberFor(series, { typed, date, session, req, docType, docId } = {}) {
+    const want = typed == null ? "" : String(typed).trim();
+    if (!want) return this.allocate(series, date || new Date(), { session, req, docType, docId });
+    return this.claimManual(series, want, date || new Date(), { session, req, docType, docId });
+  }
+
+  /**
    * A number a person typed, where the type allows it. The number is theirs; what this does is make sure
    * the automatic series can never collide with it later.
    *

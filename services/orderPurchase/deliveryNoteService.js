@@ -436,7 +436,7 @@ class DeliveryNoteService {
       { items: lines, charges: bound ? [] : data.charges, discount: bound ? 0 : data.discount, date },
       { session }
     );
-    const deliveryNoteNo = await NumberSeriesService.allocate("DLN", date, { session });
+    const deliveryNoteNo = await NumberSeriesService.numberFor("DLN", { typed: data.manualNumber, date, session, docType: "DeliveryNote" });
     const [doc] = await DeliveryNote.create(
       [{
         companyId, branchId, deliveryNoteNo, partyId, date, status: "DRAFT",

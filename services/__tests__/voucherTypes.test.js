@@ -426,3 +426,23 @@ test("the migration takes every voucher written before the flag existed into the
   );
   await Voucher.deleteMany({ voucherNo: /^OLD-/ });
 });
+
+test("numberFor is the one door every document kind goes through for a typed number", { skip }, async () => {
+  await reset("QT");
+  // Nothing typed: the next number from the counter, exactly as before.
+  assert.equal(await S.Numbers.numberFor("QT", { docType: "Quotation" }), `QT-${Y}-0001`);
+  assert.equal(await S.Numbers.numberFor("QT", { typed: "   ", docType: "Quotation" }), `QT-${Y}-0002`, "blank is nothing typed");
+
+  // A typed number is REFUSED by default - every type is automatic until somebody changes it - so a
+  // number arriving in a request body is never quietly honoured.
+  await assert.rejects(() => S.Numbers.numberFor("QT", { typed: `QT-${Y}-0900` }), { code: "NUMBER_NOT_TYPEABLE" });
+
+  await set("QT", { method: "auto_override" });
+  assert.equal(await S.Numbers.numberFor("QT", { typed: `qt-${Y}-0900`, docType: "Quotation" }), `QT-${Y}-0900`, "and it is upper-cased, as a number is");
+  assert.equal(await S.Numbers.numberFor("QT", { docType: "Quotation" }), `QT-${Y}-0901`,
+    "the counter was floated past it, so the automatic series cannot reach it again and fail months later");
+  await assert.rejects(() => S.Numbers.numberFor("QT", { typed: `QT-${Y}-0900` }), { code: "NUMBER_ALREADY_USED" });
+
+  await set("QT", { method: "auto" });
+  await reset("QT");
+});

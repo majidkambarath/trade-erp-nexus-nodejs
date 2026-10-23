@@ -150,7 +150,10 @@ class TransactionService {
   static createTransaction = withTransactionSession(
     async (data, createdBy, session) => {
       const {
-        transactionNo, // ADD: Destructure incoming transactionNo
+        // The number a person typed on the form, and the older internal way to supply one. Both are
+        // governed by the document's voucher type: see where finalTransactionNo is worked out below.
+        manualNumber,
+        transactionNo,
         type,
         partyId,
         partyType,
@@ -181,27 +184,23 @@ class TransactionService {
       await FiscalYearService.assertPostingAllowed(date || new Date(), { session });
       if (!items?.length) throw new AppError("Items are required", 400);
 
-      // The number: allocated, or - for a caller that supplies one - claimed through the governed
-      // override path.
+      // The number: the one a person typed where this document's type allows that, else the next from
+      // the counter. It goes through NumberSeriesService.numberFor, as every other document kind does,
+      // so a typed number is refused unless the type says `auto_override` and the counter is FLOATED
+      // past it - before, it was taken with only a uniqueness check and the counter was left where it
+      // was, so the automatic series would reach the same number months later and fail on the index.
       //
-      // NOTE this is not reachable from a request body: controllers/orderPurchase/transactionController.js
-      // strips `transactionNo` before it gets here, and the mass-assignment sweep pins that ("the body
-      // chose the number"). It is for internal callers, and no caller passes one today.
-      //
-      // A supplied number used to be taken with nothing but a uniqueness check, and the counter was left
-      // where it was - so the automatic series would walk up to the same number months later and fail on
-      // the unique index. Now the voucher type has to allow a typed number at all, and the counter is
-      // FLOATED past it (services/core/numberSeriesService.js claimManual).
+      // What a person types on the form arrives as `manualNumber`. `transactionNo` is the older,
+      // internal way and is still honoured for a caller inside the server, but a REQUEST body cannot
+      // reach it: controllers/orderPurchase/transactionController.js strips it, and the mass-assignment
+      // sweep pins that ("the body chose the number").
       const series = NumberSeriesService.forTransactionType(type);
-      const typed = transactionNo && String(transactionNo).trim();
-      let finalTransactionNo;
-      if (!typed) {
-        finalTransactionNo = await NumberSeriesService.allocate(series, date || new Date(), { session, docType: "Transaction" });
-      } else {
-        const existing = await Transaction.findOne({ transactionNo: typed }).session(session);
-        if (existing) throw new AppError(`Transaction number ${typed} already exists`, 400);
-        finalTransactionNo = await NumberSeriesService.claimManual(series, typed, date || new Date(), { session, docType: "Transaction" });
+      const typed = String(manualNumber || transactionNo || "").trim();
+      if (typed) {
+        const existing = await Transaction.findOne({ transactionNo: typed.toUpperCase() }).session(session);
+        if (existing) throw new AppError(`Transaction number ${typed} already exists`, 400, "NUMBER_ALREADY_USED");
       }
+      const finalTransactionNo = await NumberSeriesService.numberFor(series, { typed, date: date || new Date(), session, docType: "Transaction" });
 
       // Stock availability check disabled for order capture
       // Previously validated for sales_order and purchase_return; now we only fetch to ensure item exists
@@ -272,7 +271,7 @@ class TransactionService {
       // Create StockPurchaseLog for purchase orders (unchanged, but use finalTransactionNo)
       if (type === "purchase_order") {
         const purchaseLogData = {
-          transactionNo: newTransaction.transactionNo, // Will now match incoming if provided
+          transactionNo: newTransaction.transactionNo,
           type: "purchase_order",
           partyId,
           partyType: "Vendor",
@@ -322,7 +321,7 @@ class TransactionService {
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
-      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef"]) delete data[key];
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef"]) delete data[key];
       // changing a document takes back an approval it was given: what was approved is no longer what is there
       if (transaction.approvals?.length) transaction.approvals = [];
 
