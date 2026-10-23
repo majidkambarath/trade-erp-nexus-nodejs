@@ -1,5 +1,80 @@
 # Changelog
 
+## 1.6.0.0 — 23 October 2026
+
+How a document is numbered is the organisation's own setting now, instead of a table in the source. A
+master to set it, a record of every number ever given out, and an answer to "why is there no invoice
+41?". Frontend 1.6.0.0.
+
+### Added
+
+- **A voucher type master** (`VoucherType`, `/accounting/voucher-types`). One row per series - all 29,
+  not only the finance vouchers - holding what the document is called and how its number is built:
+  prefix, suffix, separator, counter width, whether the year appears, when the counter restarts, how
+  the branch appears, whether a number may be typed and whether a deleted number may be used again.
+  Seeded on first READ from `utils/voucherTypes.js`, never overwriting, and the seed reproduces the old
+  hardcoded defaults byte for byte - so an organisation already trading keeps every number it has
+  issued. Reading is `accounts.view` (the type list also takes `lookups.view`: a form needs to know
+  what a document will be called); changing it is `accounts.manage`.
+- **A register of every number issued** (`IssuedNumber`), written in the same transaction as the
+  document it numbers. It answers three things at once: the deleted list with the reason each number
+  went, the free list for re-use, and whether a sequence is unbroken. A unique index on the rendered
+  number is the real guarantee a number is never used twice, independent of any counter - it refused a
+  hand-wound counter the day it was written. It also means a number never has to be PARSED to find the
+  counter that minted it, which nothing in the product does.
+- **Re-use of a deleted number, where that is safe.** Opt-in per type, and refused outright for a
+  document we issue bearing tax (`SO`, `SR`, `DN`, `CN` - India CGST Rule 46(b), and an e-invoiced
+  number is already lodged with the tax authority), for a series the system writes itself, and for any
+  document already sent to the customer. Everywhere else the gap is recorded with its reason instead,
+  which is what an auditor asks for. The free list is a query over the register claimed by one
+  conditional update, never an array on the counter: an array cannot de-duplicate a double release, and
+  that is how two documents end up sharing a number.
+- **Continuity report** (`/accounting/number-register/gaps`): for one series and one counter, which
+  numbers are in use, which are missing, and why each hole is there - handed back, retired, or no
+  record at all (a transaction that took a number and rolled back).
+- **Named variants of a built-in type.** "Petty cash payment" under Payment carries its own name,
+  prefix and counter and stores its PARENT's `postsAs`, so the twenty-odd places that compare
+  `voucherType` against `"payment"`, the reports, the approval queue and the VAT return needed no
+  change at all.
+
+### Fixed
+
+- **A number a person typed was silently thrown away.** The sales invoice form has had an Auto /
+  Manual switch since before the mass-assignment hardening made the controller strip `transactionNo`
+  from request bodies - rightly, a body must not choose a tax invoice's number - and nobody took the
+  box away. A person could switch to Manual, type INV-500, save, and the server would file it as
+  SO-2026-0043 with no error. Both ends are joined now: `NumberSeriesService.numberFor` is the one
+  entry point for every document service, a typed number arrives as `manualNumber` (its own field,
+  because `transactionNo` must stay stripped), it is refused unless the voucher type allows it, and
+  the counter is FLOATED past it so the automatic series can never reach the same number months later
+  and fail on the unique index.
+- **The prefix rule never matched what the code produces.** `prefix` was declared
+  `/^[A-Z0-9]{1,5}$/` while `prefixFor` has always produced `SHJ-SO` - a hyphen and six characters.
+  It survived only because `findOneAndUpdate` does not run validators; the first validated write would
+  have thrown on every non-head-office series.
+- **Head office could not see a branch's numbering.** `NumberSeriesService.list` was pinned to the one
+  branch being worked in. It reads `branchView` from the ambient scope now, which `getTenant()` does
+  not carry.
+- Three leftover `TEMP LOG` lines in the trade-document path, and a controller comment that claimed
+  `transactionNo` "is not a field of the order form" when it was exactly that.
+
+### Upgrading
+
+- **One migration, `markVoucherNumbersHeld`, runs at start-up.** A deleted voucher is kept, cancelled,
+  WITH its number, so the unique index held that number for ever and nothing could be given it again.
+  `Voucher.numberReleased` was added and the index is partial on it. The migration flags vouchers
+  written before that field existed and drops the legacy index; without it those rows match the partial
+  filter on nothing and lose the uniqueness the index exists for. It is idempotent and one-time.
+- **The partial index is NAMED `voucherNo_unique_held` on purpose.** Mongoose names an index after its
+  keys, so it would otherwise be called `companyId_1_voucherNo_1` - the same as the unconditional one
+  it replaces - and MongoDB refuses two indexes of one name. Dropping the old one from the migration
+  cannot help: `autoIndex` tries to build the new one as soon as the connection opens, long before any
+  migration runs, and Mongoose caches that rejection for the life of the process. With its own name the
+  two coexist until the migration drops the legacy one.
+- Measured on live books: 801 vouchers flagged, the legacy index dropped, clean boot.
+- No permission key and no plan changed, so `zarvia-platform` is untouched. `utils/voucherTypes.js` is a
+  new module and is not parity-mirrored.
+
 ## 1.5.0.2 — 22 October 2026
 
 Two endpoints the screens had grown to need, the routes the assistant and the CRM sign in through,
