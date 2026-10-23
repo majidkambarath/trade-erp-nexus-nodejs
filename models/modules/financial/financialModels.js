@@ -193,6 +193,12 @@ const voucherSchema = new mongoose.Schema({
     // enum: ["draft", "pending", "approved", "rejected", "cancelled"],
     default: "draft",
   },
+  // A deleted voucher is kept, cancelled, WITH its number - which is why its number could not be given
+  // to anything else: the unique index below still held it. Set when the number has been handed back for
+  // re-use (services/core/numberSeriesService.js release, only where the voucher type allows it), which
+  // takes this voucher out of that index. A number that was RETIRED instead leaves this false, so the
+  // cancelled voucher goes on holding it and nothing can take it.
+  numberReleased: { type: Boolean, default: false },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Admin",
@@ -273,7 +279,12 @@ voucherSchema.index({ createdBy: 1, createdAt: -1 }); // For FinancialService.ge
 // the currency register and "is this currency used?"; only foreign-currency vouchers are indexed
 voucherSchema.index({ currency: 1, voucherType: 1, date: -1 }, { partialFilterExpression: { foreignAmount: { $exists: true } } });
 
-voucherSchema.index({ voucherNo: 1 }, { unique: true }); // unique within an organisation
+// Unique within an organisation, counting only the vouchers that still HOLD their number. MongoDB
+// refuses $ne and $exists:false in a partial filter, so the flag is an explicit boolean rather than a
+// test on status - and status has no enum, so a stray value would have dropped a live voucher out of the
+// index altogether. Re-use is off by default on every type, so an organisation that never switches it on
+// never has two vouchers sharing a number.
+voucherSchema.index({ voucherNo: 1 }, { unique: true, partialFilterExpression: { numberReleased: false } });
 
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
 // documents belong to a branch: a person working in one branch sees only that branch's (utils/tenantPlugin.js)

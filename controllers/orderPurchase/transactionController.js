@@ -45,10 +45,13 @@ const sendPaginated = (res, result) => {
 
 // Create new transaction
 exports.createTransaction = catchAsync(async (req, res) => {
-  // A document's number is allocated by the number series when it is saved (the order form sends none). A number named in the body is
-  // not taken: a person who may add a document must not be able to choose the number of a tax invoice.
-  // `isOpening` is the go-live load's flag (it also switches off the plan's monthly document limit), `quoteRef` / `linkedRef` are the
-  // links the conversions write: none of them is a field of the order form.
+  // A document's number comes from its number series when it is saved.
+  // `transactionNo` is stripped on purpose and must stay stripped: a body choosing its own document
+  // number is a forgery, and services/__tests__/massAssignmentHttp.test.js pins that it is ignored.
+  // A number a person TYPES on the form is a different thing and arrives as `manualNumber`, which the
+  // voucher type has to allow (`auto_override`) or the service refuses it - so it is a deliberate
+  // setting, not an open door. `isOpening` is the go-live load's flag (it also switches off the plan's
+  // monthly document limit), `quoteRef` / `linkedRef` are the links the conversions write.
   const { transactionNo: _chosenNumber, isOpening: _opening, quoteRef: _quote, linkedRef: _linked, ...body } = req.body || {};
   const transaction = await TransactionService.createTransaction(
     body,

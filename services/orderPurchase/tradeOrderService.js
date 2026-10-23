@@ -228,7 +228,7 @@ class TradeOrderService {
     const expectedDate = data.expectedDate ? S.dayToDate(data.expectedDate) : null;
     if (data.expectedDate && !expectedDate) throw fail("Enter a valid date", 400, "INVALID_DATE");
     const priced = await S.priceDocument({ items: data.items, charges: data.charges, discount: data.discount, date }, { session });
-    const orderNo = await NumberSeriesService.allocate(k.series, date, { session });
+    const orderNo = await NumberSeriesService.numberFor(k.series, { typed: data.manualNumber, date, session, docType: "TradeOrder" });
     const [doc] = await TradeOrder.create(
       [{
         companyId, branchId, kind, orderNo, partyId: party._id, partyType: k.partyType, date, expectedDate,

@@ -44,6 +44,18 @@ router.post("/fiscal-years/:id/months/:month/reopen", requirePermission("account
 
 router.get("/number-series", requirePermission("accounts.view"), c.listNumberSeries);
 
+// voucher types: how every kind of document is named and numbered. Reading is on the same floor as the
+// tax codes (a form needs to know what a document will be called); changing it is accounts.manage.
+router.get("/voucher-types", requirePermission(["accounts.view", "lookups.view"]), c.listVoucherTypes);
+router.post("/voucher-types", requirePermission("accounts.manage"), c.createVoucherType);
+router.put("/voucher-types/:key", requirePermission("accounts.manage"), c.updateVoucherType);
+router.delete("/voucher-types/:key", requirePermission("accounts.manage"), c.removeVoucherType);
+router.get("/voucher-types/:key/usage", requirePermission("accounts.view"), c.voucherTypeUsage);
+
+// the register: every number given out, the deleted ones with their reason, and the gaps in a sequence
+router.get("/number-register", requirePermission("accounts.view"), c.numberRegister);
+router.get("/number-register/gaps", requirePermission("accounts.view"), c.numberGaps);
+
 // chart of accounts
 router.get("/chart", requirePermission("accounts.view"), chart.getChart);
 router.post("/chart/defaults", requirePermission("accounts.manage"), chart.restoreDefaults);

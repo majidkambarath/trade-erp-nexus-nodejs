@@ -136,8 +136,12 @@ test("allocateMany hands out consecutive numbers from one increment", { skip }, 
   const next = await svc.NumberSeries.allocate("OSI", new Date(`${GO_LIVE}T00:00:00Z`));
   assert.equal(next, `OSI-${Y}-0004`);
   await svc.NumberSeries.allocateMany("OSI", 0, new Date()); // nothing to allocate
-  // keep the counter clean for the real numbers below
+  // Keep the counter clean for the real numbers below. The REGISTER has to be cleared with it: a number
+  // that has been issued is refused a second time whatever a counter says (the unique index on
+  // IssuedNumber.number), which is the point of it - winding a counter back by hand is the one way a
+  // duplicate could be minted, and it is refused rather than obeyed.
   await mongoose.connection.collection("numberseries").deleteMany({ series: "OSI" });
+  await mongoose.connection.collection("issuednumbers").deleteMany({ series: "OSI" });
 });
 
 // -------------------------------------------------------------------------------------- fixtures

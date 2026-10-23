@@ -205,7 +205,7 @@ class GoodsReceiptService {
     const date = S.dayToDate(data.date) || new Date(todayInOrg());
     const lines = await GoodsReceiptService.#buildLines(data, order, { session });
     const priced = await S.priceDocument({ items: lines, charges: order ? [] : data.charges, discount: order ? 0 : data.discount, date }, { session });
-    const receiptNo = await NumberSeriesService.allocate("GRN", date, { session });
+    const receiptNo = await NumberSeriesService.numberFor("GRN", { typed: data.manualNumber, date, session, docType: "GoodsReceipt" });
     const [doc] = await GoodsReceipt.create(
       [{
         companyId, branchId, receiptNo, partyId: vendor._id, date, status: "DRAFT",

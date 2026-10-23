@@ -136,7 +136,7 @@ class QuotationService {
     const priced = await S.priceDocument({ items: data.items, charges: data.charges, discount: data.discount, date }, { session });
 
     const { companyId, branchId } = getTenant();
-    const quotationNo = await NumberSeriesService.allocate("QT", date, { session });
+    const quotationNo = await NumberSeriesService.numberFor("QT", { typed: data.manualNumber, date, session, docType: "Quotation" });
     const [doc] = await Quotation.create(
       [{
         companyId, branchId, quotationNo, revision: 0,

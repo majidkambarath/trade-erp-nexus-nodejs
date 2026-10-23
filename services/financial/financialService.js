@@ -32,7 +32,7 @@ class FinancialService {
   // Voucher numbers come from NumberSeriesService (one atomic counter per series and fiscal
   // year). The previous generator used a random 3-digit suffix and collided.
   static async generateVoucherNo(type, date, session) {
-    return NumberSeriesService.allocate(NumberSeriesService.forVoucherType(type), date, { session });
+    return NumberSeriesService.allocate(NumberSeriesService.forVoucherType(type), date, { session, docType: "Voucher" });
   }
 
   // Helper: Centralized cash balance adjustment (for Customer/Vendor)
@@ -1822,7 +1822,7 @@ class FinancialService {
   }
 
   // Delete voucher (reverse entries and mark as cancelled) - With retry
-  static async deleteVoucher(id, deletedBy) {
+  static async deleteVoucher(id, deletedBy, { reason } = {}) {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       throw new AppError("Invalid voucher ID", 400);
     }
@@ -1863,9 +1863,18 @@ class FinancialService {
           await this.undoUnpostedEffects(voucher, session, deletedBy, { cheque: false });
         }
 
-        // Mark as cancelled instead of hard delete
+        // The number goes on record as deleted, with its reason, so a hole in the sequence can always be
+        // explained - and goes back to be used again where the voucher type allows it. A cleared cheque
+        // or a reconciled bank line has already been refused above, so there is nothing to undo here.
+        // By number alone: it is unique per organisation, and voucherType ("payment") is not the
+        // series key ("PV"), so naming the series here would match nothing.
+        const freed = await NumberSeriesService.release({ number: voucher.voucherNo, reason: reason || "Voucher deleted", by: deletedBy, session });
+
+        // Mark as cancelled instead of hard delete. A voucher that has handed its number back must stop
+        // holding it, or the next voucher to be given that number collides on the unique index.
         voucher.status = "cancelled";
         voucher.updatedBy = deletedBy;
+        if (freed && freed.status === "released") voucher.numberReleased = true;
         await voucher.save({ session });
 
         await session.commitTransaction();
