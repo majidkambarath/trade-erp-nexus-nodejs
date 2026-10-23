@@ -121,6 +121,9 @@ test("a viewer looks at things and changes nothing", { skip }, async () => {
   await can("viewer", "GET", `/transactions/transactions/${ID.so}`);
   await can("viewer", "GET", "/vouchers/vouchers");
   await can("viewer", "GET", "/accounting/chart");
+  await can("viewer", "GET", "/accounting/voucher-types");
+  await can("viewer", "GET", "/accounting/number-register");
+  await cannot("viewer", "PUT", "/accounting/voucher-types/JV", { name: "Renamed by a viewer" });
   await can("viewer", "GET", "/accounting/reports/profit-loss?from=2000-01-01&to=2100-01-01");
   await can("viewer", "GET", "/accounting/reports/daily-summary?from=2000-01-01&to=2100-01-01");
   await can("viewer", "GET", "/accounting/reports/day-end"); // reading the cash position is reading the financial reports
@@ -173,6 +176,8 @@ test("a sales executive raises and sends sales documents, and cannot see or touc
   await can("sales", "GET", "/customers/customers");
   await can("sales", "GET", "/stock/stock");
   await can("sales", "GET", "/accounting/tax-codes");
+  await can("sales", "GET", "/accounting/voucher-types");
+  await cannot("sales", "PUT", "/accounting/voucher-types/SO", { prefix: "XX" });
   await can("sales", "GET", "/banking/payment-options");
   await can("sales", "GET", "/dashboard-summary");
   await cannot("sales", "POST", "/transactions/transactions", { type: "purchase_order" });
@@ -233,6 +238,8 @@ test("an accountant keeps the books, but does not close a period, change setting
   await can("accountant", "DELETE", `/vouchers/vouchers/${FAKE}`);
   await can("accountant", "POST", "/accounting/accounts", { accountName: "x" });
   await can("accountant", "POST", "/accounting/tax-codes", {});
+  await can("accountant", "PUT", "/accounting/voucher-types/JV", { name: "Journal" });
+  await can("accountant", "GET", "/accounting/number-register/gaps?series=JV");
   await can("accountant", "POST", "/vat-return/returns", {});
   await can("accountant", "GET", "/accounting/reports/profit-loss?from=2000-01-01&to=2100-01-01");
   await can("accountant", "GET", "/accounting/reports/day-end");
