@@ -155,10 +155,19 @@ async function assignCoreToOriginalOrganisation() {
  */
 async function markVoucherNumbersHeld() {
   const { Voucher } = require("../models/modules/financial/financialModels");
-  await Voucher.init();
   const why = "migration: mark every voucher as still holding its number, across every organisation";
   const r = await runUnscoped(why, () => Voucher.updateMany({ numberReleased: { $exists: false } }, { $set: { numberReleased: false } }));
-  await Voucher.syncIndexes(); // drops the old unconditional unique index and builds the partial one
+
+  // Only when rows were actually migrated, which is once in a database's life. Rebuilding the index is
+  // what DROPS the old unconditional one; the new partial one cannot be created while it is there,
+  // because both are named for the same keys. A database that has no voucher without the flag either
+  // never had the old index (a new organisation - Mongoose builds the partial one itself) or has
+  // already been through this, so there is nothing to drop.
+  //
+  // It is deliberately NOT run on every boot: syncIndexes drops and recreates, and two processes doing
+  // that to one collection at the same time - two instances starting together, or a test that syncs its
+  // own indexes while the server starts - leave each other waiting, and the server never reports ready.
+  if (r.modifiedCount) await Voucher.syncIndexes();
   return r.modifiedCount;
 }
 
