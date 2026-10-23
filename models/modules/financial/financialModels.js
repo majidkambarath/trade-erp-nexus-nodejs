@@ -284,7 +284,12 @@ voucherSchema.index({ currency: 1, voucherType: 1, date: -1 }, { partialFilterEx
 // test on status - and status has no enum, so a stray value would have dropped a live voucher out of the
 // index altogether. Re-use is off by default on every type, so an organisation that never switches it on
 // never has two vouchers sharing a number.
-voucherSchema.index({ voucherNo: 1 }, { unique: true, partialFilterExpression: { numberReleased: false } });
+// NAMED on purpose. Mongoose names an index after its keys, so this would be called
+// "companyId_1_voucherNo_1" - the same as the unconditional index it replaces - and MongoDB refuses two
+// indexes of one name. Worse, autoIndex tries to build it the moment the connection opens, before any
+// migration can drop the old one, and Mongoose caches that rejection for the life of the process. With
+// its own name the two simply coexist until utils/migrations.js drops the legacy one.
+voucherSchema.index({ voucherNo: 1 }, { unique: true, partialFilterExpression: { numberReleased: false }, name: "voucherNo_unique_held" });
 
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
 // documents belong to a branch: a person working in one branch sees only that branch's (utils/tenantPlugin.js)

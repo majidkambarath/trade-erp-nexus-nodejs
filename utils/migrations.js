@@ -155,19 +155,34 @@ async function assignCoreToOriginalOrganisation() {
  */
 async function markVoucherNumbersHeld() {
   const { Voucher } = require("../models/modules/financial/financialModels");
-  const why = "migration: mark every voucher as still holding its number, across every organisation";
-  const r = await runUnscoped(why, () => Voucher.updateMany({ numberReleased: { $exists: false } }, { $set: { numberReleased: false } }));
 
-  // Only when rows were actually migrated, which is once in a database's life. Rebuilding the index is
-  // what DROPS the old unconditional one; the new partial one cannot be created while it is there,
-  // because both are named for the same keys. A database that has no voucher without the flag either
-  // never had the old index (a new organisation - Mongoose builds the partial one itself) or has
-  // already been through this, so there is nothing to drop.
+  // THE INDEX FIRST, and with the raw driver. The unique index on a voucher number now counts only the
+  // vouchers that still HOLD their number, and a partial index carries the SAME auto-generated name as
+  // the unconditional one it replaces - so while the old one is there the new one cannot be created at
+  // all, and Mongoose's own autoIndex fails with an index-name conflict. Any model operation would wait
+  // on that, so the repair has to happen before the updateMany below and without touching the model.
   //
-  // It is deliberately NOT run on every boot: syncIndexes drops and recreates, and two processes doing
-  // that to one collection at the same time - two instances starting together, or a test that syncs its
-  // own indexes while the server starts - leave each other waiting, and the server never reports ready.
-  if (r.modifiedCount) await Voucher.syncIndexes();
+  // The test is the index's own shape, not whether rows needed flagging: a database can have every row
+  // flagged by an earlier version and still carry the old index, which is exactly the state this was
+  // found in. Once the filter is there this does nothing, so it is not a per-boot drop-and-recreate -
+  // two instances starting together would otherwise wait on each other and never report ready.
+  const why = "migration: mark every voucher as still holding its number, across every organisation";
+  let indexRepaired = false;
+  try {
+    const legacy = (await Voucher.collection.indexes()).find(
+      (i) => i.name === "companyId_1_voucherNo_1" && !i.partialFilterExpression
+    );
+    if (legacy) {
+      await Voucher.collection.dropIndex(legacy.name);
+      indexRepaired = true;
+      console.log("[migrations] dropped the legacy voucher-number index; re-use is now possible where a voucher type allows it");
+    }
+  } catch (err) {
+    // a database with no vouchers yet has no collection to inspect, and nothing to repair
+    if (err.codeName !== "NamespaceNotFound" && err.code !== 26) throw err;
+  }
+
+  const r = await runUnscoped(why, () => Voucher.updateMany({ numberReleased: { $exists: false } }, { $set: { numberReleased: false } }));
   return r.modifiedCount;
 }
 
