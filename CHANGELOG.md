@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.6.0.1 — 24 October 2026
+
+A statement can now be taken of any account in the chart, not only a customer's or a vendor's, and
+the IFRS notes are written in the organisation's own tax words. Frontend 1.6.0.1.
+
+### Added
+
+- **A statement of any ledger account** (`GET /accounting/reports/statement?accountId=`): a bank, a
+  cash box, a loan, a VAT account, an expense - every posting against it in date order with a running
+  balance. It is the account ledger's own read (`ChartOfAccountsService.getLedger`) reshaped into the
+  statement's answer, deliberately not a second implementation of the same arithmetic: the statement
+  and the ledger drawer behind Reports -> Ledger must read one account the same way or they would
+  quietly disagree. **It answers to more than `reports.view`**, which is in `plans.ALWAYS_ON` and
+  therefore held by every organisation: with `accountId` the route asks for `accounts.view`,
+  `reports.financial` or `finance.view`, the same keys as `/accounts/:id/ledger`, because a statement
+  of any account is the general ledger by another name. A party's statement is unchanged.
+- **`net` on every statement row, opening and closing** (debit minus credit), beside the `balance`
+  that is signed for the party. One field then means one thing whether the statement is a party's or
+  an account's, and the screen draws Dr / Cr from it. `subject { kind, name, ... }` says what the
+  statement is of, so one screen draws both. With posting off an account's statement answers
+  `postingOff: true` rather than an empty page: nothing is posted to accounts at all then, and only a
+  customer's or vendor's statement can be rebuilt from the documents themselves.
+- **The letterhead logo can be taken off** (`removeLogo` on `PUT /company/profile`; a multipart field
+  arrives as text, so `"true"` and the boolean are both accepted). Both halves of `profile.logo` are
+  emptied, so documents print without one, and the stored image is deleted from Cloudinary once the
+  change is saved - a failure to tidy up never fails the save, as with a replaced logo. The audit row
+  says "logo removed".
+
+### Fixed
+
+- **The IFRS notes read "VAT", "TRN" and "the Federal Tax Authority" whatever the country.** An
+  Indian company's notes now say GST, GSTIN and "Goods and services tax" throughout, and the heading
+  over the tax note follows the same table. Only the UAE's authority is named; everywhere else it is
+  "the tax authority", which is true and claims nothing we do not know. `taxTerms` gained `taxName`
+  (the tax written out, for a heading that cannot use the initials) and `authority`.
+
 ## 1.6.0.0 — 23 October 2026
 
 How a document is numbered is the organisation's own setting now, instead of a table in the source. A
