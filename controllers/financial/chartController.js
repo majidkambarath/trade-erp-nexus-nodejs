@@ -119,7 +119,10 @@ exports.getAgeing = catchAsync(async (req, res) => {
   ok(res, { ...report, reconciliation: await LedgerReports.ageingReconciliation({ type, asOf, ageingTotal: report.totals.total }) });
 });
 exports.getStatement = catchAsync(async (req, res) =>
-  ok(res, await StatementService.getStatement({ partyId: req.query.partyId, partyType: req.query.partyType, from: req.query.from, to: req.query.to }))
+  ok(res, await StatementService.getStatement({
+    partyId: req.query.partyId, partyType: req.query.partyType,
+    accountId: req.query.accountId, from: req.query.from, to: req.query.to,
+  }))
 );
 exports.getReturnable = catchAsync(async (req, res) => ok(res, await ReturnService.returnable(req.params.id, { excludeId: req.query.excludeId })));
 

@@ -238,8 +238,10 @@ test("credit control: an overdue invoice blocks even when the limit has room", {
 });
 
 // ---- statement ----
+let stmtCustomerId;
 test("statement: opening + movement = closing, and closing equals the party ledger balance", { skip }, async () => {
   const c = await svc.Customer.create({ customerId: "C8", customerName: "Stmt", contactPerson: "x" });
+  stmtCustomerId = c._id; // the account-statement test below states this customer's own ledger account
   await make("sales_order", c, "Customer", [line(1, 100, { vatPercent: 5 })], { date: day(40) }); // 105
   await make("sales_order", c, "Customer", [line(2, 100, { vatPercent: 5 })], { date: day(10) }); // 210
 
@@ -289,6 +291,43 @@ test("statement: with ledger posting off it is built from the approved documents
   }
   const back = await svc.Statement.getStatement({ partyId: c._id, partyType: "Customer" });
   assert.equal(back.source, "ledger");
+});
+
+test("statement: ANY ledger account can be stated, and it reads exactly as that account's ledger", { skip }, async () => {
+  const { LedgerAccount } = require("../../models/modules/financial/financialModels");
+  const Chart = require("../financial/chartOfAccountsService");
+  const acc = await LedgerAccount.findOne({ accountName: "Customer - Stmt" }).lean();
+  assert.ok(acc, "a customer gets its own ledger account the moment it is created");
+
+  const st = await svc.Statement.getStatement({ accountId: acc._id });
+  assert.equal(st.subject.kind, "account");
+  assert.equal(st.subject.name, "Customer - Stmt");
+  assert.equal(st.party, null, "an account has no party");
+
+  // It is the ACCOUNT LEDGER's own read, reshaped - not a second implementation of the same arithmetic.
+  // If these two ever disagree, the statement and the ledger drawer are telling a client different things
+  // about one account, which is the whole reason this delegates instead of recomputing.
+  const ledger = await Chart.getLedger(acc._id);
+  assert.equal(st.rows.length, ledger.rows.length);
+  assert.equal(st.closing, ledger.closing);
+  assert.equal(st.closingNet, ledger.closingNet);
+  assert.deepEqual(st.totals, ledger.totals);
+
+  // opening + movement = closing, in net terms (debit minus credit), which holds whichever side the
+  // account sits on - unlike the natural balance, which counts a liability up on the credit side.
+  const r2 = (n) => Math.round(n * 100) / 100;
+  assert.equal(r2(st.openingNet + st.totals.debit - st.totals.credit), st.closingNet);
+
+  // And the customer's own statement agrees with the statement of the customer's own account.
+  const party = await svc.Statement.getStatement({ partyId: stmtCustomerId, partyType: "Customer" });
+  assert.equal(st.closingNet, party.closing, "a customer's balance is the net of its ledger account");
+  assert.equal(party.closingNet, party.closing, "a customer's net and party-signed balance are the same figure");
+
+  const from = await svc.Statement.getStatement({ accountId: acc._id, from: day(20) });
+  assert.ok(from.rows.length < st.rows.length, "a date range narrows an account statement too");
+  assert.equal(from.closingNet, st.closingNet, "and never changes where it ends up");
+
+  await assert.rejects(() => svc.Statement.getStatement({ accountId: "nope" }), { statusCode: 400 });
 });
 
 test("audit log never throws and keeps secrets out", { skip }, async () => {

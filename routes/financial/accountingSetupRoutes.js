@@ -68,7 +68,13 @@ router.get("/accounts/:id/ledger", requirePermission(["accounts.view","reports.f
 router.get("/settings", requirePermission(["settings.view","accounts.view","lookups.view"]), chart.getSettings);
 router.put("/settings", requirePermission("settings.manage"), chart.updateSettings);
 router.get("/reports/ageing", requirePermission("reports.view"), chart.getAgeing);
-router.get("/reports/statement", requirePermission(["reports.view","finance.view"]), chart.getStatement);
+// A party's statement is an ordinary report; a statement of ANY account in the chart is the general
+// ledger by another name, so it answers to the same keys as /accounts/:id/ledger. reports.view is in
+// plans.ALWAYS_ON - every organisation holds it - so leaving the account form behind it would hand the
+// whole book to everyone who can open a report.
+router.get("/reports/statement", requirePermission((req) => (req.query.accountId
+  ? ["accounts.view","reports.financial","finance.view"]
+  : ["reports.view","finance.view"])), chart.getStatement);
 
 // ledger reports (read from the general ledger)
 router.get("/reports/general-ledger", requirePermission("reports.financial"), ledgerReports.generalLedger);

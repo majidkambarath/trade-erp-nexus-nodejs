@@ -194,3 +194,25 @@ test("nobody signed out can read it", { skip }, async () => {
   const r = await call("GET", "/company/profile");
   assert.equal(r.status, 401);
 });
+
+// A company that no longer wants a logo on its documents takes it off. It is its own instruction, so an ordinary save
+// never loses the logo by not mentioning it, and it is as guarded as every other change to the letterhead.
+test("the logo is taken off only when asked, and only by someone who may change settings", { skip }, async () => {
+  assert.equal((await api("aviewer", "GET", "/company/profile")).body.companyLogo.url, "https://cdn.test/alpha-logo.png", "the adopted logo is there");
+  const other = await api("aowner", "PUT", "/company/profile", { companyInfo: { city: "Dubai" } });
+  assert.equal(other.body.companyLogo.url, "https://cdn.test/alpha-logo.png", "an ordinary save leaves it alone");
+
+  const refused = await api("aviewer", "PUT", "/company/profile", { companyInfo: {}, removeLogo: true });
+  assert.equal(refused.status, 403, JSON.stringify(refused.data));
+  assert.equal((await api("aviewer", "GET", "/company/profile")).body.companyLogo.url, "https://cdn.test/alpha-logo.png", "and it is still there");
+
+  const off = await api("aowner", "PUT", "/company/profile", { companyInfo: {}, removeLogo: true });
+  assert.equal(off.status, 200, JSON.stringify(off.data));
+  assert.equal(off.body.companyLogo, null);
+  assert.equal((await api("aviewer", "GET", "/company/profile")).body.companyLogo, null, "it is gone for everybody");
+  const stored = await as("alpha", () => M.CompanySettings.findOne({ companyId: "alpha" }).lean());
+  assert.equal(stored.profile.logo?.url || "", "", "the stored letterhead keeps no url");
+  assert.equal(stored.profile.logo?.publicId || "", "", "nor the storage id of the picture it deleted");
+  const trail = await as("alpha", () => M.Activity.findOne({ action: "COMPANY_PROFILE_UPDATED", summary: /logo removed/ }).lean());
+  assert.ok(trail && trail.username === "aowner@alpha.test", "who took it off is on the record");
+});

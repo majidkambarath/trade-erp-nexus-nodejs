@@ -12,7 +12,10 @@ exports.profile = catchAsync(async (req, res) => {
 });
 
 // The screen sends what the old per-person form sent: a `companyInfo` JSON string beside an optional `companyLogo` file (a
-// multipart form), or the same fields as plain JSON.
+// multipart form), or the same fields as plain JSON. Taking the logo off is its own instruction (`removeLogo`), not a
+// letterhead field: a multipart field arrives as text, so the screen sends "true"; a plain JSON body may send the boolean.
+const asked = (v) => v === true || v === "true";
+
 function readPatch(body = {}) {
   const raw = body.companyInfo !== undefined ? body.companyInfo : body;
   if (typeof raw === "string") {
@@ -25,8 +28,10 @@ exports.updateProfile = catchAsync(async (req, res) => {
   const logo = req.files?.companyLogo?.[0] || null;
   try {
     const patch = readPatch(req.body);
-    const out = await CompanyProfileService.update(patch, { logo });
-    const what = [...Object.keys(patch).filter((k) => k !== "bankDetails"), ...Object.keys(patch.bankDetails || {}).map((k) => `bank ${k}`), ...(logo ? ["logo"] : [])];
+    const removeLogo = !logo && (asked(req.body?.removeLogo) || asked(patch.removeLogo));
+    const out = await CompanyProfileService.update(patch, { logo, removeLogo });
+    const named = Object.keys(patch).filter((k) => k !== "bankDetails" && k !== "removeLogo");
+    const what = [...named, ...Object.keys(patch.bankDetails || {}).map((k) => `bank ${k}`), ...(logo ? ["logo"] : removeLogo ? ["logo removed"] : [])];
     await AuditService.log({ req, action: "COMPANY_PROFILE_UPDATED", entity: "CompanySettings", summary: `Company profile changed: ${what.join(", ") || "nothing"}` });
     res.status(200).json({ success: true, data: out });
   } catch (error) {

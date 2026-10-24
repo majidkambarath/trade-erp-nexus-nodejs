@@ -814,16 +814,19 @@ class IfrsReportsService {
     const inventoryAccounts = joinAccounts(cur.inventoryAccounts, prev?.inventoryAccounts || [], hasPrevious);
     const net = (f) => (f.vat ? r2(f.vat.output + (f.vat.reverseCharge || 0) - f.vat.input) : 0);
     const name = ctx.entity.name || "The Company";
+    // What the tax and its registration number are called where the organisation is: an Indian company reads GST,
+    // GSTIN and "Goods and services tax" throughout, and only a UAE company is told the Federal Tax Authority.
+    const terms = orgTaxTerms();
     return {
       ...this.head(ctx, "notes", "Notes to the financial statements"),
       asAt: to, from, compare: mode, comparative: hasPrevious ? { asAt: comparative.to, from: comparative.from } : null,
       disclaimer: "Basic notes generated from the general ledger. They are not a complete set of IFRS disclosures and should be reviewed with your accountant.",
       policies: [
-        { key: "entity", title: "Reporting entity", text: `${name}${ctx.entity.trn ? ` (TRN ${ctx.entity.trn})` : ""} is the reporting entity. These notes accompany the statements for the period ended ${to}.` },
+        { key: "entity", title: "Reporting entity", text: `${name}${ctx.entity.trn ? ` (${terms.taxId} ${ctx.entity.trn})` : ""} is the reporting entity. These notes accompany the statements for the period ended ${to}.` },
         { key: "basis", title: "Basis of preparation", text: `The statements are prepared from the company's general ledger on the historical cost basis, applying the recognition and measurement requirements of International Financial Reporting Standards (IFRS). They are not a complete set of IFRS financial statements until the disclosures listed as not yet available are added. The functional and presentation currency is the ${currencyName()} (${currency()}). Amounts are rounded to two decimal places.` },
         { key: "inventory", title: "Inventories", text: "Inventories are stated at weighted average cost, recalculated on each purchase; a sale takes stock out at the current average and does not change it. Stock found expired or damaged is written off when it is identified. No allowance for net realisable value below cost (IAS 2.9) is calculated by the system: review slow-moving and expiring stock with your accountant." },
-        { key: "revenue", title: "Revenue recognition", text: "Revenue from the sale of goods is recognised at the point in time control passes to the customer, when the goods are dispatched and invoiced. It is measured at the transaction price net of VAT, discounts and returns (IFRS 15)." },
-        { key: "vat", title: "Value added tax", text: "Revenue, expenses and assets are recognised net of VAT. Output VAT charged on sales is a liability to the Federal Tax Authority and input VAT on purchases is recoverable from it; the net is settled with the authority. VAT the company assesses on purchases made under the reverse charge is recorded as a liability to the authority and, where recoverable, as input VAT at the same time." },
+        { key: "revenue", title: "Revenue recognition", text: `Revenue from the sale of goods is recognised at the point in time control passes to the customer, when the goods are dispatched and invoiced. It is measured at the transaction price net of ${terms.tax}, discounts and returns (IFRS 15).` },
+        { key: "vat", title: terms.taxName, text: `Revenue, expenses and assets are recognised net of ${terms.tax}. Output ${terms.tax} charged on sales is a liability to ${terms.authority} and input ${terms.tax} on purchases is recoverable from it; the net is settled with the authority. ${terms.tax} the company assesses on purchases made under the reverse charge is recorded as a liability to the authority and, where recoverable, as input ${terms.tax} at the same time.` },
         { key: "classification", title: "Current and non-current classification", text: "An asset or liability is non-current when its account group, or any group above it, is named as fixed, non-current, property, plant, equipment, intangible or long-term. All other assets and liabilities are current." },
       ],
       tables: {
@@ -865,14 +868,14 @@ class IfrsReportsService {
         },
         vat: cur.vat
           ? {
-              title: "Value added tax",
+              title: terms.taxName,
               rows: [
-                { key: "output", label: `Output ${orgTaxTerms().tax} payable`, ...pair(cur.vat.output, prev?.vat?.output, hasPrevious) },
+                { key: "output", label: `Output ${terms.tax} payable`, ...pair(cur.vat.output, prev?.vat?.output, hasPrevious) },
                 // shown only when there is some: a company that never bought under the reverse charge sees the two lines it always did
                 ...(cur.vat.reverseCharge || prev?.vat?.reverseCharge
-                  ? [{ key: "reverseCharge", label: `Reverse-charge ${orgTaxTerms().tax} payable (self-assessed)`, ...pair(cur.vat.reverseCharge, prev?.vat?.reverseCharge, hasPrevious) }]
+                  ? [{ key: "reverseCharge", label: `Reverse-charge ${terms.tax} payable (self-assessed)`, ...pair(cur.vat.reverseCharge, prev?.vat?.reverseCharge, hasPrevious) }]
                   : []),
-                { key: "input", label: `Input ${orgTaxTerms().tax} recoverable`, ...pair(cur.vat.input, prev?.vat?.input, hasPrevious) },
+                { key: "input", label: `Input ${terms.tax} recoverable`, ...pair(cur.vat.input, prev?.vat?.input, hasPrevious) },
               ],
               net: pair(net(cur), prev ? net(prev) : 0, hasPrevious),
             }

@@ -27,7 +27,11 @@ function taxTerms(country = "AE") {
   const c = String(country || "AE").toUpperCase();
   const tax = GST_COUNTRIES.has(c) ? "GST" : VAT_COUNTRIES.has(c) ? "VAT" : "Tax";
   const taxId = c === "AE" ? "TRN" : c === "IN" ? "GSTIN" : tax === "Tax" ? "Tax no." : `${tax} no.`;
-  return { country: c, tax, taxId };
+  // The tax written out, for a heading or a sentence that cannot use the initials, and who the tax is owed to.
+  // Only the UAE's authority is named: "the tax authority" is true everywhere else and claims nothing we do not know.
+  const taxName = tax === "GST" ? "Goods and services tax" : tax === "VAT" ? "Value added tax" : "Tax";
+  const authority = c === "AE" ? "the Federal Tax Authority" : "the tax authority";
+  return { country: c, tax, taxId, taxName, authority };
 }
 
 // A starter account's name in the organisation's own words: "Input VAT" is "Input GST" in India, "Input Tax" where

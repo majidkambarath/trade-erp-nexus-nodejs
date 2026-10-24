@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const { LedgerAccount, LedgerEntry, Voucher } = require("../../models/modules/financial/financialModels");
 const Transaction = require("../../models/modules/transactionModel");
 const AccountConfigService = require("./accountConfigService");
+const ChartOfAccountsService = require("./chartOfAccountsService");
 const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
 
@@ -26,7 +27,8 @@ class StatementService {
     return accounts.map((a) => a._id);
   }
 
-  static async getStatement({ partyId, partyType, from, to }) {
+  static async getStatement({ partyId, partyType, accountId, from, to }) {
+    if (accountId) return this.accountStatement(accountId, { from, to });
     if (!mongoose.isValidObjectId(partyId) || !["Customer", "Vendor"].includes(partyType)) {
       throw new AppError("partyId and partyType (Customer or Vendor) are required", 400);
     }
@@ -36,7 +38,14 @@ class StatementService {
     const name = partyType === "Vendor" ? party.vendorName : party.customerName;
 
     const sign = partyType === "Vendor" ? -1 : 1; // net = sign * (debit - credit)
-    const empty = { party: { _id: party._id, name, type: partyType }, from: from || null, to: to || null, opening: 0, rows: [], closing: 0, totals: { debit: 0, credit: 0 }, source: "ledger" };
+    const empty = {
+      party: { _id: party._id, name, type: partyType },
+      // `subject` says what this statement is OF, so one screen can draw a party's and an account's alike.
+      subject: { kind: "party", _id: party._id, name, type: partyType },
+      from: from || null, to: to || null,
+      opening: 0, openingNet: 0, rows: [], closing: 0, closingNet: 0,
+      totals: { debit: 0, credit: 0 }, source: "ledger",
+    };
 
     const postingOn = await AccountConfigService.isPostingEnabled();
     const accountIds = postingOn ? await this.partyAccountIds(partyType, name) : [];
@@ -65,15 +74,57 @@ class StatementService {
       return {
         _id: e._id, date: e.date, voucherNo: e.voucherNo, voucherType: e.voucherType,
         narration: e.narration, debit: round2(e.debit), credit: round2(e.credit), balance: running,
+        // `balance` is signed FOR THE PARTY (positive = they owe us / we owe them); `net` is always
+        // debit minus credit, so one field means one thing on a party's statement and an account's.
+        net: round2(sign * running),
       };
     });
     return {
       ...empty,
       opening,
+      openingNet: round2(sign * opening),
       rows,
       closing: running,
+      closingNet: round2(sign * running),
       source,
       totals: { debit: round2(entries.reduce((t, e) => t + e.debit, 0)), credit: round2(entries.reduce((t, e) => t + e.credit, 0)) },
+    };
+  }
+
+  // A statement for ANY account in the chart - a bank, a cash box, a loan, an expense, a VAT account,
+  // or a party's own account - chosen by name rather than by party. It is the ACCOUNT LEDGER's own read
+  // reshaped into this answer, deliberately not a second implementation of the same arithmetic: the
+  // statement and the ledger drawer behind Reports -> Ledger read one account the same way or they
+  // would quietly disagree, which is the whole reason StockReportsService.ledgerCheck reuses reconcile().
+  //
+  // The running balance here is the account's NATURAL balance (an expense counts up on the debit side, a
+  // liability on the credit side), and `net` is debit minus credit, which is what prints as Dr / Cr.
+  // A party's statement signs its balance for the party; an account's cannot, because an account has no
+  // party - so `net` is the field both have in common and the screen reads that.
+  static async accountStatement(accountId, { from, to } = {}) {
+    if (!mongoose.isValidObjectId(accountId)) throw new AppError("accountId must be an account id", 400);
+    const [ledger, postingOn] = await Promise.all([
+      ChartOfAccountsService.getLedger(accountId, { from, to }),
+      AccountConfigService.isPostingEnabled(),
+    ]);
+    const a = ledger.account;
+    return {
+      party: null,
+      account: a,
+      subject: { kind: "account", _id: a._id, name: a.accountName, code: a.accountCode, category: a.category },
+      from: from || null, to: to || null,
+      opening: ledger.opening, openingNet: ledger.openingNet,
+      rows: ledger.rows.map((r) => ({
+        _id: r._id, date: r.date, voucherId: r.voucherId, voucherNo: r.voucherNo, voucherType: r.voucherType,
+        referenceType: r.referenceType, narration: r.narration,
+        debit: r.debit, credit: r.credit, balance: r.balance, net: r.net,
+      })),
+      closing: ledger.closing, closingNet: ledger.closingNet,
+      totals: ledger.totals,
+      source: "ledger",
+      // With posting off nothing reaches an account at all, so an empty page here is the truth and not a
+      // fault: only a customer's or a vendor's statement can be rebuilt from the documents themselves.
+      postingOff: !postingOn,
     };
   }
 

@@ -16,12 +16,17 @@ test("the UAE VAT return and UAE e-invoicing apply in the UAE only, whatever the
 });
 
 test("the words: VAT and TRN in the UAE, GST and GSTIN in India, VAT or Tax elsewhere", () => {
-  assert.deepEqual(R.taxTerms("AE"), { country: "AE", tax: "VAT", taxId: "TRN" });
-  assert.deepEqual(R.taxTerms("in"), { country: "IN", tax: "GST", taxId: "GSTIN" });
-  assert.deepEqual(R.taxTerms("GB"), { country: "GB", tax: "VAT", taxId: "VAT no." });
-  assert.deepEqual(R.taxTerms("SG"), { country: "SG", tax: "GST", taxId: "GST no." });
-  assert.deepEqual(R.taxTerms("JP"), { country: "JP", tax: "Tax", taxId: "Tax no." });
+  assert.deepEqual(R.taxTerms("AE"), { country: "AE", tax: "VAT", taxId: "TRN", taxName: "Value added tax", authority: "the Federal Tax Authority" });
+  assert.deepEqual(R.taxTerms("in"), { country: "IN", tax: "GST", taxId: "GSTIN", taxName: "Goods and services tax", authority: "the tax authority" });
+  assert.deepEqual(R.taxTerms("GB"), { country: "GB", tax: "VAT", taxId: "VAT no.", taxName: "Value added tax", authority: "the tax authority" });
+  assert.deepEqual(R.taxTerms("SG"), { country: "SG", tax: "GST", taxId: "GST no.", taxName: "Goods and services tax", authority: "the tax authority" });
+  assert.deepEqual(R.taxTerms("JP"), { country: "JP", tax: "Tax", taxId: "Tax no.", taxName: "Tax", authority: "the tax authority" });
   assert.deepEqual(R.taxTerms(), R.taxTerms("AE"));
+});
+
+test("only the UAE's tax authority is named; everywhere else it is 'the tax authority'", () => {
+  assert.equal(R.taxTerms("AE").authority, "the Federal Tax Authority");
+  for (const c of ["IN", "GB", "SA", "SG", "JP"]) assert.equal(R.taxTerms(c).authority, "the tax authority", c);
 });
 
 test("starter account names in the organisation's words; whole words only", () => {

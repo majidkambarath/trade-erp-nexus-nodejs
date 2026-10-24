@@ -19,6 +19,7 @@ test.before(async () => {
     Usage: require("../core/usageService"),
     Chart: require("../financial/defaultChartService"),
     Config: require("../financial/accountConfigService"),
+    Ifrs: require("../reports/ifrsReportsService"),
     O: require("../../models/core/organisationModel"),
     LedgerAccount: require("../../models/modules/financial/financialModels").LedgerAccount,
     ctx: require("../../utils/tenantContext"),
@@ -63,4 +64,30 @@ test("the UAE VAT return and e-invoicing are refused to an Indian organisation w
   assert.ok(await svc.Usage.assertFeature("vatReturn", ae));
   assert.equal((await svc.Usage.liveCodes({ feature: "einvoicing" })).has("intest"), false, "no e-invoicing job runs for it");
   assert.equal((await svc.Usage.liveCodes({ feature: "einvoicing" })).has("aetest"), true);
+});
+
+// The IFRS notes are the longest piece of prose the product prints, and they used to be written for the UAE alone: an
+// Indian company read "Value added tax", "net of VAT" and "the Federal Tax Authority" over a table whose own rows said
+// "Output GST payable".
+test("the IFRS notes are written in the organisation's own tax words", { skip }, async () => {
+  const notes = (code) => inOrg(code, () => svc.Ifrs.notes({ asAt: "2026-10-24" }));
+  const india = await notes("intest");
+  const policy = (d, key) => d.policies.find((p) => p.key === key);
+
+  assert.equal(policy(india, "vat").title, "Goods and services tax");
+  assert.equal(india.tables.vat.title, "Goods and services tax", "the heading agrees with the rows under it");
+  assert.deepEqual(india.tables.vat.rows.map((r) => r.label), ["Output GST payable", "Input GST recoverable"]);
+  for (const key of ["vat", "revenue"]) {
+    assert.match(policy(india, key).text, /\bGST\b/);
+    assert.doesNotMatch(policy(india, key).text, /\bVAT\b/, `${key} must not say VAT in India`);
+  }
+  assert.doesNotMatch(policy(india, "vat").text, /Federal Tax Authority/, "that is the UAE's authority, not India's");
+  assert.match(policy(india, "vat").text, /the tax authority/);
+
+  const uae = await notes("aetest");
+  assert.equal(policy(uae, "vat").title, "Value added tax");
+  assert.equal(uae.tables.vat.title, "Value added tax");
+  assert.deepEqual(uae.tables.vat.rows.map((r) => r.label), ["Output VAT payable", "Input VAT recoverable"]);
+  assert.match(policy(uae, "vat").text, /Federal Tax Authority/, "a UAE company is still told who it owes");
+  assert.match(policy(uae, "revenue").text, /net of VAT/);
 });

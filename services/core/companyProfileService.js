@@ -97,9 +97,10 @@ class CompanyProfileService {
 
   /**
    * Change the letterhead. `patch` is the old `companyInfo` shape; only what it names changes. `logo` is an uploaded file
-   * ({ path, filename }) or null. -> the letterhead as it now stands.
+   * ({ path, filename }) or null; `removeLogo` takes the stored one off (an uploaded logo wins over it).
+   * -> the letterhead as it now stands.
    */
-  static async update(patch = {}, { logo = null } = {}) {
+  static async update(patch = {}, { logo = null, removeLogo = false } = {}) {
     const { companyId } = getTenant();
     const row = await this.adopt(await this.row());
     const $set = {};
@@ -155,9 +156,12 @@ class CompanyProfileService {
 
     const oldLogo = row.profile?.logo?.publicId;
     if (logo) { $set["profile.logo.url"] = logo.path; $set["profile.logo.publicId"] = logo.filename; }
+    // taken off: both halves are emptied, and toApi reads an empty url as no logo, so documents print without one
+    else if (removeLogo) { $set["profile.logo.url"] = ""; $set["profile.logo.publicId"] = ""; }
     if (Object.keys($set).length) await CompanySettings.updateOne({ companyId }, { $set });
-    // the logo it replaced is removed only once the new one is stored; a failure to tidy up never fails the save
-    if (logo && oldLogo && oldLogo !== logo.filename) deleteFromCloudinary(oldLogo).catch(() => {});
+    // the logo it replaced - or the one taken off - goes only once the change is stored; a failure to tidy up never fails the save
+    const dropped = logo ? (oldLogo && oldLogo !== logo.filename ? oldLogo : null) : removeLogo ? oldLogo : null;
+    if (dropped) deleteFromCloudinary(dropped).catch(() => {});
     return this.get();
   }
 }

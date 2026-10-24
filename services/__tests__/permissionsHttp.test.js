@@ -230,10 +230,16 @@ test("a storekeeper looks after stock, and touches no money and raises no sale",
   await cannot("storekeeper", "GET", "/accounting/chart");
   await cannot("storekeeper", "GET", "/accounting/reports/profit-loss");
   await cannot("storekeeper", "GET", "/accounting/reports/day-end/register");
+  // A statement of ANY account in the chart is the general ledger by another name. reports.view is in
+  // plans.ALWAYS_ON, so if that form of the route sat behind it alone, every person in every organisation
+  // could read the whole book an account at a time.
+  await cannot("storekeeper", "GET", `/accounting/reports/statement?accountId=${FAKE}`);
 });
 
 test("an accountant keeps the books, but does not close a period, change settings or approve a sale", { skip }, async () => {
   await can("accountant", "POST", "/vouchers/vouchers", { voucherType: "receipt" });
+  // ... and may state any account, which is what keeping the books means (the gate is not simply shut)
+  await can("accountant", "GET", `/accounting/reports/statement?accountId=${FAKE}`);
   await can("accountant", "PATCH", `/vouchers/vouchers/${FAKE}/approve`, { action: "approve" });
   await can("accountant", "DELETE", `/vouchers/vouchers/${FAKE}`);
   await can("accountant", "POST", "/accounting/accounts", { accountName: "x" });
