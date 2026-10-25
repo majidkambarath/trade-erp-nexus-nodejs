@@ -159,19 +159,31 @@ test("a module is the organisation's ceiling: the plan's set, its own overrides,
   const perms = require("../permissions");
   const actionsOf = (org, m) => p.moduleActions(org, m);
 
-  // every full plan holds every module whole
+  // every full plan holds every module whole, EXCEPT the opt-in verticals (garage): those are in no plan, not
+  // even Premium or Internal, exactly as an opt-in FEATURE is in no plan either - an organisation only ever
+  // gets one by a module override from the developer console.
   for (const code of ["trial", "premium", "internal"]) {
     const org = { planCode: code };
-    for (const m of p.MODULE_KEYS) assert.deepEqual(actionsOf(org, m), [...p.MODULE_ACTIONS[m]].sort(), `${code} holds all of ${m}`);
-    assert.deepEqual(p.entitledKeys(org), perms.KEYS.slice().sort(), `${code} holds every permission key`);
+    for (const m of p.MODULE_KEYS.filter((x) => !p.OPT_IN_MODULES.includes(x))) {
+      assert.deepEqual(actionsOf(org, m), [...p.MODULE_ACTIONS[m]].sort(), `${code} holds all of ${m}`);
+    }
+    for (const m of p.OPT_IN_MODULES) assert.deepEqual(actionsOf(org, m), [], `${code} does not hold the opt-in module ${m}`);
+    assert.deepEqual(
+      p.entitledKeys(org),
+      perms.KEYS.filter((k) => !p.OPT_IN_MODULES.some((m) => k.startsWith(`${m}.`))).sort(),
+      `${code} holds every permission key but the opt-in modules'`
+    );
+    // An override turns it on for one organisation, same mechanism as CRM on Standard below.
+    assert.deepEqual(actionsOf({ planCode: code, moduleOverrides: { garage: true } }, "garage"), [...p.MODULE_ACTIONS.garage].sort(), `${code} plus an override sells garage`);
   }
 
   // Standard is everything the trade and the books need, and CRM is the one module it does not include: it is sold
   // up to Premium, or switched on for one organisation with a module override.
   const standard = { planCode: "standard" };
   assert.deepEqual(actionsOf(standard, "crm"), [], "Standard does not include CRM");
-  for (const m of p.MODULE_KEYS.filter((x) => x !== "crm")) assert.deepEqual(actionsOf(standard, m), [...p.MODULE_ACTIONS[m]].sort(), `standard holds all of ${m}`);
-  assert.deepEqual(p.entitledKeys(standard), perms.KEYS.filter((k) => !k.startsWith("crm.")).sort(), "standard holds every key but CRM's");
+  const offStandard = ["crm", ...p.OPT_IN_MODULES];
+  for (const m of p.MODULE_KEYS.filter((x) => !offStandard.includes(x))) assert.deepEqual(actionsOf(standard, m), [...p.MODULE_ACTIONS[m]].sort(), `standard holds all of ${m}`);
+  assert.deepEqual(p.entitledKeys(standard), perms.KEYS.filter((k) => !offStandard.some((m) => k.startsWith(`${m}.`))).sort(), "standard holds every key but CRM's and the opt-in modules'");
   assert.deepEqual(actionsOf({ planCode: "standard", moduleOverrides: { crm: true } }, "crm"), [...p.MODULE_ACTIONS.crm].sort(), "and an override sells it");
 
   // the trade-only plan: no books, and Reports only as far as looking

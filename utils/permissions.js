@@ -124,6 +124,22 @@ const MODULES = {
       manage: "Change the company profile, credit control, sending and e-invoicing settings",
     },
   },
+  // The first industry VERTICAL: a workshop's vehicles, job cards and insurance claims. Like crm above, a person
+  // may hold it without holding sales/purchase/inventory - raising the job card's invoice is a separate ask
+  // (asserted in the controller, not implied here), so holding this module alone cannot post anything.
+  garage: {
+    label: "Garage",
+    hint: "Vehicles, job cards, estimates, tasks and insurance claims for a workshop",
+    actions: {
+      view: "See vehicles, job cards and claims",
+      create: "Add a vehicle, open a job card, raise a claim",
+      edit: "Change a job card, its tasks and its estimate, and a claim",
+      delete: "Delete a draft job card or claim",
+      approve: "Record the customer's or the insurer's approval of an estimate, and release the vehicle",
+      invoice: "Raise the invoice from a job card",
+      manage: "Change the service menu, bays and garage settings",
+    },
+  },
   audit: {
     label: "Activity trail",
     hint: "Who did what",

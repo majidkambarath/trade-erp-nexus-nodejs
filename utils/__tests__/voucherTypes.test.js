@@ -8,7 +8,7 @@ const type = (key, over = {}) => ({ ...V.DEFAULTS, ...V.seedFor(key), ...over })
 const num = (t, seq, { branchId = "main", yearCode = "2026" } = {}) => V.renderNumber({ type: t, branchId, yearCode, seq });
 
 test("the seed reproduces the numbering that was hardcoded, so no existing client's numbers move", () => {
-  assert.equal(V.seedRows().length, 29, "every series the app issues");
+  assert.equal(V.seedRows().length, 31, "every series the app issues: 29 plus JC and CLM for the garage module (26 Oct 2026)");
   assert.equal(num(type("SO"), 1), "SO-2026-0001");
   assert.equal(num(type("PO"), 1), "PO-2026-0001");
   assert.equal(num(type("RV"), 1), "RV-2026-0001");
