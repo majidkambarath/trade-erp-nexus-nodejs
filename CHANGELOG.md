@@ -1,5 +1,59 @@
 # Changelog
 
+## 1.7.0.0 — 26 October 2026
+
+The balance sheet is a statement now, not a list of accounts: classified current and non-current,
+grouped, in the order IAS 1 reads, with a comparative column beside it. Frontend 1.7.0.0.
+
+### Added
+
+- **The balance sheet is classified and comparative.** `getBalanceSheet(asOf, { compareAsOf })`
+  keeps every field it has always answered and adds `sections` - non-current and current assets,
+  equity, non-current and current liabilities, each grouped with its own subtotal - and
+  `comparative`, the same statement at an earlier date zipped in per account so every line, group
+  and total carries `comparative` beside `amount`. IAS 1.60 expects a classified statement and
+  IAS 1.38 a comparative; until now this answered three flat arrays of ledger accounts under three
+  headings. `positionAt()` is one date's position, and a comparative is simply that function called
+  twice. `GET /vouchers/reports/financial?reportType=balance_sheet` takes `compareTo`; the screen
+  works out what "a year earlier" means, because that is a reading question and not the ledger's.
+- **Profit inside equity is two figures, not one.** `profitBroughtForward` (what earlier years
+  nobody closed earned - a closed year has its profit in Retained Earnings already) and
+  `profitForPeriod`. `profitToDate` is unchanged and is their sum, so nothing that read it moves.
+  A prior year left open used to disappear into that single number with nothing to say it was there.
+- **`utils/statementClassification.js`**, new and pure: whether an account is non-current (by its
+  GROUP PATH - its own group or any above it in the tree), the order a statement reads in (IAS 1:
+  stock, then receivables, then the rest, cash LAST), and what counts as drawings.
+  `services/reports/ifrsReportsService.js` imports these instead of declaring its own copies, so the
+  product's two balance sheets cannot classify or order the same account differently. It is a new
+  module deliberately: `plans.js` and `permissions.js` are mirrored in zarvia-platform and adding
+  exports to either needs the mirror changed in the same commit.
+- **Every trial balance row carries its `groupPath`**, so a screen can collapse a trial balance to
+  its groups and narrow it to the payables, the receivables or the expenses without asking again.
+
+### Fixed
+
+- **An account with a balance at the comparative date and none today vanished from the statement,**
+  so the comparative column did not add up. Found on the ABC books: assets 1,979,037.46 against
+  equity and liabilities 2,073,547.30. Walking only today's rows is the trap; such lines are carried
+  through at nil now, classified as they were on the day they had a balance.
+- **The no-offsetting reclassification was name-matching** (`/^Customer( Advance)? - /` and friends),
+  so an account somebody renamed was left as a negative on the wrong side. It resolves the configured
+  receivable, payable and cash-and-bank group trees first, with the old name-matching behind them:
+  `groupSet` skips a posting key that was never mapped, and a company in that state would otherwise
+  lose the reclassification altogether.
+- **A balance sheet's lines came out in account-code order**, which is an arbitrary order for a
+  statement. They read as IAS 1 reads them now.
+
+### Verified
+
+- Every subtotal of the Statements balance sheet equals the IFRS statement of financial position -
+  the one proved against live books on 24 October - for Brivox's Indian books and for the 21-month
+  ABC books, and a comparative column equals a direct run at that date.
+- `utils/__tests__/statementClassification.test.js` (10 pure),
+  `services/__tests__/balanceSheetStatement.test.js` (11, including the dropped-line bug and the
+  IFRS oracle). Unchanged and green: ifrsReports 15, reportsReview 11, yearEnd 19,
+  chartAndPricing 8, httpFlow 16.
+
 ## 1.6.0.1 — 24 October 2026
 
 A statement can now be taken of any account in the chart, not only a customer's or a vendor's, and
