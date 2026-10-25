@@ -2048,6 +2048,11 @@ class FinancialService {
     ]);
 
     const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    // The whole group tree, so every row can carry the path from the top of the chart down to its own group.
+    // A trial balance of 72 accounts is 13 customers and 18 expenses: the screen needs the path to collapse
+    // them group-wise (the way Tally reads a trial balance) and to filter to payables, receivables or expenses.
+    const groupTree = await AccountGroup.find({}).select("name parentGroup").lean();
+    const groupPathOf = statementClassification.pathBuilder(groupTree);
     const trialBalance = rows.map((row) => {
       const accountType = row.acc?.[0]?.accountType;
       // The account's group category wins; fall back to its legacy accountType.
@@ -2062,6 +2067,7 @@ class FinancialService {
         category,
         groupName: row.grp?.[0]?.name || null,
         groupId: row.acc?.[0]?.groupId || null,
+        groupPath: groupPathOf(row.acc?.[0]?.groupId),
         openingBalance: r2(naturalBalance(category, row.openingDebit, row.openingCredit)),
         totalDebits: r2(row.periodDebit),
         totalCredits: r2(row.periodCredit),
