@@ -9,6 +9,7 @@ const { getTenant } = require("../../utils/tenant");
 const currencyCatalog = require("../../utils/currencyCatalog");
 const orgLocale = require("../../utils/orgLocale");
 const { orgTaxTerms } = require("../../utils/countryRules");
+const statementClassification = require("../../utils/statementClassification");
 
 // IFRS statements read straight from the general ledger, so they cannot disagree with the Trial
 // Balance, the Balance Sheet or the Profit and loss screens:
@@ -39,17 +40,14 @@ const { orgTaxTerms } = require("../../utils/countryRules");
 
 const currency = () => orgLocale.baseCurrency(); // the books are kept in the organisation's base currency
 const currencyName = () => currencyCatalog.SUPPORTED[currency()]?.name || currency(); // "UAE Dirham", "Pound Sterling"
-const NON_CURRENT_RX = /fixed|non.?current|property|plant|equipment|intangible|long.?term/i;
+// Classification and ordering are shared with the Balance sheet screen, so the two statements cannot
+// disagree about what is current or how the lines read (utils/statementClassification.js).
+const { NON_CURRENT_RX, INVENTORY_RX, RECEIVABLE_RX, PAYABLE_RX, RETAINED_RX, SHARE_CAPITAL_RX } = statementClassification;
 const FINANCE_RX = /interest|finance|bank charges/i;
 const DEPRECIATION_RX = /depreciation|amortis|amortiz/i;
 const TAX_RX = /income tax|corporate tax/i;
-const INVENTORY_RX = /inventor|stock/i;
-const RECEIVABLE_RX = /receivable|debtor/i;
-const PAYABLE_RX = /payable|creditor/i;
 const FINANCING_RX = /loan|borrowing|debenture|finance lease|mortgage/i;
 const DISPOSAL_RX = /disposal/i;
-const RETAINED_RX = /retained|accumulated|earnings|profit/i;
-const SHARE_CAPITAL_RX = /capital|share/i;
 
 const COMPARE_MODES = ["prior-year", "prior-period", "none"];
 const EQUITY_COLUMNS = [

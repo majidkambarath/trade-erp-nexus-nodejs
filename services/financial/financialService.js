@@ -18,6 +18,9 @@ const tz = require("../../utils/tz");
 const { listPeriod, condition: periodCondition } = require("../../utils/listPeriod");
 const { applyBalances } = require("./ledgerBalances");
 const { naturalBalance, categoryOf, remainderAfterAllocation } = require("../../utils/accounting");
+const AccountGroup = require("../../models/modules/financial/accountGroupModel");
+const LedgerReports = require("../reports/ledgerReportsService");
+const statementClassification = require("../../utils/statementClassification"); // current / non-current and reading order, shared with the IFRS statement
 const mongoose = require("mongoose");
 const { ensurePartyAccount } = require("./partyAccounts");
 const LedgerVoucherService = require("./ledgerVoucherService");
@@ -1955,7 +1958,9 @@ class FinancialService {
       case "profit_loss":
         return this.getProfitAndLoss(dateFrom, dateTo);
       case "balance_sheet":
-        return this.getBalanceSheet(dateTo);
+        // compareTo is the earlier as-at date for the comparative column (IAS 1.38); the screen works it out,
+        // since what "the year before" means is a reading question, not something the ledger decides.
+        return this.getBalanceSheet(dateTo, { compareAsOf: filters.compareTo || undefined });
       case "cash_flow":
         // Read from the ledger like every other statement. This report used to add up receipt, payment and contra voucher totals,
         // which left out expenses, journals and cheque clearing and so never agreed with the cash and bank accounts.
@@ -2056,6 +2061,7 @@ class FinancialService {
         accountType,
         category,
         groupName: row.grp?.[0]?.name || null,
+        groupId: row.acc?.[0]?.groupId || null,
         openingBalance: r2(naturalBalance(category, row.openingDebit, row.openingCredit)),
         totalDebits: r2(row.periodDebit),
         totalCredits: r2(row.periodCredit),
@@ -2103,7 +2109,109 @@ class FinancialService {
   // Balance Sheet as at a date. The profit of the fiscal year the date falls in is shown inside equity (it is not
   // closed to Retained Earnings until the year is closed); the profit of closed years is already in Retained Earnings.
   // Read from the start of that year, so the closing entries of earlier years count and this year's own do not.
-  static async getBalanceSheet(asOf) {
+  //
+  // Returns BOTH shapes. The flat `assets` / `liabilities` / `equity` arrays are what this has always answered and are
+  // unchanged. `sections` is the same figures classified current / non-current and grouped, which is what a balance
+  // sheet is read as (IAS 1.60) - the screen draws that and falls back to the flat arrays when an older server omits
+  // it. `compareAsOf` adds the comparative column IAS 1.38 asks for: the same statement at an earlier date, zipped in
+  // per account, so every line, group and total carries `comparative` beside `amount`.
+  static async getBalanceSheet(asOf, { compareAsOf } = {}) {
+    const now = await this.positionAt(asOf);
+    const prev = compareAsOf ? await this.positionAt(compareAsOf) : null;
+    const was = new Map((prev ? prev.lines : []).map((l) => [String(l._id), l.amount]));
+    const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const flat = (list) => list.map(({ _id, accountCode, accountName, groupName, amount, nonCurrent }) =>
+      ({ _id, accountCode, accountName, groupName, amount, nonCurrent }));
+
+    // An account that existed on only one of the two dates gets null on the other, never 0: "not there" and "nil" are
+    // different answers, and a reader must be able to tell them apart.
+    const sum = (list, key) => r2(list.reduce((t, a) => t + (Number(a[key]) || 0), 0));
+    const sumCmp = (list) => (prev ? sum(list, "comparative") : null);
+    const cmpOf = (l) => {
+      if (!prev) return null;
+      const v = was.get(String(l._id));
+      return v === undefined ? null : v;
+    };
+
+    // An account can hold a balance at the comparative date and none today - a customer who has since paid in full,
+    // a loan repaid. Walking only today's lines dropped it from the statement entirely, which left the comparative
+    // column not adding up. It is carried through at nil instead, classified as it was on the day it had a balance.
+    const hasNow = new Set(now.lines.map((l) => String(l._id)));
+    const goneSince = prev ? prev.lines.filter((l) => !hasNow.has(String(l._id))).map((l) => ({ ...l, amount: 0 })) : [];
+    const withGone = (list, side) => (goneSince.length ? [...list, ...goneSince.filter((g) => g.side === side)] : list);
+
+    const section = (label, list, extraGroups) => {
+      const rows = list
+        .map((l) => ({ ...l, comparative: cmpOf(l) }))
+        .sort((a, b) => a.rank - b.rank || String(a.accountCode).localeCompare(String(b.accountCode)));
+      const byName = new Map();
+      for (const row of rows) {
+        const name = row.sectionGroup || row.groupName || "Other";
+        if (!byName.has(name)) byName.set(name, { name, accounts: [] });
+        byName.get(name).accounts.push({
+          _id: row._id, accountCode: row.accountCode, accountName: row.accountName,
+          amount: row.amount, comparative: row.comparative,
+        });
+      }
+      const groups = [...byName.values()].map((g) => ({
+        name: g.name, accounts: g.accounts, amount: sum(g.accounts, "amount"), comparative: sumCmp(g.accounts),
+      }));
+      for (const g of extraGroups || []) groups.push(g);
+      return { label, groups, amount: sum(groups, "amount"), comparative: sumCmp(groups) };
+    };
+
+    // Profit sits inside equity until the year is closed: first what earlier unclosed years earned, then this year's own.
+    const profitGroups = [];
+    const broughtForward = {
+      name: "Accumulated profit brought forward", synthetic: true, accounts: [],
+      amount: now.profitBroughtForward, comparative: prev ? prev.profitBroughtForward : null,
+    };
+    if (broughtForward.amount || broughtForward.comparative) profitGroups.push(broughtForward);
+    profitGroups.push({
+      name: "Profit for the period", synthetic: true, accounts: [],
+      amount: now.profitForPeriod, comparative: prev ? prev.profitForPeriod : null,
+    });
+
+    const side = (word, list) => ({
+      nonCurrent: section("Non-current " + word, list.filter((l) => l.nonCurrent)),
+      current: section("Current " + word, list.filter((l) => !l.nonCurrent)),
+    });
+    const totalOf = (parts) => ({
+      amount: r2(parts.reduce((t, p) => t + p.amount, 0)),
+      comparative: prev ? r2(parts.reduce((t, p) => t + (p.comparative || 0), 0)) : null,
+    });
+    const assetSide = side("assets", withGone(now.assets, "asset"));
+    const liabilitySide = side("liabilities", withGone(now.liabilities, "liability"));
+    const equitySection = section("Equity", withGone(now.equity, "equity"), profitGroups);
+    const liabilitiesTotal = totalOf([liabilitySide.nonCurrent, liabilitySide.current]);
+
+    return {
+      asOf: asOf || null,
+      assets: flat(now.assets), liabilities: flat(now.liabilities), equity: flat(now.equity),
+      profitToDate: now.profitToDate,
+      profitBroughtForward: now.profitBroughtForward, profitForPeriod: now.profitForPeriod,
+      totalAssets: now.totalAssets, totalLiabilities: now.totalLiabilities, totalEquity: now.totalEquity,
+      totalLiabilitiesAndEquity: now.totalLiabilitiesAndEquity, isBalanced: now.isBalanced,
+      sections: {
+        assets: Object.assign({}, assetSide, totalOf([assetSide.nonCurrent, assetSide.current])),
+        equity: equitySection,
+        liabilities: Object.assign({}, liabilitySide, liabilitiesTotal),
+        equityAndLiabilities: totalOf([equitySection, liabilitiesTotal]),
+      },
+      comparative: prev
+        ? {
+          asOf: compareAsOf || null, profitToDate: prev.profitToDate,
+          profitBroughtForward: prev.profitBroughtForward, profitForPeriod: prev.profitForPeriod,
+          totalAssets: prev.totalAssets, totalLiabilities: prev.totalLiabilities, totalEquity: prev.totalEquity,
+          totalLiabilitiesAndEquity: prev.totalLiabilitiesAndEquity, isBalanced: prev.isBalanced,
+        }
+        : null,
+    };
+  }
+
+  // One date's position: the lines, reclassified (IAS 1.32), split current / non-current and put in reading order.
+  // getBalanceSheet calls it once, or twice when a comparative is asked for.
+  static async positionAt(asOf) {
     // The screen sends "2025-12-31T23:59:59.999" with no zone: read it as the organisation's wall clock, not the server's
     // (on a UTC host that is four hours into 1 January in Dubai, so the year just closed was not found).
     const asOfInstant = asOf ? tz.boundOf(asOf, "end", orgLocale.timezone()) : new Date();
@@ -2113,29 +2221,75 @@ class FinancialService {
     const lines = (category) =>
       trialBalance
         .filter((a) => a.category === category)
-        .map((a) => ({ _id: a._id, accountCode: a.accountCode, accountName: a.accountName, groupName: a.groupName, amount: r2(a.balance) }))
+        .map((a) => ({
+          _id: a._id, accountCode: a.accountCode, accountName: a.accountName, groupName: a.groupName,
+          groupId: a.groupId, category, amount: r2(a.balance), opening: r2(a.openingBalance),
+        }))
         .filter((a) => Math.abs(a.amount) >= 0.005);
     const sum = (arr) => r2(arr.reduce((t, a) => t + a.amount, 0));
+    const sumOpening = (arr) => r2(arr.reduce((t, a) => t + a.opening, 0));
     let assets = lines("ASSET");
     let liabilities = lines("LIABILITY");
     const equity = lines("EQUITY");
-    const earned = r2(sum(lines("INCOME")) - sum(lines("EXPENSE")));
-    // A bank account in credit is an overdraft, a customer in credit a liability, a supplier in debit an asset: shown on their
-    // own side rather than as a negative inside the other (IAS 1.32). Totals of both sides rise by the same amount.
-    const isBank = (a) => /\b(bank|cash)\b/i.test(a.groupName || "") || /\b(bank|cash)\b/i.test(a.accountName || "");
-    const moved = (a, groupName) => ({ ...a, groupName, amount: r2(-a.amount) });
-    const toLiabilities = assets.filter((a) => a.amount < 0 && (isBank(a) || /^Customer( Advance)? - /.test(a.accountName)));
-    const toAssets = liabilities.filter((a) => a.amount < 0 && /^Vendor - /.test(a.accountName));
+    const income = lines("INCOME");
+    const expense = lines("EXPENSE");
+    const earned = r2(sum(income) - sum(expense));
+    // A year that WAS closed has its profit in Retained Earnings already, so what is left standing here belongs to
+    // earlier years nobody closed. Shown apart from this year's own trading, which is the only part the period earned.
+    const profitBroughtForward = r2(sumOpening(income) - sumOpening(expense));
+    const profitForPeriod = r2(earned - profitBroughtForward);
+
+    // A bank account in credit is an overdraft, a customer in credit a liability, a supplier in debit an asset: shown on
+    // their own side rather than as a negative inside the other (IAS 1.32). Totals of both sides rise by the same amount.
+    // The groups the posting map points at decide it, so an account somebody renamed is still caught; the older
+    // name-matching stays behind them for a company that never mapped those keys, where groupSet comes back empty.
+    const [cashAccounts, receivableGroups, payableGroups] = await Promise.all([
+      LedgerReports.cashBankAccounts().catch(() => []),
+      LedgerReports.groupSet(["account-receivable-group"]).catch(() => new Set()),
+      LedgerReports.groupSet(["account-payable-group"]).catch(() => new Set()),
+    ]);
+    const cashIds = new Set(cashAccounts.map((a) => String(a._id)));
+    const isBank = (a) => cashIds.has(String(a._id))
+      || /\b(bank|cash)\b/i.test(a.groupName || "") || /\b(bank|cash)\b/i.test(a.accountName || "");
+    const isReceivable = (a) => receivableGroups.has(String(a.groupId)) || /^Customer( Advance)? - /.test(a.accountName);
+    const isPayable = (a) => payableGroups.has(String(a.groupId)) || /^Vendor - /.test(a.accountName);
+    const moved = (a, groupName) => ({ ...a, groupName, sectionGroup: groupName, amount: r2(-a.amount) });
+    const toLiabilities = assets.filter((a) => a.amount < 0 && (isBank(a) || isReceivable(a)));
+    const toAssets = liabilities.filter((a) => a.amount < 0 && isPayable(a));
     assets = [...assets.filter((a) => !toLiabilities.includes(a)), ...toAssets.map((a) => moved(a, "Supplier debit balances"))];
     liabilities = [
       ...liabilities.filter((a) => !toAssets.includes(a)),
       ...toLiabilities.map((a) => moved(a, isBank(a) ? "Bank overdrafts" : "Customer credit balances")),
     ];
+
+    // Current / non-current, and the order the lines read: both shared with the IFRS statement of financial position,
+    // so the two balance sheets cannot classify or order the same account differently.
+    const groups = await AccountGroup.find({}).select("name parentGroup").lean();
+    const pathOf = statementClassification.pathBuilder(groups);
+    const classify = (list, side) => list.map((a) => {
+      const path = pathOf(a.groupId);
+      const row = { ...a, path, isCash: cashIds.has(String(a._id)) };
+      return {
+        ...row,
+        side,
+        // Equity is neither current nor non-current; it is its own side of the statement.
+        nonCurrent: a.category !== "EQUITY" && statementClassification.isNonCurrent(path),
+        rank: statementClassification.presentationRank(row),
+        // Money the owners took out is a deduction from the capital it reduces, not a negative among the positives.
+        sectionGroup: a.sectionGroup || (statementClassification.isDrawings(a) ? "Less: Drawings" : null),
+      };
+    });
+    assets = classify(assets, "asset");
+    liabilities = classify(liabilities, "liability");
+    const equityRows = classify(equity, "equity");
+
     const totalAssets = sum(assets);
     const totalLiabilities = sum(liabilities);
-    const totalEquity = r2(sum(equity) + earned);
+    const totalEquity = r2(sum(equityRows) + earned);
     return {
-      asOf: asOf || null, assets, liabilities, equity, profitToDate: earned,
+      asOf: asOf || null, assets, liabilities, equity: equityRows,
+      lines: [...assets, ...liabilities, ...equityRows],
+      profitToDate: earned, profitBroughtForward, profitForPeriod,
       totalAssets, totalLiabilities, totalEquity, totalLiabilitiesAndEquity: r2(totalLiabilities + totalEquity),
       isBalanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
     };
