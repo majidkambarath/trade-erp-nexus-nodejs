@@ -150,7 +150,7 @@ class OrganisationService {
   // customers' email, submit its e-invoices or post its backlog while the organisation cannot change anything.
   // `includeLocked` is for the few jobs that only look.
   static async forEach(fn, { label = "job", includeLocked = false, now = new Date() } = {}) {
-    const found = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code status planCode subscription baseCurrency timezone country").lean();
+    const found = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code status planCode subscription baseCurrency timezone country featureOverrides moduleOverrides limitOverrides").lean();
     const orgs = includeLocked ? found : found.filter((o) => plans.subscriptionState(o, now).canWrite);
     const out = [];
     for (const org of orgs) {

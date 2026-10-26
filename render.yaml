@@ -36,6 +36,22 @@ services:
         sync: false
       - key: PUBLIC_APP_URL
         value: https://zarvia.onrender.com
+      # --- the app reaches this service through its OWN origin (see "Deployment (Render)" in CLAUDE.md) ---
+      # The frontend sets VITE_API_URL=/api/v1 and rewrites /api/* here, so the backend's address is in no
+      # request a client can see. Two consequences have to be configured, and ORDER MATTERS for both.
+      #
+      # The rewrite makes a fresh server-to-server request, so the visitor's address does not survive it and
+      # every per-address limit would key on one egress. true switches the sign-in throttle off the address
+      # and onto the email typed plus one overall ceiling (middleware/loginThrottle.js).
+      # CHECK FIRST: GET /api/v1/health -> yourAddress. If that is the real visitor, set this to false and
+      # nothing is lost. Tune with LOGIN_ACCOUNT_FAILURE_LIMIT (10) and LOGIN_GLOBAL_FAILURE_LIMIT (300).
+      - key: SHARED_CLIENT_ADDRESS
+        value: true
+      # App and API are one origin now, so Lax is correct and is a stronger CSRF defence than the Origin
+      # check it replaces. DO NOT set this before the frontend is actually on /api/v1: while the app still
+      # calls this service cross-site, Lax stops the browser sending the session cookie and sign-in breaks.
+      - key: SESSION_COOKIE_SAMESITE
+        value: lax
       # Pictures and logos
       - key: CLOUDINARY_CLOUD_NAME
         sync: false
@@ -48,7 +64,7 @@ services:
         sync: false
       - key: JWT_REFRESH_EXPIRES_IN
         sync: false
-      # Optional: CORS_ORIGINS, TRUST_PROXY_HOPS, SESSION_COOKIE_SAMESITE, SUPPORT_CONTACT /
+      # Optional: CORS_ORIGINS, TRUST_PROXY_HOPS, TRUST_CF_CONNECTING_IP, SUPPORT_CONTACT /
       # SUPPORT_EMAIL, TWO_FACTOR_ISSUER, SYSTEM_MAIL_PROVIDER (console | resend | smtp) with
       # SYSTEM_MAIL_FROM / _FROM_NAME / _REPLY_TO / _API_KEY / _SMTP_HOST|PORT|USER|PASS, and the
       # limits (LOGIN_FAILURE_LIMIT, FORGOT_PASSWORD_IP_LIMIT, JSON_BODY_LIMIT, ...).
