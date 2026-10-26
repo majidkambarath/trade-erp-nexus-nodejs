@@ -1,5 +1,63 @@
 # Changelog
 
+## Unreleased — post-dated cheque lifecycle
+
+The cheque register used to know four states (pending, cleared, bounced, cancelled) and nothing else. It now
+follows a cheque the way a finance desk does: held in the drawer, taken to the bank, cleared or sent back, with the
+reason and the cost of a bounce on file, a view of what falls due, and reminders so nobody has to remember which
+cheque is due on Thursday. Every new state is a state of the REGISTER: no new posting key, no new voucher type and
+no new voucher status, so the day book, the reports and the Phase 2 parity mirrors are untouched.
+
+### Added
+
+- **Deposit and hold** (`POST /banking/cheques/:id/{deposit,hold,resume}`): a cheque taken to the bank is
+  `deposited` (paying-in slip recorded); one kept back on purpose is `hold` (reason required). Neither posts
+  anything - the money stays in "Cheques in Hand" until it clears - so neither is stopped by a closed period.
+  A deposited cheque is still a bank-reconciliation candidate; a held one is not. **Bulk** deposit / clear /
+  hold / resume (`POST /banking/cheques/bulk`, up to 200): one transaction per cheque, each failure reports its
+  own code. Bounce is not bulk: it needs a reason for each.
+- **The dishonour recorded**: a reason from a fixed list or in words, the bank's memo date and reference, its
+  certificate reference, and the part the bank paid, if any (recorded as a fact; the cheque still reverses in
+  full and the part paid is entered as a receipt). Optionally the **bank's charge** (an ordinary expense voucher,
+  with VAT split from the gross) and a **charge-back to the customer** (an ordinary debit note), posted inside
+  the bounce's own transaction: if anything is refused - a closed period, an account, an approval limit - the
+  bounce and both charges are undone together.
+- **Hand back** (`POST /banking/cheques/:id/return`, status `returned`): a cheque given back to the party before
+  it was presented. The voucher is reversed and reads "cancelled". The screen says "Handed back".
+- **Reminders** on the notification feed, for people with `banking.view`: a cheque maturing within 7 days or past
+  its date and not deposited ("deposit it" for one we hold, "keep the account funded" for one we issued), a
+  cheque at the bank more than 5 days without clearing, and a cheque about to go stale. Moving to a later stage
+  (past its date) tells a person again even if they read the earlier notice.
+- **Due dates and Cash forecast** (`GET /banking/cheques/{maturity,forward}`), as views of the Cheques page:
+  what falls due grouped by how soon / party / bank account / month, and week-by-week or month-by-month what the
+  cheques do to the bank. A cheque on hold is shown beside the forecast, never in it.
+
+### Changed
+
+- **Cheques belong to a branch.** They did not, so a branch user listed other branches' cheques, whose audit
+  trail then answered 404. A branch view now lists, reads and reconciles only its own branch's cheques, as the
+  voucher behind each already did. **On first start-up** `backfillChequeBranches` gives every existing cheque its
+  voucher's branch (not head office's); it is idempotent and runs before requests are served.
+- A voucher whose cheque is at the bank cannot be edited or deleted (`CHEQUE_WITH_BANK`), instead of silently
+  cancelling a cheque the bank holds.
+
+### Fixed
+
+- **Background notification checks ignored plan overrides.** The organisation row a job is handed omitted
+  `featureOverrides` / `moduleOverrides` / `limitOverrides`, so an organisation that bought the CRM or the garage
+  as an override on a lower plan got none of its notifications, and one that had a module switched off still
+  did. They now follow the overrides. (Organisations with overrides will see CRM / garage notifications begin
+  or stop accordingly.)
+
+### Notes
+
+- Nothing here encodes a legal rule. Cheque validity is 183 days for every country, as it always was, because no
+  other country's value could be verified; a country is added to `CHEQUE_VALIDITY_DAYS` only from its primary source.
+- **Not built:** entering a strip of cheques in one step, re-presenting a bounced cheque, counting uncleared
+  cheques in a customer's credit exposure, and keeping an invoice open until its cheque clears. The last needs a
+  decision first: from 1 January 2026 IFRS 9 does not allow a receivable to be removed for a cheque until it
+  clears, and the ledger currently credits the customer when the cheque is received.
+
 ## 1.8.0.0 — 26 October 2026
 
 The first industry vertical: a garage/workshop module, sold per organisation like the CRM. A vehicle
