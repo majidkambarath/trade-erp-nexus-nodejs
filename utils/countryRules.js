@@ -41,7 +41,19 @@ const localAccountName = (name, country) => {
   return tax === "VAT" ? name : String(name).replace(/\bVAT\b/g, tax);
 };
 
+// How long a cheque is good for after the date written on it, in days. Past it, a cheque is "stale" and the bank may
+// refuse it: the register will not accept one, and warns before one goes stale.
+//
+// ONE VALUE, ON PURPOSE. 183 days (six months) is what this system has always used and it is kept for every country. No
+// other country has its own value because none could be VERIFIED: the research behind the cheque lifecycle could not
+// confirm the current UAE cheque-law text, and found India's 3-month Reserve Bank rule INDETERMINATE after 28 Nov 2025.
+// A wrong number here would refuse a good cheque or wave through a stale one, so a country is added to this table only
+// once its value is confirmed from the primary source - a one-line change. This is a convenience for the accounts
+// person, not legal advice.
+const CHEQUE_VALIDITY_DAYS = Object.freeze({ default: 183 });
+const chequeValidityDays = (country) => CHEQUE_VALIDITY_DAYS[String(country || "AE").toUpperCase()] ?? CHEQUE_VALIDITY_DAYS.default;
+
 // The terms of the organisation in scope (a service raising a message reads them here).
 const orgTaxTerms = () => taxTerms(require("./orgLocale").country());
 
-module.exports = { UAE_ONLY_FEATURES, countryOf, featureAppliesIn, countryFeatures, hasCountryFeature, taxTerms, orgTaxTerms, localAccountName };
+module.exports = { UAE_ONLY_FEATURES, countryOf, featureAppliesIn, countryFeatures, hasCountryFeature, taxTerms, orgTaxTerms, localAccountName, CHEQUE_VALIDITY_DAYS, chequeValidityDays };

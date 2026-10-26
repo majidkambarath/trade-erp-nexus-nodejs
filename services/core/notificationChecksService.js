@@ -10,7 +10,7 @@ const OrganisationService = require("./organisationService");
 const NotificationService = require("./notificationService");
 const plans = require("../../utils/plans");
 const crm = require("../../utils/crm");
-const { todayInOrg, addDays } = require("../../utils/documentExpiry");
+const { todayInOrg, addDays, toExpiryDay } = require("../../utils/documentExpiry");
 
 /** A person-sized name for a row's audience: the deal's own owner where there is one, else everyone who may look. */
 const aim = (ownerId) => ({ permission: "crm.view", adminId: ownerId || null });
@@ -365,6 +365,80 @@ class NotificationChecksService {
     return { checked: rows.length };
   }
 
+  // ---- cheques. The wording and the date logic are pure (utils/chequeNotices.js); these read, raise and resolve. Told to
+  // whoever may look at the cheque register (a cheque is the finance desk's business, not one person's).
+
+  /** A cheque row as the notice builders want it: its dates as the organisation's calendar days. */
+  static chequeRow(c) {
+    return { ...c, chequeDay: toExpiryDay(c.chequeDate), presentedDay: c.presentedOn ? toExpiryDay(c.presentedOn) : null };
+  }
+
+  static async raiseCheque(kind, notice, now) {
+    return NotificationService.raise({
+      kind, severity: notice.severity, title: notice.title, body: notice.body, link: "/cheques",
+      dedupeKey: `${kind}:${notice.dedupeKey}`, permission: "banking.view", now,
+    });
+  }
+
+  /** Cheques still in hand that are due within a week, or past due: "deposit it" for one we hold, "keep the account
+   * funded" for one we issued. Past its date is a NEW notice (see utils/chequeNotices.js), so it is told again. */
+  static async checkChequesMaturing(now = new Date()) {
+    const { Cheque } = require("../../models/modules/banking/bankingModels");
+    const rules = require("../../utils/chequeRules");
+    const notices = require("../../utils/chequeNotices");
+    const today = todayInOrg();
+    const upTo = new Date(`${addDays(today, rules.SOON_DAYS + 1)}T00:00:00.000Z`);
+    // oldest first: if there are ever more than the cap, it is the long-overdue ones that must not be cut off
+    const rows = await Cheque.find({ status: { $in: rules.IN_HAND }, chequeDate: { $lt: upTo } })
+      .select("direction status chequeNo chequeDate partyName amount voucherNo holdReason").sort({ chequeDate: 1 }).limit(500).lean();
+    const active = [];
+    for (const n of notices.maturing(rows.map(this.chequeRow), today, { currency: require("../../utils/orgLocale").baseCurrency() })) {
+      active.push(`cheque_maturing:${n.dedupeKey}`);
+      await this.raiseCheque("cheque_maturing", n, now);
+    }
+    await NotificationService.resolveMissing({ kind: "cheque_maturing", activeDedupeKeys: active, now });
+    return { checked: rows.length, told: active.length };
+  }
+
+  /** A cheque taken to the bank that has not cleared after a few days. Resolves itself the moment it clears or bounces. */
+  static async checkChequesUncleared(now = new Date()) {
+    const { Cheque } = require("../../models/modules/banking/bankingModels");
+    const rules = require("../../utils/chequeRules");
+    const notices = require("../../utils/chequeNotices");
+    const today = todayInOrg();
+    const upTo = new Date(`${addDays(today, 1 - rules.UNCLEARED_AFTER_DAYS)}T00:00:00.000Z`);
+    const rows = await Cheque.find({ status: "deposited", presentedOn: { $ne: null, $lt: upTo } })
+      .select("direction status chequeNo partyName amount voucherNo presentedOn depositSlipNo").sort({ presentedOn: 1 }).limit(500).lean();
+    const active = [];
+    for (const n of notices.uncleared(rows.map(this.chequeRow), today, { currency: require("../../utils/orgLocale").baseCurrency() })) {
+      active.push(`cheque_uncleared:${n.dedupeKey}`);
+      await this.raiseCheque("cheque_uncleared", n, now);
+    }
+    await NotificationService.resolveMissing({ kind: "cheque_uncleared", activeDedupeKeys: active, now });
+    return { checked: rows.length, told: active.length };
+  }
+
+  /** A cheque still in hand that is about to go stale, or has. The register refuses to accept a stale cheque; this is
+   * the warning that comes before it, while there is still time to deposit it or ask for a replacement. */
+  static async checkChequesExpiring(now = new Date()) {
+    const { Cheque } = require("../../models/modules/banking/bankingModels");
+    const rules = require("../../utils/chequeRules");
+    const notices = require("../../utils/chequeNotices");
+    const orgLocale = require("../../utils/orgLocale");
+    const validity = require("../../utils/countryRules").chequeValidityDays(orgLocale.country());
+    const today = todayInOrg();
+    const upTo = new Date(`${addDays(today, rules.EXPIRY_WARN_DAYS - validity + 1)}T00:00:00.000Z`);
+    const rows = await Cheque.find({ status: { $in: rules.IN_HAND }, chequeDate: { $lt: upTo } })
+      .select("direction status chequeNo chequeDate partyName amount voucherNo").sort({ chequeDate: 1 }).limit(500).lean();
+    const active = [];
+    for (const n of notices.expiring(rows.map(this.chequeRow), today, validity, { currency: orgLocale.baseCurrency() })) {
+      active.push(`cheque_expiring:${n.dedupeKey}`);
+      await this.raiseCheque("cheque_expiring", n, now);
+    }
+    await NotificationService.resolveMissing({ kind: "cheque_expiring", activeDedupeKeys: active, now });
+    return { checked: rows.length, told: active.length };
+  }
+
   /**
    * The registry. `module` is the permission module an organisation must hold for the check to run at all: a CRM
    * notification for an organisation that did not buy CRM would be work nobody can see, and a row whose audience names
@@ -381,6 +455,10 @@ class NotificationChecksService {
     { key: "garageEstimatesWaiting", module: "garage", run: (now) => NotificationChecksService.checkGarageEstimatesWaiting(now) },
     { key: "garageClaimsWaiting", module: "garage", run: (now) => NotificationChecksService.checkGarageClaimsWaiting(now) },
     { key: "garageServiceDue", module: "garage", run: (now) => NotificationChecksService.checkGarageServiceDue(now) },
+    // Cheques live behind the banking FEATURE as well as the banking module, so these name both.
+    { key: "chequesMaturing", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesMaturing(now) },
+    { key: "chequesUncleared", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesUncleared(now) },
+    { key: "chequesExpiring", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesExpiring(now) },
   ];
 
   /** Every check this organisation is entitled to. One check failing never stops the others. */
@@ -388,7 +466,7 @@ class NotificationChecksService {
     const results = {};
     for (const check of this.CHECKS) {
       // No organisation to judge (a direct call in a test) means run everything; otherwise the plan decides.
-      if (organisation && !plans.moduleAllows(organisation, `${check.module}.view`)) {
+      if (organisation && ((check.feature && !plans.hasFeature(organisation, check.feature)) || !plans.moduleAllows(organisation, `${check.module}.view`))) {
         results[check.key] = { skipped: "not in the plan" };
         continue;
       }

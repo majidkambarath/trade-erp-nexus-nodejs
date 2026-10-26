@@ -41,6 +41,10 @@ const STATUSES = Object.freeze([PENDING, HOLD, DEPOSITED, CLEARED, BOUNCED, RETU
 // The money is still in the air: recorded, not yet in the bank, not written off.
 const LIVE = Object.freeze([PENDING, HOLD, DEPOSITED]);
 
+// Still with us: in the drawer or on its way to the bank, not yet handed over. (What a maturity reminder is about; a cheque
+// already at the bank is the bank's, and has its own reminder when it is slow to clear.)
+const IN_HAND = Object.freeze([PENDING, HOLD]);
+
 // It can be taken to the bank, or is already there, so a bank statement line may be the proof that it
 // cleared (services/banking/reconciliationCore.js offers exactly these as match candidates). A cheque
 // ON HOLD is deliberately not here: it is in the drawer on purpose.
@@ -101,10 +105,39 @@ function canTransition(status, action) {
   return { ok: false, code: "CHEQUE_NOT_PENDING", message: PLAIN[action](status) };
 }
 
+// ---- days ----
+// Everything below works in calendar DAYS as "YYYY-MM-DD" strings (the organisation's own days: the caller converts), so
+// there is no time zone arithmetic in here and nothing to get wrong at midnight.
+const DAY_MS = 86400000;
+const stamp = (day) => Date.parse(`${day}T00:00:00Z`);
+const daysBetween = (fromDay, toDay) => Math.round((stamp(toDay) - stamp(fromDay)) / DAY_MS); // positive: toDay is later
+const addDays = (day, n) => new Date(stamp(day) + n * DAY_MS).toISOString().slice(0, 10);
+
+// How far ahead a cheque is "soon", how long a deposited one may take, and how early to warn about staleness.
+const SOON_DAYS = 7;
+const UNCLEARED_AFTER_DAYS = 5;
+const EXPIRY_WARN_DAYS = 30;
+
+// Where a cheque stands against its date. `days` is how far away it is: negative once the date has passed.
+function maturityOf(chequeDay, today, soonDays = SOON_DAYS) {
+  const days = daysBetween(today, chequeDay);
+  const state = days < 0 ? "overdue" : days === 0 ? "today" : days <= soonDays ? "soon" : "later";
+  return { state, days };
+}
+
+// Where a cheque stands against its validity. A cheque is good for `validityDays` after the date written on it (the
+// service refuses to ACCEPT one older than that, so the last good day is date + validityDays).
+function expiryOf(chequeDay, today, validityDays, warnDays = EXPIRY_WARN_DAYS) {
+  const lastDay = addDays(chequeDay, validityDays);
+  const daysLeft = daysBetween(today, lastDay);
+  return { state: daysLeft < 0 ? "expired" : daysLeft <= warnDays ? "expiring" : "ok", lastDay, daysLeft };
+}
+
 const isLive = (status) => LIVE.includes(status);
 const isPresentable = (status) => PRESENTABLE.includes(status);
 
 module.exports = {
-  STATUSES, LIVE, PRESENTABLE, OPEN, CLOSED, ACTIONS, BULK_ACTIONS, MAX_BULK,
+  STATUSES, LIVE, IN_HAND, PRESENTABLE, OPEN, CLOSED, ACTIONS, BULK_ACTIONS, MAX_BULK,
   canTransition, isLive, isPresentable,
+  daysBetween, addDays, maturityOf, expiryOf, SOON_DAYS, UNCLEARED_AFTER_DAYS, EXPIRY_WARN_DAYS,
 };
