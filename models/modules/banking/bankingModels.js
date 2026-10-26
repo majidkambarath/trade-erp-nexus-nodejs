@@ -86,10 +86,13 @@ cardSchema.index({ companyId: 1, kind: 1, isActive: 1 });
 // pending -> cleared | bounced | cancelled. Until it clears, a cheque sits in a post-dated
 // cheques account rather than in the bank account.
 // ---------------------------------------------------------------------------------------------
-const CHEQUE_STATUSES = ["pending", "cleared", "bounced", "cancelled"];
+const { STATUSES: CHEQUE_STATUSES } = require("../../../utils/chequeRules");
 const chequeSchema = new mongoose.Schema(
   {
     companyId: { type: String, required: true },
+    // The branch of the voucher this cheque was taken on; head office is "main". Documents are per branch, and a
+    // cheque is one: without this a branch user listed other branches' cheques, whose audit trail then 404ed.
+    branchId: { type: String, default: "main" },
     direction: { type: String, enum: ["receipt", "payment"], required: true },
     voucherId: { type: mongoose.Schema.Types.ObjectId, ref: "Voucher", required: true },
     voucherNo: { type: String, required: true },
@@ -112,6 +115,35 @@ const chequeSchema = new mongoose.Schema(
     clearedOn: { type: Date, default: null },
     bouncedOn: { type: Date, default: null },
     reason: { type: String, trim: true, maxlength: 250, default: "" },
+    // Taken to the bank: the day, and the paying-in slip. Posts nothing - the money stays in the post-dated cheques account.
+    presentedOn: { type: Date, default: null },
+    depositSlipNo: { type: String, trim: true, maxlength: 40, default: "" },
+    // Kept in the drawer on purpose: why, and optionally until when. Set only while status is "hold".
+    holdReason: { type: String, trim: true, maxlength: 250, default: "" },
+    holdUntil: { type: Date, default: null },
+    // A cheque the bank sent back: the bank's return memo, and what it cost. FACTS ONLY - nothing here asserts a legal
+    // consequence (utils/chequeDishonour.js says why).
+    returnMemo: {
+      reasonCode: { type: String, default: undefined },
+      reasonText: { type: String, trim: true, maxlength: 250, default: undefined },
+      memoDate: { type: Date, default: undefined },
+      memoRef: { type: String, trim: true, maxlength: 60, default: undefined },
+      _id: false,
+    },
+    certificateRef: { type: String, trim: true, maxlength: 60, default: undefined },
+    // What the bank paid, if it paid part. The cheque is still reversed in full; the part paid is entered as a receipt.
+    partialPayment: { amount: { type: Number, min: 0, default: undefined }, on: { type: Date, default: undefined }, _id: false },
+    returnedOn: { type: Date, default: null },
+    // The vouchers a bounce posted: the bank's charge, and what was charged back to the customer.
+    charges: {
+      expenseVoucherId: { type: mongoose.Schema.Types.ObjectId, ref: "Voucher", default: undefined },
+      expenseVoucherNo: { type: String, default: undefined },
+      amount: { type: Number, min: 0, default: undefined },
+      rechargeVoucherId: { type: mongoose.Schema.Types.ObjectId, ref: "Voucher", default: undefined },
+      rechargeVoucherNo: { type: String, default: undefined },
+      rechargeAmount: { type: Number, min: 0, default: undefined },
+      _id: false,
+    },
     history: [
       {
         status: String,
@@ -126,6 +158,8 @@ const chequeSchema = new mongoose.Schema(
   { timestamps: true }
 );
 chequeSchema.index({ companyId: 1, status: 1, chequeDate: 1 });
+chequeSchema.index({ companyId: 1, branchId: 1, status: 1, chequeDate: 1 });
+chequeSchema.index({ companyId: 1, bankAccountId: 1, status: 1 });
 chequeSchema.index({ companyId: 1, voucherId: 1 });
 chequeSchema.index({ companyId: 1, direction: 1, chequeNo: 1 });
 
@@ -133,7 +167,7 @@ chequeSchema.index({ companyId: 1, direction: 1, chequeNo: 1 });
 bankSchema.plugin(tenantPlugin);
 cardTypeSchema.plugin(tenantPlugin);
 cardSchema.plugin(tenantPlugin);
-chequeSchema.plugin(tenantPlugin);
+chequeSchema.plugin(tenantPlugin, { branchScoped: true });
 
 const BankMaster = mongoose.models.BankMaster || mongoose.model("BankMaster", bankSchema);
 const CardType = mongoose.models.CardType || mongoose.model("CardType", cardTypeSchema);

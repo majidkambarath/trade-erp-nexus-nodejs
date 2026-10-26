@@ -4,6 +4,7 @@ const { Cheque } = require("../../models/modules/banking/bankingModels");
 const R = require("../../models/modules/banking/reconciliationModels");
 const { groupFamily } = require("./cardService");
 const ChequeService = require("./chequeService");
+const chequeRules = require("../../utils/chequeRules");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 const { orgDay } = require("../../utils/documentExpiry");
@@ -56,7 +57,7 @@ function chequeRow(c) {
   return {
     id: `cheque:${c._id}`, type: "cheque", chequeId: c._id, voucherId: c.voucherId, voucherNo: c.voucherNo, voucherType: "cheque",
     day: orgDay(c.chequeDate), amount: round2(c.direction === "receipt" ? c.amount : -c.amount),
-    narration: `Cheque ${c.chequeNo} ${c.direction === "receipt" ? "received" : "issued"}${c.isPDC ? " (post-dated)" : ""}`,
+    narration: `Cheque ${c.chequeNo} ${c.direction === "receipt" ? "received" : "issued"}${c.isPDC ? " (post-dated)" : ""}${c.status === "deposited" ? ", deposited" : ""}`,
     party: c.partyName || "", reference: "", chequeNo: c.chequeNo, card: null, groupId: null, pending: true,
   };
 }
@@ -86,7 +87,7 @@ async function loadBook(accountId, setup, { req, session, upTo } = {}) {
 
 async function loadPendingCheques(accountId, { req, session } = {}) {
   const { companyId } = getTenant(req);
-  const cheques = await inSession(Cheque.find({ companyId, bankAccountId: accountId, status: "pending" }).sort({ chequeDate: 1 }).lean(), session);
+  const cheques = await inSession(Cheque.find({ companyId, bankAccountId: accountId, status: { $in: chequeRules.PRESENTABLE } }).sort({ chequeDate: 1 }).lean(), session);
   return cheques.map(chequeRow);
 }
 
@@ -115,7 +116,7 @@ async function resolveEntryRefs(refs, { accountId, clearOn, session, req, adminI
   const out = [];
   for (const ref of refs) {
     if (ref.type === "cheque") {
-      const cheque = await inSession(Cheque.findOne({ _id: ref.chequeId, companyId, bankAccountId: accountId, status: "pending" }).lean(), session);
+      const cheque = await inSession(Cheque.findOne({ _id: ref.chequeId, companyId, bankAccountId: accountId, status: { $in: chequeRules.PRESENTABLE } }).lean(), session);
       if (!cheque) throw new AppError("That cheque is no longer pending", 409, "CHEQUE_NOT_PENDING");
       await ChequeService.clear(cheque._id, { clearedOn: clearOn, note: "Cleared from the bank statement" }, req, adminId, session);
       const e = await inSession(LedgerEntry.findOne({ accountId, referenceType: "cheque", referenceId: cheque._id, isReversed: { $ne: true } }).lean(), session);

@@ -2,6 +2,7 @@ const catchAsync = require("../../utils/catchAsync");
 const BankMasterService = require("../../services/banking/bankMasterService");
 const { CardTypeService, CardService } = require("../../services/banking/cardService");
 const ChequeService = require("../../services/banking/chequeService");
+const ChequeReportService = require("../../services/banking/chequeReportService");
 const PaymentModeService = require("../../services/banking/paymentModeService");
 const AuditService = require("../../services/core/auditService");
 
@@ -53,14 +54,48 @@ exports.updateCard = catchAsync(async (req, res) => {
 
 // --- cheques ---
 exports.listCheques = catchAsync(async (req, res) => ok(res, await ChequeService.list(req, req.query)));
+exports.chequeMaturity = catchAsync(async (req, res) => ok(res, await ChequeReportService.maturity(req.query)));
+exports.chequeForward = catchAsync(async (req, res) => ok(res, await ChequeReportService.forward(req.query)));
+exports.getCheque = catchAsync(async (req, res) => ok(res, await ChequeService.get(req.params.id, req)));
 exports.clearCheque = catchAsync(async (req, res) => {
   const c = await ChequeService.clear(req.params.id, req.body, req, req.admin?.id);
   await AuditService.log({ req, action: "CHEQUE_CLEARED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo} ${c.amount}` });
   ok(res, c);
 });
+exports.depositCheque = catchAsync(async (req, res) => {
+  const c = await ChequeService.deposit(req.params.id, req.body, req, req.admin?.id);
+  await AuditService.log({ req, action: "CHEQUE_DEPOSITED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo}${c.depositSlipNo ? `, slip ${c.depositSlipNo}` : ""}` });
+  ok(res, c);
+});
+exports.holdCheque = catchAsync(async (req, res) => {
+  const c = await ChequeService.hold(req.params.id, req.body, req, req.admin?.id);
+  await AuditService.log({ req, action: "CHEQUE_HELD", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo}: ${c.holdReason}` });
+  ok(res, c);
+});
+exports.resumeCheque = catchAsync(async (req, res) => {
+  const c = await ChequeService.resume(req.params.id, req.body, req, req.admin?.id);
+  await AuditService.log({ req, action: "CHEQUE_RESUMED", entity: "Cheque", entityId: c._id, summary: c.chequeNo });
+  ok(res, c);
+});
+// Several at once: always 200, each failure carries its own code. One audit row for the batch (the per-cheque
+// CHEQUE_CLEARED etc. rows are written by the single-cheque handlers; a bulk summary is what a reviewer wants to see).
+exports.bulkCheques = catchAsync(async (req, res) => {
+  const { action, ids, ...data } = req.body || {};
+  const result = await ChequeService.bulk(action, ids, data, req, req.admin?.id);
+  if (result.successful.length) {
+    await AuditService.log({ req, action: `CHEQUE_BULK_${String(action).toUpperCase()}`, entity: "Cheque", entityId: null, summary: `${result.successful.length} done, ${result.failed.length} failed` });
+  }
+  ok(res, result);
+});
 exports.bounceCheque = catchAsync(async (req, res) => {
   const c = await ChequeService.bounce(req.params.id, req.body, req, req.admin?.id);
-  await AuditService.log({ req, action: "CHEQUE_BOUNCED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo}: ${c.reason}` });
+  const charged = [c.charges?.expenseVoucherNo && `bank charge ${c.charges.expenseVoucherNo}`, c.charges?.rechargeVoucherNo && `recharged ${c.charges.rechargeVoucherNo}`].filter(Boolean).join(", ");
+  await AuditService.log({ req, action: "CHEQUE_BOUNCED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo}: ${c.reason}${charged ? ` (${charged})` : ""}` });
+  ok(res, c);
+});
+exports.returnCheque = catchAsync(async (req, res) => {
+  const c = await ChequeService.giveBack(req.params.id, req.body, req, req.admin?.id);
+  await AuditService.log({ req, action: "CHEQUE_RETURNED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo}: ${c.reason}` });
   ok(res, c);
 });
 exports.cancelCheque = catchAsync(async (req, res) => {

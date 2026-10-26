@@ -32,6 +32,8 @@ async function runMigrations() {
   if (contacts) out.crmContactsBackfilled = contacts;
   const held = await markVoucherNumbersHeld();
   if (held) out.voucherNumbersMarkedHeld = held;
+  const chequeBranches = await backfillChequeBranches();
+  if (chequeBranches) out.chequeBranchesBackfilled = chequeBranches;
   return out;
 }
 
@@ -111,6 +113,36 @@ async function applyApprovedReturnsToTheirInvoices() {
   return done;
 }
 
+// A cheque is a document of the branch its voucher was taken in, but the register had no branchId at all (it was
+// organisation-wide), so a branch user listed other branches' cheques. Now that it is branch scoped an old row with
+// no branchId would be invisible to every branch view, so each one is given its VOUCHER's branch - not a flat "main",
+// which would move a multi-branch client's cheques to head office. A cheque whose voucher is gone goes to "main".
+//
+// Idempotent, and claimed per row by the field itself: the filter is the marker, so a repeat finds nothing and a crash
+// part-way simply resumes. One write per branch, not per cheque. The new indexes are built by Mongoose's autoIndex;
+// syncIndexes is deliberately NOT called, because it would also drop any index the schema does not declare.
+async function backfillChequeBranches() {
+  const { Cheque } = require("../models/modules/banking/bankingModels");
+  const { Voucher } = require("../models/modules/financial/financialModels");
+  const why = "migration: a cheque belongs to the branch of the voucher it was taken on, across every organisation";
+  const cheques = await runUnscoped(why, () => Cheque.find(missing("branchId")).select("voucherId").lean());
+  if (!cheques.length) return 0;
+  const vouchers = await runUnscoped(why, () => Voucher.find({ _id: { $in: [...new Set(cheques.map((c) => String(c.voucherId)))] } }).select("branchId").lean());
+  const branchOf = new Map(vouchers.map((v) => [String(v._id), v.branchId || "main"]));
+  const byBranch = new Map();
+  for (const c of cheques) {
+    const branch = branchOf.get(String(c.voucherId)) || "main";
+    if (!byBranch.has(branch)) byBranch.set(branch, []);
+    byBranch.get(branch).push(c._id);
+  }
+  let done = 0;
+  for (const [branchId, ids] of byBranch) {
+    const r = await runUnscoped(why, () => Cheque.updateMany({ _id: { $in: ids }, ...missing("branchId") }, { $set: { branchId } }));
+    done += r.modifiedCount || 0;
+  }
+  return done;
+}
+
 // The original collections (orders, ledger, parties, stock, masters ...) were written before organisations
 // existed, so none of their rows names one. They all belong to the original organisation. This back-fills them,
 // THEN rebuilds their indexes: the old UNIQUE indexes were global (one transactionNo in the whole database), which
@@ -186,4 +218,4 @@ async function markVoucherNumbersHeld() {
   return r.modifiedCount;
 }
 
-module.exports = { runMigrations, assignCoreToOriginalOrganisation, markVoucherNumbersHeld };
+module.exports = { runMigrations, assignCoreToOriginalOrganisation, markVoucherNumbersHeld, backfillChequeBranches };
