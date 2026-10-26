@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased — post-dated cheque lifecycle
+## 1.9.0.0 — 26 October 2026
 
 The cheque register used to know four states (pending, cleared, bounced, cancelled) and nothing else. It now
 follows a cheque the way a finance desk does: held in the drawer, taken to the bank, cleared or sent back, with the
 reason and the cost of a bounce on file, a view of what falls due, and reminders so nobody has to remember which
 cheque is due on Thursday. Every new state is a state of the REGISTER: no new posting key, no new voucher type and
-no new voucher status, so the day book, the reports and the Phase 2 parity mirrors are untouched.
+no new voucher status, so the day book, the reports and the Phase 2 parity mirrors are untouched. Backend 1.9.0.0.
 
 ### Added
 
