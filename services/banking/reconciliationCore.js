@@ -57,7 +57,7 @@ function chequeRow(c) {
   return {
     id: `cheque:${c._id}`, type: "cheque", chequeId: c._id, voucherId: c.voucherId, voucherNo: c.voucherNo, voucherType: "cheque",
     day: orgDay(c.chequeDate), amount: round2(c.direction === "receipt" ? c.amount : -c.amount),
-    narration: `Cheque ${c.chequeNo} ${c.direction === "receipt" ? "received" : "issued"}${c.isPDC ? " (post-dated)" : ""}`,
+    narration: `Cheque ${c.chequeNo} ${c.direction === "receipt" ? "received" : "issued"}${c.isPDC ? " (post-dated)" : ""}${c.status === "deposited" ? ", deposited" : ""}`,
     party: c.partyName || "", reference: "", chequeNo: c.chequeNo, card: null, groupId: null, pending: true,
   };
 }

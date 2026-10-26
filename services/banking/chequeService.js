@@ -16,9 +16,12 @@ const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // The cheque register. A cheque is recorded when its receipt or payment voucher is saved, waits
 // in a post-dated-cheques account, and moves to the bank account only when it clears.
 //
-//   pending --clear--> cleared --bounce--> bounced
-//   pending --bounce--> bounced        (the voucher's effects are reversed: the party owes again)
-//   pending --cancel--> cancelled      (same reversal; the cheque is withdrawn or replaced)
+//   pending --deposit--> deposited --clear--> cleared --bounce--> bounced
+//   pending --clear--> cleared                  (straight to the bank, e.g. matched from a statement)
+//   pending --hold--> hold --resume--> pending  (kept in the drawer on purpose)
+//   pending, hold, deposited --bounce--> bounced (the voucher's effects are reversed: the party owes again)
+//   pending, hold --cancel--> cancelled          (same reversal; the cheque is withdrawn or replaced)
+// The whole table, and every refusal, is utils/chequeRules.js. Deposit, hold and resume POST NOTHING.
 class ChequeService {
   // Called inside the voucher's transaction.
   static async register({ voucher, cheque, direction, createdBy, session, req }) {
@@ -80,6 +83,12 @@ class ChequeService {
     };
   }
 
+  // The bank will not take a cheque before the date written on it.
+  static assertMature(cheque, on, verb) {
+    if (day(on) < day(cheque.chequeDate)) {
+      throw new AppError(`This cheque is dated ${cheque.chequeDate.toISOString().slice(0, 10)} and cannot ${verb} before then`, 409, "CHEQUE_NOT_MATURE");
+    }
+  }
   static async get(id, req, session) {
     const { companyId } = getTenant(req);
     const q = Cheque.findOne({ _id: id, companyId });
@@ -98,9 +107,7 @@ class ChequeService {
         const cheque = await this.get(id, req, session);
         const step = rules.canTransition(cheque.status, "clear");
         if (!step.ok) throw new AppError(step.message, 409, step.code);
-        if (day(on) < day(cheque.chequeDate)) {
-          throw new AppError(`This cheque is dated ${cheque.chequeDate.toISOString().slice(0, 10)} and cannot clear before then`, 409, "CHEQUE_NOT_MATURE");
-        }
+        this.assertMature(cheque, on, "clear");
         await FiscalYearService.assertPostingAllowed(on, { session });
         const pdcId = await AccountConfigService.resolveAccount(cheque.direction === "receipt" ? "pdc-receipt" : "pdc-issue", { session });
         const { LedgerAccount } = require("../../models/modules/financial/financialModels");
@@ -142,6 +149,77 @@ class ChequeService {
     }
   }
 
+  // A change of state that posts nothing (deposit, hold, resume). One conditional update: the cheque is moved only if it
+  // is still in the state it was read in, so two people pressing at once cannot both win. No transaction is needed - it is
+  // a single document - and no period lock either: nothing is posted, so a cheque may be deposited in a closed month.
+  static async moveStatus(id, action, { set = {}, unset = {}, note = "", check } = {}, req, adminId) {
+    const cheque = await this.get(id, req);
+    const step = rules.canTransition(cheque.status, action);
+    if (!step.ok) throw new AppError(step.message, 409, step.code);
+    if (check) check(cheque);
+    const { companyId } = getTenant(req);
+    const update = { $set: { status: step.to, ...set }, $push: { history: { status: step.to, at: new Date(), by: adminId ? String(adminId) : null, note } } };
+    if (Object.keys(unset).length) update.$unset = unset;
+    const moved = await Cheque.findOneAndUpdate({ _id: cheque._id, companyId, status: cheque.status }, update, { new: true });
+    if (!moved) throw new AppError("This cheque was changed by someone else a moment ago. Open it again and try once more.", 409, "CHEQUE_CHANGED");
+    return moved.toObject();
+  }
+
+  static async deposit(id, { depositedOn, slipNo, note } = {}, req, adminId) {
+    const on = depositedOn ? new Date(depositedOn) : new Date();
+    if (Number.isNaN(on.getTime())) throw new AppError("Enter a valid deposit date", 400, "INVALID_DATE");
+    const slip = String(slipNo || "").trim();
+    if (slip.length > 40) throw new AppError("The deposit slip number can be at most 40 characters", 400, "INVALID_SLIP");
+    return this.moveStatus(id, "deposit", {
+      set: { presentedOn: on, depositSlipNo: slip },
+      note: String(note || "").trim() || (slip ? `Deposited at the bank, slip ${slip}` : "Deposited at the bank"),
+      check: (c) => this.assertMature(c, on, "be deposited"),
+    }, req, adminId);
+  }
+
+  static async hold(id, { reason, until } = {}, req, adminId) {
+    const why = String(reason || "").trim();
+    if (!why) throw new AppError("Say why the cheque is being held", 400, "REASON_REQUIRED");
+    if (why.length > 250) throw new AppError("The reason can be at most 250 characters", 400, "REASON_TOO_LONG");
+    let holdUntil = null;
+    if (until) {
+      holdUntil = new Date(until);
+      if (Number.isNaN(holdUntil.getTime())) throw new AppError("Enter a valid date to hold the cheque until", 400, "INVALID_DATE");
+    }
+    return this.moveStatus(id, "hold", { set: { holdReason: why, holdUntil }, note: why }, req, adminId);
+  }
+
+  static async resume(id, { note } = {}, req, adminId) {
+    return this.moveStatus(id, "resume", { set: { holdReason: "", holdUntil: null }, note: String(note || "").trim() || "Taken off hold" }, req, adminId);
+  }
+  // Several cheques at once (a business with 200 post-dated cheques cannot act one at a time). ONE TRANSACTION PER CHEQUE,
+  // never one for all: a bad cheque must not undo the good ones, and 200 clears in one transaction would risk write
+  // conflicts. The reply is 200 even when some fail; each failure carries its own code. Bounce is not offered in bulk -
+  // it needs a reason and a return memo for each cheque.
+  static async bulk(action, ids, data = {}, req, adminId) {
+    if (!rules.BULK_ACTIONS.includes(action)) throw new AppError(`Cheques can be done in bulk by: ${rules.BULK_ACTIONS.join(", ")}`, 400, "INVALID_ACTION");
+    const list = Array.isArray(ids) ? [...new Set(ids.map(String))] : [];
+    if (!list.length) throw new AppError("Choose at least one cheque", 400, "NO_CHEQUES");
+    if (list.length > rules.MAX_BULK) throw new AppError(`At most ${rules.MAX_BULK} cheques at a time`, 400, "BULK_TOO_LARGE");
+    const run = {
+      deposit: (id) => this.deposit(id, { depositedOn: data.on, slipNo: data.slipNo, note: data.note }, req, adminId),
+      clear: (id) => this.clear(id, { clearedOn: data.on, note: data.note }, req, adminId),
+      hold: (id) => this.hold(id, { reason: data.reason, until: data.until }, req, adminId),
+      resume: (id) => this.resume(id, { note: data.note }, req, adminId),
+    }[action];
+    const successful = [];
+    const failed = [];
+    for (const id of list) {
+      try {
+        if (!mongoose.isValidObjectId(id)) throw new AppError("Not a cheque id", 400, "INVALID_ID");
+        const done = await run(id);
+        successful.push({ id, chequeNo: done.chequeNo });
+      } catch (err) {
+        failed.push({ id, code: err.code || "ERROR", message: err.message });
+      }
+    }
+    return { action, successful, failed };
+  }
   static bounce(id, data, req, adminId) {
     return this.void(id, "bounced", data, req, adminId);
   }
@@ -188,6 +266,10 @@ class ChequeService {
     const { companyId } = getTenant(req);
     const cheques = await Cheque.find({ companyId, voucherId: voucher._id, status: { $in: rules.OPEN } }).session(session);
     for (const c of cheques) {
+      // One already at the bank is not ours to cancel: editing or deleting its voucher would orphan it.
+      if (c.status === "deposited") {
+        throw new AppError("This cheque has been deposited at the bank. Wait for it to clear, or mark it bounced if it comes back, before changing its voucher.", 409, "CHEQUE_WITH_BANK");
+      }
       if (forEdit && c.status === "cleared") {
         throw new AppError("This cheque has cleared, so its voucher cannot be edited. Mark the cheque bounced first.", 409, "CHEQUE_CLEARED");
       }
