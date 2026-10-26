@@ -16,6 +16,9 @@ const countryRules = require("./countryRules");
 // The groups the console draws the modules under, in order. `core` is what no plan can take away.
 const GROUPS = [
   { key: "crm", label: "CRM workspace" },
+  // Industry verticals: a module sold to one kind of business, not to everybody (opt-in in utils/plans.js
+  // OPT_IN_MODULES). Garage is the first; the next one goes here, not under "trade".
+  { key: "vertical", label: "Industry modules" },
   { key: "trade", label: "Buying, selling and stock" },
   { key: "money", label: "Money and books" },
   { key: "organisation", label: "People and settings" },
@@ -27,6 +30,7 @@ const GROUPS = [
 // arrangement (trade erp/src/config/navigation.js), kept short and in the words a customer would use.
 const MODULE_INFO = {
   crm: { group: "crm", sections: ["Dashboard", "Leads", "Contacts", "Pipeline", "Communications", "Follow-ups", "Calendar", "Reports", "Setup"] },
+  garage: { group: "vertical", sections: ["Board", "Vehicles", "Job cards", "Claims", "Reports", "Setup"] },
   sales: { group: "trade", sections: [{ feature: "quotations" }, "Orders", { feature: "deliveryNotes" }, "Invoices", "Returns", "Customers", { feature: "messaging" }] },
   purchase: { group: "trade", sections: ["Orders", "Goods received", "Invoices", "Returns", "Vendors"] },
   inventory: { group: "trade", sections: ["Stock items", "Movements", "Categories", "Units", { feature: "batches" }, { feature: "production" }] },

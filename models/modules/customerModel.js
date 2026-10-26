@@ -25,6 +25,10 @@ const customerSchema = new mongoose.Schema({
     countryCode: { type: String, trim: true, uppercase: true, default: "AE" },
   },
   salesPerson: { type: String, trim: true, default: null, sparse: true },
+  // An insurance company is a Customer like any other: it gets a ledger account, ages its own receivables, and
+  // is chosen as a job card's bill-to with no new finance code. This flag is the only thing that marks it as
+  // one (garage module, services/garage/insuranceClaimService.js). False for every existing customer.
+  isInsurer: { type: Boolean, default: false },
   billingAddress: { type: String, default: null, trim: true },
   shippingAddress: { type: String, default: null, trim: true },
   creditLimit: { type: Number, default: 0, min: 0 },

@@ -5,6 +5,7 @@ const Sequence = require("../../models/modules/sequenceModel");
 const PartyAccounts = require("../financial/partyAccounts");
 const PartyMaster = require("../masters/partyMasterService");
 const { searchRegex } = require("../../utils/regex");
+const { retryTransientTransaction } = require("../../utils/withTransactionSession");
 
 // Customer-only fields the model has always had; the create path used to drop them.
 const cleanEInvoice = (v) =>
@@ -86,7 +87,12 @@ const releaseSequenceNumber = async (customerId, session) => {
 
 // `groupId` files the customer's ledger account in that group instead of the posting-map one (the
 // account form creates a customer straight into a chosen Receivables group).
-exports.createCustomer = async (data, { groupId } = {}) => {
+// Wrapped in retryTransientTransaction: the sequence counter's collection is created implicitly on an
+// organisation's (or a fresh test database's) FIRST customer, and MongoDB answers a transient WriteConflict
+// (code 112) when that happens at the same moment as other catalog work - found by the garage module's own
+// quick-add, reproducing on every run against a brand-new database. Each retry opens its own fresh session,
+// as the function already does.
+exports.createCustomer = retryTransientTransaction(async (data, { groupId } = {}) => {
   const {
     customerName,
     contactPerson,
@@ -154,12 +160,16 @@ exports.createCustomer = async (data, { groupId } = {}) => {
     await PartyAccounts.onPartyCreated("Customer", customer, { groupId, strict: Boolean(groupId) }); // its ledger account appears in the chart
     return customer;
   } catch (error) {
-    await session.abortTransaction();
+    // commitTransaction (above) may itself have succeeded and only a step AFTER it (PartyMaster.finish,
+    // the ledger account) threw - the customer is then already saved, and aborting an already-committed
+    // session throws its own confusing "Cannot call abortTransaction after calling commitTransaction",
+    // masking whatever actually failed. Abort only while there is still something to abort.
+    if (session.inTransaction()) await session.abortTransaction();
     throw error;
   } finally {
     session.endSession();
   }
-};
+});
 
 exports.getAllCustomers = async (filters) => {
   const query = {};
@@ -253,7 +263,8 @@ exports.deleteCustomer = async (id) => {
     await PartyMaster.discardFiles("customer", customer._id).catch((err) => console.error("[party-files] could not remove the customer's files:", err.message));
     return customer;
   } catch (error) {
-    await session.abortTransaction();
+    // Same reasoning as createCustomer above: onPartyDeleted/discardFiles run after the commit.
+    if (session.inTransaction()) await session.abortTransaction();
     throw error;
   } finally {
     session.endSession();
@@ -343,7 +354,7 @@ exports.deleteCustomerByCustomerId = async (customerId) => {
     await session.commitTransaction();
     return customer;
   } catch (error) {
-    await session.abortTransaction();
+    if (session.inTransaction()) await session.abortTransaction();
     throw error;
   } finally {
     session.endSession();

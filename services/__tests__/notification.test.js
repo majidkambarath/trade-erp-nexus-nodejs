@@ -20,6 +20,7 @@ test.before(async () => {
     Notification: require("../core/notificationService"),
     Checks: require("../core/notificationChecksService"),
     Stock: require("../../models/modules/stockModel"),
+    JobCard: require("../../models/modules/garage/jobCardModel"),
     ctx: require("../../utils/tenantContext"),
   };
   await mongoose.connection.syncIndexes();
@@ -112,4 +113,35 @@ test("checkLowStock opens a notification for an item at or below its reorder lev
   await inOrg(() => svc.Checks.checkLowStock());
   feed = await inOrg(() => svc.Notification.forPerson(seer));
   assert.ok(!feed.items.some((n) => n.title.includes("Nearly out widget")), "restocking resolves the alert instead of leaving it open forever");
+});
+
+test("checkGarageJobsOverdue opens a notification for a job promised for a day already past, and resolves it once delivered", { skip }, async () => {
+  const yesterday = new Date(Date.now() - 2 * 86400000);
+  const overdue = await inOrg(() =>
+    svc.JobCard.create({
+      companyId: "notiftest", branchId: "main", status: "IN_PROGRESS",
+      vehicleId: new mongoose.Types.ObjectId(), vehicle: { plateNumber: "Z 55501" },
+      customerId: new mongoose.Types.ObjectId(), customer: { name: "A late customer" },
+      complaints: [{ concern: "x" }], promisedAt: yesterday,
+    })
+  );
+  await inOrg(() =>
+    svc.JobCard.create({
+      companyId: "notiftest", branchId: "main", status: "IN_PROGRESS",
+      vehicleId: new mongoose.Types.ObjectId(), vehicle: { plateNumber: "Z 55502" },
+      customerId: new mongoose.Types.ObjectId(), customer: { name: "On time" },
+      complaints: [{ concern: "x" }], promisedAt: new Date(Date.now() + 2 * 86400000),
+    })
+  );
+
+  await inOrg(() => svc.Checks.checkGarageJobsOverdue());
+  const seer = reqOf("garage-person1", ["garage.view"]);
+  let feed = await inOrg(() => svc.Notification.forPerson(seer));
+  assert.ok(feed.items.some((n) => n.body?.includes("Z 55501")), "the overdue job's plate is on the alert");
+  assert.ok(!feed.items.some((n) => n.body?.includes("Z 55502")), "a job not yet due raises nothing");
+
+  await inOrg(() => svc.JobCard.updateOne({ _id: overdue._id }, { status: "CLOSED" }));
+  await inOrg(() => svc.Checks.checkGarageJobsOverdue());
+  feed = await inOrg(() => svc.Notification.forPerson(seer));
+  assert.ok(!feed.items.some((n) => n.body?.includes("Z 55501")), "closing the job resolves its own overdue alert");
 });

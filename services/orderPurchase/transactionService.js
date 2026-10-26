@@ -25,6 +25,7 @@ const { withTransactionSession } = require("../../utils/withTransactionSession")
 const DocumentLinks = require("./deliveryNoteLinks");
 const ReceiptLinks = require("./receiptLinks");
 const CrmHooks = require("../crm/crmHooks");
+const JobCardLinks = require("../garage/jobCardLinks");
 const ShareService = require("../messaging/shareService");
 const ItemKindService = require("../stock/itemKindService");
 const kinds = require("../../utils/itemKinds");
@@ -479,6 +480,8 @@ class TransactionService {
       await ReceiptLinks.onPurchaseInvoiceChanged(transaction, { session, deleted: true });
       // The CRM deal this invoice won is put back where it was: see services/crm/crmHooks.js.
       await CrmHooks.onSalesDocumentReversed(transaction, { session });
+      // A job card that raised this invoice learns it no longer exists, and can be invoiced again.
+      await JobCardLinks.onJobCardInvoiceChanged(transaction, { session, deleted: true });
       // The online link a customer was sent no longer points at anything that exists. Fire and forget:
       // failing to withdraw it must never fail the delete.
       ShareService.revokeFor("Transaction", transaction._id, "The document was deleted");
@@ -594,6 +597,9 @@ class TransactionService {
       // deliberately HERE and not earlier: an approval that is only the first of two returns above (line ~535), so a
       // deal is never won by a document still waiting for its second approver.
       await CrmHooks.onSalesDocumentProcessed(transaction, { session });
+      // A job card that raised this invoice learns whether it is now INVOICED (approved), still on its way,
+      // or dead (rejected/cancelled) - same placement as the CRM hook above, and for the same reason.
+      await JobCardLinks.onJobCardInvoiceChanged(transaction, { session });
 
       return transaction;
     }

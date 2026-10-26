@@ -227,6 +227,145 @@ class NotificationChecksService {
   }
 
   /**
+   * A job promised for a day already past, and not yet handed back. Told to whoever may act (garage.view - a
+   * workshop's whole floor, not one owner: nobody "owns" a job card the way a CRM deal has one person on it).
+   */
+  static async checkGarageJobsOverdue(now = new Date()) {
+    const JobCard = require("../../models/modules/garage/jobCardModel");
+    const garage = require("../../utils/garage");
+    const today = todayInOrg();
+    const rows = await JobCard.find({ status: { $in: [...garage.LIVE_STATUS] }, promisedAt: { $ne: null, $lt: new Date(`${today}T00:00:00.000Z`) } })
+      .select("jobNo vehicle customer promisedAt")
+      .limit(300)
+      .lean();
+
+    const active = [];
+    for (const row of rows) {
+      const dedupeKey = `garage_job_overdue:${row._id}`;
+      active.push(dedupeKey);
+      const plate = row.vehicle?.plateNumber || row.vehicle?.chassisNo || "A vehicle";
+      await NotificationService.raise({
+        kind: "garage_job_overdue",
+        severity: "warning",
+        title: `${row.jobNo || "A job card"} is overdue`,
+        body: `${plate} (${row.customer?.name || "no customer"}) was promised for ${row.promisedAt}.`,
+        link: "/garage/board",
+        dedupeKey,
+        permission: "garage.view",
+        now,
+      });
+    }
+    await NotificationService.resolveMissing({ kind: "garage_job_overdue", activeDedupeKeys: active, now });
+    return { checked: rows.length };
+  }
+
+  /**
+   * An estimate sent and not yet decided for more than a day - the commonest reason a car sits untouched in a
+   * workshop (plan part 1.4: "the daily driver"). Resolves itself the moment a decision is recorded.
+   */
+  static async checkGarageEstimatesWaiting(now = new Date()) {
+    const JobCard = require("../../models/modules/garage/jobCardModel");
+    const cutoff = new Date(now.getTime() - 24 * 3600 * 1000);
+    const rows = await JobCard.find({ status: "AWAITING_APPROVAL", "estimate.sentAt": { $ne: null, $lte: cutoff } })
+      .select("jobNo vehicle customer estimate.sentAt")
+      .limit(300)
+      .lean();
+
+    const active = [];
+    for (const row of rows) {
+      const dedupeKey = `garage_estimate_waiting:${row._id}`;
+      active.push(dedupeKey);
+      const plate = row.vehicle?.plateNumber || row.vehicle?.chassisNo || "A vehicle";
+      const hours = Math.round((now.getTime() - new Date(row.estimate.sentAt).getTime()) / 3600000);
+      await NotificationService.raise({
+        kind: "garage_estimate_waiting",
+        severity: hours >= 48 ? "warning" : "info",
+        title: `${row.jobNo || "An estimate"} is still waiting for a decision`,
+        body: `${plate} (${row.customer?.name || "no customer"}): sent about ${hours} hours ago.`,
+        link: "/garage/job-cards",
+        dedupeKey,
+        permission: "garage.view",
+        now,
+      });
+    }
+    await NotificationService.resolveMissing({ kind: "garage_estimate_waiting", activeDedupeKeys: active, now });
+    return { checked: rows.length };
+  }
+
+  /**
+   * A claim waiting on the insurer (submitted or surveyed, no decision yet) for more than two days - the
+   * claims-ageing figure the plan calls for, as a notification rather than only a report row.
+   */
+  static async checkGarageClaimsWaiting(now = new Date()) {
+    const InsuranceClaim = require("../../models/modules/garage/insuranceClaimModel");
+    const cutoff = new Date(now.getTime() - 2 * 24 * 3600 * 1000);
+    const rows = await InsuranceClaim.find({ status: { $in: ["SUBMITTED", "SURVEYED"] }, submittedAt: { $ne: null, $lte: cutoff } })
+      .select("claimNo insurer submittedAt status")
+      .limit(300)
+      .lean();
+
+    const active = [];
+    for (const row of rows) {
+      const dedupeKey = `garage_claim_waiting:${row._id}`;
+      active.push(dedupeKey);
+      const days = Math.max(0, Math.round((now.getTime() - new Date(row.submittedAt).getTime()) / 86400000));
+      await NotificationService.raise({
+        kind: "garage_claim_waiting",
+        severity: days >= 7 ? "warning" : "info",
+        title: `${row.claimNo || "A claim"} is still waiting on ${row.insurer?.name || "the insurer"}`,
+        body: `${days} days since it was submitted (${row.status === "SURVEYED" ? "surveyed" : "awaiting survey"}).`,
+        link: "/garage/claims",
+        dedupeKey,
+        permission: "garage.view",
+        now,
+      });
+    }
+    await NotificationService.resolveMissing({ kind: "garage_claim_waiting", activeDedupeKeys: active, now });
+    return { checked: rows.length };
+  }
+
+  /**
+   * A vehicle's next service, due or overdue (utils/garage.js serviceDue) - the garage's cheapest marketing
+   * (plan part 1.2 step 15). Only vehicles with an interval actually set raise anything; a date OR an odometer
+   * reading already past counts, whichever the owner tracks.
+   */
+  static async checkGarageServiceDue(now = new Date()) {
+    const Vehicle = require("../../models/modules/garage/vehicleModel");
+    const garage = require("../../utils/garage");
+    const { addMonths } = require("../../utils/yearEnd");
+    const today = todayInOrg();
+    const horizon = addDays(today, 14);
+    const rows = await Vehicle.find({ status: "active", $or: [{ "serviceInterval.km": { $gt: 0 } }, { "serviceInterval.months": { $gt: 0 } }] })
+      .select("plateNumber chassisNo make model odometer serviceInterval lastServiceDay lastServiceOdometer")
+      .limit(500)
+      .lean();
+
+    const active = [];
+    for (const row of rows) {
+      const due = garage.serviceDue(row, { intervalKm: row.serviceInterval?.km, intervalMonths: row.serviceInterval?.months, lastServiceDay: row.lastServiceDay, lastServiceOdometer: row.lastServiceOdometer, addMonths });
+      const byDay = due.dueDay && due.dueDay <= horizon;
+      const byKm = due.dueOdometer && Number(row.odometer) > 0 && Number(row.odometer) >= due.dueOdometer;
+      if (!byDay && !byKm) continue;
+      const dedupeKey = `garage_service_due:${row._id}`;
+      active.push(dedupeKey);
+      const overdue = (due.dueDay && due.dueDay < today) || byKm;
+      const plate = row.plateNumber || row.chassisNo || "A vehicle";
+      await NotificationService.raise({
+        kind: "garage_service_due",
+        severity: overdue ? "warning" : "info",
+        title: `${plate} is ${overdue ? "overdue" : "due"} for its next service`,
+        body: [due.dueDay ? `By ${due.dueDay}` : "", due.dueOdometer ? `${due.dueOdometer} km` : ""].filter(Boolean).join(" or "),
+        link: "/garage/vehicles",
+        dedupeKey,
+        permission: "garage.view",
+        now,
+      });
+    }
+    await NotificationService.resolveMissing({ kind: "garage_service_due", activeDedupeKeys: active, now });
+    return { checked: rows.length };
+  }
+
+  /**
    * The registry. `module` is the permission module an organisation must hold for the check to run at all: a CRM
    * notification for an organisation that did not buy CRM would be work nobody can see, and a row whose audience names
    * a key nobody in that organisation can hold is a row that can never be read or resolved.
@@ -238,6 +377,10 @@ class NotificationChecksService {
     { key: "crmStaleDeals", module: "crm", run: (now) => NotificationChecksService.checkStaleDeals(now) },
     { key: "crmUncontactedLeads", module: "crm", run: (now) => NotificationChecksService.checkUncontactedLeads(now) },
     { key: "crmQuotationsExpiring", module: "crm", run: (now) => NotificationChecksService.checkQuotationsExpiring(now) },
+    { key: "garageJobsOverdue", module: "garage", run: (now) => NotificationChecksService.checkGarageJobsOverdue(now) },
+    { key: "garageEstimatesWaiting", module: "garage", run: (now) => NotificationChecksService.checkGarageEstimatesWaiting(now) },
+    { key: "garageClaimsWaiting", module: "garage", run: (now) => NotificationChecksService.checkGarageClaimsWaiting(now) },
+    { key: "garageServiceDue", module: "garage", run: (now) => NotificationChecksService.checkGarageServiceDue(now) },
   ];
 
   /** Every check this organisation is entitled to. One check failing never stops the others. */

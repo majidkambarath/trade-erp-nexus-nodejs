@@ -57,7 +57,11 @@ const MODULE_ACTIONS = Object.fromEntries(MODULE_KEYS.map((m) => [m, Object.keys
 // organisation could be sold a product that cannot open a form, print a document or show a first screen.
 const ALWAYS_ON = ["lookups.view", "settings.view", "reports.view"];
 
-const ALL_MODULES = Object.fromEntries(MODULE_KEYS.map((m) => [m, true]));
+// A VERTICAL: a module that belongs to one industry, not to the product everybody buys. Like an opt-in FEATURE
+// above, it is in NO plan - not even Premium or Internal - and an organisation only ever gets it by a module
+// override from the developer console. The next vertical goes here.
+const OPT_IN_MODULES = ["garage"];
+const ALL_MODULES = Object.fromEntries(MODULE_KEYS.map((m) => [m, !OPT_IN_MODULES.includes(m)]));
 /** Every module but the ones named, which are off; `detail` sells one in part ({ reports: ["view"] }). */
 const modulesExcept = (off = [], detail = {}) => ({
   ...ALL_MODULES,
@@ -294,7 +298,7 @@ function monthStartIn(timezone, now = new Date()) {
 
 module.exports = {
   FEATURES, FEATURE_KEYS, PLANS, PLAN_CODES, LIMIT_KEYS,
-  MODULE_KEYS, MODULE_ACTIONS, ALWAYS_ON,
+  MODULE_KEYS, MODULE_ACTIONS, ALWAYS_ON, OPT_IN_MODULES,
   effectiveFeatures, hasFeature, effectiveLimits, checkLimit, subscriptionState, endsAtFor, monthStartIn,
   moduleActions, effectiveModules, entitledKeys, moduleAllows, moduleOverrideError,
 };

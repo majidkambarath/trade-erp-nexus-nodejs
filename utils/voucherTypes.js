@@ -10,7 +10,7 @@
 const HEAD_OFFICE = "main";
 
 // How the Numbering screen groups the list, and what a group is allowed to do.
-const KINDS = ["voucher", "trade", "inventory", "crm", "system"];
+const KINDS = ["voucher", "trade", "inventory", "crm", "garage", "system"];
 const RESET_POLICIES = ["yearly", "never"];
 
 // The label a continuous series counts under. A counter is identified by the label it PRINTS (see labelOf),
@@ -56,6 +56,10 @@ const SEED = [
   // CRM.
   { key: "LD",   name: "Lead",                   kind: "crm",       postsAs: null,               prefix: "LD",   statutory: false },
   { key: "OPP",  name: "Opportunity",            kind: "crm",       postsAs: null,               prefix: "OPP",  statutory: false },
+  // Garage: the job card is its own series (never postsAs a Transaction type - the invoice it raises keeps
+  // its own SO number), and the insurance claim is a record, not a posting document either.
+  { key: "JC",   name: "Job card",               kind: "garage",    postsAs: null,               prefix: "JC",   statutory: false },
+  { key: "CLM",  name: "Insurance claim",        kind: "garage",    postsAs: null,               prefix: "CLM",  statutory: false },
   // Written by the engine itself: go-live balances, a proven bank reconciliation, the year-end entry.
   // Nobody types one of these, so they take no manual override and no reuse (see mayOverride).
   { key: "OBV",  name: "Opening balance",        kind: "system",    postsAs: null,               prefix: "OBV",  statutory: false },
