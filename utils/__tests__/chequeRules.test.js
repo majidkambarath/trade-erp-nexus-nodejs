@@ -4,15 +4,15 @@ const rules = require("../chequeRules");
 
 const OLD = ["pending", "cleared", "bounced", "cancelled"]; // the register's original four
 
-test("the six statuses: the original four are kept verbatim, hold and deposited are added", () => {
-  assert.deepEqual([...rules.STATUSES], ["pending", "hold", "deposited", "cleared", "bounced", "cancelled"]);
+test("the seven statuses: the original four are kept verbatim, hold, deposited and returned are added", () => {
+  assert.deepEqual([...rules.STATUSES], ["pending", "hold", "deposited", "cleared", "bounced", "returned", "cancelled"]);
   for (const s of OLD) assert.ok(rules.STATUSES.includes(s), `${s} must survive: no status migration`);
 });
 
 test("every status is in exactly one of OPEN or CLOSED, and LIVE is inside OPEN", () => {
   for (const s of rules.STATUSES) assert.equal(rules.OPEN.includes(s) !== rules.CLOSED.includes(s), true, `${s} must be OPEN xor CLOSED`);
   for (const s of rules.LIVE) assert.ok(rules.OPEN.includes(s), `LIVE ${s} must hold its cheque number`);
-  assert.deepEqual([...rules.CLOSED].sort(), ["bounced", "cancelled"]);
+  assert.deepEqual([...rules.CLOSED].sort(), ["bounced", "cancelled", "returned"]);
   assert.ok(rules.OPEN.includes("cleared"), "a cleared cheque still holds its number");
 });
 
@@ -88,6 +88,15 @@ test("a cheque at the bank cannot be withdrawn: cancel is refused from deposited
   assert.equal(rules.canTransition("hold", "bounce").to, "bounced");
 });
 
+test("return: handed back to the party only before it was presented - never from the bank, never once cleared", () => {
+  assert.deepEqual(rules.canTransition("pending", "return"), { ok: true, to: "returned" });
+  assert.equal(rules.canTransition("hold", "return").to, "returned");
+  const atBank = rules.canTransition("deposited", "return");
+  assert.deepEqual([atBank.ok, atBank.code], [false, "CHEQUE_WITH_BANK"]);
+  assert.match(atBank.message, /handed back/);
+  for (const from of ["cleared", "bounced", "cancelled", "returned"]) assert.equal(rules.canTransition(from, "return").code, "CHEQUE_NOT_PENDING", from);
+});
+
 test("an unknown action or status is refused, never allowed by default", () => {
   assert.equal(rules.canTransition("pending", "teleport").code, "UNKNOWN_ACTION");
   assert.equal(rules.canTransition("nonsense", "clear").ok, false);
@@ -105,8 +114,8 @@ test("every legal transition lands on a known status, and the full matrix has no
   // pinned in full: a change to the machine must be a deliberate edit of this list
   assert.deepEqual(legal.sort(), [
     "cleared>bounce>bounced", "deposited>bounce>bounced", "deposited>clear>cleared", "hold>bounce>bounced",
-    "hold>cancel>cancelled", "hold>resume>pending", "pending>bounce>bounced", "pending>cancel>cancelled",
-    "pending>clear>cleared", "pending>deposit>deposited", "pending>hold>hold",
+    "hold>cancel>cancelled", "hold>resume>pending", "hold>return>returned", "pending>bounce>bounced", "pending>cancel>cancelled",
+    "pending>clear>cleared", "pending>deposit>deposited", "pending>hold>hold", "pending>return>returned",
   ]);
 });
 

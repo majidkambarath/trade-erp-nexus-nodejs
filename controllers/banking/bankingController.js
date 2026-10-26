@@ -86,7 +86,13 @@ exports.bulkCheques = catchAsync(async (req, res) => {
 });
 exports.bounceCheque = catchAsync(async (req, res) => {
   const c = await ChequeService.bounce(req.params.id, req.body, req, req.admin?.id);
-  await AuditService.log({ req, action: "CHEQUE_BOUNCED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo}: ${c.reason}` });
+  const charged = [c.charges?.expenseVoucherNo && `bank charge ${c.charges.expenseVoucherNo}`, c.charges?.rechargeVoucherNo && `recharged ${c.charges.rechargeVoucherNo}`].filter(Boolean).join(", ");
+  await AuditService.log({ req, action: "CHEQUE_BOUNCED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo}: ${c.reason}${charged ? ` (${charged})` : ""}` });
+  ok(res, c);
+});
+exports.returnCheque = catchAsync(async (req, res) => {
+  const c = await ChequeService.giveBack(req.params.id, req.body, req, req.admin?.id);
+  await AuditService.log({ req, action: "CHEQUE_RETURNED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo}: ${c.reason}` });
   ok(res, c);
 });
 exports.cancelCheque = catchAsync(async (req, res) => {

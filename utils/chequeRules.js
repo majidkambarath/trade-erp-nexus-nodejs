@@ -15,6 +15,7 @@
 //   pending --deposit--> deposited --clear--> cleared --bounce--> bounced
 //   pending ------------clear---------------^
 //   pending, hold --cancel--> cancelled          pending, hold, deposited --bounce--> bounced
+//   pending, hold --return--> returned           (handed back to the party, never presented)
 //
 // "Deposited" and "hold" post NOTHING: the money is still in the one post-dated-cheques account.
 //
@@ -31,8 +32,11 @@ const DEPOSITED = "deposited";
 const CLEARED = "cleared";
 const BOUNCED = "bounced";
 const CANCELLED = "cancelled";
+// Handed back to the party before it was ever presented (a replacement is coming, or the deal fell through). Posts like a
+// cancellation - the voucher is reversed - but it is a different FACT, and a report should be able to tell them apart.
+const RETURNED = "returned";
 
-const STATUSES = Object.freeze([PENDING, HOLD, DEPOSITED, CLEARED, BOUNCED, CANCELLED]);
+const STATUSES = Object.freeze([PENDING, HOLD, DEPOSITED, CLEARED, BOUNCED, RETURNED, CANCELLED]);
 
 // The money is still in the air: recorded, not yet in the bank, not written off.
 const LIVE = Object.freeze([PENDING, HOLD, DEPOSITED]);
@@ -58,6 +62,7 @@ const TABLE = Object.freeze({
   resume: { from: Object.freeze([HOLD]), to: PENDING },
   bounce: { from: Object.freeze([...LIVE, CLEARED]), to: BOUNCED },
   cancel: { from: Object.freeze([PENDING, HOLD]), to: CANCELLED },
+  return: { from: Object.freeze([PENDING, HOLD]), to: RETURNED },
 });
 const ACTIONS = Object.freeze(Object.keys(TABLE));
 
@@ -74,6 +79,7 @@ const PLAIN = Object.freeze({
   resume: (s) => `Only a cheque on hold can be resumed; this one is ${s}`,
   bounce: (s) => `A ${s} cheque cannot be marked bounced`,
   cancel: (s) => `A ${s} cheque cannot be marked cancelled`,
+  return: (s) => `A ${s} cheque cannot be returned to the party`,
 });
 
 // May `action` be done to a cheque in `status`? -> { ok: true, to } or { ok: false, code, message }.
@@ -87,8 +93,9 @@ function canTransition(status, action) {
   if (status === HOLD && (action === "clear" || action === "deposit")) {
     return { ok: false, code: "CHEQUE_ON_HOLD", message: "This cheque is on hold. Resume it first, then try again." };
   }
-  if (status === DEPOSITED && action === "cancel") {
-    return { ok: false, code: "CHEQUE_WITH_BANK", message: "This cheque is at the bank and cannot be withdrawn. If it comes back, mark it bounced." };
+  if (status === DEPOSITED && (action === "cancel" || action === "return")) {
+    const what = action === "cancel" ? "withdrawn" : "handed back";
+    return { ok: false, code: "CHEQUE_WITH_BANK", message: `This cheque is at the bank and cannot be ${what}. If it comes back, mark it bounced.` };
   }
   if (action === "resume") return { ok: false, code: "CHEQUE_NOT_HELD", message: PLAIN.resume(status) };
   return { ok: false, code: "CHEQUE_NOT_PENDING", message: PLAIN[action](status) };
