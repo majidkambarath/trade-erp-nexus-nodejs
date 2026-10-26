@@ -86,10 +86,13 @@ cardSchema.index({ companyId: 1, kind: 1, isActive: 1 });
 // pending -> cleared | bounced | cancelled. Until it clears, a cheque sits in a post-dated
 // cheques account rather than in the bank account.
 // ---------------------------------------------------------------------------------------------
-const CHEQUE_STATUSES = ["pending", "cleared", "bounced", "cancelled"];
+const { STATUSES: CHEQUE_STATUSES } = require("../../../utils/chequeRules");
 const chequeSchema = new mongoose.Schema(
   {
     companyId: { type: String, required: true },
+    // The branch of the voucher this cheque was taken on; head office is "main". Documents are per branch, and a
+    // cheque is one: without this a branch user listed other branches' cheques, whose audit trail then 404ed.
+    branchId: { type: String, default: "main" },
     direction: { type: String, enum: ["receipt", "payment"], required: true },
     voucherId: { type: mongoose.Schema.Types.ObjectId, ref: "Voucher", required: true },
     voucherNo: { type: String, required: true },
@@ -126,6 +129,8 @@ const chequeSchema = new mongoose.Schema(
   { timestamps: true }
 );
 chequeSchema.index({ companyId: 1, status: 1, chequeDate: 1 });
+chequeSchema.index({ companyId: 1, branchId: 1, status: 1, chequeDate: 1 });
+chequeSchema.index({ companyId: 1, bankAccountId: 1, status: 1 });
 chequeSchema.index({ companyId: 1, voucherId: 1 });
 chequeSchema.index({ companyId: 1, direction: 1, chequeNo: 1 });
 
@@ -133,7 +138,7 @@ chequeSchema.index({ companyId: 1, direction: 1, chequeNo: 1 });
 bankSchema.plugin(tenantPlugin);
 cardTypeSchema.plugin(tenantPlugin);
 cardSchema.plugin(tenantPlugin);
-chequeSchema.plugin(tenantPlugin);
+chequeSchema.plugin(tenantPlugin, { branchScoped: true });
 
 const BankMaster = mongoose.models.BankMaster || mongoose.model("BankMaster", bankSchema);
 const CardType = mongoose.models.CardType || mongoose.model("CardType", cardTypeSchema);
