@@ -43,6 +43,7 @@ router.post("/cheques/:id/hold", requirePermission("finance.approve"), c.holdChe
 router.post("/cheques/:id/resume", requirePermission("finance.approve"), c.resumeCheque);
 router.post("/cheques/:id/clear", requirePermission("finance.approve"), c.clearCheque);
 router.post("/cheques/:id/bounce", requirePermission("finance.approve"), c.bounceCheque);
+router.post("/cheques/:id/return", requirePermission("finance.approve"), c.returnCheque);
 router.post("/cheques/:id/cancel", requirePermission("finance.approve"), c.cancelCheque);
 
 module.exports = router;

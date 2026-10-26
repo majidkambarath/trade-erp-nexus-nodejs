@@ -7,6 +7,7 @@ const FiscalYearService = require("../core/fiscalYearService");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 const rules = require("../../utils/chequeRules");
+const dishonourRules = require("../../utils/chequeDishonour");
 
 const SYSTEM_USER = new mongoose.Types.ObjectId("000000000000000000000000");
 const asAdmin = (v) => (mongoose.isValidObjectId(v) ? v : SYSTEM_USER);
@@ -226,18 +227,107 @@ class ChequeService {
   static cancel(id, data, req, adminId) {
     return this.void(id, "cancelled", data, req, adminId);
   }
+  // Handed back to the party before it was presented. (Not named "return": a reserved word is a poor method name.)
+  static giveBack(id, data, req, adminId) {
+    return this.void(id, "returned", data, req, adminId);
+  }
 
-  // The cheque did not honour (or was withdrawn): the voucher is reversed as if it had not been
-  // taken, so the invoices it settled are open again, and the voucher is marked.
-  static async void(id, to, { reason, on } = {}, req, adminId) {
-    if (to === "bounced" && !String(reason || "").trim()) throw new AppError("Say why the cheque bounced", 400, "REASON_REQUIRED");
-    const when = on ? new Date(on) : new Date();
+  // The posting-map account a bank charge goes to. A company set up before the key existed has it unmapped; the defaults
+  // are added once and we retry. That top-up commits on its OWN, so this runs before the transaction opens, never inside.
+  static async bankChargesAccount(req) {
+    const AccountConfigService = require("../financial/accountConfigService");
+    try {
+      return await AccountConfigService.resolveAccount("bank-charges");
+    } catch (err) {
+      if (err.code !== "ACCOUNT_NOT_CONFIGURED") throw err;
+      await require("../financial/defaultChartService").provision(req);
+      return AccountConfigService.resolveAccount("bank-charges");
+    }
+  }
+
+  // The bank took a fee for sending the cheque back, and maybe the customer is to be charged for it. Both are ordinary
+  // vouchers posted through the ordinary code (so the ledger, the VAT return and the audit trail see them like any other),
+  // INSIDE the bounce's transaction: a bounce recorded without its fee is worse than one that refuses and says why.
+  static async postDishonourCharges({ cheque, dishonour, feeAccountId, when, session, req, adminId }) {
+    const out = {};
+    const money = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const asked = async (data) => {
+      try {
+        return await FinancialService.createVoucher(data, adminId, session, { req });
+      } catch (err) {
+        // A person over their approval limit cannot leave this waiting for an approver (it is inside a transaction).
+        if (err.code === "APPROVAL_LIMIT_EXCEEDED") err.message = `The cheque was not marked bounced, because its charge needs an approver: ${err.message}`;
+        throw err;
+      }
+    };
+    const { bankCharge, recharge } = dishonour;
+    if (bankCharge) {
+      let net = bankCharge.amount;
+      let tax = {};
+      if (bankCharge.taxCodeId) {
+        const TaxCode = require("../../models/modules/financial/taxCodeModel");
+        const code = await TaxCode.findOne({ _id: bankCharge.taxCodeId, isActive: true }).session(session).lean();
+        if (!code) throw new AppError("Tax code not found or inactive", 400, "INVALID_TAX_CODE");
+        const rate = require("../financial/taxCodeService").rateOn(code, when);
+        const split = require("../../utils/bankStatement").splitGross(bankCharge.amount, rate);
+        net = split.net;
+        tax = rate > 0 ? { taxCodeId: code._id, vatAmount: split.vat } : { taxCodeId: code._id };
+      }
+      const v = await asked({
+        voucherType: "expense", ledgerBased: true, date: when, expenseAccountId: feeAccountId, amount: net, ...tax,
+        description: `Returned cheque ${cheque.chequeNo} - bank charge`, narration: `Cheque ${cheque.chequeNo} (${cheque.voucherNo}) returned by the bank`,
+        paymentMode: "bank", paymentDetails: { accountId: cheque.bankAccountId, reference: `Cheque ${cheque.chequeNo}` },
+      });
+      out.expenseVoucherId = v._id;
+      out.expenseVoucherNo = v.voucherNo;
+      out.amount = money(bankCharge.amount);
+    }
+    if (recharge) {
+      const v = await asked({
+        voucherType: "debit_note", ledgerBased: true, date: when, partyId: cheque.partyId, partyType: "Customer",
+        lines: [{ accountId: recharge.accountId, amount: recharge.amount, ...(recharge.taxCodeId ? { taxCodeId: recharge.taxCodeId } : {}), description: recharge.description || `Charge for returned cheque ${cheque.chequeNo}` }],
+        narration: `Charge for returned cheque ${cheque.chequeNo} (${cheque.voucherNo})`,
+      });
+      out.rechargeVoucherId = v._id;
+      out.rechargeVoucherNo = v.voucherNo;
+      out.rechargeAmount = money(recharge.amount);
+    }
+    return out;
+  }
+
+  // The cheque did not honour, was handed back, or was withdrawn: the voucher is reversed as if it had not been taken, so
+  // the invoices it settled are open again, and the voucher is marked. `to` is bounced | returned | cancelled.
+  //   bounced   the bank sent it back: a reason (words or the list), optionally the bank's memo, the part it paid, and
+  //             the bank's charge and what to charge the customer - those post inside this same transaction
+  //   returned  handed back to the party unpresented: a reason is all it needs
+  //   cancelled withdrawn or replaced
+  // The voucher reads "bounced" or "cancelled" - no new voucher status: a returned cheque's voucher is cancelled.
+  static async void(id, to, input = {}, req, adminId) {
+    const action = { bounced: "bounce", returned: "return", cancelled: "cancel" }[to];
+    const when = input.on ? new Date(input.on) : new Date();
+    if (Number.isNaN(when.getTime())) throw new AppError("Enter a valid date", 400, "INVALID_DATE");
+
+    // What was asked for is judged before anything is opened. A cheque's amount, direction and party never change, so
+    // this read is safe to use for that; its STATE is read again inside the transaction.
+    const peek = await this.get(id, req);
+    let dishonour;
+    if (to === "bounced") {
+      dishonour = dishonourRules.normaliseBounce(input, { amount: peek.amount, direction: peek.direction, partyIsCustomer: peek.partyType === "Customer", now: new Date() });
+    } else if (to === "returned") {
+      dishonour = dishonourRules.normaliseReturn(input);
+    } else {
+      dishonour = { ok: true, value: { reason: String(input.reason || "").trim().slice(0, 250) } };
+    }
+    if (!dishonour.ok) throw new AppError(dishonour.message, dishonour.status || 400, dishonour.code);
+    const d = dishonour.value;
+    const feeAccountId = d.bankCharge ? await this.bankChargesAccount(req) : null;
+
     const session = await mongoose.startSession();
     try {
       let result;
       await session.withTransaction(async () => {
         const cheque = await this.get(id, req, session);
-        const step = rules.canTransition(cheque.status, to === "bounced" ? "bounce" : "cancel");
+        const step = rules.canTransition(cheque.status, action);
         if (!step.ok) throw new AppError(step.message, 409, step.code);
         const voucher = await Voucher.findById(cheque.voucherId).session(session);
         if (!voucher) throw new AppError("The voucher for this cheque no longer exists", 404);
@@ -248,9 +338,16 @@ class ChequeService {
         voucher.updatedBy = asAdmin(adminId);
         await voucher.save({ session });
         cheque.status = to;
-        if (to === "bounced") cheque.bouncedOn = when;
-        cheque.reason = reason || "";
-        cheque.history.push({ status: to, at: new Date(), by: adminId ? String(adminId) : null, note: reason || "" });
+        if (to === "bounced") {
+          cheque.bouncedOn = when;
+          cheque.returnMemo = d.returnMemo;
+          if (d.certificateRef) cheque.certificateRef = d.certificateRef;
+          if (d.partialPayment) cheque.partialPayment = d.partialPayment;
+          if (d.bankCharge || d.recharge) cheque.charges = await this.postDishonourCharges({ cheque, dishonour: d, feeAccountId, when, session, req, adminId });
+        }
+        if (to === "returned") cheque.returnedOn = when;
+        cheque.reason = d.reason || "";
+        cheque.history.push({ status: to, at: new Date(), by: adminId ? String(adminId) : null, note: d.reason || "" });
         await cheque.save({ session });
         result = cheque.toObject();
       });
@@ -259,7 +356,6 @@ class ChequeService {
       await session.endSession();
     }
   }
-
   // A voucher is being deleted or re-saved. A cheque that has not cleared is simply withdrawn
   // (the caller reverses the ledger); one that has cleared may only be deleted, not edited.
   static async onVoucherRemoved(voucher, { session, req, adminId, forEdit = false }) {

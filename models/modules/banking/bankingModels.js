@@ -121,6 +121,29 @@ const chequeSchema = new mongoose.Schema(
     // Kept in the drawer on purpose: why, and optionally until when. Set only while status is "hold".
     holdReason: { type: String, trim: true, maxlength: 250, default: "" },
     holdUntil: { type: Date, default: null },
+    // A cheque the bank sent back: the bank's return memo, and what it cost. FACTS ONLY - nothing here asserts a legal
+    // consequence (utils/chequeDishonour.js says why).
+    returnMemo: {
+      reasonCode: { type: String, default: undefined },
+      reasonText: { type: String, trim: true, maxlength: 250, default: undefined },
+      memoDate: { type: Date, default: undefined },
+      memoRef: { type: String, trim: true, maxlength: 60, default: undefined },
+      _id: false,
+    },
+    certificateRef: { type: String, trim: true, maxlength: 60, default: undefined },
+    // What the bank paid, if it paid part. The cheque is still reversed in full; the part paid is entered as a receipt.
+    partialPayment: { amount: { type: Number, min: 0, default: undefined }, on: { type: Date, default: undefined }, _id: false },
+    returnedOn: { type: Date, default: null },
+    // The vouchers a bounce posted: the bank's charge, and what was charged back to the customer.
+    charges: {
+      expenseVoucherId: { type: mongoose.Schema.Types.ObjectId, ref: "Voucher", default: undefined },
+      expenseVoucherNo: { type: String, default: undefined },
+      amount: { type: Number, min: 0, default: undefined },
+      rechargeVoucherId: { type: mongoose.Schema.Types.ObjectId, ref: "Voucher", default: undefined },
+      rechargeVoucherNo: { type: String, default: undefined },
+      rechargeAmount: { type: Number, min: 0, default: undefined },
+      _id: false,
+    },
     history: [
       {
         status: String,

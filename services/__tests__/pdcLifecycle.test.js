@@ -26,6 +26,7 @@ test.before(async () => {
     ...require("../../models/modules/financial/financialModels"),
     AccountGroup: require("../../models/modules/financial/accountGroupModel"),
     Customer: require("../../models/modules/customerModel"),
+    TaxCode: require("../../models/modules/financial/taxCodeModel"),
   };
   await mongoose.connection.syncIndexes();
   await svc.seed({ log: () => {} });
@@ -254,4 +255,157 @@ test("a cheque may be deposited in a closed period (nothing posts) but not clear
   } finally {
     await svc.FiscalYear.setStatus(fy._id, "open");
   }
+});
+
+// ======================================================================================================
+// Stage 2: the dishonour. A bounce records the bank's memo, can post the bank's charge and charge the customer
+// back - all inside the bounce's own transaction, so a refusal anywhere leaves everything as it was.
+// ======================================================================================================
+const legsOf = async (voucherId) => (await svc.LedgerEntry.find({ voucherId, isReversed: { $ne: true } }).lean())
+  .map((e) => `${e.accountName}:${e.debitAmount ? "Dr" + e.debitAmount : "Cr" + e.creditAmount}`).sort();
+const limited = (limit) => ({ admin: { id: String(admin), name: "junior", role: { approvalLimit: limit }, grants: [] } });
+const voucherCount = (type) => svc.Voucher.countDocuments({ voucherType: type });
+
+test("a bounce records the bank's memo and reverses the whole voucher", { skip }, async () => {
+  const { voucher, row } = await cheque({ amount: 400, due: 0 });
+  const hand = await balance("Cheques in Hand");
+  const done = await svc.Cheques.bounce(row._id, { reasonCode: "insufficient_funds", memoDate: day(0), memoRef: "RM-1", certificateRef: "CERT-9" }, {}, admin);
+  assert.equal(done.status, "bounced");
+  assert.equal(done.reason, "Insufficient funds", "a code alone is worded from the list");
+  assert.deepEqual([done.returnMemo.reasonCode, done.returnMemo.memoRef, done.certificateRef], ["insufficient_funds", "RM-1", "CERT-9"]);
+  assert.ok(done.returnMemo.memoDate && done.bouncedOn);
+  assert.equal(await balance("Cheques in Hand"), hand - 400);
+  assert.equal((await svc.Voucher.findById(voucher._id)).status, "bounced");
+});
+
+test("bad input is refused before anything is opened: the cheque stays as it was", { skip }, async () => {
+  const { row } = await cheque({ due: 0 });
+  for (const [input, code] of [
+    [{}, "REASON_REQUIRED"], [{ reasonCode: "nope" }, "RETURN_REASON_INVALID"], [{ reason: "r", bankCharge: { amount: -1 } }, "INVALID_CHARGE"],
+    [{ reason: "r", memoDate: "2099-01-01" }, "INVALID_DATE"], [{ reason: "r", partialAmount: 9999 }, "INVALID_PARTIAL"],
+    [{ reason: "r", recharge: { amount: 5 } }, "ACCOUNT_REQUIRED"], [{ reason: "r", on: "garbage" }, "INVALID_DATE"],
+  ]) await assert.rejects(() => svc.Cheques.bounce(row._id, input, {}, admin), { code }, code);
+  assert.equal((await reread(row)).status, "pending");
+});
+
+test("the bank's charge posts as an expense out of the cheque's own bank account", { skip }, async () => {
+  const { row } = await cheque({ amount: 300, due: 0 });
+  const bank = await balance("ENBD Current");
+  const done = await svc.Cheques.bounce(row._id, { reason: "Insufficient funds", bankCharge: { amount: 52.5 } }, {}, admin);
+  assert.equal(done.charges.amount, 52.5);
+  const fee = await svc.Voucher.findById(done.charges.expenseVoucherId);
+  assert.equal(fee.voucherType, "expense");
+  assert.match(done.charges.expenseVoucherNo, /^EV-/);
+  assert.deepEqual(await legsOf(fee._id), ["Bank Charges:Dr52.5", "ENBD Current:Cr52.5"]);
+  assert.equal(await balance("ENBD Current"), bank - 52.5, "the bank took the fee");
+});
+
+test("the bank's charge with VAT: the gross is split, and the VAT lands on its own account", { skip }, async (t) => {
+  const code = await svc.TaxCode.findOne({ isActive: true, isDefault: true });
+  if (!code) return t.skip("this organisation has no default tax code, so there is nothing to split"); // said aloud, never a silent pass
+  const { row } = await cheque({ amount: 300, due: 0 });
+  const done = await svc.Cheques.bounce(row._id, { reason: "r", bankCharge: { amount: 105, taxCodeId: String(code._id) } }, {}, admin);
+  const legs = await legsOf(done.charges.expenseVoucherId);
+  assert.ok(legs.includes("ENBD Current:Cr105"), `the bank was charged the gross: ${legs}`);
+  assert.ok(legs.some((l) => /^Bank Charges:Dr100$/.test(l)), `the net is the expense: ${legs}`);
+  assert.equal(legs.length, 3, "plus one VAT leg");
+});
+
+test("charging it back: a debit note on the customer, credited to the account you choose", { skip }, async () => {
+  const income = await svc.LedgerAccount.findOne({ accountName: "Other Income" });
+  const { row } = await cheque({ amount: 300, due: 0 });
+  const done = await svc.Cheques.bounce(row._id, { reason: "r", recharge: { amount: 60, accountId: String(income._id), description: "Bounce fee" } }, {}, admin);
+  assert.equal(done.charges.rechargeAmount, 60);
+  assert.equal((await svc.Voucher.findById(done.charges.rechargeVoucherId)).voucherType, "debit_note");
+  assert.deepEqual(await legsOf(done.charges.rechargeVoucherId), ["Customer - Al Noor:Dr60", "Other Income:Cr60"]);
+  assert.equal(done.charges.expenseVoucherId, undefined, "no bank charge was asked for");
+});
+
+test("ALL OR NOTHING: if the charge-back is refused, the bounce and the bank charge are rolled back with it", { skip }, async () => {
+  const { voucher, row } = await cheque({ amount: 300, due: 0 });
+  const hand = await balance("Cheques in Hand");
+  const bank = await balance("ENBD Current");
+  const expenses = await voucherCount("expense");
+  const notes = await voucherCount("debit_note");
+  const ghost = String(new mongoose.Types.ObjectId()); // an account that does not exist
+  await assert.rejects(() => svc.Cheques.bounce(row._id, { reason: "r", bankCharge: { amount: 10 }, recharge: { amount: 5, accountId: ghost } }, {}, admin));
+  assert.equal((await reread(row)).status, "pending", "the cheque was not marked bounced");
+  assert.equal((await svc.Voucher.findById(voucher._id)).status, "approved", "its voucher was not reversed");
+  assert.equal(await balance("Cheques in Hand"), hand);
+  assert.equal(await balance("ENBD Current"), bank, "the bank charge, posted first, was undone");
+  assert.equal(await voucherCount("expense"), expenses, "no orphan bank-charge voucher");
+  assert.equal(await voucherCount("debit_note"), notes);
+});
+
+test("a charge that needs an approver stops the whole bounce, and says the charge is why", { skip }, async () => {
+  const { row } = await cheque({ amount: 300, due: 0 });
+  const hand = await balance("Cheques in Hand");
+  await assert.rejects(
+    () => svc.Cheques.bounce(row._id, { reason: "r", bankCharge: { amount: 800 } }, limited(500), admin),
+    (err) => { assert.equal(err.code, "APPROVAL_LIMIT_EXCEEDED"); assert.match(err.message, /not marked bounced, because its charge needs an approver/); return true; }
+  );
+  assert.equal((await reread(row)).status, "pending");
+  assert.equal(await balance("Cheques in Hand"), hand);
+  // the same charge inside the person's limit goes through
+  const done = await svc.Cheques.bounce(row._id, { reason: "r", bankCharge: { amount: 80 } }, limited(500), admin);
+  assert.equal(done.status, "bounced");
+});
+
+test("a part payment is recorded as a fact: the cheque still reverses in full, and no receipt is invented", { skip }, async () => {
+  const { row } = await cheque({ amount: 400, due: 0 });
+  const hand = await balance("Cheques in Hand");
+  const receipts = await voucherCount("receipt");
+  const done = await svc.Cheques.bounce(row._id, { reason: "Part paid by the bank", partialAmount: 150, partialOn: day(0) }, {}, admin);
+  assert.equal(done.partialPayment.amount, 150);
+  assert.equal(await balance("Cheques in Hand"), hand - 400, "the whole cheque came off, not just the unpaid part");
+  assert.equal(await voucherCount("receipt"), receipts, "the 150 is for a person to enter as an ordinary receipt");
+});
+
+test("a bounce works from hold too, and a bounced cheque cannot bounce again", { skip }, async () => {
+  const { row } = await cheque({ due: 0 });
+  await svc.Cheques.hold(row._id, { reason: "drawer" }, {}, admin);
+  assert.equal((await svc.Cheques.bounce(row._id, { reason: "r" }, {}, admin)).status, "bounced");
+  await assert.rejects(() => svc.Cheques.bounce(row._id, { reason: "r" }, {}, admin), { code: "CHEQUE_NOT_PENDING" });
+});
+
+// ---- handed back to the party ----
+test("handing a cheque back reverses its voucher, reads 'returned', and the voucher reads cancelled - no new voucher status", { skip }, async () => {
+  const { voucher, row } = await cheque({ amount: 250, due: 20 });
+  const hand = await balance("Cheques in Hand");
+  await assert.rejects(() => svc.Cheques.giveBack(row._id, {}, {}, admin), { code: "REASON_REQUIRED" });
+  await assert.rejects(() => svc.Cheques.giveBack(row._id, { reason: "r", bankCharge: { amount: 5 } }, {}, admin), { code: "CHARGE_NOT_APPLICABLE" });
+  const done = await svc.Cheques.giveBack(row._id, { reason: "Customer replaced it with a transfer" }, {}, admin);
+  assert.equal(done.status, "returned");
+  assert.ok(done.returnedOn);
+  assert.equal(done.reason, "Customer replaced it with a transfer");
+  assert.equal((await svc.Voucher.findById(voucher._id)).status, "cancelled", "the voucher status vocabulary did not grow");
+  assert.equal(await balance("Cheques in Hand"), hand - 250);
+});
+
+test("a cheque at the bank cannot be handed back; one on hold can; the number is free afterwards", { skip }, async () => {
+  const atBank = (await cheque({ due: 0 })).row;
+  await svc.Cheques.deposit(atBank._id, {}, {}, admin);
+  await assert.rejects(() => svc.Cheques.giveBack(atBank._id, { reason: "r" }, {}, admin), { code: "CHEQUE_WITH_BANK" });
+
+  const held = (await cheque({ due: 0 })).row;
+  await svc.Cheques.hold(held._id, { reason: "drawer" }, {}, admin);
+  assert.equal((await svc.Cheques.giveBack(held._id, { reason: "r" }, {}, admin)).status, "returned");
+  await svc.Financial.createVoucher({
+    voucherType: "receipt", customerId: customer._id, totalAmount: 100, date: day(), paymentMode: "cheque",
+    paymentDetails: { chequeNo: held.chequeNo, chequeDate: day(0), drawnOnBankName: held.drawnOnBankName, accountId: enbd._id },
+  }, admin); // the same number again: the first is closed
+});
+
+test("a bounce dated in a closed period is refused and takes its charges with it", { skip }, async () => {
+  const { row } = await cheque({ due: 0 });
+  const expenses = await voucherCount("expense");
+  const fy = await svc.FiscalYearModel.findOne();
+  await svc.FiscalYear.setStatus(fy._id, "closed");
+  try {
+    await assert.rejects(() => svc.Cheques.bounce(row._id, { reason: "r", bankCharge: { amount: 10 } }, {}, admin), { code: "PERIOD_CLOSED" });
+  } finally {
+    await svc.FiscalYear.setStatus(fy._id, "open");
+  }
+  assert.equal((await reread(row)).status, "pending");
+  assert.equal(await voucherCount("expense"), expenses);
 });
