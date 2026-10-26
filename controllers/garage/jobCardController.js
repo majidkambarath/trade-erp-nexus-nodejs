@@ -38,6 +38,7 @@ exports.createCustomer = catchAsync(async (req, res) => {
 exports.analysis = catchAsync(async (req, res) => ok(res, await JobCardService.analysis(req.query)));
 exports.comebackCandidates = catchAsync(async (req, res) => ok(res, await JobCardService.comebackCandidates(req.query)));
 exports.committed = catchAsync(async (req, res) => ok(res, await JobCardService.committed(req.query.itemIds)));
+exports.shortages = catchAsync(async (req, res) => ok(res, await JobCardService.shortages(req.params.id)));
 exports.get = catchAsync(async (req, res) => ok(res, await JobCardService.getById(req.params.id)));
 exports.activity = catchAsync(async (req, res) => ok(res, await AuditService.list(req, { entity: "JobCard", entityId: req.params.id, limit: 100 })));
 
@@ -104,6 +105,16 @@ exports.createInvoice = catchAsync(async (req, res) => {
   const { jobCard, invoice } = await JobCardService.createInvoice({ ...req.body, jobCardId: req.params.id }, by(req));
   await log(req, "JOB_CARD_INVOICED", jobCard, `Invoice ${invoice.transactionNo} raised from ${describe(jobCard)}`);
   ok(res, { jobCard: JobCardService.present(jobCard), invoice }, 201);
+});
+
+exports.raisePurchaseOrder = catchAsync(async (req, res) => {
+  // garage.edit gets you here, but this really does create a purchase document, so Purchase must be held too
+  // - the same double-assert createInvoice uses for Sales, so this route can never be a side door into a
+  // module this person was not sold.
+  assertPermission(req, "purchase.create", "raising a purchase order from a job card creates a purchase document");
+  const { jobCard, order } = await JobCardService.raisePurchaseOrder({ ...req.body, jobCardId: req.params.id }, by(req));
+  await log(req, "JOB_CARD_PURCHASE_ORDER_RAISED", jobCard, `Purchase order ${order.orderNo} raised for ${describe(jobCard)}`);
+  ok(res, { jobCard: JobCardService.present(jobCard), order }, 201);
 });
 
 exports.release = catchAsync(async (req, res) => {

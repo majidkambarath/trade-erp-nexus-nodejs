@@ -107,6 +107,23 @@ const invoiceLinkSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// A purchase order raised because a part this card needs was not on hand (utils/garage.js shortages / plan
+// part 1.2 step 8: "if a part is not in stock, a purchase order goes to a vendor, goods are received, then
+// the part reaches the job"). The same shape as invoiceLinkSchema for the same reason - a record of what was
+// raised, never a trigger for anything else: the storekeeper receives it and issues the part like any other,
+// through the ordinary Purchase screens, not through this card.
+const purchaseOrderLinkSchema = new mongoose.Schema(
+  {
+    tradeOrderId: { type: id, ref: "TradeOrder" },
+    no: String,
+    vendorId: { type: id, ref: "Vendor" },
+    vendorName: String,
+    amount: Number,
+    itemIds: { type: [id], default: [] }, // which Stock items this order was raised for
+  },
+  { _id: false }
+);
+
 // A point marked on the check-in body diagram, and what was found there: the garage's only defence when a
 // customer later claims the damage was not there on arrival.
 const damagePointSchema = new mongoose.Schema(
@@ -174,6 +191,7 @@ const jobCardSchema = new mongoose.Schema(
 
     invoices: { type: [invoiceLinkSchema], default: [] },
     invoiceStatus: { type: String, enum: ["NONE", "DRAFT", "INVOICED"], default: "NONE" },
+    purchaseOrders: { type: [purchaseOrderLinkSchema], default: [] },
 
     delivery: {
       gatePassAt: Date,

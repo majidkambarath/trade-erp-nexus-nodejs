@@ -151,6 +151,48 @@ async function seedMasters(M) {
   };
 }
 
+// The Setup screen's own data: bays (the physical plant) and the service menu (standard jobs that fill a
+// job card's estimate and tasks in one tap). Idempotent like everything else here, and run REGARDLESS of the
+// job-card stamp check below, so an organisation that already has its demo job cards but was made before
+// Setup existed still gets filled in on a re-run.
+async function seedSetup(M, W) {
+  const bay = async (name, code, kind) => {
+    const found = await M.Bay.findOne({ name });
+    if (found) return found;
+    return M.Setup.createBay({ name, code, kind }, "demo-script");
+  };
+  const bays = {
+    ramp1: await bay("Ramp 1", "R1", "mechanical"),
+    ramp2: await bay("Ramp 2", "R2", "mechanical"),
+    paintBooth: await bay("Paint booth", "PB1", "paint"),
+    washBay: await bay("Wash bay", "W1", "wash"),
+  };
+
+  const service = async (code, name, category, serviceItemId, standardHours, defaultParts, defaultTasks) => {
+    const found = await M.GarageService.findOne({ code });
+    if (found) return found;
+    return M.Setup.createService({ code, name, category, serviceItemId, standardHours, defaultParts, defaultTasks }, "demo-script");
+  };
+  await service("BRAKE", "Brake pad replacement", "Brakes", W.labour.brakeJob._id, 1,
+    [{ stockId: W.parts.brakePads._id, qty: 1 }],
+    [{ name: "Replace brake pads", mode: "in_house", standardHours: 1 }]);
+  await service("OIL", "Oil & filter change", "Servicing", W.labour.oilChange._id, 0.5,
+    [{ stockId: W.parts.oilFilter._id, qty: 1 }, { stockId: W.parts.engineOil._id, qty: 1 }],
+    [{ name: "Oil and filter change", mode: "in_house", standardHours: 0.5 }]);
+  await service("HEADLAMP", "Headlamp replacement", "Body & accident", W.labour.headlampFit._id, 1,
+    [{ stockId: W.parts.headlamp._id, qty: 1 }],
+    [{ name: "Fit replacement headlamp", mode: "in_house", standardHours: 1 }]);
+  await service("PANEL", "Panel beating & paint", "Body & accident", W.labour.panelPaint._id, 6,
+    [{ stockId: W.parts.bumper._id, qty: 1 }],
+    [
+      { name: "Strip and assess panel damage", mode: "in_house", standardHours: 1 },
+      { name: "Beat out and fill panel", mode: "in_house", standardHours: 2 },
+      { name: "Prime, paint and polish", mode: "in_house", standardHours: 3 },
+    ]);
+
+  return { bays };
+}
+
 // A complete retail job, start to finish: check-in, two complaints, parts and labour, a full approval, both
 // tasks done, the invoice raised and approved, and the car released.
 async function retailJobClosed(M, W) {
@@ -310,11 +352,16 @@ async function main() {
     Claim: require("../../services/garage/insuranceClaimService"),
     LedgerAccount: require("../../models/modules/financial/financialModels").LedgerAccount,
     JobCardModel: require("../../models/modules/garage/jobCardModel"),
+    Setup: require("../../services/garage/garageSetupService"),
+    Bay: require("../../models/modules/garage/bayModel"),
+    GarageService: require("../../models/modules/garage/garageServiceModel"),
   };
 
   await runWithTenant({ companyId: CODE, branchId: "main" }, async () => {
     const already = await M.JobCardModel.findOne({ notes: { $regex: STAMP } }).lean();
     const W = await seedMasters(M);
+    await seedSetup(M, W);
+    console.log("Setup: bays and the service menu are in place.");
 
     if (already) {
       console.log(`${CODE} already has its demo job cards. Nothing more to seed.`);

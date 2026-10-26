@@ -127,3 +127,40 @@ test("a comeback is offered from the vehicle's own closed jobs, and accepted onl
     (e) => e.code === "COMEBACK_NOT_FOUND"
   );
 });
+
+test("a part short of stock is offered with its default vendor, and raising a purchase order for it is recorded on the card", { skip }, async () => {
+  const Vendor = require("../../models/modules/vendorModel");
+  const partsVendor = await Vendor.create({ vendorId: "GSV1", vendorName: "Setup Parts Co", contactPerson: "x", address: "Dubai", paymentTerms: "Net 30" });
+  const shortPart = await svc.StockService.createStock(
+    { categoryId: category._id, unitOfMeasure: new mongoose.Types.ObjectId(), origin: "UAE", brand: "x", sku: "PART-SHORT", itemName: "Rare sensor", salesPrice: 300, vendorId: partsVendor._id },
+    "tester"
+  );
+  const card = await svc.JobCard.create(
+    { vehicleId: vehicle._id, customerId: customer._id, complaints: [{ concern: "Sensor fault" }], lines: [{ kind: "part", itemId: shortPart._id, qty: 3, price: 300 }], tasks: [] },
+    "tester"
+  );
+
+  const shortages = await svc.JobCard.shortages(card._id);
+  assert.equal(shortages.length, 1);
+  assert.equal(shortages[0].itemId, String(shortPart._id));
+  assert.equal(shortages[0].short, 3); // none on hand
+  assert.equal(shortages[0].vendorId, String(partsVendor._id));
+  assert.equal(shortages[0].vendorName, "Setup Parts Co");
+
+  const { jobCard: updated, order } = await svc.JobCard.raisePurchaseOrder(
+    { jobCardId: card._id, vendorId: partsVendor._id, items: [{ itemId: shortPart._id, qty: 3, price: 280 }] },
+    "tester"
+  );
+  assert.equal(order.kind, "purchase");
+  assert.equal(order.status, "DRAFT");
+  assert.equal(updated.purchaseOrders.length, 1);
+  assert.equal(updated.purchaseOrders[0].vendorName, "Setup Parts Co");
+  assert.equal(String(updated.purchaseOrders[0].tradeOrderId), String(order._id));
+
+  // Restocking the item (as if the order had been received and invoiced) resolves the shortage.
+  await svc.StockService.updateStock(shortPart._id, { currentStock: 10 }, "tester");
+  const resolved = await svc.JobCard.shortages(card._id);
+  assert.equal(resolved.length, 0);
+
+  await assert.rejects(() => svc.JobCard.raisePurchaseOrder({ jobCardId: card._id, vendorId: partsVendor._id, items: [] }, "tester"), (e) => e.code === "NOTHING_TO_ORDER");
+});

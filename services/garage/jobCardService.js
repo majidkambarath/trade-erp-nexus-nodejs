@@ -8,11 +8,13 @@ const Staff = require("../../models/modules/staffModel");
 const Bay = require("../../models/modules/garage/bayModel");
 const Admin = require("../../models/core/adminModel");
 const Transaction = require("../../models/modules/transactionModel");
+const Stock = require("../../models/modules/stockModel");
 const rules = require("../../utils/garage");
 const kinds = require("../../utils/itemKinds");
 const ItemKindService = require("../stock/itemKindService");
 const S = require("../orderPurchase/salesDocumentSupport");
 const TransactionService = require("../orderPurchase/transactionService");
+const TradeOrderService = require("../orderPurchase/tradeOrderService");
 const NumberSeriesService = require("../core/numberSeriesService");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { getTenant } = require("../../utils/tenant");
@@ -199,6 +201,71 @@ class JobCardService {
     const byId = new Map(rows.map((r) => [String(r._id), r.qty]));
     return ids.map((itemId) => ({ itemId, committed: rules.round3(byId.get(itemId) || 0) }));
   }
+
+  // What this card itself cannot have today: for each part/consumable it needs, on hand less what every
+  // OTHER live, uninvoiced card has already committed (the same honest "free to sell" figure `committed()`
+  // gives the stock list, just excluding this card's own lines so it is not counted against itself). Plan
+  // part 1.2 step 8: "if a part is not in stock, a purchase order goes to a vendor" - this is what tells the
+  // advisor there IS something to order, and `item.vendorId` (the item's own default supplier) is offered as
+  // who to order it from. Nothing here moves stock or creates anything; raisePurchaseOrder below does that.
+  static async shortages(id) {
+    const card = await this.#load(id);
+    const needLines = (card.lines || []).filter((l) => rules.STOCKED_KINDS.has(l.kind) && rules.isApproved(l));
+    if (!needLines.length) return [];
+    const itemIds = [...new Set(needLines.map((l) => String(l.itemId)))];
+    const objectIds = itemIds.map((i) => new mongoose.Types.ObjectId(i));
+
+    const [stocks, committedRows] = await Promise.all([
+      Stock.find({ _id: { $in: objectIds } }).select("itemId sku itemName currentStock vendorId purchasePrice").populate("vendorId", "vendorName").lean(),
+      JobCard.aggregate([
+        { $match: { status: { $in: [...rules.LIVE_STATUS] }, invoiceStatus: { $ne: "INVOICED" }, _id: { $ne: card._id } } },
+        { $unwind: "$lines" },
+        { $match: { "lines.itemId": { $in: objectIds }, "lines.kind": { $in: [...rules.STOCKED_KINDS] }, "lines.approved": { $ne: false } } },
+        { $group: { _id: "$lines.itemId", qty: { $sum: "$lines.qty" } } },
+      ]),
+    ]);
+    const stockById = new Map(stocks.map((s) => [String(s._id), s]));
+    const committedById = new Map(committedRows.map((r) => [String(r._id), r.qty]));
+    const neededById = new Map();
+    for (const l of needLines) neededById.set(String(l.itemId), (neededById.get(String(l.itemId)) || 0) + (Number(l.qty) || 0));
+
+    const out = [];
+    for (const [itemId, needed] of neededById) {
+      const stock = stockById.get(itemId);
+      const onHand = Number(stock?.currentStock) || 0;
+      const committedElsewhere = Number(committedById.get(itemId)) || 0;
+      const short = rules.round3(Math.max(0, needed - (onHand - committedElsewhere)));
+      if (short <= 0) continue;
+      out.push({
+        itemId, itemCode: stock?.itemId || "", itemName: stock?.itemName || "Unknown item", needed: rules.round3(needed),
+        onHand: rules.round3(onHand), short, vendorId: stock?.vendorId?._id ? String(stock.vendorId._id) : null, vendorName: stock?.vendorId?.vendorName || "",
+        purchasePrice: Number(stock?.purchasePrice) || 0,
+      });
+    }
+    return out;
+  }
+
+  // Raises a draft purchase order for the chosen shortages, through the ordinary Purchase flow
+  // (TradeOrderService.create, kind "purchase") - this is informational on the card from here: the
+  // storekeeper confirms, receives and invoices it through the normal Purchase screens, not through the job
+  // card, exactly as the plan says ("then the part reaches the job"). A record of it is kept so the advisor
+  // can see one was raised and follow it up, the same shape `invoices[]` already keeps for the sales side.
+  static raisePurchaseOrder = withTransactionSession(async ({ jobCardId, vendorId, items, date }, createdBy, session) => {
+    const card = await this.#load(jobCardId, session);
+    if (!Array.isArray(items) || !items.length) throw fail("Choose at least one item to order", 400, "NOTHING_TO_ORDER");
+    if (!isId(vendorId)) throw fail("Choose who to order from", 400, "VENDOR_REQUIRED");
+    const lines = items
+      .filter((it) => isId(it?.itemId) && Number(it?.qty) > 0)
+      .map((it) => ({ itemId: it.itemId, qty: Number(it.qty), price: Number(it.price) || 0, rate: Number(it.price) || 0, vatPercent: 0 }));
+    if (!lines.length) throw fail("Choose at least one item to order", 400, "NOTHING_TO_ORDER");
+
+    const vendor = await Vendor.findById(vendorId).select("vendorName").session(session).lean();
+    if (!vendor) throw fail("That vendor does not exist", 404, "VENDOR_REQUIRED");
+    const order = await TradeOrderService.create({ kind: "purchase", partyId: vendorId, items: lines, date, notes: `Short parts for job card ${card.jobNo || "(draft)"}` }, createdBy, session);
+    card.purchaseOrders.push({ tradeOrderId: order._id, no: order.orderNo, vendorId, vendorName: vendor.vendorName || "", amount: order.totalAmount, itemIds: lines.map((l) => l.itemId) });
+    await card.save({ session });
+    return { jobCard: card, order };
+  });
 
   // ---- preparing lines and tasks (shared by create, update and reviseEstimate) -------------------------------
 

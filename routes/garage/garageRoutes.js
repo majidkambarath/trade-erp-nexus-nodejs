@@ -62,6 +62,8 @@ router.get("/job-cards", requirePermission("garage.view"), j.list);
 router.post("/job-cards", requirePermission("garage.create"), j.create);
 router.get("/job-cards/:id", requirePermission("garage.view"), j.get);
 router.get("/job-cards/:id/activity", requirePermission("garage.view"), j.activity);
+router.get("/job-cards/:id/shortages", requirePermission("garage.view"), j.shortages);
+router.post("/job-cards/:id/purchase-orders", requirePermission("garage.edit"), j.raisePurchaseOrder);
 router.put("/job-cards/:id", requirePermission("garage.edit"), j.update);
 router.delete("/job-cards/:id", requirePermission("garage.delete"), j.remove);
 router.put("/job-cards/:id/check-in", requirePermission("garage.edit"), j.recordCheckIn);
