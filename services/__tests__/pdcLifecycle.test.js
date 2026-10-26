@@ -409,3 +409,101 @@ test("a bounce dated in a closed period is refused and takes its charges with it
   assert.equal((await reread(row)).status, "pending");
   assert.equal(await voucherCount("expense"), expenses);
 });
+
+// ======================================================================================================
+// The maturity report and the forward view, over a scenario of its own: its own bank account, so the figures are
+// exactly the cheques made here and the filter by account is exercised.
+// ======================================================================================================
+let rep; // { bank, vendor }
+const reportCheque = async ({ direction = "receipt", amount, due, tag }) => {
+  seq += 1;
+  const chq = { chequeNo: `RPT${1000 + seq}`, chequeDate: day(due), accountId: rep.bank._id, ...(direction === "receipt" ? { drawnOnBankName: "Mashreq" } : {}) };
+  const voucher = direction === "receipt"
+    ? await svc.Financial.createVoucher({ voucherType: "receipt", customerId: customer._id, totalAmount: amount, date: day(), paymentMode: "cheque", paymentDetails: chq }, admin)
+    : await svc.Financial.createVoucher({ voucherType: "payment", vendorId: rep.vendor._id, totalAmount: amount, date: day(), paymentMode: "cheque", paymentDetails: chq }, admin);
+  return svc.Cheque.findOne({ voucherId: voucher._id });
+};
+
+test("the maturity report: by how far away, with hold and the bank kept apart", { skip }, async () => {
+  const bankGroup = await svc.AccountGroup.findOne({ name: "Bank" });
+  rep = {
+    bank: await svc.Chart.createAccount({ accountName: "Report Bank", groupId: bankGroup._id }, {}, admin),
+    vendor: await mongoose.model("Vendor").create({ vendorId: "V9", vendorName: "Report Vendor", contactPerson: "x", address: "y" }),
+  };
+  await reportCheque({ amount: 500, due: 3 });
+  await reportCheque({ amount: 200, due: -5 });
+  const held = await reportCheque({ amount: 70, due: 0 });
+  const atBank = await reportCheque({ amount: 40, due: -1 });
+  await reportCheque({ direction: "payment", amount: 300, due: 10 });
+  await svc.Cheques.hold(held._id, { reason: "wait" }, {}, admin);
+  await svc.Cheques.deposit(atBank._id, {}, {}, admin);
+
+  const ChequeReports = require("../banking/chequeReportService");
+  const m = await ChequeReports.maturity({ bankAccountId: String(rep.bank._id) });
+  const g = Object.fromEntries(m.groups.map((x) => [x.key, x]));
+  assert.deepEqual(m.groups.map((x) => x.key), ["overdue", "today", "week", "month"]);
+  assert.equal(g.overdue.receivable.amount, 240, "the 200 overdue and the 40 at the bank (still money not yet in)");
+  assert.deepEqual([g.today.receivable.amount, g.today.onHold.amount], [0, 70], "held: shown, not expected");
+  assert.equal(g.week.receivable.amount, 500);
+  assert.equal(g.month.payable.amount, 300);
+  assert.deepEqual([m.totals.receivable.amount, m.totals.payable.amount, m.totals.onHold.amount, m.totals.net], [740, 300, 70, 440]);
+  assert.deepEqual(m.atBank, { count: 1, amount: 40 });
+  assert.equal(m.rows.length, 5);
+  assert.equal(m.rows[0].chequeDay < m.rows.at(-1).chequeDay, true, "nearest first");
+  assert.equal(m.capped, false);
+});
+
+test("the maturity report filters by direction and party, and groups by party and bank", { skip }, async () => {
+  const ChequeReports = require("../banking/chequeReportService");
+  const bank = String(rep.bank._id);
+  const outs = await ChequeReports.maturity({ bankAccountId: bank, direction: "payment" });
+  assert.deepEqual([outs.totals.payable.amount, outs.totals.receivable.amount], [300, 0]);
+  const byParty = await ChequeReports.maturity({ bankAccountId: bank, groupBy: "party" });
+  assert.deepEqual(byParty.groups.map((x) => x.label), ["Al Noor", "Report Vendor"], "biggest first");
+  const byBank = await ChequeReports.maturity({ bankAccountId: bank, groupBy: "bank" });
+  assert.deepEqual(byBank.groups.map((x) => x.label), ["Report Bank"]);
+  const one = await ChequeReports.maturity({ partyId: String(rep.vendor._id), bankAccountId: bank });
+  assert.equal(one.rows.length, 1);
+});
+
+test("the forward view: due cheques come off the opening balance, then week by week", { skip }, async () => {
+  const ChequeReports = require("../banking/chequeReportService");
+  const f = await ChequeReports.forward({ bankAccountId: String(rep.bank._id), unit: "week", count: 3 });
+  const opening = (await svc.LedgerAccount.findById(rep.bank._id)).currentBalance;
+  assert.equal(f.openingKnown, true);
+  assert.equal(f.opening, opening);
+  assert.equal(f.due.net, 240);
+  assert.deepEqual(f.periods.map((p) => [p.receipts.amount, p.payments.amount, p.onHold.amount]), [[500, 0, 70], [0, 300, 0], [0, 0, 0]]);
+  assert.deepEqual(f.periods.map((p) => p.closing), [opening + 740, opening + 440, opening + 440]);
+  assert.equal(f.totals.closing, opening + 440);
+  const months = await ChequeReports.forward({ bankAccountId: String(rep.bank._id), unit: "month", count: 2 });
+  assert.equal(months.periods.length, 2);
+  assert.equal(months.totals.receipts, 740);
+});
+
+test("in a branch view the cheques are the branch's, so the whole organisation's bank balance is not put beside them", { skip }, async () => {
+  const ChequeReports = require("../banking/chequeReportService");
+  const tenant = require("../../utils/tenantContext");
+  const f = await tenant.runWithTenant({ companyId: "default", branchId: "main", branchView: "main" }, () => ChequeReports.forward({ bankAccountId: String(rep.bank._id) }));
+  assert.equal(f.openingKnown, false);
+  assert.equal(f.opening, 0);
+});
+
+test("a report refuses what it cannot answer, and says why", { skip }, async () => {
+  const R = require("../banking/chequeReportService");
+  await assert.rejects(() => R.maturity({ asOn: "26/10/2026" }), { code: "INVALID_DATE" });
+  await assert.rejects(() => R.maturity({ asOn: "2026-02-30" }), { code: "INVALID_DATE" });
+  await assert.rejects(() => R.maturity({ direction: "sideways" }), { code: "INVALID_DIRECTION" });
+  await assert.rejects(() => R.maturity({ partyId: "nope" }), { code: "INVALID_INPUT" });
+  await assert.rejects(() => R.forward({ count: 0 }), { code: "INVALID_PERIODS" });
+  await assert.rejects(() => R.forward({ count: 53 }), { code: "INVALID_PERIODS" });
+  await assert.rejects(() => R.forward({ count: "x" }), { code: "INVALID_PERIODS" });
+});
+
+test("ROUTE ORDER: the fixed report paths are registered above '/cheques/:id', or ':id' would swallow them", { skip }, () => {
+  const stack = require("../../routes/banking/bankingRoutes").stack.filter((l) => l.route && l.route.methods.get).map((l) => l.route.path);
+  const at = (p) => stack.indexOf(p);
+  assert.ok(at("/cheques/maturity") > -1 && at("/cheques/forward") > -1 && at("/cheques/:id") > -1, stack.join(" "));
+  assert.ok(at("/cheques/maturity") < at("/cheques/:id"));
+  assert.ok(at("/cheques/forward") < at("/cheques/:id"));
+});
