@@ -35,6 +35,8 @@ router.post("/cards", requirePermission("banking.manage"), c.createCard);
 router.put("/cards/:id", requirePermission("banking.manage"), c.updateCard);
 
 router.get("/cheques", requirePermission(["banking.view","finance.view"]), c.listCheques);
+// Any fixed GET under /cheques (a report) must be registered ABOVE this line, or "/:id" captures it.
+router.get("/cheques/:id", requirePermission(["banking.view","finance.view"]), c.getCheque);
 router.post("/cheques/:id/clear", requirePermission("finance.approve"), c.clearCheque);
 router.post("/cheques/:id/bounce", requirePermission("finance.approve"), c.bounceCheque);
 router.post("/cheques/:id/cancel", requirePermission("finance.approve"), c.cancelCheque);

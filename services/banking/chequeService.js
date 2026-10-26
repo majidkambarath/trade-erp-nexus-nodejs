@@ -6,6 +6,7 @@ const FinancialService = require("../financial/financialService");
 const FiscalYearService = require("../core/fiscalYearService");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
+const rules = require("../../utils/chequeRules");
 
 const SYSTEM_USER = new mongoose.Types.ObjectId("000000000000000000000000");
 const asAdmin = (v) => (mongoose.isValidObjectId(v) ? v : SYSTEM_USER);
@@ -27,7 +28,7 @@ class ChequeService {
     const key = direction === "receipt"
       ? (cheque.drawnOnBankId ? { drawnOnBankId: cheque.drawnOnBankId } : { drawnOnBankName: new RegExp(`^${escapeRe(cheque.drawnOnBankName)}$`, "i") })
       : { bankAccountId: cheque.bankAccountId };
-    const dup = await Cheque.findOne({ companyId, direction, chequeNo: cheque.chequeNo, status: { $in: ["pending", "cleared"] }, voucherId: { $ne: voucher._id }, ...key }).session(session);
+    const dup = await Cheque.findOne({ companyId, direction, chequeNo: cheque.chequeNo, status: { $in: rules.OPEN }, voucherId: { $ne: voucher._id }, ...key }).session(session);
     if (dup) throw new AppError(`Cheque ${cheque.chequeNo} is already recorded on ${dup.voucherNo}`, 409, "DUPLICATE_CHEQUE");
 
     const [row] = await Cheque.create(
@@ -60,7 +61,7 @@ class ChequeService {
     const [rows, total, pending] = await Promise.all([
       Cheque.find(filter).populate("bankAccountId", "accountName accountCode").sort({ chequeDate: 1, createdAt: -1 }).skip((page - 1) * limit).limit(Number(limit)).lean(),
       Cheque.countDocuments(filter),
-      Cheque.aggregate([{ $match: { companyId, status: "pending" } }, { $group: { _id: "$direction", amount: { $sum: "$amount" }, count: { $sum: 1 } } }]),
+      Cheque.aggregate([{ $match: { companyId, status: { $in: rules.LIVE } } }, { $group: { _id: "$direction", amount: { $sum: "$amount" }, count: { $sum: 1 } } }]),
     ]);
     const today = day(new Date());
     return {
@@ -95,7 +96,8 @@ class ChequeService {
     if (Number.isNaN(on.getTime())) throw new AppError("Enter a valid clearing date", 400, "INVALID_DATE");
     const apply = async (session) => {
         const cheque = await this.get(id, req, session);
-        if (cheque.status !== "pending") throw new AppError(`This cheque is already ${cheque.status}`, 409, "CHEQUE_NOT_PENDING");
+        const step = rules.canTransition(cheque.status, "clear");
+        if (!step.ok) throw new AppError(step.message, 409, step.code);
         if (day(on) < day(cheque.chequeDate)) {
           throw new AppError(`This cheque is dated ${cheque.chequeDate.toISOString().slice(0, 10)} and cannot clear before then`, 409, "CHEQUE_NOT_MATURE");
         }
@@ -157,10 +159,8 @@ class ChequeService {
       let result;
       await session.withTransaction(async () => {
         const cheque = await this.get(id, req, session);
-        const allowed = to === "bounced" ? ["pending", "cleared"] : ["pending"];
-        if (!allowed.includes(cheque.status)) {
-          throw new AppError(`A ${cheque.status} cheque cannot be marked ${to}`, 409, "CHEQUE_NOT_PENDING");
-        }
+        const step = rules.canTransition(cheque.status, to === "bounced" ? "bounce" : "cancel");
+        if (!step.ok) throw new AppError(step.message, 409, step.code);
         const voucher = await Voucher.findById(cheque.voucherId).session(session);
         if (!voucher) throw new AppError("The voucher for this cheque no longer exists", 404);
         await FiscalYearService.assertPostingAllowed(voucher.date, { session });
@@ -186,7 +186,7 @@ class ChequeService {
   // (the caller reverses the ledger); one that has cleared may only be deleted, not edited.
   static async onVoucherRemoved(voucher, { session, req, adminId, forEdit = false }) {
     const { companyId } = getTenant(req);
-    const cheques = await Cheque.find({ companyId, voucherId: voucher._id, status: { $in: ["pending", "cleared"] } }).session(session);
+    const cheques = await Cheque.find({ companyId, voucherId: voucher._id, status: { $in: rules.OPEN } }).session(session);
     for (const c of cheques) {
       if (forEdit && c.status === "cleared") {
         throw new AppError("This cheque has cleared, so its voucher cannot be edited. Mark the cheque bounced first.", 409, "CHEQUE_CLEARED");

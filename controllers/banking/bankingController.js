@@ -53,6 +53,7 @@ exports.updateCard = catchAsync(async (req, res) => {
 
 // --- cheques ---
 exports.listCheques = catchAsync(async (req, res) => ok(res, await ChequeService.list(req, req.query)));
+exports.getCheque = catchAsync(async (req, res) => ok(res, await ChequeService.get(req.params.id, req)));
 exports.clearCheque = catchAsync(async (req, res) => {
   const c = await ChequeService.clear(req.params.id, req.body, req, req.admin?.id);
   await AuditService.log({ req, action: "CHEQUE_CLEARED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo} ${c.amount}` });
