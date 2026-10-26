@@ -59,6 +59,31 @@ exports.clearCheque = catchAsync(async (req, res) => {
   await AuditService.log({ req, action: "CHEQUE_CLEARED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo} ${c.amount}` });
   ok(res, c);
 });
+exports.depositCheque = catchAsync(async (req, res) => {
+  const c = await ChequeService.deposit(req.params.id, req.body, req, req.admin?.id);
+  await AuditService.log({ req, action: "CHEQUE_DEPOSITED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo}${c.depositSlipNo ? `, slip ${c.depositSlipNo}` : ""}` });
+  ok(res, c);
+});
+exports.holdCheque = catchAsync(async (req, res) => {
+  const c = await ChequeService.hold(req.params.id, req.body, req, req.admin?.id);
+  await AuditService.log({ req, action: "CHEQUE_HELD", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo}: ${c.holdReason}` });
+  ok(res, c);
+});
+exports.resumeCheque = catchAsync(async (req, res) => {
+  const c = await ChequeService.resume(req.params.id, req.body, req, req.admin?.id);
+  await AuditService.log({ req, action: "CHEQUE_RESUMED", entity: "Cheque", entityId: c._id, summary: c.chequeNo });
+  ok(res, c);
+});
+// Several at once: always 200, each failure carries its own code. One audit row for the batch (the per-cheque
+// CHEQUE_CLEARED etc. rows are written by the single-cheque handlers; a bulk summary is what a reviewer wants to see).
+exports.bulkCheques = catchAsync(async (req, res) => {
+  const { action, ids, ...data } = req.body || {};
+  const result = await ChequeService.bulk(action, ids, data, req, req.admin?.id);
+  if (result.successful.length) {
+    await AuditService.log({ req, action: `CHEQUE_BULK_${String(action).toUpperCase()}`, entity: "Cheque", entityId: null, summary: `${result.successful.length} done, ${result.failed.length} failed` });
+  }
+  ok(res, result);
+});
 exports.bounceCheque = catchAsync(async (req, res) => {
   const c = await ChequeService.bounce(req.params.id, req.body, req, req.admin?.id);
   await AuditService.log({ req, action: "CHEQUE_BOUNCED", entity: "Cheque", entityId: c._id, summary: `${c.chequeNo}: ${c.reason}` });

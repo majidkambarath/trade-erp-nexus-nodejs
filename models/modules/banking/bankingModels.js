@@ -115,6 +115,12 @@ const chequeSchema = new mongoose.Schema(
     clearedOn: { type: Date, default: null },
     bouncedOn: { type: Date, default: null },
     reason: { type: String, trim: true, maxlength: 250, default: "" },
+    // Taken to the bank: the day, and the paying-in slip. Posts nothing - the money stays in the post-dated cheques account.
+    presentedOn: { type: Date, default: null },
+    depositSlipNo: { type: String, trim: true, maxlength: 40, default: "" },
+    // Kept in the drawer on purpose: why, and optionally until when. Set only while status is "hold".
+    holdReason: { type: String, trim: true, maxlength: 250, default: "" },
+    holdUntil: { type: Date, default: null },
     history: [
       {
         status: String,
