@@ -37,3 +37,12 @@ test("starter account names in the organisation's words; whole words only", () =
   assert.equal(R.localAccountName("Cash in Hand", "IN"), "Cash in Hand");
   assert.equal(R.localAccountName("VATable sales", "IN"), "VATable sales", "not inside another word");
 });
+
+test("cheque validity: six months (183 days) everywhere, because no other country's value is verified", () => {
+  const { chequeValidityDays, CHEQUE_VALIDITY_DAYS } = require("../countryRules");
+  assert.equal(chequeValidityDays("AE"), 183, "what the register has always used");
+  for (const c of ["IN", "in", "SA", "GB", "XX", "", null, undefined]) assert.equal(chequeValidityDays(c), 183, String(c));
+  assert.ok(Object.isFrozen(CHEQUE_VALIDITY_DAYS));
+  assert.deepEqual(Object.keys(CHEQUE_VALIDITY_DAYS), ["default"], "a country is added here only once its value is confirmed from the primary source");
+  for (const k of ["constructor", "__proto__", "toString"]) assert.equal(chequeValidityDays(k), 183, k);
+});
