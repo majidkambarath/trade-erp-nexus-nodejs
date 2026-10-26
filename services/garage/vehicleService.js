@@ -138,6 +138,20 @@ class VehicleService {
     return Vehicle.find(filter).sort({ updatedAt: -1 }).limit(300).lean();
   }
 
+  // Every make and model this organisation has already entered, for the vehicle form's own suggestions (free
+  // text stays free text - plan 1.4 "Not built yet"; this only stops "Toyota" and "toyota" drifting apart on
+  // the same workshop's books). Capped small; a form's datalist, not a full catalogue.
+  static async catalogue() {
+    const makes = await Vehicle.distinct("make");
+    const rows = await Vehicle.aggregate([{ $group: { _id: { make: "$make", model: "$model" } } }]);
+    const modelsByMake = {};
+    for (const r of rows) {
+      if (!r._id.make || !r._id.model) continue;
+      (modelsByMake[r._id.make] ||= []).push(r._id.model);
+    }
+    return { makes: makes.filter(Boolean).sort(), modelsByMake };
+  }
+
   // What the vehicle's own screen shows above its history: who owns it now, when it is next due, and any open
   // comeback candidate. `JobCardService` supplies the job history itself (it owns that collection).
   static async withSchedule(id, { lastServiceDay, lastServiceOdometer, addMonths } = {}) {

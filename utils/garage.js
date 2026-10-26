@@ -72,6 +72,47 @@ function validateVehicle(input = {}) {
   return errors;
 }
 
+// ---- setup: bays and the service menu --------------------------------------------------------------------
+const BAY_KINDS = ["mechanical", "body", "paint", "wash", "other"];
+
+function validateBay(input = {}) {
+  const errors = [];
+  const add = (field, code, message) => errors.push({ field, code, message });
+  if (!text(input.name, 60)) add("name", "BAY_NAME_REQUIRED", "Give the bay a name");
+  if (input.kind && !BAY_KINDS.includes(input.kind)) add("kind", "INVALID_BAY_KIND", "Choose a kind of bay");
+  return errors;
+}
+
+function validateGarageService(input = {}) {
+  const errors = [];
+  const add = (field, code, message) => errors.push({ field, code, message });
+  if (!text(input.code, 20)) add("code", "SERVICE_CODE_REQUIRED", "Give the service a short code");
+  if (!text(input.name, 120)) add("name", "SERVICE_NAME_REQUIRED", "Give the service a name");
+  if (!idOf(input.serviceItemId)) add("serviceItemId", "SERVICE_ITEM_REQUIRED", "Choose the service item this bills under");
+  const hours = input.standardHours == null || input.standardHours === "" ? 0 : num(input.standardHours);
+  if (!(hours >= 0 && hours <= 1000)) add("standardHours", "INVALID_HOURS", "Enter the standard hours as a number");
+  (Array.isArray(input.defaultParts) ? input.defaultParts : []).forEach((p, i) => {
+    if (!idOf(p?.stockId)) add(`defaultParts.${i}.stockId`, "PART_REQUIRED", `Part ${i + 1}: choose the item`);
+  });
+  (Array.isArray(input.defaultTasks) ? input.defaultTasks : []).forEach((t, i) => {
+    if (!text(t?.name, 80)) add(`defaultTasks.${i}.name`, "TASK_NAME_REQUIRED", `Task ${i + 1}: give it a name`);
+  });
+  return errors;
+}
+
+// A standard job turned into a draft job-card payload: the service item itself as a labour line, its usual
+// parts, and its usual tasks. Returns the payload only - nothing is created, exactly as a process route's own
+// `plan` works (services/stock/processRouteService.js). The caller (garageSetupService.plan) fills in real
+// prices and names from the item/staff masters; this is the pure shape.
+function planFromService(svc, { partsById } = {}) {
+  const lines = [
+    { kind: "labour", itemId: idOf(svc.serviceItemId), qty: 1, price: undefined },
+    ...(svc.defaultParts || []).map((p) => ({ kind: "part", itemId: idOf(p.stockId), qty: Number(p.qty) || 1, price: partsById?.get(idOf(p.stockId))?.salesPrice })),
+  ];
+  const tasks = (svc.defaultTasks || []).map((t) => ({ name: t.name, mode: t.mode || "in_house", standardHours: Number(t.standardHours) || 0 }));
+  return { lines, tasks, standardHours: Number(svc.standardHours) || 0 };
+}
+
 // ---- a job card -----------------------------------------------------------------------------------------
 function validateJobCard(input = {}) {
   const errors = [];
@@ -117,6 +158,12 @@ function validateJobCard(input = {}) {
 const isApproved = (line) => line?.approved !== false;
 const approvedLines = (card) => (card?.lines || []).filter(isApproved);
 const declinedLines = (card) => (card?.lines || []).filter((l) => l?.approved === false);
+// What is actually left to BILL: approved, and not already carried on some invoice. jobTotals keeps reading
+// the whole approved figure (what was agreed never shrinks because part of it was billed); this is the
+// narrower list createInvoice and its action gate use, so the same line cannot be invoiced twice - whether
+// by two presses of the ordinary button, or by it racing an insurance claim's own raiseInvoices for the
+// same lines, which is exactly how a customer ended up billed for a repair their insurer already paid.
+const billableLines = (card) => approvedLines(card).filter((l) => !l?.invoiced);
 
 // One line's value before VAT: quantity x price, less its discount. The SERVER prices the real document through
 // TransactionService.buildPricing, so this is the estimate's own arithmetic and nothing posts from it.
@@ -416,10 +463,10 @@ function analysis(cards = [], { from, to, dayOf } = {}) {
 
 module.exports = {
   JOB_STATUS, LIVE_STATUS, JOB_TYPES, TASK_MODES, TASK_STATUS, OPEN_TASK, LINE_KINDS, STOCKED_KINDS,
-  COMPLAINT_STATUS, APPROVAL_METHODS, FUEL_LEVELS, CHECK_IN_ITEMS, DAMAGE_KINDS, HOLD_REASONS,
+  COMPLAINT_STATUS, APPROVAL_METHODS, FUEL_LEVELS, CHECK_IN_ITEMS, DAMAGE_KINDS, HOLD_REASONS, BAY_KINDS,
   num, round2, round3, idOf, text, plateKey, chassisKey,
-  validateVehicle, validateJobCard,
-  isApproved, approvedLines, declinedLines, lineValue, jobTotals, planEstimate, checkApproval,
+  validateVehicle, validateJobCard, validateBay, validateGarageService, planFromService,
+  isApproved, approvedLines, declinedLines, billableLines, lineValue, jobTotals, planEstimate, checkApproval,
   stagesOf, release, advance, checkCompletion, allTasksSettled, currentTasks, taskHours,
   mayRelease, warrantyUntil, comebackCandidates, serviceDue,
   dueState, board, analysis,

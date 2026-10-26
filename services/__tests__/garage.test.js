@@ -143,6 +143,29 @@ test("a job card is opened with three complaints and a first estimate of parts a
   taskOilId = String(card.tasks[1]._id);
 });
 
+test("the walk-around is recorded separately from the estimate: damage points, what was in the car, a refused bad damage kind", { skip }, async () => {
+  card = await svc.JobCard.recordCheckIn(
+    card._id,
+    {
+      damagePoints: [{ panel: "Front bumper", kind: "scratch", notes: "Light scuff, left side" }],
+      itemsPresent: ["Spare wheel", "Jack and tools"],
+      notes: "Fuel gauge at half, no warning lights",
+    },
+    "advisor1"
+  );
+  assert.equal(card.checkIn.damagePoints.length, 1);
+  assert.equal(card.checkIn.damagePoints[0].kind, "scratch");
+  assert.deepEqual(card.checkIn.itemsPresent, ["Spare wheel", "Jack and tools"]);
+  // Recording the walk-around touched nothing of the estimate already built.
+  assert.equal(card.lines.length, 5);
+  assert.equal(card.complaints.length, 3);
+
+  await assert.rejects(
+    () => svc.JobCard.recordCheckIn(card._id, { damagePoints: [{ panel: "Roof", kind: "sunburn" }] }, "advisor1"),
+    (e) => e.code === "INVALID_DAMAGE_KIND"
+  );
+});
+
 test("a part cannot be billed as labour, and a service item cannot be billed as a part", { skip }, async () => {
   await assert.rejects(
     () => svc.JobCard.create({ vehicleId: vehicle._id, customerId: customer._id, complaints: [{ concern: "x" }], lines: [{ kind: "labour", itemId: brakePads._id, qty: 1, price: 10 }] }, "tester"),
@@ -294,4 +317,38 @@ test("deleting the approved invoice reopens the job card to be invoiced again", 
   assert.equal(card.invoiceStatus, "NONE");
   assert.equal(card.status, "DELIVERED", "handed over, but no longer invoiced - reopened from CLOSED, never silently left wrong");
   assert.equal(await onHand(brakePads), 10, "the reversal gave the part back");
+});
+
+test("a line cannot be billed twice: raising a second invoice for lines already on a live one is refused", { skip }, async () => {
+  // The lines freed by the deletion above are billable again (jobCardLinks.js un-invoiced exactly them).
+  const first = await svc.JobCard.createInvoice({ jobCardId: card._id, billTo: "customer" }, "tester");
+  invoice = first.invoice;
+  card = await svc.JobCardModel.findById(card._id).lean();
+  assert.equal(card.invoices.length, 1);
+  assert.ok(card.lines.every((l) => l.approved === false || l.invoiced === true), "every approved line is now marked invoiced");
+
+  // Pressing "Raise invoice" again - nothing left to pick, whole or by naming the same (now billed) line back:
+  // with nothing billable at all, that is ALREADY_INVOICED whichever lineIds were asked for.
+  await assert.rejects(() => svc.JobCard.createInvoice({ jobCardId: card._id, billTo: "customer" }, "tester"), (e) => e.code === "ALREADY_INVOICED");
+  const anyLineId = String(card.lines.find((l) => l.approved !== false)._id);
+  await assert.rejects(
+    () => svc.JobCard.createInvoice({ jobCardId: card._id, billTo: "customer", lineIds: [anyLineId] }, "tester"),
+    (e) => e.code === "ALREADY_INVOICED"
+  );
+});
+
+test("a walk-in customer can be added on the spot from the vehicle or job card form, with a real ledger account behind it", { skip }, async () => {
+  const c = await svc.JobCard.createCustomer("Majid Test Quickadd");
+  assert.match(c.code, /^CUST\d{4}\d{3}$/);
+  assert.equal(c.name, "Majid Test Quickadd");
+  assert.equal(c.active, true);
+
+  const stored = await svc.Customer.findById(c.id).lean();
+  assert.equal(stored.customerName, "Majid Test Quickadd");
+  assert.equal(stored.contactPerson, "Majid Test Quickadd", "a one-person customer: the contact is the same name until someone edits it");
+
+  const account = await svc.LedgerAccount.findOne({ accountName: `Customer - ${c.name}` }).lean();
+  assert.ok(account, "a real party ledger account, exactly as the ordinary Customers screen creates one");
+
+  await assert.rejects(() => svc.JobCard.createCustomer("   "), (e) => e.code === "CUSTOMER_NAME_REQUIRED");
 });

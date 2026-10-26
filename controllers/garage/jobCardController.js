@@ -1,4 +1,5 @@
 const JobCardService = require("../../services/garage/jobCardService");
+const GarageAttachmentService = require("../../services/garage/garageAttachmentService");
 const AuditService = require("../../services/core/auditService");
 const roles = require("../../utils/permissions");
 const AppError = require("../../utils/AppError");
@@ -26,7 +27,16 @@ async function assertMayWorkTask(req) {
 exports.list = catchAsync(async (req, res) => ok(res, await JobCardService.list(req.query)));
 exports.board = catchAsync(async (req, res) => ok(res, await JobCardService.board({ me: req.admin?.id })));
 exports.assignees = catchAsync(async (req, res) => ok(res, await JobCardService.assignees()));
+exports.staff = catchAsync(async (req, res) => ok(res, await JobCardService.staffChoices()));
+exports.customers = catchAsync(async (req, res) => ok(res, await JobCardService.customerChoices(req.query)));
+exports.vendors = catchAsync(async (req, res) => ok(res, await JobCardService.vendorChoices(req.query)));
+exports.createCustomer = catchAsync(async (req, res) => {
+  const c = await JobCardService.createCustomer(req.body?.name);
+  await AuditService.log({ req, action: "GARAGE_CUSTOMER_CREATED", entity: "Customer", entityId: c.id, summary: `${c.name} (${c.code}) added from the garage module` });
+  ok(res, c, 201);
+});
 exports.analysis = catchAsync(async (req, res) => ok(res, await JobCardService.analysis(req.query)));
+exports.comebackCandidates = catchAsync(async (req, res) => ok(res, await JobCardService.comebackCandidates(req.query)));
 exports.committed = catchAsync(async (req, res) => ok(res, await JobCardService.committed(req.query.itemIds)));
 exports.get = catchAsync(async (req, res) => ok(res, await JobCardService.getById(req.params.id)));
 exports.activity = catchAsync(async (req, res) => ok(res, await AuditService.list(req, { entity: "JobCard", entityId: req.params.id, limit: 100 })));
@@ -34,50 +44,57 @@ exports.activity = catchAsync(async (req, res) => ok(res, await AuditService.lis
 exports.create = catchAsync(async (req, res) => {
   const c = await JobCardService.create(req.body || {}, by(req));
   await log(req, "JOB_CARD_CREATED", c, `Opened ${describe(c)}`);
-  ok(res, c, 201);
+  ok(res, JobCardService.present(c), 201);
 });
 
 exports.update = catchAsync(async (req, res) => {
   const c = await JobCardService.update(req.params.id, req.body || {}, by(req));
   await log(req, "JOB_CARD_UPDATED", c, `Updated ${describe(c)}`);
-  ok(res, c);
+  ok(res, JobCardService.present(c));
 });
 
 exports.remove = catchAsync(async (req, res) => {
   const c = await JobCardService.remove(req.params.id, by(req));
   await log(req, "JOB_CARD_DELETED", c, `Deleted ${describe(c)}`);
-  ok(res, c);
+  await GarageAttachmentService.removeAll("jobcard", c._id, req); // after the record is gone, never inside its transaction
+  ok(res, JobCardService.present(c));
+});
+
+exports.recordCheckIn = catchAsync(async (req, res) => {
+  const c = await JobCardService.recordCheckIn(req.params.id, req.body || {}, by(req));
+  await log(req, "JOB_CARD_CHECKED_IN", c, `Check-in recorded for ${describe(c)}`);
+  ok(res, JobCardService.present(c));
 });
 
 exports.sendEstimate = catchAsync(async (req, res) => {
   const c = await JobCardService.sendEstimate(req.params.id, by(req));
   await log(req, "JOB_CARD_ESTIMATE_SENT", c, `Estimate sent for ${describe(c)}`);
-  ok(res, c);
+  ok(res, JobCardService.present(c));
 });
 
 exports.recordApproval = catchAsync(async (req, res) => {
   const c = await JobCardService.recordApproval(req.params.id, req.body || {}, by(req));
   await log(req, "JOB_CARD_APPROVED", c, `Approval recorded for ${describe(c)}`);
-  ok(res, c);
+  ok(res, JobCardService.present(c));
 });
 
 exports.reviseEstimate = catchAsync(async (req, res) => {
   const c = await JobCardService.reviseEstimate(req.params.id, req.body || {}, by(req));
   await log(req, "JOB_CARD_ESTIMATE_REVISED", c, `Supplementary estimate on ${describe(c)}`);
-  ok(res, c);
+  ok(res, JobCardService.present(c));
 });
 
 exports.startTask = catchAsync(async (req, res) => {
   await assertMayWorkTask(req);
   const c = await JobCardService.startTask(req.params.id, req.params.taskId, by(req));
-  ok(res, c);
+  ok(res, JobCardService.present(c));
 });
 
 exports.completeTask = catchAsync(async (req, res) => {
   await assertMayWorkTask(req);
   const c = await JobCardService.completeTask(req.params.id, req.params.taskId, req.body || {}, by(req));
   await log(req, "JOB_CARD_TASK_DONE", c, `A task on ${describe(c)}`);
-  ok(res, c);
+  ok(res, JobCardService.present(c));
 });
 
 exports.createInvoice = catchAsync(async (req, res) => {
@@ -86,17 +103,17 @@ exports.createInvoice = catchAsync(async (req, res) => {
   assertPermission(req, "sales.create", "raising the invoice from a job card creates a sales document");
   const { jobCard, invoice } = await JobCardService.createInvoice({ ...req.body, jobCardId: req.params.id }, by(req));
   await log(req, "JOB_CARD_INVOICED", jobCard, `Invoice ${invoice.transactionNo} raised from ${describe(jobCard)}`);
-  ok(res, { jobCard, invoice }, 201);
+  ok(res, { jobCard: JobCardService.present(jobCard), invoice }, 201);
 });
 
 exports.release = catchAsync(async (req, res) => {
   const c = await JobCardService.releaseVehicle(req.params.id, req.body || {}, by(req));
   await log(req, "JOB_CARD_RELEASED", c, `Vehicle released for ${describe(c)}`);
-  ok(res, c);
+  ok(res, JobCardService.present(c));
 });
 
 exports.cancel = catchAsync(async (req, res) => {
   const c = await JobCardService.cancel(req.params.id, req.body || {}, by(req));
   await log(req, "JOB_CARD_CANCELLED", c, `Cancelled ${describe(c)}: ${req.body?.reason || ""}`);
-  ok(res, c);
+  ok(res, JobCardService.present(c));
 });

@@ -27,7 +27,7 @@ const attachmentSchema = new mongoose.Schema(
     // Where it is attached. null until linked.
     ownerType: {
       type: String,
-      enum: ["transaction", "voucher", "account", "einvoice", "customer", "vendor", "lead", "opportunity", "jobcard", "vehicle", null],
+      enum: ["transaction", "voucher", "account", "einvoice", "customer", "vendor", "lead", "opportunity", "jobcard", "vehicle", "claim", null],
       default: null,
     },
     ownerId: { type: mongoose.Schema.Types.ObjectId, default: null },

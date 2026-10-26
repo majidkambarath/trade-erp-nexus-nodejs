@@ -49,6 +49,9 @@ const lineSchema = new mongoose.Schema(
     vendorName: String,
     complaintId: { type: id }, // which complaint this line answers, for the printed estimate to group by
     approved: { type: Boolean, default: undefined }, // undefined/true = approved; false = the customer said no
+    invoiced: { type: Boolean, default: false }, // billed on SOME invoice already (jobCardService.createInvoice sets
+    // it on the lines it actually bills) - stops the same line being billed twice, whether by two presses of the
+    // ordinary "Raise invoice" button or by it racing an insurance claim's own raiseInvoices for the same lines.
     addedInVersion: { type: Number, default: 1 }, // which estimate version introduced this line
   },
   { _id: true }
@@ -97,6 +100,9 @@ const invoiceLinkSchema = new mongoose.Schema(
     billTo: { type: String, enum: ["customer", "insurer"], default: "customer" },
     amount: Number,
     status: String,
+    lineIds: { type: [id], default: [] }, // which estimate lines this invoice actually billed, so
+    // jobCardLinks.js can free exactly those lines (set invoiced back to false) if this invoice is
+    // later rejected, cancelled or deleted - never every line on the card.
   },
   { _id: false }
 );

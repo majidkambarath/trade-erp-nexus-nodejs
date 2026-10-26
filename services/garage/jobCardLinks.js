@@ -34,6 +34,13 @@ async function onJobCardInvoiceChanged(transaction, { session, deleted = false }
   const state = invoiceStateOf(transaction, deleted);
   for (const card of cards) {
     if (state === "NONE") {
+      const dying = card.invoices.find((i) => String(i.transactionId) === String(id));
+      // The lines this invoice billed are free to be billed again - on this card's own ordinary invoice,
+      // or (for an insurer's share that was rejected/cancelled before approval) an insurance claim's.
+      for (const lineId of dying?.lineIds || []) {
+        const sub = card.lines.id(lineId);
+        if (sub) sub.invoiced = false;
+      }
       card.invoices = card.invoices.filter((i) => String(i.transactionId) !== String(id));
     } else {
       const link = card.invoices.find((i) => String(i.transactionId) === String(id));

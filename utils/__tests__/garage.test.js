@@ -129,6 +129,23 @@ test("a line with no approval flag counts as approved: a whole estimate is not t
   assert.equal(G.jobTotals(c).total, 200);
 });
 
+test("billableLines drops what has already been invoiced, but jobTotals still counts it as approved", () => {
+  const c = {
+    lines: [
+      { kind: "part", qty: 1, price: 400, invoiced: true },
+      { kind: "labour", qty: 2, price: 120 },
+      { kind: "part", qty: 1, price: 50, approved: false },
+    ],
+  };
+  // Approved is unchanged by billing: what was agreed does not shrink because part of it was already billed.
+  assert.equal(G.approvedLines(c).length, 2);
+  assert.equal(G.jobTotals(c).total, 400 + 240);
+  // But only the un-invoiced approved line is left to bill.
+  const billable = G.billableLines(c);
+  assert.equal(billable.length, 1);
+  assert.equal(billable[0].kind, "labour");
+});
+
 test("a supplementary estimate is a new VERSION of the same card, and stamps the lines it added", () => {
   const first = G.planEstimate({ lines: [{ kind: "part", qty: 1, price: 100 }] }, { now: "2026-10-26T08:00:00Z", by: "u1" });
   assert.equal(first.version, 1);
@@ -360,4 +377,29 @@ test("a rate with nothing to measure is null, never zero", () => {
   );
   assert.equal(unmeasured.jobs.hoursTaken, 0);
   assert.equal(unmeasured.jobs.efficiencyPct, null);
+});
+
+// ---- setup: bays and the service menu --------------------------------------------------------------------
+
+test("a bay needs a name, and a real kind if one is given", () => {
+  assert.deepEqual(G.validateBay({}).map((e) => e.code), ["BAY_NAME_REQUIRED"]);
+  assert.deepEqual(G.validateBay({ name: "Ramp 1", kind: "not-a-kind" }).map((e) => e.code), ["INVALID_BAY_KIND"]);
+  assert.deepEqual(G.validateBay({ name: "Ramp 1", kind: "body" }), []);
+});
+
+test("a standard job needs its code, name and the service item it bills under", () => {
+  const codes2 = (s) => G.validateGarageService(s).map((e) => e.code);
+  assert.deepEqual(codes2({}), ["SERVICE_CODE_REQUIRED", "SERVICE_NAME_REQUIRED", "SERVICE_ITEM_REQUIRED"]);
+  assert.deepEqual(codes2({ code: "OIL", name: "Oil change", serviceItemId: S, defaultParts: [{ qty: 1 }] }), ["PART_REQUIRED"]);
+  assert.deepEqual(codes2({ code: "OIL", name: "Oil change", serviceItemId: S, standardHours: -1 }), ["INVALID_HOURS"]);
+  assert.deepEqual(codes2({ code: "OIL", name: "Oil change", serviceItemId: S }), []);
+});
+
+test("a standard job turns into a draft payload: the labour item, its usual parts, its usual tasks", () => {
+  const svc = { serviceItemId: S, standardHours: 1.5, defaultParts: [{ stockId: I, qty: 2 }], defaultTasks: [{ name: "Drain oil", mode: "in_house", standardHours: 0.5 }] };
+  const partsById = new Map([[I, { salesPrice: 25 }]]);
+  const plan = G.planFromService(svc, { partsById });
+  assert.deepEqual(plan.lines, [{ kind: "labour", itemId: S, qty: 1, price: undefined }, { kind: "part", itemId: I, qty: 2, price: 25 }]);
+  assert.deepEqual(plan.tasks, [{ name: "Drain oil", mode: "in_house", standardHours: 0.5 }]);
+  assert.equal(plan.standardHours, 1.5);
 });
