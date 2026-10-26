@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.8.0.0 — 26 October 2026
+
+The first industry vertical: a garage/workshop module, sold per organisation like the CRM. A vehicle
+comes in, is checked in with a walk-around, gets an estimate of parts and labour (sent for approval
+by WhatsApp, a call, a signature or an insurer's LPO), is worked through tasks in parallel stages,
+invoiced, and handed back on a gate pass with a warranty. An accident repair can split one job into
+two invoices - the insurer's share and the customer's excess/depreciation - from one decision.
+Almost none of the money machinery is new: a job card is a non-posting document in front of an
+ordinary sales invoice, exactly like a delivery note; labour and sublet are service `Stock` items, so
+the existing service-posting routing keeps parts, labour and sublet revenue apart with no new
+template. Backend 1.8.0.0.
+
+### Added
+
+- **`Vehicle`** (organisation-wide master, found again by plate or chassis however either is typed)
+  and **`JobCard`** (branch scoped, series `JC`): DRAFT -> AWAITING_APPROVAL -> IN_PROGRESS -> READY
+  -> DELIVERED -> CLOSED, or CANCELLED. One `lines[]` array for parts/labour/sublet/consumable, so the
+  estimate and the invoice price from the same figures; `approved`/`invoiced` per line stop a line
+  being billed twice, including across an ordinary invoice racing an insurance claim's own split.
+  Tasks carry a `stage` - tasks sharing one run in parallel, the next stage opens only once every task
+  in this one is settled - the one structural difference from a process order's strictly sequential
+  steps.
+- **`InsuranceClaim`** (series `CLM`) and `Customer.isInsurer`: survey, the insurer's approval with an
+  excess and a parts-depreciation percentage, and `splitBill` - one job, two invoices, proven to add
+  back to the job's own total.
+- **Setup**: `Bay` (branch scoped: the ramps, lifts and booths a task can be assigned to) and
+  `GarageService` (organisation-wide: a saved "standard job" - a labour item plus its usual parts and
+  tasks - that fills a job card's estimate in one tap, `GET /garage/services/plan`, the same
+  "returns a draft, creates nothing" shape as a process route's own plan).
+- **A part short of stock is offered, not guessed**: `JobCardService.shortages` reads what is on hand
+  less what every OTHER live, uninvoiced job card has already committed, names the item's own default
+  vendor, and `raisePurchaseOrder` raises a real draft purchase order through the ordinary
+  `TradeOrderService` (kind `purchase`) - recorded on the card, received and invoiced through the
+  ordinary Purchase screens, never through the job card itself.
+- **Four notification checks** (`NotificationChecksService.CHECKS`, module `garage`): a job overdue
+  against its promised day, an estimate still waiting a decision after 24 hours, a claim waiting on
+  the insurer past two days, and a vehicle due or overdue for its next service (date or odometer,
+  whichever comes first).
+- **Attachments** (`garageAttachmentService.js`, the CRM's own narrow-door pattern) for job cards,
+  vehicles and claims - photos, signatures, survey photos - never through the finance attachment
+  door, which answers to keys a garage-only person does not hold.
+- **The module itself**: `garage` is the first entry in `plans.js` `OPT_IN_MODULES` (in NO plan, not
+  even Premium - an organisation only gets it from a developer-console override, like the CRM), with
+  its own permission actions (view/create/edit/delete/approve/invoice/manage) and no implied access to
+  `sales.*`/`purchase.*`/`inventory.*` - raising an invoice or a purchase order from a job card
+  double-asserts the real module's own key in the controller, never a side door through `garage.*`.
+  `scripts/demo/garageDemo.js` builds a full demo organisation (Al Manara Auto Garage) through the
+  real services: a retail job closed end to end, an accident repair split between insurer and
+  customer, three more jobs left open at different stages, and the Setup screen's own bays and
+  standard jobs.
+
+### Fixed
+
+- **Two pre-existing bugs found while building this, unrelated to garage**: `customerService.js`'s
+  `createCustomer`/`deleteCustomer`/`deleteCustomerByCustomerId` called `session.abortTransaction()`
+  unconditionally in their catch block, so a transaction already committed (or already aborted) threw
+  a second error that masked the real one; guarded with `session.inTransaction()`. A genuine,
+  deterministic transient `WriteConflict` (112) on the `Sequence` collection's very first write in a
+  fresh database was surfacing as a raw 500 on `createCustomer`; wrapped with the established
+  `retryTransientTransaction` helper.
+
 ## 1.7.0.0 — 26 October 2026
 
 The balance sheet is a statement now, not a list of accounts: classified current and non-current,
