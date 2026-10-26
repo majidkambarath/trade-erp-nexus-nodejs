@@ -2,6 +2,7 @@ const catchAsync = require("../../utils/catchAsync");
 const BankMasterService = require("../../services/banking/bankMasterService");
 const { CardTypeService, CardService } = require("../../services/banking/cardService");
 const ChequeService = require("../../services/banking/chequeService");
+const ChequeReportService = require("../../services/banking/chequeReportService");
 const PaymentModeService = require("../../services/banking/paymentModeService");
 const AuditService = require("../../services/core/auditService");
 
@@ -53,6 +54,8 @@ exports.updateCard = catchAsync(async (req, res) => {
 
 // --- cheques ---
 exports.listCheques = catchAsync(async (req, res) => ok(res, await ChequeService.list(req, req.query)));
+exports.chequeMaturity = catchAsync(async (req, res) => ok(res, await ChequeReportService.maturity(req.query)));
+exports.chequeForward = catchAsync(async (req, res) => ok(res, await ChequeReportService.forward(req.query)));
 exports.getCheque = catchAsync(async (req, res) => ok(res, await ChequeService.get(req.params.id, req)));
 exports.clearCheque = catchAsync(async (req, res) => {
   const c = await ChequeService.clear(req.params.id, req.body, req, req.admin?.id);
