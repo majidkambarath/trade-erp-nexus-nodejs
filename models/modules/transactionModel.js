@@ -233,14 +233,14 @@ transactionSchema.index({ partyId: 1, partyType: 1 });
 transactionSchema.index({ "returnOf.transactionId": 1 }, { sparse: true });
 transactionSchema.index({ status: 1 });
 // The order lists read one type, newest first, by date or by when it was saved: without these every list sorted the whole collection.
+// The _id on the end is the tie-breaker that keeps a page boundary stable; without it the sort falls back to an
+// in-memory sort of every matching document. (Declared once: a second, identical declaration lower down warned
+// "Duplicate schema index" on every boot.)
 transactionSchema.index({ type: 1, createdAt: -1, _id: -1 });
 transactionSchema.index({ type: 1, date: -1 });
 transactionSchema.index({ type: 1, status: 1, date: -1 });
 transactionSchema.index({ date: -1 });
 transactionSchema.index({ isOpening: 1, type: 1, partyId: 1 });
-// List query: filter by type, sort by createdAt then _id (the tie-breaker that keeps a page boundary stable). Without this the
-// sort falls back to an in-memory sort of every matching document.
-transactionSchema.index({ type: 1, createdAt: -1, _id: -1 });
 transactionSchema.index({ createdAt: -1, _id: -1 });
 
 transactionSchema.index({ transactionNo: 1 }, { unique: true }); // unique within an organisation - NOT per branch: a tax invoice number must be unique per taxpayer, so branches take their own prefix in the number format
