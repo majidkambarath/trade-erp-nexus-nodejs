@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.10.0.0 — 30 October 2026
+
+A QA pass of the garage module (Garage-Test-Report.xlsx, run against the live Al Manara Auto Garage LLC
+organisation) found that every garage estimate and invoice was charging 0% VAT, a gate pass could let a
+car go for work it was never invoiced for, and a dozen smaller gaps. Needs frontend 1.10.0.0. Backend
+1.10.0.0.
+
+### Fixed
+
+- **Every garage line posted at 0% VAT, and the VAT return refused to finalise.** Three causes, all
+  fixed: the job-card form sent no tax code and no rate; `TaxCodeService.applyToItems` left such a line
+  untouched (the ordinary order forms cover for this by always sending a literal `5`, which the garage
+  form never learned to do); and the job-card `lineSchema` never declared the fields the pricing engine
+  computes (`vatPercent`, `vatAmount`, `taxKind`, `taxableAmount`, `grossAmount`, `lineTotal`), so Mongoose
+  silently dropped them on every save. Fixed with a narrow server default - the organisation's own
+  default standard tax code is applied only when a line names no code AND sends no rate at all, never
+  overriding an explicit `0` - and by declaring the missing fields. A purchase order raised from a
+  shortage had the same defect a third way (an explicit `vatPercent: 0`), now removed so the same default
+  applies there too. `scripts/garage-vat-audit.cjs` is a read-only report of the lines on already-approved
+  documents that predate this fix, for a credit note and a fresh invoice.
+- **A gate pass could release a car for free.** `releaseVehicle` summed only the invoices actually
+  raised; approved lines never put on any invoice at all reported nothing owed. It now also counts the
+  real value of every approved, unbilled line. The override that bypasses the amount-owed check needed
+  `garage.manage` as well as `garage.approve`, and had no server-side check for it at all.
+- **`Vehicle.customerName` was computed on every save and never stored** (missing from the schema): the
+  vehicle screen's Owner tile always read "-". A migration backfills existing vehicles.
+- Editing a vehicle answered 404 on every attempt (`vehicleController` read the wrong route parameter
+  name).
+- A job card's line/task validation messages for an out-of-range year or hours figure said "...as a
+  number" even when the value given was a real number, just out of range; a blank price was accepted as
+  an explicit 0; a deliberate stage of 0 was silently turned into 1.
+- A cancelled job card still offered "Raise purchase order" for its shortages.
+- `isInsurer` could be set on a customer when editing, but not when creating one - the one field that
+  blocked every insurance-claim test in the QA pass.
+- Vehicle search did not cover the owner's name; job-card search did not cover the vehicle's make.
+- The board's "Not started" column (a draft card, or one with no open task) counted toward nothing, so
+  the workshop-health ring's own total disagreed with the "Jobs in the workshop" tile beside it.
+- A duplicate SKU answered with no field name to mark on the form.
+- A fresh organisation had no starter unit of measure at all, so the first stock item anyone tried to
+  save had nowhere to point; three are seeded now.
+- A cash receipt's own reference field was accepted by the form and then dropped before it reached the
+  stored voucher.
+- `render.yaml` and the session cookie's `SameSite` setting had not been updated to match the 26 October
+  2026 deployment decision (the API proxied through the frontend's own origin) - the committed blueprint
+  still set the old cross-origin backend URL. A dropped session-refresh cookie and a genuinely ended
+  session now answer different error codes, so the difference is diagnosable.
+
 ## 1.9.0.0 — 26 October 2026
 
 The cheque register used to know four states (pending, cleared, bounced, cancelled) and nothing else. It now
