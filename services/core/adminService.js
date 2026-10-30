@@ -472,6 +472,12 @@ const deleteAdmin = async (adminId, deletedBy = null, actorType = null) => {
 
 const SESSION_ENDED = "Your session has ended. Please sign in again.";
 const endedSession = () => new AppError(SESSION_ENDED, 401, "SESSION_REVOKED");
+// Same refusal, same status, a DIFFERENT code (D13): the browser sent no refresh cookie at all, which is
+// what "the cookie was dropped as third-party" and "the session genuinely ended" both look like from the
+// front end's single try/catch (restoreSession in axios.js) - without this they were indistinguishable
+// even in the server's own response, so a full page load that lost its cookie could never be told apart
+// from a session an administrator actually revoked.
+const noSessionCookie = () => new AppError(SESSION_ENDED, 401, "NO_SESSION_COOKIE");
 
 // Ends sessions (all of a person's, or all but the one making the request). Their refresh cookies stop working at once, and so do the
 // access tokens that name them: the API looks the session up on every request (middleware/authMiddleware.js).
@@ -513,7 +519,7 @@ const reuseDetected = async (admin, session) => {
 // give, and the person's own next refresh is the one that exposes it (they and the thief then hold the same link of the chain).
 // -> { accessToken, expiresIn, admin } and, when the cookie was replaced or restored, { refreshToken, refreshExpiresAt } for the controller to set.
 const refreshAccessToken = async (refreshToken) => {
-  if (!refreshToken || typeof refreshToken !== "string") throw endedSession();
+  if (!refreshToken || typeof refreshToken !== "string") throw noSessionCookie();
 
   const decoded = verifyToken(refreshToken);
   if (decoded.type !== "refresh" || typeof decoded.sid !== "string")

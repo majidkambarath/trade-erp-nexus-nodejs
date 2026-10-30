@@ -13,6 +13,23 @@ const needText = (value, label) => {
   return value.trim();
 };
 
+// A fresh organisation had no units at all, yet unitOfMeasure is required on every stock item (D20): the
+// first item anybody tried to save had nowhere to point, and nothing in provisioning ever created one.
+// Seeded lazily, like TaxCodeService's starter codes: only while the organisation has NONE, so one that
+// deleted every unit on purpose - or renamed "Each" to its own word - is left alone on a later call.
+const STARTER_UNITS = [
+  { unitName: "Each", shortCode: "ea", category: "Quantity" },
+  { unitName: "Kilogram", shortCode: "kg", category: "Weight" },
+  { unitName: "Litre", shortCode: "l", category: "Volume" },
+];
+
+exports.ensureStarter = async (companyId) => {
+  const existing = await UOM.countDocuments({ companyId });
+  if (existing) return 0;
+  await UOM.insertMany(STARTER_UNITS.map((u) => ({ ...u, type: "Base", status: "Active", companyId })));
+  return STARTER_UNITS.length;
+};
+
 // UOM CRUD Operations
 exports.createUOM = async (data) => {
   const { type, category, status } = data;

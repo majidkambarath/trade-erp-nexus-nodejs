@@ -68,8 +68,11 @@ async function prepareLines(items, { session, allowEmpty = false } = {}) {
     if (discountPercent < 0 || discountPercent > 100) throw new AppError(`Line ${n}: discount is 0 to 100%`, 400, "INVALID_DISCOUNT");
     const discountAmount = num(line.discountAmount) || 0;
     if (discountAmount < 0) throw new AppError(`Line ${n}: discount cannot be negative`, 400, "INVALID_DISCOUNT");
-    const vatPercent = num(line.vatPercent) || 0;
-    if (vatPercent < 0) throw new AppError(`Line ${n}: ${orgTaxTerms().tax} cannot be negative`, 400, "INVALID_VAT");
+    // Left as `undefined`, not coerced to 0, when the caller sent no rate at all: that is the signal
+    // TaxCodeService.applyToItems reads to tell "explicitly zero-rated" from "this form never asked",
+    // and reaches it unharmed because buildPricing receives exactly what prepareLines returns.
+    const vatPercent = line.vatPercent === undefined || line.vatPercent === null || line.vatPercent === "" ? undefined : num(line.vatPercent);
+    if (vatPercent !== undefined && !(vatPercent >= 0)) throw new AppError(`Line ${n}: ${orgTaxTerms().tax} cannot be negative`, 400, "INVALID_VAT");
     return {
       itemId: line.itemId,
       itemCode: line.itemCode || stock.itemId || "",

@@ -41,6 +41,11 @@ const vehicleSchema = new mongoose.Schema(
     // Current owner, plus everyone who has owned it before. A vehicle can change hands; the history stays with
     // the vehicle, so a used car's buyer sees what was done to it and a workshop's demo is not a lie.
     customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer" },
+    // A snapshot of the owner's name, taken when vehicleService#prepare loads the customer - declared here on
+    // purpose (D15): the service always computed and tried to save it, but Mongoose strict mode silently
+    // dropped it with nowhere to go, so the vehicle screen's "Owner" always read "-". Fixed where found by
+    // the same miss as D01's job-card lines.
+    customerName: { type: String, trim: true, maxlength: 150 },
     ownerHistory: { type: [ownerHistorySchema], default: [] },
 
     odometer: { type: Number, min: 0, default: 0 }, // the LATEST reading we have seen

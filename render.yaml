@@ -36,6 +36,14 @@ services:
         sync: false
       - key: PUBLIC_APP_URL
         value: https://zarvia.onrender.com
+      # App and API are the same origin now (the frontend's /api/* rewrite, below): the backend may no
+      # longer see an Origin header to check, so SameSite=Lax is the CSRF defence in its place and MUST
+      # ship in the same deploy as that rewrite (CLAUDE.md "Deployment (Render)"). A deploy with the
+      # rewrite but not this still defaults to SameSite=None in production, which current browsers treat
+      # as third-party on a Render host and drop - the garage QA report's D13 ("session lost after a full
+      # page navigation") matches that symptom exactly.
+      - key: SESSION_COOKIE_SAMESITE
+        value: lax
       # Pictures and logos
       - key: CLOUDINARY_CLOUD_NAME
         sync: false

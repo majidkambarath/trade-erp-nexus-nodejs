@@ -97,7 +97,7 @@ class CardSettlementService {
     }
     const { entries } = await Core.loadBook(accountId, setup, { req, upTo: to || line?.day });
     const receipts = entries.filter((e) => !e.groupId && e.card && e.amount > 0).map(receiptOut);
-    const code = await TaxCode.findOne({ companyId, isDefault: true, isActive: true }).lean();
+    const code = await TaxCodeService.defaultStandard(companyId);
     const vatRate = code && code.kind === "standard" ? TaxCodeService.rateOn(code, line ? new Date(`${line.day}T00:00:00.000Z`) : new Date()) : 0;
     return {
       account: { _id: account._id, accountName: account.accountName }, receipts,
@@ -150,7 +150,7 @@ class CardSettlementService {
         }
         let code = null;
         if (vatAmount > 0) {
-          code = await TaxCode.findOne({ companyId, isDefault: true, isActive: true, kind: "standard" }).session(session).lean();
+          code = await TaxCodeService.defaultStandard(companyId, { session });
           if (!code) throw new AppError(`There is no default standard-rated tax code to put the ${orgTaxTerms().tax} on`, 422, "TAX_CODE_REQUIRED");
         }
         adjustment = await FinancialService.createVoucher({

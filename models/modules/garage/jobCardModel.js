@@ -44,7 +44,19 @@ const lineSchema = new mongoose.Schema(
     price: { type: Number, required: true, min: 0 },
     discountPercent: { type: Number, min: 0, max: 100, default: 0 },
     discountAmount: { type: Number, min: 0, default: 0 },
+    // The VAT the pricing engine (TransactionService.buildPricing, via priceDocument/storedLine - the same
+    // shape a Transaction line keeps) computed for this line. Declared here on purpose: Mongoose strict mode
+    // silently drops an undeclared path on save, which is how a job card used to compute real VAT and then
+    // lose it before the estimate or the invoice could read it back.
+    itemType: { type: String, enum: ["goods", "service"] },
+    grossAmount: { type: Number, default: 0, min: 0 },
+    taxableAmount: { type: Number, default: 0, min: 0 },
     taxCodeId: { type: id, ref: "TaxCode" },
+    taxKind: { type: String, default: null }, // snapshot of the tax code's kind at pricing time
+    vatPercent: { type: Number, default: 0, min: 0 },
+    vatAmount: { type: Number, default: 0, min: 0 },
+    rcmVat: { type: Number, min: 0 }, // reverse-charge self-assessed VAT, absent on every other line
+    lineTotal: { type: Number, min: 0 }, // the priced total (qty x price less discount, plus VAT) - present() recomputes it, this is the stored snapshot
     vendorId: { type: id, ref: "Vendor" }, // sublet only: who the work goes out to
     vendorName: String,
     complaintId: { type: id }, // which complaint this line answers, for the printed estimate to group by
@@ -196,7 +208,7 @@ const jobCardSchema = new mongoose.Schema(
     delivery: {
       gatePassAt: Date,
       releasedBy: String,
-      odometerOut: Number,
+      odometerOut: { type: Number, min: 0 }, // D11: had no floor at all, unlike odometerIn below
       handedTo: { type: String, trim: true, maxlength: 150, default: "" },
       signatureAttachmentId: { type: id, ref: "Attachment" },
     },
