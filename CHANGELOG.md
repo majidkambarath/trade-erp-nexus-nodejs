@@ -1,11 +1,11 @@
 # Changelog
 
-## 1.10.0.0 — 30 October 2026
+## 2.0.0.1 — 30 October 2026
 
 A QA pass of the garage module (Garage-Test-Report.xlsx, run against the live Al Manara Auto Garage LLC
 organisation) found that every garage estimate and invoice was charging 0% VAT, a gate pass could let a
-car go for work it was never invoiced for, and a dozen smaller gaps. Needs frontend 1.10.0.0. Backend
-1.10.0.0.
+car go for work it was never invoiced for, and a dozen smaller gaps. Needs frontend 2.0.0.1. Backend
+2.0.0.1.
 
 ### Fixed
 
