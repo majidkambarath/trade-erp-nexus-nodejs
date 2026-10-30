@@ -16,7 +16,7 @@ exports.catalogue = catchAsync(async (req, res) => ok(res, await VehicleService.
 // With its next-service due date/odometer worked out (utils/garage.js serviceDue) - a vehicle's own screen
 // shows that above its job history, and it is why the vehicle form keeps a service interval at all.
 exports.get = catchAsync(async (req, res) => ok(res, await VehicleService.withSchedule(req.params.vehicleId, { addMonths })));
-exports.activity = catchAsync(async (req, res) => ok(res, await AuditService.list(req, { entity: "Vehicle", entityId: req.params.id, limit: 100 })));
+exports.activity = catchAsync(async (req, res) => ok(res, await AuditService.list(req, { entity: "Vehicle", entityId: req.params.vehicleId, limit: 100 })));
 // Every job card this vehicle has ever had, newest first - the service history that sells the next job.
 exports.jobs = catchAsync(async (req, res) => ok(res, await JobCardService.list({ vehicleId: req.params.vehicleId })));
 
@@ -27,7 +27,7 @@ exports.create = catchAsync(async (req, res) => {
 });
 
 exports.update = catchAsync(async (req, res) => {
-  const v = await VehicleService.update(req.params.id, req.body || {}, by(req));
+  const v = await VehicleService.update(req.params.vehicleId, req.body || {}, by(req));
   await log(req, "VEHICLE_UPDATED", v, `Updated ${describe(v)}`);
   ok(res, v);
 });

@@ -34,6 +34,8 @@ async function runMigrations() {
   if (held) out.voucherNumbersMarkedHeld = held;
   const chequeBranches = await backfillChequeBranches();
   if (chequeBranches) out.chequeBranchesBackfilled = chequeBranches;
+  const vehicleNames = await backfillVehicleCustomerNames();
+  if (vehicleNames) out.vehicleCustomerNamesBackfilled = vehicleNames;
   return out;
 }
 
@@ -218,4 +220,38 @@ async function markVoucherNumbersHeld() {
   return r.modifiedCount;
 }
 
-module.exports = { runMigrations, assignCoreToOriginalOrganisation, markVoucherNumbersHeld, backfillChequeBranches };
+// A vehicle's owner NAME was computed every time (vehicleService#prepare loads the customer) but had nowhere
+// to be saved: customerName was missing from vehicleSchema (D15, garage QA report) until it was added, so
+// Mongoose silently dropped it on every create and update and the vehicle screen's Owner always read "-".
+// This copies the name across for vehicles that already have a customerId, across every organisation.
+// Idempotent: a vehicle already carrying its name is excluded by the same filter a repeat run uses.
+async function backfillVehicleCustomerNames() {
+  const Vehicle = require("../models/modules/garage/vehicleModel");
+  const Customer = require("../models/modules/customerModel");
+  const why = "migration: a vehicle's owner name was computed but had nowhere to be saved, across every organisation";
+  const vehicles = await runUnscoped(why, () =>
+    Vehicle.find({ customerId: { $ne: null }, $or: [{ customerName: { $exists: false } }, { customerName: "" }] })
+      .select("customerId")
+      .lean()
+  );
+  if (!vehicles.length) return 0;
+  const customerIds = [...new Set(vehicles.map((v) => String(v.customerId)))];
+  const customers = await runUnscoped(why, () => Customer.find({ _id: { $in: customerIds } }).select("customerName").lean());
+  const nameOf = new Map(customers.map((c) => [String(c._id), c.customerName]));
+  let done = 0;
+  for (const v of vehicles) {
+    const name = nameOf.get(String(v.customerId));
+    if (!name) continue;
+    const r = await runUnscoped(why, () => Vehicle.updateOne({ _id: v._id }, { $set: { customerName: name } }));
+    done += r.modifiedCount || 0;
+  }
+  return done;
+}
+
+module.exports = {
+  runMigrations,
+  assignCoreToOriginalOrganisation,
+  markVoucherNumbersHeld,
+  backfillChequeBranches,
+  backfillVehicleCustomerNames,
+};

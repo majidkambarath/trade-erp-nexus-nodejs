@@ -109,7 +109,9 @@ class PaymentModeService {
     if (mode === "cash") {
       const account = await this.pickAccount("cash-account-group", details.accountId, { session, req, what: "cash" });
       legs = [side(account, amount)];
-      Object.assign(stored, { accountId: account._id, accountName: account.accountName });
+      // D22: a cash receipt had no reference at all on the form; now that it does, it must actually be
+      // kept, not dropped here the way bank/transfer's own reference is not.
+      Object.assign(stored, { accountId: account._id, accountName: account.accountName, reference: reference || undefined });
     } else if (mode === "bank" || mode === "transfer") {
       if (mode === "transfer") {
         if (!reference) throw new AppError("Enter the transfer reference", 400, "REFERENCE_REQUIRED");

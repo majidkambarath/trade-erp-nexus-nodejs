@@ -100,7 +100,7 @@ class ReconciliationPostingService {
         // VAT as the bank charged it: the statement shows the gross, so the net is worked back from it
         let code = null;
         if (input.taxCodeId) code = await TaxCode.findOne({ _id: input.taxCodeId, companyId, isActive: true }).session(session).lean();
-        else if (input.vat !== false) code = await TaxCode.findOne({ companyId, isDefault: true, isActive: true }).session(session).lean();
+        else if (input.vat !== false) code = await TaxCodeService.defaultStandard(companyId, { session });
         if (input.taxCodeId && !code) throw new AppError("Tax code not found or inactive", 400, "INVALID_TAX_CODE");
         const rate = code ? TaxCodeService.rateOn(code, date) : 0;
         const split = S.splitGross(gross, rate);

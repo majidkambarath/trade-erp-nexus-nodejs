@@ -71,17 +71,44 @@ class TaxCodeService {
     return missing.length;
   }
 
+  // The organisation's own default standard-rated code, the one answer to "what VAT does an
+  // unmarked line get". Used below, and by the two banking call sites that used to query this
+  // inline (cardSettlementService.js, reconciliationPosting.js) - lifted here so there is one place
+  // that knows what "the default" means, not three.
+  static async defaultStandard(companyId, { session } = {}) {
+    const q = TaxCode.findOne({ companyId, isDefault: true, isActive: true, kind: "standard" });
+    return (session ? q.session(session) : q).lean();
+  }
+
   // Lines that name a tax code get their VAT % from it (as in force on the document date) and
   // keep a snapshot of the kind, so a later change to the code never restates a posted document.
-  // Lines without one keep the vatPercent they sent.
+  // Lines without one keep the vatPercent they sent - UNLESS they sent no rate at all (not even an
+  // explicit 0), in which case the organisation's default standard code is applied. That is the
+  // narrow case a form that never learned about tax codes produces (the garage job-card form was
+  // the first; any future one that forgets would hit the same default rather than post at 0%). It
+  // never touches a line that named a code, nor one that sent an explicit rate (0 included - that is
+  // a deliberate zero-rated/out-of-scope entry, not an omission).
   static async applyToItems(items, date, { session, companyId } = {}) {
     const company = companyId || getTenant().companyId;
     const ids = [...new Set(items.map((i) => i.taxCodeId).filter(Boolean).map(String))];
-    if (!ids.length) return items;
-    const q = TaxCode.find({ companyId: company, _id: { $in: ids } }).lean();
-    const codes = new Map((await (session ? q.session(session) : q)).map((c) => [String(c._id), c]));
+    const noRateSent = (i) => i.vatPercent === undefined || i.vatPercent === null || i.vatPercent === "";
+    const needsDefault = items.some((i) => !i.taxCodeId && noRateSent(i));
+    if (!ids.length && !needsDefault) return items;
+
+    const codes = new Map();
+    if (ids.length) {
+      const q = TaxCode.find({ companyId: company, _id: { $in: ids } }).lean();
+      for (const c of await (session ? q.session(session) : q)) codes.set(String(c._id), c);
+    }
+    const fallback = needsDefault ? await this.defaultStandard(company, { session }) : null;
+
     return items.map((item) => {
-      if (!item.taxCodeId) return item;
+      if (!item.taxCodeId) {
+        if (fallback && noRateSent(item)) {
+          return { ...item, taxCodeId: fallback._id, vatPercent: rateOn(fallback, date), taxKind: fallback.kind };
+        }
+        return item;
+      }
       const code = codes.get(String(item.taxCodeId));
       if (!code || !code.isActive) {
         throw new AppError(`Tax code not found or inactive for "${item.description || item.itemId}"`, 400, "INVALID_TAX_CODE");

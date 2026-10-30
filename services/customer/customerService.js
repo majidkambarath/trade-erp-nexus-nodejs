@@ -103,6 +103,7 @@ exports.createCustomer = retryTransientTransaction(async (data, { groupId } = {}
     creditLimit,
     status,
     salesPerson, // <- ADDED
+    isInsurer, // D10: the field already existed on the model (customerModel.js) with nowhere to arrive from
     eInvoice,
     minShelfLifeDays,
   } = data;
@@ -139,6 +140,7 @@ exports.createCustomer = retryTransientTransaction(async (data, { groupId } = {}
           shippingAddress,
           creditLimit: Number(creditLimit) || 0,
           salesPerson: trimmedSalesPerson, // <-- ADDED
+          isInsurer: Boolean(isInsurer),
           status,
           eInvoice: cleanEInvoice(eInvoice),
           minShelfLifeDays: shelfLife,

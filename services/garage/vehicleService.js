@@ -133,7 +133,8 @@ class VehicleService {
     const search = String(query.search || "").trim();
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      filter.$or = [{ plateNumber: rx }, { chassisNo: rx }, { make: rx }, { model: rx }];
+      // customerName was not searchable before D15 declared it on the schema (it existed nowhere to search).
+      filter.$or = [{ plateNumber: rx }, { chassisNo: rx }, { make: rx }, { model: rx }, { customerName: rx }];
     }
     return Vehicle.find(filter).sort({ updatedAt: -1 }).limit(300).lean();
   }

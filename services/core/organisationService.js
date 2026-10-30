@@ -244,6 +244,10 @@ class OrganisationService {
         if (org.country !== "AE") return { state: "skipped", reason: `There is no starter tax-code set for ${org.country}; add the tax codes in Accounting setup.` };
         await TaxCodeService.ensureStarter(org.code);
       });
+      await run("units", async () => {
+        const UOMService = require("../unit/uomService");
+        await UOMService.ensureStarter(org.code);
+      });
       await run("chart", async () => {
         if (org.code === DEFAULT_CODE) return { state: "done", note: "the original organisation already has its chart" };
         if (!this.chartIsSafeToProvision()) {

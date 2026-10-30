@@ -20,6 +20,23 @@ const { withTransactionSession } = require("../../utils/withTransactionSession")
 const { getTenant } = require("../../utils/tenant");
 const { todayInOrg, toExpiryDay } = require("../../utils/documentExpiry");
 const { addMonths } = require("../../utils/yearEnd");
+const orgLocale = require("../../utils/orgLocale");
+const tz = require("../../utils/tz");
+
+// "Promised" is a day; an optional time narrows it to the hour actually told to the customer (D07: it was
+// date-only, so "today" could read as a different day once stored). Combined in the organisation's own
+// zone (utils/tz.js wallToInstant - the same construction the CRM's meetings use), so a promise typed as
+// "2 pm" means 2 pm in Dubai, not wherever the server happens to run. A bare day with no time is left
+// UNCHANGED: Mongoose casts "YYYY-MM-DD" to UTC midnight, the convention every other day-only field in
+// this codebase already relies on - this only narrows it further when a time was actually given.
+function promisedInstant(day, time) {
+  if (!day) return undefined;
+  const match = /^(\d{2}):(\d{2})$/.exec(String(time || "").trim());
+  if (!match) return day;
+  const [y, m, d] = String(day).slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return day;
+  return tz.wallToInstant(y, m, d, Number(match[1]), Number(match[2]), 0, 0, orgLocale.timezone());
+}
 
 // The job card (utils/garage.js has the pure rules: validation, the estimate, tasks in parallel stages, the
 // board, analysis). A NON-POSTING document, like a delivery note or a goods receipt: nothing here moves stock
@@ -54,11 +71,13 @@ class JobCardService {
     return {
       ...c,
       totals: rules.jobTotals(c),
-      // The server's own value of each line (qty x price less its discount) - the estimate and the invoice
-      // must read the same figure, so this is the SAME rules.lineValue() buildPricing's own figure comes
-      // from, never a frontend computation of its own. The line's stored fields (qty, price, discountPercent)
-      // are the estimate's; what an approved invoice actually billed is on Transaction.items, not here.
-      lines: (c.lines || []).map((l) => ({ ...l, lineTotal: rules.lineValue(l) })),
+      // A line's real `lineTotal` (qty x price less discount, PLUS VAT) is the pricing engine's own figure,
+      // stamped by #priceAndStampLines and now persisted (jobCardModel's lineSchema declares it - D01). The
+      // fallback to rules.lineValue() - the PRE-VAT figure jobTotals/the board use - is for a line saved
+      // before that fix and never re-priced since: it had no stored lineTotal at all (Mongoose silently
+      // dropped it), so this used to compute one on every read, which is why the screen showed 0% VAT
+      // everywhere lineTotal was displayed, not only on the printed estimate.
+      lines: (c.lines || []).map((l) => ({ ...l, lineTotal: l.lineTotal || rules.lineValue(l) })),
       actions: {
         edit: status === "DRAFT",
         delete: status === "DRAFT",
@@ -67,7 +86,9 @@ class JobCardService {
         recordApproval: ["AWAITING_APPROVAL", "IN_PROGRESS"].includes(status),
         reviseEstimate: ["AWAITING_APPROVAL", "IN_PROGRESS"].includes(status),
         createInvoice: ["IN_PROGRESS", "READY", "DELIVERED"].includes(status) && rules.billableLines(c).length > 0,
-        release: !["DRAFT", "CANCELLED"].includes(status) && !c.delivery?.gatePassAt,
+        // A whitelist, like createInvoice above it, not "everything but DRAFT/CANCELLED": mayRelease (D05)
+        // now refuses AWAITING_APPROVAL too (the customer has not decided yet), so the button agrees.
+        release: ["IN_PROGRESS", "READY", "DELIVERED"].includes(status) && !c.delivery?.gatePassAt,
         cancel: !["DELIVERED", "CLOSED", "CANCELLED"].includes(status),
       },
       tasks: (c.tasks || []).map((t) => ({ ...t, actions: { start: t.status === "READY", complete: rules.OPEN_TASK.has(t.status) } })),
@@ -76,7 +97,23 @@ class JobCardService {
 
   static async getById(id) {
     const card = await this.#load(id);
-    return this.present(card);
+    const presented = this.present(card);
+    // delivery.releasedBy is a raw account id (D09): the gate pass used to print it as-is. One extra lookup
+    // on the single-card read only, following the house pattern (InventoryMovementService.who): an account
+    // removed since has no name to show, "system" reads as "System", nothing else is expected here.
+    if (presented.delivery?.releasedBy) {
+      presented.delivery = { ...presented.delivery, releasedByName: await this.#actorName(presented.delivery.releasedBy) };
+    }
+    return presented;
+  }
+
+  static async #actorName(raw) {
+    const value = String(raw ?? "").trim();
+    if (!value) return null;
+    if (value.toLowerCase() === "system") return "System";
+    if (!mongoose.isValidObjectId(value)) return value;
+    const admin = await Admin.findById(value).select("name email").lean();
+    return admin ? admin.name || admin.email || null : null;
   }
 
   static async list(query = {}) {
@@ -88,7 +125,8 @@ class JobCardService {
     const search = String(query.search || "").trim();
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      filter.$or = [{ jobNo: rx }, { "vehicle.plateNumber": rx }, { "customer.name": rx }];
+      // D16: "Toyota" found nothing - the vehicle snapshot's own make was never searched, only its plate.
+      filter.$or = [{ jobNo: rx }, { "vehicle.plateNumber": rx }, { "vehicle.make": rx }, { "customer.name": rx }];
     }
     return JobCard.find(filter).sort({ createdAt: -1 }).limit(300).lean();
   }
@@ -210,6 +248,9 @@ class JobCardService {
   // who to order it from. Nothing here moves stock or creates anything; raisePurchaseOrder below does that.
   static async shortages(id) {
     const card = await this.#load(id);
+    // A cancelled job needs nothing bought for it (D21) - unlike every other write on the card, this had
+    // no status check at all, so "Short of stock" and "Raise purchase order" kept offering on a dead card.
+    if (card.status === "CANCELLED") return [];
     const needLines = (card.lines || []).filter((l) => rules.STOCKED_KINDS.has(l.kind) && rules.isApproved(l));
     if (!needLines.length) return [];
     const itemIds = [...new Set(needLines.map((l) => String(l.itemId)))];
@@ -252,11 +293,15 @@ class JobCardService {
   // can see one was raised and follow it up, the same shape `invoices[]` already keeps for the sales side.
   static raisePurchaseOrder = withTransactionSession(async ({ jobCardId, vendorId, items, date }, createdBy, session) => {
     const card = await this.#load(jobCardId, session);
+    if (card.status === "CANCELLED") throw fail("This job was cancelled", 409, "JOB_CANCELLED");
     if (!Array.isArray(items) || !items.length) throw fail("Choose at least one item to order", 400, "NOTHING_TO_ORDER");
     if (!isId(vendorId)) throw fail("Choose who to order from", 400, "VENDOR_REQUIRED");
+    // No vatPercent here (D01, same cause as the job-card lines): leaving the rate unset lets
+    // TaxCodeService.applyToItems put the organisation's default on it, same as any other purchase, rather
+    // than an explicit 0 it would never have overridden.
     const lines = items
       .filter((it) => isId(it?.itemId) && Number(it?.qty) > 0)
-      .map((it) => ({ itemId: it.itemId, qty: Number(it.qty), price: Number(it.price) || 0, rate: Number(it.price) || 0, vatPercent: 0 }));
+      .map((it) => ({ itemId: it.itemId, qty: Number(it.qty), price: Number(it.price) || 0, rate: Number(it.price) || 0 }));
     if (!lines.length) throw fail("Choose at least one item to order", 400, "NOTHING_TO_ORDER");
 
     const vendor = await Vendor.findById(vendorId).select("vendorName").session(session).lean();
@@ -379,7 +424,7 @@ class JobCardService {
       customerId: customer._id,
       customer: { name: customer.customerName, phone: customer.phone || "" },
       receivedAt: data.receivedAt || existing?.receivedAt || new Date(),
-      promisedAt: data.promisedAt || undefined,
+      promisedAt: promisedInstant(data.promisedAt, data.promisedTime),
       odometerIn: data.odometerIn === "" || data.odometerIn == null ? undefined : Number(data.odometerIn),
       fuelLevelIn: data.fuelLevelIn || "",
       checkIn: {
@@ -582,6 +627,9 @@ class JobCardService {
         type: "sales_order", partyId: resolvedPartyId, partyType: "Customer", partyTypeRef: "Customer",
         date: date || card.receivedAt || new Date(), items,
         notes: `Job card ${card.jobNo || "(draft)"}${billTo === "insurer" ? " - insurer's share" : ""}`, status: "DRAFT",
+        // A structured link, not only the free-text note above: the printed tax invoice reads this to
+        // show the job number and the plate, which a garage invoice needs and the note cannot answer for.
+        jobCardRef: { jobCardId: card._id, jobNo: card.jobNo || undefined, plateNumber: card.vehicle?.plateNumber || undefined },
       },
       createdBy,
       session
@@ -603,10 +651,20 @@ class JobCardService {
     const card = await this.#load(id, session);
     const txIds = (card.invoices || []).map((i) => i.transactionId).filter(Boolean);
     const open = txIds.length ? await Transaction.find({ _id: { $in: txIds } }).select("outstandingAmount").session(session).lean() : [];
-    const outstanding = open.reduce((t, x) => t + (Number(x.outstandingAmount) || 0), 0);
+    const invoicedOutstanding = open.reduce((t, x) => t + (Number(x.outstandingAmount) || 0), 0);
+    // Approved lines never put on ANY invoice - draft or posted - are not in the sum above at all (D05):
+    // without this a job whose work was approved but never invoiced reported 0 owed.
+    const unbilled = rules.billableValue(card.toObject());
+    const outstanding = rules.round2(invoicedOutstanding + unbilled);
 
     const check = rules.mayRelease(card.toObject(), { outstanding, mayOverride: Boolean(input?.override), onAccount: Boolean(input?.onAccount) });
     if (!check.ok) throw fail(check.message, 409, check.code, check.details);
+
+    // odometerOut had no floor at all before (D11), unlike odometerIn - a typed "-5" would have been stored
+    // as a real reading with no refusal.
+    if (input?.odometerOut !== undefined && input?.odometerOut !== "" && !(Number(input.odometerOut) >= 0)) {
+      throw fail("Enter the odometer reading in kilometres", 400, "INVALID_ODOMETER");
+    }
 
     const deliveredDay = todayInOrg();
     const warranty = rules.warrantyUntil(

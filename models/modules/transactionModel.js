@@ -182,6 +182,14 @@ const transactionSchema = new mongoose.Schema({
   notes: { type: String, trim: true },
   quoteRef: { type: String, trim: true },
   linkedRef: { type: String, trim: true },
+  // The job card this invoice was raised from (services/garage/jobCardService.createInvoice), so the printed
+  // tax invoice can carry the job number and the vehicle's plate - what a garage invoice needs and a free-text
+  // note cannot answer for ("Job card JC-..." in `notes` cannot be read back). Absent on every other document.
+  jobCardRef: {
+    jobCardId: { type: mongoose.Schema.Types.ObjectId, ref: "JobCard" },
+    jobNo: { type: String, trim: true },
+    plateNumber: { type: String, trim: true },
+  },
   creditNoteIssued: { type: Boolean, default: false },
   // A sales order the customer will not take the rest of (utils/closeShort.js).
   closedShort: { type: closedShortSchema, default: undefined },

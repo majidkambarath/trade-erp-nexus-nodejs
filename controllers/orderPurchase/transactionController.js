@@ -51,8 +51,8 @@ exports.createTransaction = catchAsync(async (req, res) => {
   // A number a person TYPES on the form is a different thing and arrives as `manualNumber`, which the
   // voucher type has to allow (`auto_override`) or the service refuses it - so it is a deliberate
   // setting, not an open door. `isOpening` is the go-live load's flag (it also switches off the plan's
-  // monthly document limit), `quoteRef` / `linkedRef` are the links the conversions write.
-  const { transactionNo: _chosenNumber, isOpening: _opening, quoteRef: _quote, linkedRef: _linked, ...body } = req.body || {};
+  // monthly document limit), `quoteRef` / `linkedRef` / `jobCardRef` are the links the conversions write.
+  const { transactionNo: _chosenNumber, isOpening: _opening, quoteRef: _quote, linkedRef: _linked, jobCardRef: _jobCardRef, ...body } = req.body || {};
   const transaction = await TransactionService.createTransaction(
     body,
     resolveCreatedBy(req)

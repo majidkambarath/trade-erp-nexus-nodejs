@@ -96,7 +96,7 @@ class StockService {
       // Check if SKU already exists
       const existingSku = await Stock.findOne({ sku }).session(session);
       if (existingSku) {
-        throw new AppError("SKU already exists", 400);
+        throw new AppError("That SKU is already used by another item", 400, "DUPLICATE_SKU", { fields: ["sku"] });
       }
 
       // Create stock record
@@ -184,7 +184,7 @@ class StockService {
           _id: { $ne: id },
         }).session(session);
         if (existingSku) {
-          throw new AppError("SKU already exists", 400);
+          throw new AppError("That SKU is already used by another item", 400, "DUPLICATE_SKU", { fields: ["sku"] });
         }
       }
 

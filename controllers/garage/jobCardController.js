@@ -118,6 +118,12 @@ exports.raisePurchaseOrder = catchAsync(async (req, res) => {
 });
 
 exports.release = catchAsync(async (req, res) => {
+  // garage.approve gets you here, but overriding the payment-due check is a stronger act than approving the
+  // release itself (D05): it was taken at the server's word with no permission of its own, so anyone holding
+  // garage.approve could clear the check that money is owed. The same double-assert createInvoice/
+  // raisePurchaseOrder use for their own module. Releasing on account is the ordinary, documented way to let
+  // a fleet customer or an insurer leave without paying yet and stays under garage.approve alone.
+  if (req.body?.override) assertPermission(req, "garage.manage", "overriding the amount-owed check on a release needs it");
   const c = await JobCardService.releaseVehicle(req.params.id, req.body || {}, by(req));
   await log(req, "JOB_CARD_RELEASED", c, `Vehicle released for ${describe(c)}`);
   ok(res, JobCardService.present(c));

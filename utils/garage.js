@@ -66,7 +66,9 @@ function validateVehicle(input = {}) {
   if (!text(input.make, 60)) add("make", "MAKE_REQUIRED", "Enter the make (Toyota, Nissan, ...)");
   if (!text(input.model, 60)) add("model", "MODEL_REQUIRED", "Enter the model");
   const year = input.year === "" || input.year == null ? null : num(input.year);
-  if (year != null && !(Number.isInteger(year) && year >= 1900 && year <= 2100)) add("year", "INVALID_YEAR", "Enter the year as four digits");
+  // "Enter the year as four digits" was shown even for a real four-digit year outside 1900-2100 (D11),
+  // which reads as though the digit count were the problem rather than the range.
+  if (year != null && !(Number.isInteger(year) && year >= 1900 && year <= 2100)) add("year", "INVALID_YEAR", "Enter the model year, 1900 to 2100");
   const odo = input.odometer === "" || input.odometer == null ? null : num(input.odometer);
   if (odo != null && !(odo >= 0 && odo < 10000000)) add("odometer", "INVALID_ODOMETER", "Enter the odometer reading in kilometres");
   return errors;
@@ -90,7 +92,8 @@ function validateGarageService(input = {}) {
   if (!text(input.name, 120)) add("name", "SERVICE_NAME_REQUIRED", "Give the service a name");
   if (!idOf(input.serviceItemId)) add("serviceItemId", "SERVICE_ITEM_REQUIRED", "Choose the service item this bills under");
   const hours = input.standardHours == null || input.standardHours === "" ? 0 : num(input.standardHours);
-  if (!(hours >= 0 && hours <= 1000)) add("standardHours", "INVALID_HOURS", "Enter the standard hours as a number");
+  // "...as a number" was shown for 1001, which IS a number, just too many hours (D11, SET-05).
+  if (!(hours >= 0 && hours <= 1000)) add("standardHours", "INVALID_HOURS", "Enter the standard hours, 0 to 1000");
   (Array.isArray(input.defaultParts) ? input.defaultParts : []).forEach((p, i) => {
     if (!idOf(p?.stockId)) add(`defaultParts.${i}.stockId`, "PART_REQUIRED", `Part ${i + 1}: choose the item`);
   });
@@ -147,7 +150,7 @@ function validateJobCard(input = {}) {
     const stage = t?.stage == null || t?.stage === "" ? 1 : num(t.stage);
     if (!(Number.isInteger(stage) && stage >= 1 && stage <= 50)) add(`tasks.${i}.stage`, "INVALID_STAGE", `${n}: the stage is a whole number from 1 to 50`);
     const hours = t?.standardHours == null || t?.standardHours === "" ? 0 : num(t.standardHours);
-    if (!(hours >= 0 && hours <= 1000)) add(`tasks.${i}.standardHours`, "INVALID_HOURS", `${n}: enter the hours as a number`);
+    if (!(hours >= 0 && hours <= 1000)) add(`tasks.${i}.standardHours`, "INVALID_HOURS", `${n}: enter the hours, 0 to 1000`);
   });
   return errors;
 }
@@ -244,7 +247,7 @@ function checkCompletion(task, { actualHours } = {}) {
   if (!task) return { code: "TASK_NOT_FOUND", message: "That task is not on this job card" };
   if (!OPEN_TASK.has(task.status)) return { code: "TASK_NOT_OPEN", message: `This task is ${String(task.status || "").toLowerCase()}` };
   const h = actualHours == null || actualHours === "" ? null : num(actualHours);
-  if (h != null && !(h >= 0 && h <= 1000)) return { code: "INVALID_HOURS", message: "Enter the hours worked as a number" };
+  if (h != null && !(h >= 0 && h <= 1000)) return { code: "INVALID_HOURS", message: "Enter the hours worked, 0 to 1000" };
   return null;
 }
 
@@ -267,12 +270,35 @@ function taskHours(card) {
 function mayRelease(card, { outstanding = 0, mayOverride = false, onAccount = false } = {}) {
   if (!card) return { ok: false, code: "JOB_NOT_FOUND", message: "That job card does not exist" };
   if (card.status === "CANCELLED") return { ok: false, code: "JOB_CANCELLED", message: "This job was cancelled" };
+  // The customer has not even decided on the estimate yet (D05): there is nothing settled to hand the car
+  // back against. NOT a check on any one LINE's approval state - a declined line is a normal, final outcome
+  // ("skip the AC, just the brakes") and must not block release; "the invoice bills exactly the approved
+  // lines" (services/__tests__/garage.test.js) releases a card with a declined line still on it.
+  if (card.status === "DRAFT" || card.status === "AWAITING_APPROVAL") {
+    return { ok: false, code: "NOT_YET_DECIDED", message: "The customer has not decided on the estimate yet" };
+  }
   if (card.delivery?.gatePassAt) return { ok: false, code: "ALREADY_RELEASED", message: "This vehicle has already been handed over" };
   if (!allTasksSettled(card) && (card.tasks || []).length) return { ok: false, code: "WORK_NOT_FINISHED", message: "Some work is still open. Finish or skip every task first" };
   if (round2(outstanding) > 0 && !onAccount && !mayOverride) {
     return { ok: false, code: "PAYMENT_DUE", message: `${round2(outstanding)} is still owed on this job. Take the payment, or release it on account`, details: { outstanding: round2(outstanding) } };
   }
   return { ok: true };
+}
+
+// What `outstanding` above must also count: the real value (taxable + VAT) of every line that is approved
+// and billable but was never put on ANY invoice at all - draft or posted. releaseVehicle used to sum only
+// the invoices it found in card.invoices, so a job whose approved lines were never invoiced reported 0
+// owed and the car left for free (D05, JC-2026-0013: two approved, uninvoiced lines; a declined sublet that
+// correctly contributes nothing). `taxableAmount`/`vatAmount` are the pricing engine's own figures (see
+// jobCardModel's lineSchema); a line saved before they were declared there falls back to the pre-VAT
+// lineValue, which is honest for an old record rather than a crash on `undefined + undefined`.
+function billableValue(card) {
+  return round2(
+    billableLines(card).reduce((t, l) => {
+      const taxed = (Number(l.taxableAmount) || 0) + (Number(l.vatAmount) || 0);
+      return t + (taxed || lineValue(l));
+    }, 0)
+  );
 }
 
 // ---- warranty and comebacks ----------------------------------------------------------------------------
@@ -336,7 +362,7 @@ function dueState(dueDay, today, tomorrow) {
 // board, plus three of our own: waiting for approval (the commonest reason a car sits untouched), ready for
 // collection, and delivered but not yet invoiced - the three places money goes missing in a workshop.
 function board(cards = [], { today, tomorrow, dayOf, me = null } = {}) {
-  const counts = { jobs: 0, awaitingApproval: 0, inProgress: 0, ready: 0, deliveredNotInvoiced: 0, overdue: 0, dueToday: 0, dueTomorrow: 0, doneToday: 0 };
+  const counts = { jobs: 0, awaitingApproval: 0, inProgress: 0, ready: 0, deliveredNotInvoiced: 0, notStarted: 0, overdue: 0, dueToday: 0, dueTomorrow: 0, doneToday: 0 };
   const columns = new Map();
   const all = [];
   const mine = [];
@@ -377,7 +403,10 @@ function board(cards = [], { today, tomorrow, dayOf, me = null } = {}) {
     else if (c.status === "DELIVERED") { name = "Delivered, not invoiced"; order = 998; counts.deliveredNotInvoiced += 1; }
     else if (c.status === "READY") { name = "Ready for collection"; order = 997; counts.ready += 1; }
     else if (task) { name = task.name; order = (Number(task.stage) || 1) * 10 + 1; counts.inProgress += 1; }
-    else { name = "Not started"; order = 1; }
+    // Every live card lands in exactly one column, but this branch (a DRAFT, or an IN_PROGRESS card with no
+    // open task) used to count in NOTHING (D17) - so counts.jobs included it while the donut's own total
+    // (which only ever summed the other four) did not, and the two disagreed by exactly this many cards.
+    else { name = "Not started"; order = 1; counts.notStarted += 1; }
     column(name, order).cards.push(card);
     all.push(card);
     if (me && card.assigneeId === String(me) && task && OPEN_TASK.has(task.status)) mine.push(card);
@@ -468,6 +497,6 @@ module.exports = {
   validateVehicle, validateJobCard, validateBay, validateGarageService, planFromService,
   isApproved, approvedLines, declinedLines, billableLines, lineValue, jobTotals, planEstimate, checkApproval,
   stagesOf, release, advance, checkCompletion, allTasksSettled, currentTasks, taskHours,
-  mayRelease, warrantyUntil, comebackCandidates, serviceDue,
+  mayRelease, billableValue, warrantyUntil, comebackCandidates, serviceDue,
   dueState, board, analysis,
 };
