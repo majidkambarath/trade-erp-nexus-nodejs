@@ -284,6 +284,17 @@ class ChartOfAccountsService {
     if (data.accountName !== undefined) {
       const name = String(data.accountName).trim();
       if (!name) throw new AppError("Account name is required", 400);
+      if (name.toLowerCase() !== account.accountName.toLowerCase()) {
+        // F11 (finance QA review 1 Nov 2026): renaming to an existing name was saved silently, with
+        // no message at all - createAccount already refused this on a new account, but a rename
+        // never went through the same check.
+        const dup = await LedgerAccount.findOne({
+          _id: { $ne: id },
+          accountName: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"),
+          isActive: true,
+        }).lean();
+        if (dup) throw new AppError(`An account named "${dup.accountName}" already exists`, 409, "DUPLICATE_ACCOUNT");
+      }
       account.accountName = name;
     }
     if (data.description !== undefined) account.description = data.description;

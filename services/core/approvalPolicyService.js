@@ -17,6 +17,16 @@ class ApprovalPolicyService {
     return rules.normalisePolicy(s?.approvals);
   }
 
+  // "Credit and debit notes wait for approval" (F08, finance QA review 1 Nov 2026): off by default,
+  // so an organisation that has not asked for it sees no change. Read directly, not through
+  // rules.normalisePolicy - that function is mirrored in zarvia-platform, which has no concept of a
+  // voucher type, so this one setting is kept out of it on purpose.
+  static async notesNeedApproval(session) {
+    const q = CompanySettings.findOne({ companyId: getTenant().companyId }).select("approvals.notesNeedApproval").lean();
+    const s = await (session ? q.session(session) : q);
+    return s?.approvals?.notesNeedApproval === true;
+  }
+
   /** The person behind a request, as the rules want them. null when there is none. */
   static actorOf(req) {
     if (!req?.admin?.id) return null;

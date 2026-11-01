@@ -225,19 +225,28 @@ test("the VAT return says when it assumed Dubai, and is saved only from the whol
   assert.equal(draft.status, "DRAFT");
 });
 
-test("a finalised return shows what has changed in its period since", { skip }, async () => {
+test("a finalised return locks its period (F02, finance QA review 1 Nov 2026): nothing can be dated inside it any more", { skip }, async () => {
   const draft = await svc.Vat.createDraft({ from: "2024-10-01", to: "2024-10-31" }, admin);
   const done = await svc.Vat.finalize(draft._id, admin, { allowUnclassified: true });
   assert.equal(done.status, "FINALIZED");
   assert.equal((await svc.Vat.get(done._id)).changedSince, null, "nothing has moved yet");
-  // an expense with VAT dated inside the period, posted afterwards (a bank fee found on a statement)
-  await svc.Financial.createVoucher({
+
+  // an expense with VAT dated inside the period, posted afterwards (a bank fee found on a statement):
+  // before F02 this posted and silently drifted the filed figures from the books, and `changedSince`
+  // existed to say so after the fact. assertPostingAllowed now refuses it outright - compute() reads
+  // approved documents directly (not the ledger), so there is no path left, bank statements and
+  // catch-up included, by which a document dated inside a finalised period can still become
+  // approved: it is caught at the one gate every create / approve path already goes through.
+  await assert.rejects(() => svc.Financial.createVoucher({
     voucherType: "expense", ledgerBased: true, expenseAccountId: ctx.rent._id, amount: 100, taxCodeId: ctx.std._id,
     description: "Bank fee found later", paymentMode: "cash", date: at("2024-10-20"),
-  }, admin);
-  const changed = (await svc.Vat.get(done._id)).changedSince;
-  assert.equal(changed.recoverableVat, 5, "5 of input VAT that the filed return does not have");
-  assert.equal(changed.netPayable, -5);
+  }, admin), { code: "PERIOD_CLOSED" });
+  await assert.rejects(() => buy(1, 100, "2024-10-20"), { code: "PERIOD_CLOSED" });
+  assert.equal((await svc.Vat.get(done._id)).changedSince, null, "still nothing has moved");
+
+  // and a filed return cannot be reopened to fix it from here - only a finalised one can
+  await svc.Vat.file(done._id, admin, { reference: "FTA-REVIEW-1" });
+  await assert.rejects(() => svc.Vat.reopen(done._id, admin), { code: "ALREADY_FILED" });
 });
 
 // ================================================================================== dashboard

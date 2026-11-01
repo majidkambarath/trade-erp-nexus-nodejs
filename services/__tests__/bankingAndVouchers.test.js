@@ -131,6 +131,11 @@ test("bank and transfer: with several banks the account must be chosen, and a tr
   // there is more than one bank account by now
   await assert.rejects(() => receipt({ paymentMode: "bank" }), { code: "BANK_ACCOUNT_REQUIRED" });
   const enbd = await acct("ENBD Current");
+  // F03 (finance QA review 1 Nov 2026): a bank-mode receipt or payment, unlike an expense paid by
+  // bank, needs a slip or reference number of its own - there was nothing on the deposit slip to tie
+  // one to, before this.
+  await assert.rejects(() => receipt({ paymentMode: "bank", paymentDetails: { accountId: enbd._id } }), { code: "REFERENCE_REQUIRED" });
+  await assert.rejects(() => payment({ paymentMode: "bank", paymentDetails: { accountId: enbd._id } }), { code: "REFERENCE_REQUIRED" });
   const r = await receipt({ paymentMode: "bank", paymentDetails: { accountId: enbd._id, reference: "SLIP-9" } });
   assert.ok((await legs(r)).includes("ENBD Current:Dr100"));
   assert.equal(r.paymentDetails.reference, "SLIP-9");
@@ -232,7 +237,10 @@ test("cheque issued to a vendor: cheques-issued, then the bank when it clears; d
   const p3 = await payment({ paymentMode: "cheque", paymentDetails: { chequeNo: "000323", chequeDate: day(), accountId: enbd._id } });
   const row3 = await svc.Cheque.findOne({ voucherId: p3._id });
   await svc.Cheques.clear(row3._id, {}, {}, admin);
-  await assert.rejects(() => svc.Financial.updateVoucher(p3._id, { totalAmount: 50, forceUpdate: true }, admin), { code: "CHEQUE_CLEARED" });
+  // F04 (finance QA review, 1 Nov 2026): a posted voucher is locked outright now, whatever it paid
+  // with - CHEQUE_CLEARED (the narrower, cheque-specific refusal this used to hit) is unreachable
+  // for a figure change: VOUCHER_POSTED refuses it first, and is the stricter answer either way.
+  await assert.rejects(() => svc.Financial.updateVoucher(p3._id, { totalAmount: 50, forceUpdate: true, reason: "trying" }, admin), { code: "VOUCHER_POSTED" });
   const list = await svc.Cheques.list({}, { status: "pending" });
   assert.ok(list.summary);
 });

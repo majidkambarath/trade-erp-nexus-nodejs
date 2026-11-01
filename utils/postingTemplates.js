@@ -26,10 +26,13 @@ const TEMPLATES = {
     { account: { key: "cogs" }, side: "debit", amount: "cogs" },
     { account: { key: "inventory-asset" }, side: "credit", amount: "cogs" },
   ],
-  // The exact mirror of a sale; stock returns to inventory at the cost it was issued at.
+  // The exact mirror of a sale; stock returns to inventory at the cost it was issued at. The debit
+  // leg goes to Sales Returns (a contra-revenue account, F08 of the finance QA review 1 Nov 2026),
+  // not to Sales Revenue itself: a return is a deduction from what was sold, not an erasure of it,
+  // so the top line still shows what was actually sold.
   sales_return: [
     { account: { party: true }, side: "credit", amount: "total" },
-    { account: { key: "sales-revenue" }, side: "debit", amount: "gross" },
+    { account: { key: "sales-returns" }, side: "debit", amount: "gross" },
     { account: { key: "discount-sales" }, side: "credit", amount: "discount" },
     { account: { key: "freight-sales" }, side: "debit", amount: "charges" },
     { account: { key: "vat-sales" }, side: "debit", amount: "vat" },

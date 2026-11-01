@@ -22,4 +22,6 @@ exports.get = catchAsync(async (req, res) => ok(res, await VatReturn.get(req.par
 exports.createDraft = catchAsync(async (req, res) => ok(res, await VatReturn.createDraft({ from: req.body?.from, to: req.body?.to, notes: req.body?.notes }, admin(req)), 201));
 exports.finalize = catchAsync(async (req, res) => ok(res, await VatReturn.finalize(req.params.id, admin(req), { allowUnclassified: req.body?.allowUnclassified === true })));
 exports.file = catchAsync(async (req, res) => ok(res, await VatReturn.file(req.params.id, admin(req), { reference: req.body?.reference, filedOn: req.body?.filedOn })));
+// Takes a finalised return back to a draft, so its period posts again (F02). A filed return refuses.
+exports.reopen = catchAsync(async (req, res) => ok(res, await VatReturn.reopen(req.params.id, admin(req))));
 exports.remove = catchAsync(async (req, res) => { await VatReturn.remove(req.params.id); ok(res, { deleted: true }); });

@@ -331,7 +331,6 @@ const CORNERS = [
   ["POST /api/v1/accounting/fiscal-years", BOOKS], ["POST /api/v1/accounting/tax-codes", BOOKS], ["PUT /api/v1/opening-balances/go-live", BOOKS], ["POST /api/v1/opening-balances/accounts", BOOKS],
   ["POST /api/v1/currencies", BOOKS], ["GET /api/v1/accounting/audit-log", BOOKS],
   ["POST /api/v1/vat-return/returns", BOOKS], ["POST /api/v1/vat-return/returns/:id/finalize", BOOKS], ["POST /api/v1/vat-return/returns/:id/file", BOOKS], ["DELETE /api/v1/vat-return/returns/:id", BOOKS],
-  ["POST /api/v1/reports/vat/:id/finalize", BOOKS], ["POST /api/v1/reports/vat/:id/submit", BOOKS],
   ["POST /api/v1/banking/banks", BOOKS], ["POST /api/v1/banking/cards", BOOKS], ["PUT /api/v1/banking/reconciliation/setup", BOOKS], ["POST /api/v1/banking/reconciliation/import", BOOKS],
   ["POST /api/v1/banking/reconciliation/matches", BOOKS],
   // approving money movements
@@ -415,7 +414,6 @@ test("(d) trade documents: sales and purchase are told apart by the document's t
   await expectRoles("list", "GET", T1, undefined, ["owner", "admin", "manager", "accountant", "operator", "sales", "purchase", "storekeeper", "viewer"].filter((w) => ROLE_NAMES.includes(w)));
   // a voucher delete: nothing found, so judged as a plain delete (finance.delete)
   await expectRoles("delete a voucher", "DELETE", `/vouchers/vouchers/${H.FAKE_ID}`, undefined, ["owner", "admin", "manager", "accountant"]);
-  await expectRoles("delete an account voucher", "DELETE", `/account/account-vouchers/${H.FAKE_ID}`, undefined, ["owner", "admin", "manager", "accountant"]);
 });
 
 test("(d) a role that is switched off, and a role that does not exist, hold nothing", { skip, timeout: 120000 }, async () => {

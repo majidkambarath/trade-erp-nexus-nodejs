@@ -44,6 +44,11 @@ const companySettingsSchema = new mongoose.Schema(
     approvals: {
       separateApprover: { type: Boolean, default: false }, // the person who prepared a document may not approve it
       secondApprovalAbove: { type: Number, min: 0, default: null }, // a document above this amount needs two different approvers; null = never
+      // Credit and debit notes post as soon as they are saved (F08, finance QA review 1 Nov 2026); this
+      // holds EVERY one of them for approval, whatever its amount, until someone switches it on. Read
+      // directly by ApprovalPolicyService.notesNeedApproval, not through utils/approvalRules.js
+      // normalisePolicy (which is mirrored in zarvia-platform and has no concept of a voucher type).
+      notesNeedApproval: { type: Boolean, default: false },
     },
     // How people sign in to this organisation (services/core/securityPolicyService.js). Off until the organisation chooses.
     security: {

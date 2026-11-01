@@ -17,7 +17,7 @@ const orgLocale = require("../../utils/orgLocale");
 const tz = require("../../utils/tz");
 const { listPeriod, condition: periodCondition } = require("../../utils/listPeriod");
 const { applyBalances } = require("./ledgerBalances");
-const { naturalBalance, categoryOf, remainderAfterAllocation } = require("../../utils/accounting");
+const { naturalBalance, categoryOf, remainderAfterAllocation, round2 } = require("../../utils/accounting");
 const AccountGroup = require("../../models/modules/financial/accountGroupModel");
 const LedgerReports = require("../reports/ledgerReportsService");
 const statementClassification = require("../../utils/statementClassification"); // current / non-current and reading order, shared with the IFRS statement
@@ -66,6 +66,40 @@ class FinancialService {
     logger.debug(
       `[CashBalance] ${partyType} ${partyId}: Adjusted by ${delta} (new: ${party.cashBalance})`
     );
+  }
+
+  // The money-movement side effects of a receipt, payment, credit note or debit note: settling the
+  // invoices it was allocated to, and moving the party's own balance for whatever was left on
+  // account. Applied once a voucher actually posts - at creation for one that is not held, or from
+  // processVoucherApproval when a held one (effectsDeferred: true) is finally approved - never while
+  // it waits, so ageing, the party accounts and credit control cannot disagree with the ledger over
+  // something nobody has approved yet (see createVoucher and processVoucherApproval).
+  //
+  // Re-reads each invoice fresh and refuses if what it still has open has moved since this voucher
+  // was saved (another voucher settled it differently in the meantime): the allocation it was given
+  // no longer matches the invoice, and it has to be reviewed rather than silently applied.
+  static async applyInvoiceAndPartyEffects(voucher, session) {
+    for (const linked of voucher.linkedInvoices || []) {
+      if (!mongoose.Types.ObjectId.isValid(linked.invoiceId)) continue;
+      const invoice = await Transaction.findById(linked.invoiceId).session(session);
+      if (!invoice) throw new AppError(`Invoice ${linked.invoiceId} no longer exists`, 404, "INVOICE_CHANGED");
+      if (Math.abs(round2(invoice.outstandingAmount) - round2(linked.previousBalance)) > 0.01) {
+        throw new AppError(
+          `${invoice.transactionNo} now has ${round2(invoice.outstandingAmount).toFixed(2)} open (it had ${round2(linked.previousBalance).toFixed(2)} when this was saved). Review the allocation before approving.`,
+          409,
+          "INVOICE_CHANGED"
+        );
+      }
+      invoice.paidAmount = round2((invoice.paidAmount || 0) + linked.allocatedAmount);
+      invoice.outstandingAmount = round2(linked.newBalance);
+      // Whether it is paid is paidAmount / outstandingAmount. The document's status stays
+      // APPROVED: overwriting it made a part-paid invoice disappear from ageing, returns, credit
+      // control and deletion, which all look for APPROVED documents.
+      await invoice.save({ session });
+    }
+    if (voucher.partyType && voucher.onAccountAmount > 0) {
+      await this.adjustPartyCashBalance(voucher.partyId, voucher.partyType, voucher.onAccountAmount, session, "add");
+    }
   }
 
   // Retry wrapper for transactions to handle a transient conflict with another writer. 251 (NoSuchTransaction,
@@ -168,6 +202,19 @@ class FinancialService {
         let hold = processedData.status === "approved" && options.req
           ? await require("../core/approvalPolicyService").holdOnSave({ amount: processedData.totalAmount, req: options.req, session })
           : null;
+        // "Credit and debit notes wait for approval" (F08, finance QA review 1 Nov 2026): an
+        // organisation-wide rule for the voucher TYPE, off by default, so it holds even a note
+        // saved by someone with no limit at all, or with nobody behind the save (a job, a test) -
+        // unlike the limit / second-approver hold above, it is not a judgement of who is saving it.
+        if (!hold && processedData.status === "approved" && ["debit_note", "credit_note"].includes(voucherType)) {
+          if (await require("../core/approvalPolicyService").notesNeedApproval(session)) {
+            hold = {
+              reason: "notes",
+              amount: processedData.totalAmount,
+              message: "This credit or debit note has been saved but not posted: the organisation requires approval for credit and debit notes.",
+            };
+          }
+        }
         if (hold && outerSession) {
           // Part of a larger act that cannot wait (posting the entry for a bank statement line and matching the line, in one
           // transaction). A person over their own limit may not post it; where the organisation wants two approvers at this
@@ -188,7 +235,15 @@ class FinancialService {
             403, hold.reason === "limit" ? "APPROVAL_LIMIT_EXCEEDED" : "SECOND_APPROVER_REQUIRED", { amount: hold.amount, ...(hold.reason === "limit" ? { limit: hold.limit } : { above: hold.above }) }
           );
         }
-        if (hold) processedData = { ...processedData, status: "pending", approvalStatus: "pending", approvals: [], ...(_cheque ? { heldCheque: _cheque } : {}) };
+        if (hold) {
+          // Held for approval: nothing it would otherwise do - settling an invoice, moving the
+          // party's on-account balance - happens until it actually posts (F09: a held voucher must
+          // not disagree with ageing and the party accounts while it waits). applyInvoiceAndPartyEffects
+          // runs instead when it is finally approved.
+          processedData = { ...processedData, status: "pending", approvalStatus: "pending", approvals: [], effectsDeferred: true, ...(_cheque ? { heldCheque: _cheque } : {}) };
+        } else if (["receipt", "payment", "debit_note", "credit_note"].includes(voucherType)) {
+          await this.applyInvoiceAndPartyEffects(processedData, session);
+        }
 
         const voucherDoc = {
           voucherNo,
@@ -267,14 +322,18 @@ class FinancialService {
     // cheques account until a cheque clears, a card's settlement account less its fee...)
     const money = await require("../banking/paymentModeService").resolve({
       direction: "receipt", mode: paymentMode, details: paymentDetails, amount: totalAmount, date,
-      description: `Receipt from ${customer.customerName}`, session,
+      description: `Receipt from ${customer.customerName}`, session, requireReference: true,
     });
 
-    // Validate and allocate linked invoices (parallel fetch for optimization)
+    // Validate and allocate linked invoices. Sequential, on the same session: MongoDB does not run
+    // concurrent operations on one transaction session, so a Promise.all here failed now and then
+    // under real use, and a duplicate invoiceId in one request would otherwise pass the balance
+    // check twice (both copies read the same outstanding amount before either applied it).
     let validatedInvoices = [];
     let totalAllocated = 0;
     if (linkedInvoices.length > 0) {
-      const invoicePromises = linkedInvoices.map(async (linked) => {
+      const seen = new Set();
+      for (const linked of linkedInvoices) {
         const { invoiceId, amount: allocated, balance: expectedNew } = linked;
         if (allocated <= 0 || !mongoose.Types.ObjectId.isValid(invoiceId)) {
           throw new AppError(
@@ -282,6 +341,11 @@ class FinancialService {
             400
           );
         }
+        const key = String(invoiceId);
+        if (seen.has(key)) {
+          throw new AppError(`Invoice ${invoiceId} is allocated twice in the same receipt`, 400, "DUPLICATE_ALLOCATION");
+        }
+        seen.add(key);
 
         const invoice = await Transaction.findById(invoiceId).session(session);
         if (!invoice) {
@@ -307,22 +371,16 @@ class FinancialService {
           );
         }
 
-        invoice.paidAmount += allocated;
-        invoice.outstandingAmount = expectedNew;
-        // Whether it is paid is paidAmount / outstandingAmount. The document's status stays
-        // APPROVED: overwriting it made a part-paid invoice disappear from ageing, returns, credit
-        // control and deletion, which all look for APPROVED documents.
-        await invoice.save({ session });
-
-        return {
+        // Settling the invoice itself waits until the voucher actually posts
+        // (FinancialService.applyInvoiceAndPartyEffects) - a held voucher must change nothing
+        // until it is approved.
+        validatedInvoices.push({
           invoiceId: invoice._id,
           allocatedAmount: allocated,
           previousBalance: current,
           newBalance: expectedNew,
-        };
-      });
-
-      validatedInvoices = await Promise.all(invoicePromises); // Parallel processing
+        });
+      }
       totalAllocated = validatedInvoices.reduce(
         (sum, inv) => sum + inv.allocatedAmount,
         0
@@ -333,15 +391,6 @@ class FinancialService {
     if (onAccountAmount < 0) {
       throw new AppError("Allocated amount cannot exceed total amount", 400);
     }
-
-    // Update customer cashBalance for on-account
-    await this.adjustPartyCashBalance(
-      customerId,
-      "Customer",
-      onAccountAmount,
-      session,
-      "add"
-    );
 
     // Create entries for double-entry accounting (parallel fetch)
     const customerAccount =
@@ -436,14 +485,17 @@ class FinancialService {
     // Validate the payment mode and work out where the money comes from
     const money = await require("../banking/paymentModeService").resolve({
       direction: "payment", mode: paymentMode, details: paymentDetails, amount: totalAmount, date,
-      description: `Payment to ${vendor.vendorName}`, session,
+      description: `Payment to ${vendor.vendorName}`, session, requireReference: true,
     });
 
-    // Validate and allocate linked invoices (parallel)
+    // Validate and allocate linked invoices. Sequential, on the same session: see
+    // processReceiptVoucher for why (MongoDB does not run concurrent operations on one session,
+    // and a duplicate invoiceId must not pass the balance check against the same stale read twice).
     let validatedInvoices = [];
     let totalAllocated = 0;
     if (linkedInvoices.length > 0) {
-      const invoicePromises = linkedInvoices.map(async (linked) => {
+      const seen = new Set();
+      for (const linked of linkedInvoices) {
         const { invoiceId, amount: allocated, balance: expectedNew } = linked;
         if (allocated <= 0 || !mongoose.Types.ObjectId.isValid(invoiceId)) {
           throw new AppError(
@@ -451,6 +503,11 @@ class FinancialService {
             400
           );
         }
+        const key = String(invoiceId);
+        if (seen.has(key)) {
+          throw new AppError(`Invoice ${invoiceId} is allocated twice in the same payment`, 400, "DUPLICATE_ALLOCATION");
+        }
+        seen.add(key);
 
         const invoice = await Transaction.findById(invoiceId).session(session);
         if (!invoice) {
@@ -476,22 +533,16 @@ class FinancialService {
           );
         }
 
-        invoice.paidAmount += allocated;
-        invoice.outstandingAmount = expectedNew;
-        // Whether it is paid is paidAmount / outstandingAmount. The document's status stays
-        // APPROVED: overwriting it made a part-paid invoice disappear from ageing, returns, credit
-        // control and deletion, which all look for APPROVED documents.
-        await invoice.save({ session });
-
-        return {
+        // Settling the invoice itself waits until the voucher actually posts
+        // (FinancialService.applyInvoiceAndPartyEffects) - a held voucher must change nothing
+        // until it is approved.
+        validatedInvoices.push({
           invoiceId: invoice._id,
           allocatedAmount: allocated,
           previousBalance: current,
           newBalance: expectedNew,
-        };
-      });
-
-      validatedInvoices = await Promise.all(invoicePromises);
+        });
+      }
       totalAllocated = validatedInvoices.reduce(
         (sum, inv) => sum + inv.allocatedAmount,
         0
@@ -502,15 +553,6 @@ class FinancialService {
     if (onAccountAmount < 0) {
       throw new AppError("Allocated amount cannot exceed total amount", 400);
     }
-
-    // Update vendor cashBalance for on-account
-    await this.adjustPartyCashBalance(
-      vendorId,
-      "Vendor",
-      onAccountAmount,
-      session,
-      "add"
-    );
 
     // Create entries (parallel fetch)
     const vendorAccount =
@@ -578,13 +620,17 @@ class FinancialService {
   }
 
   // Debit and credit notes. One that lowers what the party owes and is not set against an invoice
-  // is money on account, like an unallocated receipt, so the party's balance moves with it.
+  // is money on account, like an unallocated receipt, so the party's balance moves with it. Moving
+  // it, and settling an invoice the note names, both wait until the note actually posts
+  // (applyInvoiceAndPartyEffects, called from createVoucher when it is not held and from
+  // processVoucherApproval when a held one is approved) - a note needing approval (see F08: either
+  // because of its own amount, or the organisation's "credit and debit notes wait for approval"
+  // setting) must change nothing while it waits.
   static async processNoteWithBalance(data, session, voucherType) {
     const processed = await LedgerVoucherService.processNote(data, session, { voucherType });
     const reduces = (processed.partyType === "Customer" && voucherType === "credit_note") || (processed.partyType === "Vendor" && voucherType === "debit_note");
     if (reduces && !processed.linkedInvoices.length) {
       processed.onAccountAmount = processed.totalAmount;
-      await this.adjustPartyCashBalance(processed.partyId, processed.partyType, processed.totalAmount, session, "add");
     }
     return processed;
   }
@@ -618,6 +664,11 @@ class FinancialService {
     if (cheque && voucher.paymentMode === "cheque") {
       await require("../banking/chequeService").onVoucherRemoved(voucher, { session, req: {}, adminId: by, forEdit: false });
     }
+    // A held voucher (effectsDeferred: true) never touched an invoice or the party's balance in the
+    // first place - see applyInvoiceAndPartyEffects, run only once it is actually approved - so
+    // there is nothing here to put back. A voucher held before this existed has no
+    // `effectsDeferred` at all, so it is undone the old way (it was applied the old way).
+    if (voucher.effectsDeferred) return;
     await this.reverseVoucherEffects(voucher, session);
   }
 
@@ -1444,13 +1495,13 @@ class FinancialService {
 
   // Update voucher - With retry and reversal handling
   //
-  // `options.req` is the request of the person editing (the voucher route passes it). Changing the posted figures of an
-  // APPROVED voucher takes its postings back and posts new ones - a deletion and an approval in one act - so it needs what
-  // each of those needs: finance.deletePosted (judged by the STORED status, never by the request), and an approval of the NEW
-  // amount that stands on its own (the editor's role limit, the separate-approver rule, and no second approver: an edit is
-  // one person's act, so an amount that needs two is refused with SECOND_APPROVER_REQUIRED - delete the voucher and enter it
-  // again, which then waits for both). The editor's approval replaces the old approvals. A voucher that is NOT approved is
-  // only ever changed, never approved, by an edit: it stays where it was. Without `req` (a job, a test) nobody is judged.
+  // A POSTED (approved) voucher is locked (F04 of the finance QA review, 1 Nov 2026): it already moved
+  // money and the books, so changing what it posted is a deletion plus a fresh entry, never an edit -
+  // `changesPosting(oldVoucher, data)` true on an approved voucher is refused outright (409
+  // VOUCHER_POSTED), whatever permission the person holds. Only its narration, notes and attachments
+  // may still change, and only with a `reason` (400 REASON_REQUIRED without one): see the `wasApproved`
+  // branch below. A voucher that is NOT approved is only ever changed, never approved, by an edit: it
+  // stays where it was.
   static async updateVoucher(id, data, updatedBy, options = {}) {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       throw new AppError("Invalid voucher ID", 400);
@@ -1476,21 +1527,36 @@ class FinancialService {
         if (["bounced", "cancelled"].includes(oldVoucher.status)) {
           throw new AppError(`A ${oldVoucher.status} voucher cannot be edited`, 400, "VOUCHER_VOIDED");
         }
-        if (oldVoucher.status === "approved" && !data.forceUpdate) {
-          throw new AppError("Cannot update approved voucher", 400);
-        }
         // changing a voucher that is waiting for its second approver takes back the first: what was approved is no longer what is there
         if (oldVoucher.status !== "approved" && oldVoucher.approvals?.length) oldVoucher.approvals = [];
         if (!["receipt", "payment"].includes(oldVoucher.voucherType)) await FxVoucherService.assertBaseCurrencyOnly(data, { session });
 
         const wasApproved = oldVoucher.status === "approved";
         const repost = this.changesPosting(oldVoucher, data);
-        // The right to take postings back is judged by the STORED status, before anything is touched.
-        if (wasApproved && repost && options.req) {
-          require("../../middleware/permissionGate").assertPermission(
-            options.req, "finance.deletePosted",
-            "Changing the amount, accounts or party of a posted voucher takes its postings back and posts new ones, so it needs the right to delete posted vouchers (finance.deletePosted). You can still change its narration or notes."
-          );
+
+        if (wasApproved) {
+          if (repost) {
+            throw new AppError(
+              "This voucher is posted, so its amount, accounts, party, date or tax cannot be changed here. Delete it, which reverses its postings, and enter it again.",
+              409,
+              "VOUCHER_POSTED"
+            );
+          }
+          const reason = String(data.reason || "").trim();
+          if (!reason) throw new AppError("Say why you are changing a posted voucher", 400, "REASON_REQUIRED");
+          if (reason.length > 500) throw new AppError("The reason is limited to 500 characters", 400, "REASON_TOO_LONG");
+          // Only narration, notes and attachments may still change; attachments are MERGED, never
+          // replaced, so a new upload does not drop what was already there.
+          if (data.narration !== undefined) oldVoucher.narration = data.narration;
+          if (data.notes !== undefined) oldVoucher.notes = data.notes;
+          if (data.attachments && data.attachments.length > 0) {
+            oldVoucher.attachments = [...(oldVoucher.attachments || []), ...data.attachments];
+          }
+          oldVoucher.updatedBy = updatedBy;
+          oldVoucher.$locals.narrationReason = reason; // read by the controller, for the audit row
+          await oldVoucher.save({ session });
+          await session.commitTransaction();
+          return this.shown(oldVoucher);
         }
 
         let needReprocess = false;
@@ -1501,17 +1567,24 @@ class FinancialService {
             await require("../banking/chequeService").onVoucherRemoved(oldVoucher, { session, req: {}, adminId: updatedBy, forEdit: true });
           }
           await this.reverseLedgerEntries(id, session);
-          await this.reverseAllocations(oldVoucher, session);
+          // A held voucher's invoice settlement and on-account balance were never applied in the
+          // first place (F09, applyInvoiceAndPartyEffects runs only once a voucher actually posts),
+          // so there is nothing here to put back before recomputing. A voucher held before this
+          // existed has no `effectsDeferred` at all and was applied the old way, so it is reversed
+          // the old way too. (A voucher reaching this point is never approved: see the refusal above.)
+          if (!oldVoucher.effectsDeferred) {
+            await this.reverseAllocations(oldVoucher, session);
 
-          // Reverse old cashBalance adjustment
-          if (oldVoucher.partyType && oldVoucher.onAccountAmount > 0) {
-            await this.adjustPartyCashBalance(
-              oldVoucher.partyId,
-              oldVoucher.partyType,
-              oldVoucher.onAccountAmount,
-              session,
-              "subtract"
-            );
+            // Reverse old cashBalance adjustment
+            if (oldVoucher.partyType && oldVoucher.onAccountAmount > 0) {
+              await this.adjustPartyCashBalance(
+                oldVoucher.partyId,
+                oldVoucher.partyType,
+                oldVoucher.onAccountAmount,
+                session,
+                "subtract"
+              );
+            }
           }
 
           // Reverse Transactor balance changes for contra or journal vouchers
@@ -1591,22 +1664,10 @@ class FinancialService {
           }
           const { _cheque, _vatPercent, ...storable } = processedData;
           processedData = storable;
-          if (wasApproved) {
-            // The new figures are approved by the person changing them, on their own, or not at all (see the note above).
-            const judged = await require("../core/approvalPolicyService").judgeRepost({
-              amount: processedData.totalAmount, preparedBy: oldVoucher.createdBy, req: options.req, session,
-            });
-            if (judged.approval) {
-              processedData.approvals = [judged.approval];
-              processedData.approvalStatus = "approved";
-              if (mongoose.isValidObjectId(updatedBy)) processedData.approvedBy = updatedBy;
-              processedData.approvedAt = new Date();
-            }
-          } else {
-            // An edit never approves a voucher that was waiting (or turned down): it stays as it was.
-            processedData.status = oldVoucher.status;
-            processedData.approvalStatus = oldVoucher.approvalStatus;
-          }
+          // A voucher reaching here is never approved (see the refusal above): an edit never
+          // approves a voucher that was waiting (or turned down), so it stays as it was.
+          processedData.status = oldVoucher.status;
+          processedData.approvalStatus = oldVoucher.approvalStatus;
           // The cheque of a voucher that is not posted waits on the voucher; it enters the register when the voucher is approved.
           if (processedData.status === "approved") {
             updatedCheque = _cheque;
@@ -1767,9 +1828,19 @@ class FinancialService {
           approval = verdict.approval || null;
         }
 
-        // Turned down: a voucher that waited has posted nothing, but saving it settled invoices and moved the party's balance
-        // on account (and older ones moved cash & bank balances). Those are put back, as when it is deleted.
+        // Turned down: a voucher that waited has posted nothing. Before F09 saving it had already settled
+        // invoices and moved the party's balance on account (and older ones moved cash & bank balances); those
+        // were put back here, as when it is deleted. A voucher held since (effectsDeferred: true) never touched
+        // them in the first place, so undoUnpostedEffects now does nothing for it.
         if (action === "reject") await this.undoUnpostedEffects(voucher, session, approvedBy);
+
+        // Approved at last: a held voucher's invoice settlement and on-account balance were never
+        // applied (F09) - apply them now, re-checking each invoice is still what it was when this
+        // was saved. A legacy held voucher (no effectsDeferred at all) already has them.
+        if (action === "approve" && voucher.effectsDeferred) {
+          await this.applyInvoiceAndPartyEffects(voucher, session);
+          voucher.effectsDeferred = false;
+        }
 
         // Update voucher status
         voucher.status = action === "approve" ? "approved" : "rejected";
@@ -2257,6 +2328,12 @@ class FinancialService {
     const cashIds = new Set(cashAccounts.map((a) => String(a._id)));
     const isBank = (a) => cashIds.has(String(a._id))
       || /\b(bank|cash)\b/i.test(a.groupName || "") || /\b(bank|cash)\b/i.test(a.accountName || "");
+    // A cash account in credit is a shortfall, a bank account in credit is an overdraft (F17,
+    // finance QA review 1 Nov 2026) - they used to share "Bank overdrafts". The posting map says
+    // which is which; an account with no map is guessed from its name, as the whole check above is.
+    const cashKindById = new Map(cashAccounts.map((a) => [String(a._id), a.kind]));
+    const cashKindOf = (a) => cashKindById.get(String(a._id))
+      || (/\bcash\b/i.test(a.groupName || "") || /\bcash\b/i.test(a.accountName || "") ? "cash" : "bank");
     const isReceivable = (a) => receivableGroups.has(String(a.groupId)) || /^Customer( Advance)? - /.test(a.accountName);
     const isPayable = (a) => payableGroups.has(String(a.groupId)) || /^Vendor - /.test(a.accountName);
     const moved = (a, groupName) => ({ ...a, groupName, sectionGroup: groupName, amount: r2(-a.amount) });
@@ -2265,7 +2342,7 @@ class FinancialService {
     assets = [...assets.filter((a) => !toLiabilities.includes(a)), ...toAssets.map((a) => moved(a, "Supplier debit balances"))];
     liabilities = [
       ...liabilities.filter((a) => !toAssets.includes(a)),
-      ...toLiabilities.map((a) => moved(a, isBank(a) ? "Bank overdrafts" : "Customer credit balances")),
+      ...toLiabilities.map((a) => moved(a, isBank(a) ? (cashKindOf(a) === "cash" ? "Cash shortfall" : "Bank overdrafts") : "Customer credit balances")),
     ];
 
     // Current / non-current, and the order the lines read: both shared with the IFRS statement of financial position,

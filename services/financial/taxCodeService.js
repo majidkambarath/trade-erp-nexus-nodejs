@@ -1,6 +1,9 @@
 const TaxCode = require("../../models/modules/financial/taxCodeModel");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
+// Lazy: avoids loading the whole VAT return service (and its own requires) for every unrelated
+// caller of this file; list() is the only place that needs it, and only for a UAE organisation.
+const boxesOfKind = (kind) => require("../reports/vatReturnService").boxesOf(kind);
 
 // The rate in force on `date`: the latest history entry dated on or before it, else the base rate.
 function rateOn(taxCode, date) {
@@ -24,9 +27,14 @@ const STARTER = [
 class TaxCodeService {
   static rateOn = rateOn;
 
+  // F05: a person picking or checking a tax code could not tell which VAT 201 box a line of
+  // that kind would land in - the whole report's layout in utils/countryRules.js is UAE-only,
+  // so this rides along on every code and the screen (src/components/accounting/setup/TaxCodes.jsx)
+  // shows it only for a UAE organisation, the same way the VAT return screens themselves are hidden.
   static async list(req) {
     const { companyId } = getTenant(req);
-    return TaxCode.find({ companyId }).sort({ isDefault: -1, name: 1 }).lean();
+    const codes = await TaxCode.find({ companyId }).sort({ isDefault: -1, name: 1 }).lean();
+    return codes.map((c) => ({ ...c, box: boxesOfKind(c.kind) }));
   }
 
   static async create(data, req) {

@@ -99,6 +99,51 @@ test("tax codes: the rate in force on the document date applies and is snapshott
   );
 });
 
+// F01: the garage job-card form (and any future form that forgets a tax code) used to post every
+// line at 0% VAT, silently, because applyToItems left a line with no code and no rate exactly as
+// it arrived. A line that sends no code and NO RATE AT ALL now gets the organisation's own default
+// standard code; a line that sends an explicit rate (0 included - a deliberate zero-rated or
+// out-of-scope entry) is left alone, because it was a choice, not an omission.
+test("tax codes: a line with no code and no rate at all gets the organisation's default standard code", { skip }, async () => {
+  await svc.TaxCode.create({ name: "Standard 5% (default)", kind: "standard", ratePercent: 5, isDefault: true });
+  const defaultCode = (await svc.TaxCode.list()).find((c) => c.name === "Standard 5% (default)");
+
+  const [noCodeNoRate] = await svc.TaxCode.applyToItems([{ description: "x", qty: 1, price: 100 }], new Date());
+  assert.equal(String(noCodeNoRate.taxCodeId), String(defaultCode._id));
+  assert.equal(noCodeNoRate.vatPercent, 5);
+  assert.equal(noCodeNoRate.taxKind, "standard");
+
+  // An explicit 0 is a decision (zero-rated, exempt, out of scope sent as a bare rate) and is left exactly as sent.
+  const [explicitZero] = await svc.TaxCode.applyToItems([{ description: "y", qty: 1, price: 100, vatPercent: 0 }], new Date());
+  assert.equal(explicitZero.taxCodeId, undefined);
+  assert.equal(explicitZero.vatPercent, 0);
+  assert.equal(explicitZero.taxKind, undefined);
+
+  // A line that already names its own code is never redirected to the default.
+  const other = await svc.TaxCode.create({ name: "Zero-rated (own)", kind: "zero_rated", ratePercent: 0 });
+  const [named] = await svc.TaxCode.applyToItems([{ description: "z", taxCodeId: other._id }], new Date());
+  assert.equal(String(named.taxCodeId), String(other._id));
+  assert.equal(named.taxKind, "zero_rated");
+});
+
+// F05: the Tax codes screen shows which VAT 201 box a code's kind lands in, for each direction it
+// can be used on - a code is not itself "a sales code" or "a purchase code".
+test("tax codes: each code carries the VAT 201 box its kind lands in, for sales and for purchases", { skip }, async () => {
+  const codes = await svc.TaxCode.list();
+  const by = (name) => codes.find((c) => c.name === name);
+  assert.deepEqual(by("Standard 5% (default)").box, { sales: "1 (by emirate)", purchases: "9" });
+  assert.deepEqual(by("Zero-rated (own)").box, { sales: "4", purchases: "None" });
+  assert.deepEqual(by("Phased").box, { sales: "1 (by emirate)", purchases: "9" });
+
+  const exempt = await svc.TaxCode.create({ name: "Exempt (own)", kind: "exempt", ratePercent: 0 });
+  const outOfScope = await svc.TaxCode.create({ name: "Out of scope (own)", kind: "out_of_scope", ratePercent: 0 });
+  const rcm = await svc.TaxCode.create({ name: "Reverse charge (own)", kind: "reverse_charge", ratePercent: 5 });
+  const refreshed = await svc.TaxCode.list();
+  assert.deepEqual(refreshed.find((c) => c._id.equals(exempt._id)).box, { sales: "5", purchases: "None" });
+  assert.deepEqual(refreshed.find((c) => c._id.equals(outOfScope._id)).box, { sales: "None", purchases: "None" });
+  assert.deepEqual(refreshed.find((c) => c._id.equals(rcm._id)).box, { sales: "None - the customer declares it in box 3", purchases: "3 and 10" });
+});
+
 test("pricing: discount, freight and header discount are computed on the server and posted separately", { skip }, async () => {
   const vendor = await svc.Vendor.create({ vendorId: "V3", vendorName: "Vend3", contactPerson: "x", address: "y" });
   const customer = await svc.Customer.create({ customerId: "C3", customerName: "Cust3", contactPerson: "x" });

@@ -54,6 +54,21 @@ function treatmentOf(kind, vatPercent, vatAmount) {
   return num(vatPercent) > 0 || num(vatAmount) > 0 ? "standard" : "unclassified";
 }
 
+// Which VAT 201 box a tax code's KIND lands in, for each direction a line carrying it can be
+// used on - a code is not itself "a sales code" or "a purchase code", the same one can go on
+// either, so both are named. Mirrors the branches of compute()'s box-building loop below exactly
+// (keep the two in step); this is what the Tax codes screen shows so a person can tell, before
+// ever raising a document, which box a line will land in (F05: a 5% line with no code used to be
+// unclassified on the return with nothing on screen to say that mattered).
+const SALES_BOX = {
+  standard: "1 (by emirate)", zero_rated: "4", exempt: "5",
+  reverse_charge: "None - the customer declares it in box 3",
+};
+const PURCHASE_BOX = { standard: "9", reverse_charge: "3 and 10" };
+function boxesOf(kind) {
+  return { sales: SALES_BOX[kind] || "None", purchases: PURCHASE_BOX[kind] || "None" };
+}
+
 // A line's taxable value (before VAT, after the line discount).
 function taxableOf(item) {
   if (num(item.taxableAmount) || num(item.vatAmount)) return num(item.taxableAmount);
@@ -64,6 +79,7 @@ function taxableOf(item) {
 class VatReturnService {
   static EMIRATES = EMIRATES;
   static treatmentOf = treatmentOf;
+  static boxesOf = boxesOf;
 
   // Every VAT-relevant line of the period as a flat list:
   // { source, docId, docNo, date, direction: output|input, partyId, partyType, partyName, kind, taxable, vat, rcmVat }
@@ -399,6 +415,24 @@ class VatReturnService {
     r.filingReference = String(reference).trim();
     r.filedAt = filedOn ? new Date(filedOn) : new Date();
     r.filedBy = String(adminId || "");
+    await r.save();
+    return r.toObject();
+  }
+
+  // Takes a FINALIZED return back to DRAFT, so the period it locked (FiscalYearService.assertPostingAllowed)
+  // can be posted into again - a mistaken finalise must not freeze a period for good. A FILED return
+  // stays locked: it has already gone to the tax authority, and there is no correcting that from here.
+  static async reopen(id, adminId) {
+    assertWholeOrganisation();
+    const r = await VATReturn.findOne({ _id: id, companyId: getTenant().companyId });
+    if (!r) throw new AppError("VAT return not found", 404);
+    if (r.status === "FILED") throw new AppError("A filed return cannot be reopened: it has already gone to the tax authority", 409, "ALREADY_FILED");
+    if (r.status !== "FINALIZED") throw new AppError(`This return is ${r.status.toLowerCase()}, not finalised`, 409, "NOT_FINALIZED");
+    r.status = "DRAFT";
+    r.finalizedAt = undefined;
+    r.finalizedBy = undefined;
+    r.reopenedAt = new Date();
+    r.reopenedBy = String(adminId || "");
     await r.save();
     return r.toObject();
   }

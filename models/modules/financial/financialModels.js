@@ -172,6 +172,12 @@ const voucherSchema = new mongoose.Schema({
   // The cheque behind a receipt, payment or expense that was saved WAITING for approval. It enters the cheque register only
   // when the voucher is approved (a pending voucher has posted nothing, so there is nothing yet to clear or bounce); never sent to a screen.
   heldCheque: { type: mongoose.Schema.Types.Mixed, select: false },
+  // True on a voucher that was held for approval (F09, finance QA review 1 Nov 2026): its invoice settlement
+  // and on-account balance (FinancialService.applyInvoiceAndPartyEffects) have NOT been applied yet, so
+  // undoing it (reject, delete) has nothing to put back, and approving it applies them for the first time.
+  // Cleared back to false once applied. A voucher held before this existed has no flag at all (falsy), and
+  // is undone the old way, because it WAS applied the old way.
+  effectsDeferred: { type: Boolean, default: false },
   totalAmount: {
     type: Number,
     required: true,

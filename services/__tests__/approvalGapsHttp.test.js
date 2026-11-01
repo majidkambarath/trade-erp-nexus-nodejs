@@ -136,30 +136,50 @@ test("an organisation with a customer, an item, the starter chart, and people wi
   await person("looker", ["sales.view", "finance.view"]);
 });
 
-// ---- 1. editing an approved voucher ---------------------------------------------------------------
-test("Edit alone cannot change what an approved voucher posted: it is refused, and nothing is reversed or re-posted", { skip }, async () => {
+// ---- 1. editing an approved (posted) voucher, locked (F04, finance QA review 1 Nov 2026) --------
+// A posted voucher already moved money and the books: changing what it posted is a deletion plus a
+// fresh entry, never an edit. VOUCHER_POSTED is refused to EVERY role, deletePosted included - there
+// is no longer a permission that lifts it. Only narration, notes and attachments may still change,
+// and only with a reason.
+test("a posted voucher's figures cannot be changed by Edit, whoever holds deletePosted", { skip }, async () => {
   const made = await journal("owner", 600);
   assert.equal(made.status, 201, JSON.stringify(made.data));
   S.v1 = voucherId(made);
   assert.equal((await voucherRow(S.v1)).status, "approved");
   assert.deepEqual(await legs(S.v1), ["Cash in Hand:Cr600", "Rent Expense:Dr600"]);
 
-  const refused = await api("editor", "PUT", `/vouchers/vouchers/${S.v1}`, { forceUpdate: true, lines: lines(700) });
-  assert.equal(refused.status, 403, JSON.stringify(refused.data));
-  assert.equal(refused.code, "PERMISSION_DENIED");
-  assert.ok(refused.details.required.includes("finance.deletePosted"), `names what is missing: ${JSON.stringify(refused.details)}`);
+  for (const who of ["editor", "reposter"]) {
+    const refused = await api(who, "PUT", `/vouchers/vouchers/${S.v1}`, { forceUpdate: true, reason: "trying", lines: lines(700) });
+    assert.equal(refused.status, 409, `${who}: ${JSON.stringify(refused.data)}`);
+    assert.equal(refused.code, "VOUCHER_POSTED");
+    assert.match(refused.message, /Delete it, which reverses its postings, and enter it again/);
+  }
   assert.equal((await voucherRow(S.v1)).totalAmount, 600);
   assert.deepEqual(await legs(S.v1), ["Cash in Hand:Cr600", "Rent Expense:Dr600"], "the postings are exactly as they were");
   assert.equal((await as(() => M.LedgerEntry.countDocuments({ voucherId: S.v1 }))), 2, "and no reversal rows were written");
 
-  // the amount alone, the accounts alone: any change to what it posted
-  assert.equal((await api("editor", "PUT", `/vouchers/vouchers/${S.v1}`, { forceUpdate: true, totalAmount: 650 })).status, 403);
+  // the amount alone, the accounts alone, the party, the date: any change to what it posted
+  assert.equal((await api("reposter", "PUT", `/vouchers/vouchers/${S.v1}`, { forceUpdate: true, reason: "trying", totalAmount: 650 })).status, 409);
+});
 
-  // a narration is not a posted figure
-  const narration = await api("editor", "PUT", `/vouchers/vouchers/${S.v1}`, { forceUpdate: true, narration: "October accrual" });
-  assert.equal(narration.status, 200, JSON.stringify(narration.data));
-  assert.equal((await voucherRow(S.v1)).narration, "October accrual");
-  assert.equal((await voucherRow(S.v1)).status, "approved", "and an edit never moves where the voucher stands");
+test("a narration-only edit of a posted voucher needs a reason, and changes nothing it posted", { skip }, async () => {
+  const noReason = await api("editor", "PUT", `/vouchers/vouchers/${S.v1}`, { narration: "October accrual" });
+  assert.equal(noReason.status, 400, JSON.stringify(noReason.data));
+  assert.equal(noReason.code, "REASON_REQUIRED");
+  assert.equal((await voucherRow(S.v1)).narration, "Month-end accrual", "refused: nothing changed");
+
+  const done = await api("editor", "PUT", `/vouchers/vouchers/${S.v1}`, { narration: "October accrual", notes: "re-keyed by finance", reason: "typo in the month" });
+  assert.equal(done.status, 200, JSON.stringify(done.data));
+  const row = await voucherRow(S.v1);
+  assert.equal(row.narration, "October accrual");
+  assert.equal(row.notes, "re-keyed by finance");
+  assert.equal(row.status, "approved", "an edit never moves where the voucher stands");
+  assert.equal(row.totalAmount, 600, "and never its figures");
+  assert.deepEqual(await legs(S.v1), ["Cash in Hand:Cr600", "Rent Expense:Dr600"], "the postings are exactly as they were");
+
+  const tooLong = await api("editor", "PUT", `/vouchers/vouchers/${S.v1}`, { narration: "x", reason: "y".repeat(501) });
+  assert.equal(tooLong.status, 400);
+  assert.equal(tooLong.code, "REASON_TOO_LONG");
 });
 
 test("a request cannot move a voucher's status, approvals or maker through a plain edit", { skip }, async () => {
@@ -179,70 +199,36 @@ test("a request cannot move a voucher's status, approvals or maker through a pla
   assert.equal((await entriesOf(pending._id)).length, 0, "nothing posted");
 });
 
-test("with deletePosted the new figures are posted, and become the editor's approval", { skip }, async () => {
-  const done = await api("reposter", "PUT", `/vouchers/vouchers/${S.v1}`, { forceUpdate: true, lines: lines(700) });
-  assert.equal(done.status, 200, JSON.stringify(done.data));
-  assert.equal((await voucherRow(S.v1)).totalAmount, 700);
-  assert.deepEqual(await legs(S.v1), ["Cash in Hand:Cr700", "Rent Expense:Dr700"]);
-  assert.deepEqual((await voucherRow(S.v1)).approvals.map((a) => a.by), [S.id_reposter], "who stands behind the new figures");
-});
-
-test("the new amount is judged like an approval: the editor's limit", { skip }, async () => {
+// Nobody reposts an approved voucher any more (F04): not a limited role, not the separate-approver
+// or second-approver settings - deletePosted included. The only way to a different figure is to
+// delete it (which reverses it) and enter it again.
+test("deletePosted does not lift the lock: a posted voucher's figures are still refused", { skip }, async () => {
   const v = voucherId(await journal("owner", 300));
-  const over = await api("reposter_ltd", "PUT", `/vouchers/vouchers/${v}`, { forceUpdate: true, lines: lines(700) });
-  assert.equal(over.status, 403, JSON.stringify(over.data));
-  assert.equal(over.code, "APPROVAL_LIMIT_EXCEEDED");
-  assert.deepEqual(over.details, { amount: 700, limit: 500 });
-  assert.deepEqual(await legs(v), ["Cash in Hand:Cr300", "Rent Expense:Dr300"], "refused: as it was, the whole edit undone");
+  const refused = await api("reposter", "PUT", `/vouchers/vouchers/${v}`, { forceUpdate: true, reason: "trying", lines: lines(700) });
+  assert.equal(refused.status, 409, JSON.stringify(refused.data));
+  assert.equal(refused.code, "VOUCHER_POSTED");
+  assert.deepEqual(await legs(v), ["Cash in Hand:Cr300", "Rent Expense:Dr300"], "untouched");
   assert.equal((await voucherRow(v)).totalAmount, 300);
-  const within = await api("reposter_ltd", "PUT", `/vouchers/vouchers/${v}`, { forceUpdate: true, lines: lines(400) });
-  assert.equal(within.status, 200, JSON.stringify(within.data));
-  assert.deepEqual(await legs(v), ["Cash in Hand:Cr400", "Rent Expense:Dr400"]);
 });
 
-test("the new amount is judged like an approval: the separate approver, and a second approver", { skip }, async () => {
+test("a posted voucher's own preparer may still change its narration with a reason, even where separateApprover is on", { skip }, async () => {
   const mine = voucherId(await journal("reposter", 200));
   assert.equal((await settings({ approvals: { separateApprover: true } })).status, 200);
   try {
-    const own = await api("reposter", "PUT", `/vouchers/vouchers/${mine}`, { forceUpdate: true, lines: lines(210) });
-    assert.equal(own.status, 403, JSON.stringify(own.data));
-    assert.equal(own.code, "SELF_APPROVAL_NOT_ALLOWED", "whoever prepared a voucher does not correct their own figures");
-    assert.equal((await api("owner", "PUT", `/vouchers/vouchers/${mine}`, { forceUpdate: true, lines: lines(210) })).status, 200, "someone else may");
+    // separateApprover governs approving a document, not changing its narration with a reason: there
+    // is no approval here to give oneself.
+    const done = await api("reposter", "PUT", `/vouchers/vouchers/${mine}`, { narration: "re-keyed", reason: "typo" });
+    assert.equal(done.status, 200, JSON.stringify(done.data));
+    const row = await voucherRow(mine);
+    assert.equal(row.narration, "re-keyed");
+    assert.equal(row.totalAmount, 200, "never the figure");
+    // a figure change is still refused outright, whoever asks and whatever the settings
+    const refused = await api("owner", "PUT", `/vouchers/vouchers/${mine}`, { forceUpdate: true, reason: "trying", lines: lines(210) });
+    assert.equal(refused.status, 409);
+    assert.equal(refused.code, "VOUCHER_POSTED");
   } finally {
     await settings({ approvals: { separateApprover: false } });
   }
-
-  assert.equal((await settings({ approvals: { secondApprovalAbove: 1000 } })).status, 200);
-  try {
-    const refused = await api("owner", "PUT", `/vouchers/vouchers/${mine}`, { forceUpdate: true, lines: lines(1500) });
-    assert.equal(refused.status, 403, JSON.stringify(refused.data));
-    assert.equal(refused.code, "SECOND_APPROVER_REQUIRED", "one person's edit cannot reach an amount that needs two");
-    assert.match(refused.message, /Delete the voucher and enter it again/);
-    assert.deepEqual(await legs(mine), ["Cash in Hand:Cr210", "Rent Expense:Dr210"]);
-    assert.equal((await api("owner", "PUT", `/vouchers/vouchers/${mine}`, { forceUpdate: true, lines: lines(900) })).status, 200, "under the amount one person is enough");
-  } finally {
-    await settings({ approvals: { secondApprovalAbove: "" } });
-  }
-});
-
-test("the older account-voucher routes follow the same rules: a posted (settled) one is not edited or deleted on Edit / Delete alone", { skip }, async () => {
-  const settled = await as(() => new M.Voucher({ voucherNo: "SV-T-1", voucherType: "sale", date: new Date(), totalAmount: 10, status: "settled", approvalStatus: "approved", createdBy: new mongoose.Types.ObjectId(S.id_owner), entries: [] }).save());
-  const waitingOne = await as(() => new M.Voucher({ voucherNo: "SV-T-2", voucherType: "sale", date: new Date(), totalAmount: 10, status: "pending", approvalStatus: "pending", createdBy: new mongoose.Types.ObjectId(S.id_owner), entries: [] }).save());
-
-  const edit = await api("editor", "PUT", `/account/account-vouchers/${settled._id}`, { forceUpdate: true, paidAmount: 5, invoiceBalances: [] });
-  assert.equal(edit.status, 403, JSON.stringify(edit.data));
-  assert.equal(edit.code, "PERMISSION_DENIED");
-  assert.ok(edit.details.required.includes("finance.deletePosted"));
-
-  const del = await api("deleter", "DELETE", `/account/account-vouchers/${settled._id}`);
-  assert.equal(del.status, 403, JSON.stringify(del.data));
-  assert.ok(del.details.required.includes("finance.deletePosted"), "a posted one needs the right to reverse it");
-  assert.equal((await voucherRow(settled._id)).status, "settled", "untouched");
-  const plain = await api("deleter", "DELETE", `/account/account-vouchers/${waitingOne._id}`);
-  assert.equal(plain.status, 200, "one that never posted needs only Delete: " + JSON.stringify(plain.data));
-  const done = await api("reposter", "DELETE", `/account/account-vouchers/${settled._id}`);
-  assert.equal(done.status, 200, JSON.stringify(done.data));
-  assert.equal((await voucherRow(settled._id)).status, "cancelled");
 });
 
 test("an approved trade document cannot be edited at all, by anyone: it is reversed and re-entered, never edited in place", { skip }, async () => {

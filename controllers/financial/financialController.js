@@ -36,7 +36,7 @@ exports.createVoucher = catchAsync(async (req, res) => {
     action: "VOUCHER_CREATED",
     entity: "Voucher",
     entityId: voucher._id,
-    summary: `${VoucherAuditService.describe(voucher)} saved${hold ? ` and held for approval: ${hold.reason === "limit" ? "over the approval limit of the person who saved it" : "it needs two approvers at this amount"}` : ""}`,
+    summary: `${VoucherAuditService.describe(voucher)} saved${hold ? ` and held for approval: ${{ limit: "over the approval limit of the person who saved it", second: "it needs two approvers at this amount", notes: "credit and debit notes need approval" }[hold.reason] || hold.reason}` : ""}`,
     after: { ...VoucherAuditService.snapshot(voucher), effects: await VoucherAuditService.effects(voucher._id) },
   });
 

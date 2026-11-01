@@ -448,7 +448,7 @@ test("a USD receipt settles AED invoices in AED: allocation is checked against t
 // ---- foreign payments -----------------------------------------------------------------------
 test("a USD payment to a vendor credits the bank in AED; a credit-card limit is judged in AED", { skip }, async () => {
   const bankBefore = await balance("Bank Account");
-  const p = await payment({ currency: "USD", foreignAmount: 500, paymentMode: "bank" });
+  const p = await payment({ currency: "USD", foreignAmount: 500, paymentMode: "bank", paymentDetails: { reference: "SLIP-FX-1" } });
 
   assert.equal(p.totalAmount, 1836.25);
   assert.deepEqual((await legs(p)).sort(), ["Bank Account:Cr1836.25", "Advance to Vendor - Gulf Mills:Dr1836.25"].sort());
@@ -460,7 +460,7 @@ test("a USD payment to a vendor credits the bank in AED; a credit-card limit is 
 
   // against the vendor's invoice
   const buy = await svc.Transaction.findOne({ type: "purchase_order", partyId: vendor._id });
-  const against = await payment({ currency: "USD", foreignAmount: 300, paymentMode: "bank", linkedInvoices: [{ invoiceId: buy._id, amount: 1101.75, balance: r2(buy.outstandingAmount - 1101.75) }] });
+  const against = await payment({ currency: "USD", foreignAmount: 300, paymentMode: "bank", paymentDetails: { reference: "SLIP-FX-2" }, linkedInvoices: [{ invoiceId: buy._id, amount: 1101.75, balance: r2(buy.outstandingAmount - 1101.75) }] });
 
   assert.equal((await svc.Transaction.findById(buy._id)).paidAmount, 1101.75);
 
@@ -473,7 +473,7 @@ test("a USD payment to a vendor credits the bank in AED; a credit-card limit is 
 });
 
 // ---- edit, delete, consistency ----------------------------------------------------------------
-test("editing a foreign voucher: it keeps the rate it was made at; a new day, currency or typed rate is looked up and judged afresh", { skip }, async () => {
+test("a posted foreign voucher is locked like any other (F04, finance QA review 1 Nov 2026): its amount, rate, day and currency cannot be changed by Edit", { skip }, async () => {
   await svc.Currencies.update("GBP", { isActive: true }, {});
   await svc.Currencies.addRate("GBP", { rate: 4.6, effectiveDate: ymd(-6) }, {});
   await svc.Currencies.addRate("GBP", { rate: 4.8, effectiveDate: ymd(-1) }, {});
@@ -483,68 +483,34 @@ test("editing a foreign voucher: it keeps the rate it was made at; a new day, cu
   assert.equal(v.totalAmount, 460);
   const cash0 = await balance("Cash in Hand");
 
-  // the master for that day is corrected afterwards; the voucher keeps the rate it was made at
-  await svc.Currencies.addRate("GBP", { rate: 4.55, effectiveDate: ymd(-6) }, {});
-  const bigger = await svc.Financial.updateVoucher(v._id, { customerId: customer._id, foreignAmount: 200, forceUpdate: true }, admin);
-  assert.equal(bigger.exchangeRate, 4.6, "same rate, even though the master moved");
-  assert.equal(bigger.totalAmount, 920);
-  assert.equal(bigger.foreignAmount, 200);
-  assert.equal(bigger.rateSource, "manual");
-  assert.equal(await balance("Cash in Hand"), r2(cash0 + 460), "the ledger moved by the difference only");
-  const cash = await entry(v, "Cash in Hand");
-  assert.equal(cash.amountForeign, 200);
-  assert.equal(cash.debitAmount, 920);
-  assert.equal((await svc.LedgerEntry.find({ voucherId: v._id, accountName: "Cash in Hand", isReversed: { $ne: true } })).length, 1, "one live entry; the old one is reversed");
-
-  // a form that sends the voucher's own rate back is not a new rate, even if the master is now far from it
-  await svc.Currencies.addRate("GBP", { rate: 5.5, effectiveDate: ymd(-6) }, {});
-  const resent = await svc.Financial.updateVoucher(v._id, { customerId: customer._id, exchangeRate: 4.6, foreignAmount: 200, forceUpdate: true }, admin);
-  assert.equal(resent.exchangeRate, 4.6);
-  assert.equal(resent.totalAmount, 920);
-  assert.ok(!resent.rateOverridden);
-
-  // a new day looks the rate up again
-  const moved = await svc.Financial.updateVoucher(v._id, { customerId: customer._id, date: day(0), forceUpdate: true }, admin);
-  assert.equal(moved.exchangeRate, 4.8);
-  assert.equal(moved.totalAmount, 960);
-  assert.equal(orgDay(moved.rateDate), ymd(-1));
-
-  // a typed rate is judged like on a new voucher, and a refusal leaves the voucher as it was
-  const snapshot = { total: moved.totalAmount, cash: await balance("Cash in Hand") };
-  await assert.rejects(() => svc.Financial.updateVoucher(v._id, { customerId: customer._id, exchangeRate: 6, forceUpdate: true }, admin), { code: "RATE_OUT_OF_TOLERANCE" });
+  // Before F04 this re-looked up the rate, judged a typed one against the master, and so on - all
+  // of that FX-editing logic (FxVoucherService) is unchanged, but it is reachable only on a voucher
+  // that has NOT posted; an approved one is refused outright, whatever the edit touches.
+  for (const edit of [
+    { foreignAmount: 200 },
+    { exchangeRate: 4.6, foreignAmount: 200 },
+    { date: day(0) },
+    { exchangeRate: 6 },
+    { currency: "USD", foreignAmount: 100 },
+    { currency: "AED", totalAmount: 500 },
+  ]) {
+    await assert.rejects(
+      () => svc.Financial.updateVoucher(v._id, { customerId: customer._id, forceUpdate: true, reason: "trying", ...edit }, admin),
+      { code: "VOUCHER_POSTED" },
+      JSON.stringify(edit)
+    );
+  }
   const unchanged = await svc.Voucher.findById(v._id);
-  assert.equal(unchanged.totalAmount, snapshot.total);
-  assert.equal(unchanged.exchangeRate, 4.8);
-  assert.equal(await balance("Cash in Hand"), snapshot.cash, "the refused edit rolled back");
-  const typed = await svc.Financial.updateVoucher(v._id, { customerId: customer._id, exchangeRate: 4.9, forceUpdate: true }, admin);
-  assert.equal(typed.exchangeRate, 4.9);
-  assert.equal(typed.totalAmount, 980);
-  assert.equal(typed.rateSource, "voucher");
+  assert.equal(unchanged.totalAmount, 460);
+  assert.equal(unchanged.exchangeRate, 4.6);
+  assert.equal(unchanged.currency, "GBP");
+  assert.equal(await balance("Cash in Hand"), cash0, "none of it touched the ledger");
 
-  // into another currency: the master is consulted for it
-  const usd = await svc.Financial.updateVoucher(v._id, { customerId: customer._id, currency: "USD", foreignAmount: 100, forceUpdate: true }, admin);
-  assert.equal(usd.currency, "USD");
-  assert.equal(usd.exchangeRate, 3.6725);
-  assert.equal(usd.totalAmount, 367.25);
-  assert.ok(!usd.rateOverridden, "the old typed rate's override does not follow it");
-  assert.equal((await entry(v, "Cash in Hand")).currency, "USD");
-
-  // and back to AED: nothing foreign is left behind
-  const back = await svc.Financial.updateVoucher(v._id, { customerId: customer._id, currency: "AED", totalAmount: 500, forceUpdate: true }, admin);
-  assert.equal(back.currency, "AED");
-  assert.equal(back.exchangeRate, 1);
-  assert.equal(back.totalAmount, 500);
-  for (const f of ["foreignAmount", "rateDate", "rateSource", "rateOverridden", "rateOverrideReason"]) assert.equal(back[f], undefined, f);
-  const aed = await entry(v, "Cash in Hand");
-  assert.equal(aed.debitAmount, 500);
-  assert.equal(aed.currency, undefined);
-  assert.equal(aed.amountForeign, undefined);
-
-  // and out again
-  const out = await svc.Financial.updateVoucher(v._id, { customerId: customer._id, currency: "GBP", foreignAmount: 50, forceUpdate: true }, admin);
-  assert.equal(out.exchangeRate, 4.8);
-  assert.equal(out.totalAmount, 240);
-
+  // narration and notes may still change, with a reason - and nothing of the foreign side moves
+  const narrated = await svc.Financial.updateVoucher(v._id, { customerId: customer._id, narration: "GBP receipt, checked", reason: "tidied" }, admin);
+  assert.equal(narrated.narration, "GBP receipt, checked");
+  assert.equal(narrated.totalAmount, 460);
+  assert.equal(narrated.exchangeRate, 4.6);
 });
 
 test("a used currency cannot be deleted, or have its decimals changed; it can be switched off, which stops new use", { skip }, async () => {
@@ -618,7 +584,8 @@ test("the currency register lists foreign vouchers with totals and an average ra
   const today = await svc.Fx.register({}, { from: ymd(0), to: ymd(0) });
   assert.ok(today.rows.length > 0, "today's vouchers are in a range that is today");
   const gbp = await svc.Fx.register({}, { currency: "GBP" });
-  assert.deepEqual(gbp.totals.map((t) => [t.currency, t.type, t.count, t.foreign, t.aed]), [["GBP", "receipt", 1, 50, 240]]);
+  // the GBP voucher made in the previous test is now locked (F04) and stays as it was made: 100 @ 4.6
+  assert.deepEqual(gbp.totals.map((t) => [t.currency, t.type, t.count, t.foreign, t.aed]), [["GBP", "receipt", 1, 100, 460]]);
 
   await assert.rejects(() => svc.Fx.register({}, { from: "04/10/2026" }), { code: "INVALID_DATE" });
   await assert.rejects(() => svc.Fx.register({}, { type: "journal" }), { code: "INVALID_TYPE" });

@@ -60,6 +60,10 @@ const SEED = [
   // --- sales side ---
   k("sales-group", "Sales postings", null, "none"),
   k("sales-revenue", "Sales revenue", "INCOME", "account", "sales-group"),
+  // F08 (finance QA review, 1 Nov 2026): a sales return used to debit Sales Revenue itself, so it
+  // reduced the top line directly rather than showing as a deduction (IFRS 15.47's "a provision...
+  // separately" spirit for the reverse of a sale). A dedicated contra-revenue account.
+  k("sales-returns", "Sales returns", "INCOME", "account", "sales-group"),
   k("vat-sales", "Output VAT", "LIABILITY", "account", "sales-group"),
   k("discount-sales", "Sales discounts given", "EXPENSE", "account", "sales-group"),
   k("freight-sales", "Freight & handling recovered", "INCOME", "account", "sales-group"),

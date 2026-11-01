@@ -148,7 +148,42 @@ test("contra, ledger expense and credit note are held the same way, and posted w
   for (const v of [contra, expense, note]) assert.equal((await row(v)).status, "approved");
 });
 
-test("a held receipt has already settled its invoice; turning it down puts the invoice and the customer back, and it never posts", { skip }, async () => {
+// F08 (finance QA review, 1 Nov 2026): "credit and debit notes wait for approval" is an
+// organisation setting, off by default - a note posts at once unless it is switched on, whatever
+// its amount and whoever saves it (not a judgement of a person's limit, like the hold above).
+test("'credit and debit notes wait for approval' holds every note, whatever its amount, once the organisation switches it on", { skip }, async () => {
+  const sales = await acct("Sales Discounts Given");
+  const smallOff = await svc.Financial.createVoucher({ voucherType: "credit_note", partyType: "Customer", partyId: customer._id, date: day(), lines: [{ accountId: sales._id, amount: 10 }] }, PEOPLE.boss, undefined, { req: reqOf("boss") });
+  assert.equal(smallOff.status, "approved", "off by default: posts at once, even for a tiny amount");
+
+  await policy({ notesNeedApproval: true });
+  try {
+    // a job with nobody behind it is held too: the rule is about the TYPE, not about judging who saves it
+    const held = await svc.Financial.createVoucher({ voucherType: "credit_note", partyType: "Customer", partyId: customer._id, date: day(), lines: [{ accountId: sales._id, amount: 10 }] }, PEOPLE.clerk, undefined, {});
+    assert.equal(held.status, "pending");
+    assert.equal(held.effectsDeferred, true);
+    assert.equal((await entriesOf(held)).length, 0);
+
+    const heldDebit = await svc.Financial.createVoucher({ voucherType: "debit_note", partyType: "Vendor", partyId: (await svc.Vendor.findOne({ vendorName: "Gulf Mills" }))._id, date: day(), lines: [{ accountId: sales._id, amount: 10 }] }, PEOPLE.clerk, undefined, { req: reqOf("clerk") });
+    assert.equal(heldDebit.status, "pending", "debit notes too");
+
+    const done = await approve(held, "senior");
+    assert.equal(done.status, "approved");
+    assert.deepEqual(await legs(held), ["Customer - Al Noor:Cr10", "Sales Discounts Given:Dr10"]);
+  } finally {
+    await policy({ notesNeedApproval: false });
+  }
+
+  // switched off again: posts at once as before
+  const after = await svc.Financial.createVoucher({ voucherType: "credit_note", partyType: "Customer", partyId: customer._id, date: day(), lines: [{ accountId: sales._id, amount: 10 }] }, PEOPLE.boss, undefined, { req: reqOf("boss") });
+  assert.equal(after.status, "approved");
+});
+
+// F09 (finance QA review, 1 Nov 2026): a held voucher must change NOTHING - not the invoice, not the
+// party's balance - until it is actually approved, or ageing and credit control disagree with the
+// ledger while it waits. Before this a held receipt settled the invoice and moved the balance at
+// once, and turning it down or deleting it had to put that back; now there is nothing to put back.
+test("a held receipt leaves its invoice untouched until it is approved; turning it down leaves it exactly as it was", { skip }, async () => {
   const inv = await invoice(10); // 105
   assert.equal(await outstanding(inv), 105);
   const cashBefore = await balance("Cash in Hand");
@@ -159,32 +194,58 @@ test("a held receipt has already settled its invoice; turning it down puts the i
     linkedInvoices: [{ invoiceId: inv._id, amount: 105, balance: 0 }],
   }, PEOPLE.clerk, undefined, { req: reqOf("clerk", { limit: 50 }) });
   assert.equal(held.status, "pending");
-  assert.equal(await outstanding(inv), 0, "the customer paid: the invoice shows it while the voucher waits");
-  assert.equal(await balance("Cash in Hand"), cashBefore, "but nothing is in the books");
+  assert.equal(held.effectsDeferred, true);
+  assert.equal(await outstanding(inv), 105, "nothing changes on the invoice while the voucher waits");
+  assert.equal(await balance("Cash in Hand"), cashBefore, "and nothing is in the books");
 
   const rejected = await approve(held, "senior", { action: "reject" });
   assert.equal(rejected.status, "rejected");
-  assert.equal(await outstanding(inv), 105, "turned down: the invoice is open again");
+  assert.equal(await outstanding(inv), 105, "turned down: there was nothing to undo");
   assert.equal(await balance("Cash in Hand"), cashBefore);
   assert.equal((await entriesOf(held)).length, 0);
   assert.equal(await owes(), owesBefore);
   assert.deepEqual((await row(held)).approvals, []);
 });
 
-test("a held receipt on account moves the customer's balance; deleting it (cancelling) undoes that, approving it posts the advance", { skip }, async () => {
+test("approving a held receipt applies its invoice settlement for the first time; a changed invoice refuses the approval", { skip }, async () => {
+  const inv = await invoice(10); // 105
+  const held = await svc.Financial.createVoucher({
+    voucherType: "receipt", customerId: customer._id, totalAmount: 105, paymentMode: "cash", date: day(),
+    linkedInvoices: [{ invoiceId: inv._id, amount: 105, balance: 0 }],
+  }, PEOPLE.clerk, undefined, { req: reqOf("clerk", { limit: 50 }) });
+  assert.equal(await outstanding(inv), 105, "still untouched");
+
+  // another receipt settles the same invoice while this one waits
+  const other = await svc.Financial.createVoucher({
+    voucherType: "receipt", customerId: customer._id, totalAmount: 105, paymentMode: "cash", date: day(),
+    linkedInvoices: [{ invoiceId: inv._id, amount: 105, balance: 0 }],
+  }, PEOPLE.boss, undefined, {});
+  assert.equal(other.status, "approved");
+  assert.equal(await outstanding(inv), 0, "the other one settled it first");
+
+  await assert.rejects(() => approve(held, "senior"), (err) => {
+    assert.equal(err.code, "INVOICE_CHANGED");
+    return true;
+  });
+  assert.equal((await row(held)).status, "pending", "the held one is still waiting, not silently applied");
+  assert.equal(await outstanding(inv), 0, "the invoice is not touched a second time");
+});
+
+test("a held receipt on account moves nothing until it is approved; deleting it before then leaves the customer's balance untouched", { skip }, async () => {
   const owesBefore = await owes();
   const held = await svc.Financial.createVoucher({ voucherType: "receipt", customerId: customer._id, totalAmount: 400, paymentMode: "cash", date: day() }, PEOPLE.clerk, undefined, { req: reqOf("clerk", { limit: 50 }) });
   assert.equal(held.onAccountAmount, 400);
-  assert.equal(await owes(), owesBefore + 400);
+  assert.equal(await owes(), owesBefore, "not yet: the voucher is still waiting");
   const removed = await svc.Financial.deleteVoucher(held._id, PEOPLE.clerk);
   assert.equal(removed.removed.status, "pending");
   assert.equal((await row(held)).status, "cancelled");
-  assert.equal(await owes(), owesBefore, "a voucher that never posted gives its balance back");
+  assert.equal(await owes(), owesBefore, "nothing to give back: it was never applied");
 
   const again = await svc.Financial.createVoucher({ voucherType: "receipt", customerId: customer._id, totalAmount: 400, paymentMode: "cash", date: day() }, PEOPLE.clerk, undefined, { req: reqOf("clerk", { limit: 50 }) });
+  assert.equal(await owes(), owesBefore, "still waiting");
   await approve(again, "senior");
   assert.deepEqual(await legs(again), ["Cash in Hand:Dr400", "Customer Advance - Al Noor:Cr400"]);
-  assert.equal(await owes(), owesBefore + 400);
+  assert.equal(await owes(), owesBefore + 400, "applied for the first time, on approval");
 });
 
 test("the cheque behind a held voucher enters the register only when it is approved, and never if it is turned down", { skip }, async () => {
@@ -340,73 +401,76 @@ test("a held voucher's first approval is taken back by an edit, as for a documen
   }
 });
 
-// ---- changing what an approved voucher posted ------------------------------------------------
-test("changing the figures of an approved voucher needs finance.deletePosted, and is refused without it with nothing touched", { skip }, async () => {
+// ---- a posted voucher is locked (F04, finance QA review 1 Nov 2026) --------------------------
+// It already moved money and the books; changing what it posted is a deletion plus a fresh entry,
+// never an edit. finance.deletePosted no longer lifts anything here - there is nothing left for it
+// to gate, since a figure change on an approved voucher is refused outright, to every role and to a
+// job with nobody behind it. Only narration, notes and attachments may still change, and only with
+// a reason.
+test("a posted voucher's figures cannot be changed by Edit - deletePosted does not lift it, and nobody behind the request does either", { skip }, async () => {
   const [rent, cash] = await Promise.all([acct("Rent Expense"), acct("Cash in Hand")]);
   const v = await journal(300, {}, "boss");
   const lines = (n) => [{ accountId: rent._id, debit: n }, { accountId: cash._id, credit: n }];
   const before = await balance("Rent Expense");
 
   const editOnly = reqOf("other", { grants: ["finance.edit", "finance.create"] });
-  await assert.rejects(() => svc.Financial.updateVoucher(v._id, { forceUpdate: true, lines: lines(500) }, PEOPLE.other, { req: editOnly }), { code: "PERMISSION_DENIED" });
+  const reposter = reqOf("other", { grants: ["finance.edit", "finance.deletePosted"] });
+  for (const req of [editOnly, reposter, undefined]) {
+    await assert.rejects(() => svc.Financial.updateVoucher(v._id, { forceUpdate: true, reason: "trying", lines: lines(500) }, PEOPLE.other, req ? { req } : {}), { code: "VOUCHER_POSTED" });
+  }
   assert.equal((await row(v)).totalAmount, 300);
   assert.equal(await balance("Rent Expense"), before, "not reversed, not re-posted");
   assert.deepEqual(await legs(v), ["Cash in Hand:Cr300", "Rent Expense:Dr300"]);
 
-  // a narration is not a posted figure: Edit is enough
-  const narration = await svc.Financial.updateVoucher(v._id, { forceUpdate: true, narration: "clearer words" }, PEOPLE.other, { req: editOnly });
+  // a narration is not a posted figure, but it needs a reason - Edit alone is enough, deletePosted is not asked for
+  await assert.rejects(() => svc.Financial.updateVoucher(v._id, { forceUpdate: true, narration: "clearer words" }, PEOPLE.other, { req: editOnly }), { code: "REASON_REQUIRED" });
+  const narration = await svc.Financial.updateVoucher(v._id, { forceUpdate: true, narration: "clearer words", reason: "a typo" }, PEOPLE.other, { req: editOnly });
   assert.equal(narration.narration, "clearer words");
-
-  // with the right to take postings back, the new figures are posted
-  const reposter = reqOf("other", { grants: ["finance.edit", "finance.deletePosted"] });
-  const done = await svc.Financial.updateVoucher(v._id, { forceUpdate: true, lines: lines(500) }, PEOPLE.other, { req: reposter });
-  assert.equal(done.totalAmount, 500);
-  assert.deepEqual(await legs(v), ["Cash in Hand:Cr500", "Rent Expense:Dr500"]);
-  assert.equal(await balance("Rent Expense"), before + 200);
-  assert.deepEqual((await row(v)).approvals.map((a) => a.by), [String(PEOPLE.other)], "the new figures are the editor's approval, replacing the old one");
+  assert.equal(narration.totalAmount, 300, "still never the figure");
+  assert.deepEqual(await legs(v), ["Cash in Hand:Cr300", "Rent Expense:Dr300"]);
 });
 
-test("the new amount is judged like an approval: the editor's limit, the preparer, and an amount that needs two approvers", { skip }, async () => {
+test("neither a role's limit, the separate-approver rule nor the second-approver amount is even asked: a posted voucher's figures stay locked regardless", { skip }, async () => {
   const [rent, cash] = await Promise.all([acct("Rent Expense"), acct("Cash in Hand")]);
   const lines = (n) => [{ accountId: rent._id, debit: n }, { accountId: cash._id, credit: n }];
   const grants = ["finance.edit", "finance.deletePosted"];
   const v = await journal(300, {}, "boss");
   const before = await balance("Rent Expense");
-  const edit = (n, req) => svc.Financial.updateVoucher(v._id, { forceUpdate: true, lines: lines(n) }, PEOPLE.junior, { req });
+  const edit = (n, req) => svc.Financial.updateVoucher(v._id, { forceUpdate: true, reason: "trying", lines: lines(n) }, PEOPLE.junior, { req });
 
-  // the editor's limit
-  await assert.rejects(() => edit(700, reqOf("junior", { limit: 500, grants })), { code: "APPROVAL_LIMIT_EXCEEDED" });
-  assert.equal(await balance("Rent Expense"), before, "refused: the whole edit is rolled back");
+  // a limit that would refuse a repost, and one that would have allowed it: both refused the same way now
+  await assert.rejects(() => edit(700, reqOf("junior", { limit: 500, grants })), { code: "VOUCHER_POSTED" });
+  await assert.rejects(() => edit(400, reqOf("junior", { limit: 500, grants })), { code: "VOUCHER_POSTED" });
+  assert.equal(await balance("Rent Expense"), before, "neither attempt touched anything");
   assert.deepEqual(await legs(v), ["Cash in Hand:Cr300", "Rent Expense:Dr300"]);
-  assert.equal((await edit(400, reqOf("junior", { limit: 500, grants }))).totalAmount, 400);
-  assert.deepEqual(await legs(v), ["Cash in Hand:Cr400", "Rent Expense:Dr400"]);
 
-  // the person who prepared it does not correct their own figures when the organisation separates the two
   await policy({ separateApprover: true });
   try {
-    await assert.rejects(() => svc.Financial.updateVoucher(v._id, { forceUpdate: true, lines: lines(410) }, PEOPLE.boss, { req: reqOf("boss", { grants }) }), { code: "SELF_APPROVAL_NOT_ALLOWED" });
-    assert.equal((await svc.Financial.updateVoucher(v._id, { forceUpdate: true, lines: lines(410) }, PEOPLE.senior, { req: reqOf("senior", { grants }) })).totalAmount, 410);
+    // even the voucher's own preparer is refused the same way - there is no approval here to separate
+    await assert.rejects(() => svc.Financial.updateVoucher(v._id, { forceUpdate: true, reason: "trying", lines: lines(410) }, PEOPLE.boss, { req: reqOf("boss", { grants }) }), { code: "VOUCHER_POSTED" });
   } finally {
     await policy({ separateApprover: false });
   }
 
-  // an amount that needs two approvers cannot be reached by one person's edit - the old approvers do not count
-  await policy({ secondApprovalAbove: 1000 });
+  await policy({ secondApprovalAbove: 1 });
   try {
-    await assert.rejects(() => svc.Financial.updateVoucher(v._id, { forceUpdate: true, lines: lines(1500) }, PEOPLE.senior, { req: reqOf("senior", { grants }) }), { code: "SECOND_APPROVER_REQUIRED" });
-    assert.deepEqual(await legs(v), ["Cash in Hand:Cr410", "Rent Expense:Dr410"], "still as it was");
-    assert.equal((await svc.Financial.updateVoucher(v._id, { forceUpdate: true, lines: lines(900) }, PEOPLE.senior, { req: reqOf("senior", { grants }) })).totalAmount, 900);
+    await assert.rejects(() => svc.Financial.updateVoucher(v._id, { forceUpdate: true, reason: "trying", lines: lines(1500) }, PEOPLE.senior, { req: reqOf("senior", { grants }) }), { code: "VOUCHER_POSTED" });
   } finally {
     await policy({ secondApprovalAbove: null });
   }
+  assert.equal((await row(v)).totalAmount, 300, "untouched through all of it");
 });
 
-test("a job with nobody behind it edits an approved voucher as before (nobody to judge)", { skip }, async () => {
+test("a job with nobody behind it is refused too: there is no permission left that would let it through", { skip }, async () => {
   const [rent, cash] = await Promise.all([acct("Rent Expense"), acct("Cash in Hand")]);
   const v = await journal(120, {}, "boss");
-  const out = await svc.Financial.updateVoucher(v._id, { forceUpdate: true, lines: [{ accountId: rent._id, debit: 130 }, { accountId: cash._id, credit: 130 }] }, PEOPLE.boss);
-  assert.equal(out.totalAmount, 130);
-  assert.equal(out.status, "approved");
+  await assert.rejects(() => svc.Financial.updateVoucher(v._id, { forceUpdate: true, reason: "trying", lines: [{ accountId: rent._id, debit: 130 }, { accountId: cash._id, credit: 130 }] }, PEOPLE.boss), { code: "VOUCHER_POSTED" });
+  assert.equal((await row(v)).totalAmount, 120);
+  // a narration-only edit with no req behind it is not JUDGED (no reason to - nobody to approve
+  // anything), but it still needs a reason: the rule is about the voucher being posted, not about who asks.
+  const done = await svc.Financial.updateVoucher(v._id, { narration: "tidied", reason: "a job corrected it" }, PEOPLE.boss);
+  assert.equal(done.narration, "tidied");
+  assert.equal(done.totalAmount, 120);
 });
 
 test("everything in this file keeps the books balanced", { skip }, async () => {

@@ -284,6 +284,9 @@ class IfrsReportsService {
       pathNames,
       cash,
       cashIds: new Set(cash.map((a) => String(a._id))),
+      // "cash" or "bank", per account: a cash account in credit is a shortfall, a bank account in
+      // credit is an overdraft (F17, finance QA review 1 Nov 2026) - they used to share one label.
+      cashKind: new Map(cash.map((a) => [String(a._id), a.kind])),
       cashGroupIds,
       receivableGroups, payableGroups, inventoryGroups,
     };
@@ -313,6 +316,7 @@ class IfrsReportsService {
         accountId, accountCode: r.accountCode, accountName: r.accountName,
         groupId: r.groupId ? String(r.groupId) : null, groupName: r.groupName, category: r.category,
         path, nonCurrent: path.some((n) => NON_CURRENT_RX.test(n)), isCash: ctx.cashIds.has(accountId),
+        cashKind: ctx.cashKind?.get(accountId) || null, // "cash" | "bank" | null (F17)
         openingNet, periodNet, closingNet: r2(openingNet + periodNet),
         periodDebit: r2(r.periodDebit), periodCredit: r2(r.periodCredit),
       };
@@ -341,9 +345,12 @@ class IfrsReportsService {
       const amount = nat(r.category, r.closingNet);
       const item = { section, accountId: r.accountId, accountCode: r.accountCode, accountName: r.accountName, groupId: r.groupId, groupName: r.groupName, rank: presentationRank(r), amount };
       // An account on the wrong side of its own group is not a negative asset or liability (IAS 1.32). It is shown where it
-      // belongs: a bank in credit is an overdraft, a customer in credit owes them (a liability), a supplier in debit
-      // owes us (an asset). `ctx` is absent when only equity is wanted.
-      if (amount < 0 && section === "currentAssets" && r.isCash) {
+      // belongs: a bank in credit is an overdraft, a cash account in credit is a shortfall (F17, finance QA review 1 Nov
+      // 2026 - the two used to share "Bank overdrafts"), a customer in credit owes them (a liability), a supplier in
+      // debit owes us (an asset). `ctx` is absent when only equity is wanted.
+      if (amount < 0 && section === "currentAssets" && r.isCash && r.cashKind === "cash") {
+        items.push({ ...item, section: "currentLiabilities", groupId: "cash-shortfalls", groupName: "Cash shortfall", rank: 7, amount: r2(-amount) });
+      } else if (amount < 0 && section === "currentAssets" && r.isCash) {
         items.push({ ...item, section: "currentLiabilities", groupId: "bank-overdrafts", groupName: "Bank overdrafts", rank: 7, amount: r2(-amount) });
       } else if (amount < 0 && section === "currentAssets" && ctx?.receivableGroups.has(String(r.groupId))) {
         items.push({ ...item, section: "currentLiabilities", groupId: "customer-credit-balances", groupName: "Customer credit balances", rank: 3, amount: r2(-amount) });
@@ -744,7 +751,10 @@ class IfrsReportsService {
       inventoryAccounts: inGroup(ctx.inventoryGroups).map((r) => ({ accountId: r.accountId, accountCode: r.accountCode, accountName: r.accountName, amount: asset(r) })),
       cashRows,
       cashAssets: owing(cashRows, (c) => c.net),
-      bankOverdrafts: inCredit(cashRows, (c) => c.net),
+      // A cash account in credit is a shortfall, a bank account in credit is an overdraft (F17,
+      // finance QA review 1 Nov 2026) - they used to be added together under "Bank overdrafts".
+      bankOverdrafts: inCredit(cashRows.filter((c) => c.kind === "bank"), (c) => c.net),
+      cashShortfalls: inCredit(cashRows.filter((c) => c.kind === "cash"), (c) => c.net),
       tradePayables: owing(payables.filter(isVendor), liability),
       otherPayables: owing(payables.filter((r) => !isVendor(r)), liability),
       customerCredits: inCredit(receivables, asset),
@@ -808,6 +818,7 @@ class IfrsReportsService {
     // liability (IAS 1.32), so the note reconciles the two (IAS 7.45)
     const cashAssets = p("cashAssets");
     const bankOverdrafts = p("bankOverdrafts");
+    const cashShortfalls = p("cashShortfalls");
 
     const inventoryAccounts = joinAccounts(cur.inventoryAccounts, prev?.inventoryAccounts || [], hasPrevious);
     const net = (f) => (f.vat ? r2(f.vat.output + (f.vat.reverseCharge || 0) - f.vat.input) : 0);
@@ -852,6 +863,7 @@ class IfrsReportsService {
           presentedAs: [
             { key: "cashAssets", label: "Cash and bank balances (current assets)", ...cashAssets },
             { key: "bankOverdrafts", label: "Bank overdrafts (current liabilities)", ...bankOverdrafts, negate: true, optional: true },
+            { key: "cashShortfalls", label: "Cash shortfall (current liabilities)", ...cashShortfalls, negate: true, optional: true },
           ],
         },
         tradePayables: {

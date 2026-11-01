@@ -54,6 +54,7 @@ const ACCOUNTS = [
   ["Opening Balance Equity", "Equity", "opening-balance-equity"],
 
   ["Sales Revenue", "Sales Income", "sales-revenue"],
+  ["Sales Returns", "Sales Income", "sales-returns"],
   ["Freight Recovered", "Other Income", "freight-sales"],
   ["Purchase Discounts Received", "Other Income", "discount-purchase"],
   ["Other Income", "Other Income", null],

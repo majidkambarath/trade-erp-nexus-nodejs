@@ -17,6 +17,7 @@ router.get("/returns/:id", requirePermission("reports.financial"), c.get);
 router.post("/returns", requirePermission("reports.vat"), c.createDraft);
 router.post("/returns/:id/finalize", requirePermission("reports.vat"), c.finalize);
 router.post("/returns/:id/file", requirePermission("reports.vat"), c.file);
+router.post("/returns/:id/reopen", requirePermission("reports.vat"), c.reopen);
 router.delete("/returns/:id", requirePermission("reports.vat"), c.remove);
 
 module.exports = router;

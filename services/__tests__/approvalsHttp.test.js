@@ -112,7 +112,7 @@ test("built-in roles have no limit; a custom one shows what was saved; the statu
   assert.equal(roles.find((r) => r.key === "senior").approvalLimit, null);
   const status = (await api("junior", "GET", "/organisation/status")).body;
   assert.equal(status.me.role.approvalLimit, 500);
-  assert.deepEqual(status.policy.approvals, { separateApprover: false, secondApprovalAbove: null }, "nothing is set by default");
+  assert.deepEqual(status.policy.approvals, { separateApprover: false, secondApprovalAbove: null, notesNeedApproval: false }, "nothing is set by default");
 });
 
 test("a limit is an amount of 0 or more, empty for none, and can be changed", { skip }, async () => {
