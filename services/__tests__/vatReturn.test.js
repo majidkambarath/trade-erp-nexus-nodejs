@@ -28,6 +28,7 @@ test.before(async () => {
     Tx: require("../orderPurchase/transactionService"),
     Config: require("../financial/accountConfigService"),
     Vat: require("../reports/vatReturnService"),
+    FY: require("../core/fiscalYearService"),
     ...require("../../models/modules/financial/financialModels"),
     TaxCode: require("../../models/modules/financial/taxCodeModel"),
     Stock: require("../../models/modules/stockModel"),
@@ -219,9 +220,49 @@ test("a return is saved as a draft, finalised only when every line has a treatme
   assert.equal(filed.status, "FILED");
   assert.equal(filed.filingReference, "FTA-123456");
 
-  // the saved boxes are a record: a later document does not change them
-  await svc.Tx.createTransaction({ type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", items: [{ itemId: stock._id, description: "Rice", qty: 1, price: 20, rate: 20, vatPercent: 5 }] }, "t")
-    .then((t) => svc.Tx.processTransaction(t._id, "approve", "t"));
-  assert.equal((await svc.Vat.get(draft._id)).totals.outputVat, 3);
+  // F02: a filed return locks its own period - nothing may be dated inside it at all any more, let
+  // alone change the saved figures.
+  await assert.rejects(
+    () => svc.Tx.createTransaction({ type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", items: [{ itemId: stock._id, description: "Rice", qty: 1, price: 20, rate: 20, vatPercent: 5 }] }, "t")
+      .then((t) => svc.Tx.processTransaction(t._id, "approve", "t")),
+    { code: "PERIOD_CLOSED" }
+  );
+  assert.equal((await svc.Vat.get(draft._id)).totals.outputVat, 3, "the saved boxes are a record: unchanged");
   assert.equal((await svc.Vat.list()).length, 1);
+
+  // a filed return cannot be reopened; a finalised one can, and the period posts again
+  await assert.rejects(() => svc.Vat.reopen(draft._id, admin), { code: "ALREADY_FILED" });
+});
+
+test("reopening a finalised return gives its period back; a filed one stays locked for good", { skip }, async () => {
+  const from = orgDay(10);
+  const to = orgDay(12);
+  const draft = await svc.Vat.createDraft({ from, to }, admin);
+  const fin = await svc.Vat.finalize(draft._id, admin, { allowUnclassified: true });
+  assert.equal(fin.status, "FINALIZED");
+
+  await assert.rejects(
+    () => svc.Tx.createTransaction({ type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", date: orgDay(11), items: [{ itemId: stock._id, description: "Rice", qty: 1, price: 20, rate: 20, vatPercent: 5 }] }, "t"),
+    { code: "PERIOD_CLOSED" }
+  );
+
+  const reopened = await svc.Vat.reopen(draft._id, admin);
+  assert.equal(reopened.status, "DRAFT");
+  // posts now the period is open again
+  const t2 = await svc.Tx.createTransaction({ type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", date: orgDay(11), items: [{ itemId: stock._id, description: "Rice", qty: 1, price: 20, rate: 20, vatPercent: 5 }] }, "t");
+  await svc.Tx.processTransaction(t2._id, "approve", "t");
+
+  await assert.rejects(() => svc.Vat.reopen(draft._id, admin), { code: "NOT_FINALIZED" }, "already a draft");
+});
+
+test("with no fiscal year at all, a filed return's period still locks (checked before the fiscal-year bootstrap rule)", { skip }, async () => {
+  // a period far outside any fiscal year this test file has made
+  const from = "2099-01-01";
+  const to = "2099-01-31";
+  const draft = await svc.Vat.createDraft({ from, to }, admin);
+  await svc.Vat.finalize(draft._id, admin, { allowUnclassified: true });
+  await assert.rejects(
+    () => svc.FY.assertPostingAllowed("2099-01-15"),
+    { code: "PERIOD_CLOSED" }
+  );
 });

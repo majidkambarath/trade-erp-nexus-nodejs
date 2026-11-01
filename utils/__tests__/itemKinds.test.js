@@ -109,7 +109,10 @@ test("a mixed sale: goods earn into sales-revenue and carry their cost, the serv
 test("a sales return of a service takes back the same revenue and VAT on the same side, with no stock leg", () => {
   const e = post("sales_return", [line({ itemId: "design" }), line({ itemId: "consult" })], 0);
   assert.equal(side(e, "INC-DESIGN", "debit"), 100);
-  assert.equal(side(e, "sales-revenue", "debit"), 100);
+  // the return's gross leg is Sales Returns (F08), not Sales Revenue itself; a service with no
+  // income account of its own still shares that leg, whichever account it is.
+  assert.equal(side(e, "sales-returns", "debit"), 100);
+  assert.equal(side(e, "sales-revenue", "debit"), 0, "never debited directly");
   assert.equal(side(e, "vat-sales", "debit"), 10);
   assert.equal(side(e, "PARTY", "credit"), 210);
   assert.equal(side(e, "inventory-asset", "debit"), 0);

@@ -48,8 +48,6 @@ const HINTS = [
   [/\/categories\/categories/, ["Category"]],
   [/\/staff\/staff/, ["Staff"]],
   [/\/vouchers\/vouchers/, ["Voucher"]],
-  [/\/account\/account-vouchers/, ["Voucher"]],
-  [/\/account-v2\/Transactor/, ["Transactor", "LedgerAccount"]],
   [/\/expense\/categories/, ["ExpenseCategory"]],
   [/\/ledger\/ledger\/vendor/, ["Vendor"]],
   [/\/ledger\/ledger\/customer/, ["Customer"]],

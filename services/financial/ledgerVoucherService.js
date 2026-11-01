@@ -241,11 +241,12 @@ class LedgerVoucherService {
       if (total > invoice.outstandingAmount + EPS) {
         throw new AppError(`This ${label.toLowerCase()} (${total.toFixed(2)}) is more than the ${round2(invoice.outstandingAmount).toFixed(2)} still open on ${invoice.transactionNo}`, 409, "NOTE_EXCEEDS_INVOICE");
       }
+      // Settling the invoice itself waits until the note actually posts
+      // (FinancialService.applyInvoiceAndPartyEffects): a note held for approval must change
+      // nothing on the invoice while it waits.
       const before = round2(invoice.outstandingAmount);
-      invoice.paidAmount = round2((invoice.paidAmount || 0) + total);
-      invoice.outstandingAmount = round2(Math.max(0, before - total));
-      await invoice.save({ session });
-      linkedInvoices = [{ invoiceId: invoice._id, allocatedAmount: total, previousBalance: before, newBalance: invoice.outstandingAmount }];
+      const after = round2(Math.max(0, before - total));
+      linkedInvoices = [{ invoiceId: invoice._id, allocatedAmount: total, previousBalance: before, newBalance: after }];
       reference = { referenceInvoiceId: invoice._id, referenceInvoiceNo: invoice.transactionNo };
     }
 

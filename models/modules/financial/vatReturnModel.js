@@ -31,6 +31,10 @@ const vatReturnSchema = new mongoose.Schema(
     filedBy: String,
     filingReference: { type: String, trim: true, default: "" }, // the FTA's reference for the filing
     createdBy: String,
+    // A FINALIZED return taken back to DRAFT (F02, finance QA review 1 Nov 2026), so its period can be
+    // posted into again. A FILED return cannot be reopened from here.
+    reopenedAt: Date,
+    reopenedBy: String,
   },
   { timestamps: true }
 );

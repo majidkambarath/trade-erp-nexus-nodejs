@@ -1,4 +1,5 @@
 const FiscalYear = require("../../models/modules/financial/fiscalYearModel");
+const VATReturn = require("../../models/modules/financial/vatReturnModel");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 const tz = require("../../utils/tz");
@@ -65,14 +66,30 @@ class FiscalYearService {
   // so undoing something dated in a locked month is refused, while a payment dated today settling an old invoice is not.
   static async assertPostingAllowed(date, { session, companyId } = {}) {
     const company = companyId || getTenant().companyId;
+    // named by the organisation's calendar day (the UTC date is the day before for the first hours of a day in Dubai)
+    const day = tz.dayOf(new Date(date), zoneOf(company)) || String(date);
+
+    // A finalised or filed VAT return locks its own period (F02, finance QA review 1 Nov 2026): once
+    // a return has gone to the tax authority, nothing may still be dated inside it, or the books
+    // drift from what was filed with no warning. Checked first, so it holds even before any fiscal
+    // year is set up (the VAT period and the fiscal year are independent locks).
+    const vq = VATReturn.findOne({ companyId: company, status: { $in: ["FINALIZED", "FILED"] }, periodFrom: { $lte: day }, periodTo: { $gte: day } }).select("returnNo status").lean();
+    const vr = await (session ? vq.session(session) : vq);
+    if (vr) {
+      throw new AppError(
+        `VAT return ${vr.returnNo} is ${vr.status === "FILED" ? "filed" : "finalised"} for this period: date the correction in an open period, or reopen the return first.`,
+        422,
+        "PERIOD_CLOSED",
+        { returnNo: vr.returnNo, status: vr.status }
+      );
+    }
+
     const anyQ = FiscalYear.exists({ companyId: company });
     const any = await (session ? anyQ.session(session) : anyQ);
     if (!any) return null;
 
     const fy = await this.getForDate(date, { session, companyId: company });
     if (!fy) {
-      // named by the organisation's calendar day (the UTC date is the day before for the first hours of a day in Dubai)
-      const day = tz.dayOf(new Date(date), zoneOf(company)) || String(date);
       throw new AppError(`No fiscal year covers ${day}`, 422, "NO_FISCAL_YEAR");
     }
     if (fy.status === "closed") {

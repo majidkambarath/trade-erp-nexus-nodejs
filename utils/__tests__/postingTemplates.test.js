@@ -64,7 +64,11 @@ test("purchase: stock at VAT-exclusive cost, input VAT recoverable, vendor credi
 test("returns mirror their originals exactly", () => {
   const sale = buildEntries("sales_order", figuresFor(tx("sales_order"), 400), resolve);
   const ret = buildEntries("sales_return", figuresFor(tx("sales_return"), 400), resolve);
-  for (const acc of ["PARTY", "sales-revenue", "vat-sales", "cogs", "inventory-asset"]) {
+  // the return debits Sales Returns (a contra-revenue account, F08), not Sales Revenue itself: the
+  // amount mirrors the sale's revenue credit exactly, but it is a deduction, not an erasure.
+  assert.equal(side(ret, "sales-returns", "debit"), side(sale, "sales-revenue", "credit"), "sales-returns mirrors sales-revenue");
+  assert.equal(side(ret, "sales-revenue", "debit"), 0, "never debited directly");
+  for (const acc of ["PARTY", "vat-sales", "cogs", "inventory-asset"]) {
     assert.equal(side(ret, acc, "debit"), side(sale, acc, "credit"), acc);
     assert.equal(side(ret, acc, "credit"), side(sale, acc, "debit"), acc);
   }

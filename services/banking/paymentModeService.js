@@ -88,7 +88,12 @@ class PaymentModeService {
 
   // Validates the mode's details and returns the money-side ledger legs plus what to store on
   // the voucher. The caller adds the party side. Receipts debit these legs, payments credit them.
-  static async resolve({ direction, mode, details = {}, amount, date, description, session, req }) {
+  // `requireReference`: a receipt or payment voucher (money actually changing hands, as opposed to an
+  // expense merely paid by one of these means) needs a slip or reference number for BANK mode too, not
+  // transfer alone (F03, finance QA review 1 Nov 2026 - a bank-mode receipt was saved with none at all,
+  // and there was nothing on the deposit slip to tie it to later). Passed by processReceiptVoucher /
+  // processPaymentVoucher only; an expense voucher stays as it was (the slip is optional there).
+  static async resolve({ direction, mode, details = {}, amount, date, description, session, req, requireReference = false }) {
     mode = normalizeMode(mode);
     // Cheques and cards belong to the banking feature; cash and a transfer to a bank account do not need it.
     if (mode === "cheque" || mode === "card") await UsageService.assertFeature("banking");
@@ -113,11 +118,14 @@ class PaymentModeService {
       // kept, not dropped here the way bank/transfer's own reference is not.
       Object.assign(stored, { accountId: account._id, accountName: account.accountName, reference: reference || undefined });
     } else if (mode === "bank" || mode === "transfer") {
-      if (mode === "transfer") {
-        if (!reference) throw new AppError("Enter the transfer reference", 400, "REFERENCE_REQUIRED");
-        if (referenceDate) asDate(referenceDate, "transfer date");
-      }
+      if (mode === "transfer" && referenceDate) asDate(referenceDate, "transfer date");
+      // which account comes first: an ambiguous choice of several banks is the more fundamental
+      // problem, and is what the earlier form of this check always refused first.
       const account = await this.pickAccount("bank-account-group", details.accountId, { session, req, what: "bank" });
+      if (mode === "transfer" && !reference) throw new AppError("Enter the transfer reference", 400, "REFERENCE_REQUIRED");
+      if (mode === "bank" && requireReference && !reference) {
+        throw new AppError("Enter the deposit slip or reference number", 400, "REFERENCE_REQUIRED");
+      }
       legs = [side(account, amount)];
       Object.assign(stored, {
         accountId: account._id, accountName: account.accountName, reference: reference || undefined,

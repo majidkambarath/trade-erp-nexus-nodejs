@@ -413,7 +413,10 @@ test("ignoring a line needs a reason, and an ignored line can be put back", { sk
 // ----------------------------------------------------------------------------- the locks
 test("a matched voucher cannot be deleted, edited or its cheque bounced until it is unmatched", { skip }, async () => {
   await assert.rejects(() => svc.Financial.deleteVoucher(rv._id, admin), { code: "BANK_MATCHED" });
-  await assert.rejects(() => svc.Financial.updateVoucher(rv._id, { totalAmount: 1051, forceUpdate: true }, admin), { code: "BANK_MATCHED" });
+  // F04 (finance QA review, 1 Nov 2026): a posted voucher is locked outright now, matched or not -
+  // VOUCHER_POSTED refuses the figure change before the match is even consulted, which is the
+  // stricter answer either way (BANK_MATCHED stays the one that matters for Delete, above).
+  await assert.rejects(() => svc.Financial.updateVoucher(rv._id, { totalAmount: 1051, forceUpdate: true, reason: "trying" }, admin), { code: "VOUCHER_POSTED" });
   const cheque = await svc.Cheque.findOne({ chequeNo: "000777" });
   await assert.rejects(() => svc.Cheques.bounce(cheque._id, { reason: "Returned unpaid" }, {}, admin), { code: "BANK_MATCHED" });
   assert.equal((await svc.Cheque.findById(cheque._id)).status, "cleared", "nothing changed");

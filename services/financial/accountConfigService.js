@@ -183,7 +183,9 @@ class AccountConfigService {
       creditControl: { mode: "off", overdueBlockDays: 0, ...(s.creditControl || {}) },
       returnWindowDays: s.returnWindowDays || 0,
       requireReturnLink: Boolean(s.requireReturnLink),
-      approvals: require("../../utils/approvalRules").normalisePolicy(s.approvals),
+      // normalisePolicy (mirrored in zarvia-platform, with no concept of a voucher type) only
+      // knows separateApprover / secondApprovalAbove; notesNeedApproval is read alongside it here.
+      approvals: { ...require("../../utils/approvalRules").normalisePolicy(s.approvals), notesNeedApproval: Boolean(s.approvals?.notesNeedApproval) },
       fiscalYearStartMonth: s.fiscalYearStartMonth,
       amountDecimal: s.amountDecimal,
       quantityDecimal: s.quantityDecimal,
@@ -215,7 +217,7 @@ class AccountConfigService {
     }
     if (data.requireReturnLink !== undefined) set.requireReturnLink = Boolean(data.requireReturnLink);
     if (data.approvals) {
-      const { separateApprover, secondApprovalAbove } = data.approvals;
+      const { separateApprover, secondApprovalAbove, notesNeedApproval } = data.approvals;
       if (separateApprover !== undefined) set["approvals.separateApprover"] = separateApprover === true || separateApprover === "true";
       if (secondApprovalAbove !== undefined) {
         if (secondApprovalAbove === null || secondApprovalAbove === "") set["approvals.secondApprovalAbove"] = null;
@@ -225,6 +227,7 @@ class AccountConfigService {
           set["approvals.secondApprovalAbove"] = Math.round(n * 100) / 100;
         }
       }
+      if (notesNeedApproval !== undefined) set["approvals.notesNeedApproval"] = notesNeedApproval === true || notesNeedApproval === "true";
     }
     if (data.fiscalYearStartMonth !== undefined) {
       const n = Number(data.fiscalYearStartMonth);

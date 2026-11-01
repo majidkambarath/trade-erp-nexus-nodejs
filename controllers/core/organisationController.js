@@ -17,6 +17,10 @@ exports.status = catchAsync(async (req, res) => {
   const security = await require("../../services/core/securityPolicyService").policy();
   const me = { id: req.admin.id, name: req.admin.name, email: req.admin.email, role: req.admin.role, grants: req.admin.grants, mustChangePassword: req.admin.mustChangePassword, twoFactorEnabled: req.admin.twoFactorEnabled, twoFactorRequired: security.requireTwoFactor && !req.admin.twoFactorEnabled, homeBranch: req.admin.homeBranch, branchRoles };
   // The organisation's rules about who may approve, so a screen can offer Confirm only to someone who could use it
-  const policy = { approvals: await require("../../services/core/approvalPolicyService").policy(), security };
+  const ApprovalPolicyService = require("../../services/core/approvalPolicyService");
+  const policy = {
+    approvals: { ...(await ApprovalPolicyService.policy()), notesNeedApproval: await ApprovalPolicyService.notesNeedApproval() },
+    security,
+  };
   res.status(200).json({ success: true, data: { ...status, me, policy } });
 });
