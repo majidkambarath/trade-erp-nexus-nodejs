@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.1.0.0 — 1 November 2026
+
+A QA pass against the live deploy (Al Manara Auto Garage LLC, 30 October 2026) found 18 defects in
+Finance, verdict "not ready to file VAT": a line with no tax code posted at 0% silently, a posted
+voucher could be edited in place, a finalised VAT return did not lock its period, and a held
+receipt or payment moved the invoice and the party balance before anyone approved it. Needs
+frontend 2.1.0.0. Backend 2.1.0.0.
+
+### Fixed
+
+- **A posted voucher is now locked.** Only its narration, notes and attachments may change, and only
+  with a required reason; the `forceUpdate` repost-in-place path for an approved voucher is gone.
+  Anything that would change what it posted - amount, accounts, party, date, tax, allocations - is
+  refused with `VOUCHER_POSTED`: delete it, which reverses its postings, and enter it again.
+- **A held receipt, payment, credit note or debit note changes nothing until it is approved.**
+  Saving one that will be held no longer allocates its invoices or moves the party's on-account
+  balance at once; that happens on approval (`effectsDeferred`), re-checked against each invoice's
+  current state (`INVOICE_CHANGED` if it has since changed). Credit and debit notes can now be made
+  to wait for approval too, as an organisation setting, off by default.
+- **A finalised or filed VAT return locks its own period against new postings**, checked before the
+  "no fiscal year defined" bootstrap rule, so it holds even with none. A finalised return can be
+  reopened; a filed one cannot.
+- **Sales returns post to their own account** instead of debiting sales revenue straight back, so a
+  return no longer shows as negative revenue.
+- A tax code now shows which VAT 201 box it lands in, for a sale and for a purchase.
+- A bank-mode receipt or payment needs a slip or reference; typing a minus into an amount field is
+  refused with a message instead of being silently dropped.
+- The legacy `/api/v1/account`, `/api/v1/account-v2` and `/api/v1/reports` endpoints, unused by the
+  frontend, are unmounted and their dead code removed.
+- Invoice allocation inside a voucher's transaction now runs sequentially rather than with
+  `Promise.all`; a duplicate invoice id in one request is refused rather than raced against itself.
+- A cash account in credit on the IFRS statement of financial position now reads "Cash shortfall"
+  rather than "Bank overdrafts"; the chart of accounts gained a duplicate-name check on update.
+
 ## 2.0.0.1 — 30 October 2026
 
 A QA pass of the garage module (Garage-Test-Report.xlsx, run against the live Al Manara Auto Garage LLC
