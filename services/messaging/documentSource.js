@@ -38,6 +38,11 @@ async function companyFor(req) {
     companyNameArabic: c.companyNameArabic,
     addressLine1: c.addressLine1,
     addressLine2: c.addressLine2,
+    // The rest of the address. This mapping and the browser's own `useCompanyProfile` must carry the
+    // same fields or the copy a customer is emailed prints a different letterhead from the one on screen.
+    city: c.city,
+    state: c.state,
+    country: c.country,
     phoneNumber: c.phoneNumber,
     email: c.emailAddress,
     website: c.website,

@@ -170,6 +170,7 @@ class TransactionService {
         // Sales invoice specific fields
         docno,
         lpono,
+        serialNo,
         discount,
       } = data;
 
@@ -257,6 +258,10 @@ class TransactionService {
         // Sales invoice specific fields
         docno: docno || null,
         lpono: lpono || null,
+        // The organisation's own reference, typed on the form or by the garage when it raises the
+        // invoice. Trimmed and capped by the schema; blank is stored as null so the printed sheet's
+        // `rowsWithValue` drops the row rather than printing an empty one.
+        serialNo: String(serialNo || "").trim() || null,
         discount: Number(discount ?? 0),
         // Where a sales order came from: the quotation it converted, or the delivery notes it invoices.
         // linkedRef is kept for a sales order only - the sales-return form sends the same key for the
@@ -782,7 +787,10 @@ const logAmount = balanceEffect;
       // this read slow.
       const FIELDS =
         "transactionNo type partyId partyType partyTypeRef vendorReference date deliveryDate returnDate expectedDispatch status totalAmount " +
-        "docno lpono discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
+        // `serialNo` is here for the same reason `pricing` and `charges` are: the LISTS PRINT. Download, the
+        // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
+        // left out here is simply missing from the paper while the screen beside it shows it.
+        "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
         "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals jobCardRef";
       const [docs, total] = await Promise.all([
         Transaction.find(query).select(FIELDS).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),

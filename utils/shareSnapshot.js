@@ -25,11 +25,15 @@ const pick = (src, keys) => {
 const LINE_KEYS = ["itemCode", "description", "qty", "rate", "vatPercent", "vatAmount", "taxKind", "lineTotal"];
 const CHARGE_KEYS = ["code", "description", "amount", "vatPercent", "vatAmount"];
 const PRICING_KEYS = ["gross", "lineDiscount", "net", "lineVat", "chargesNet", "chargesVat", "headerDiscount", "roundOff", "grandTotal"];
-const DOCUMENT_KEYS = ["transactionNo", "invoiceNumber", "status", "date", "deliveryDate", "dueDate", "lpono", "docno", "discount", "totalAmount"];
+const DOCUMENT_KEYS = ["transactionNo", "invoiceNumber", "status", "date", "deliveryDate", "dueDate", "lpono", "docno", "serialNo", "discount", "totalAmount"];
+// The job card an invoice was raised from, picked down to what the customer's own copy prints: the job
+// number and the vehicle. NEVER jobCardId - that is a database id and has no business on a public page.
+const JOB_CARD_KEYS = ["jobNo", "plateNumber", "chassisNo"];
 const PARTY_KEYS = ["customerName", "customerId", "billingAddress", "phone", "email", "trnNumber", "paymentTerms"];
 // The company block is the shape the invoice screen already prints from (useCompanyProfile).
 const COMPANY_KEYS = [
-  "companyName", "companyNameArabic", "addressLine1", "addressLine2", "phoneNumber", "email", "website",
+  "companyName", "companyNameArabic", "addressLine1", "addressLine2", "city", "state", "country",
+  "phoneNumber", "email", "website",
   "vatNumber", "logo", "bankName", "accountNumber", "accountName", "ibanNumber", "swiftCode", "branch",
 ];
 
@@ -44,12 +48,25 @@ function invoiceSnapshot({ transaction, customer, company, currency = orgLocale.
     charges: (tx.charges || []).map((x) => pick(toPlain(x), CHARGE_KEYS)),
     pricing: pick(toPlain(tx.pricing), PRICING_KEYS),
   };
+  // The job card, when this invoice came from one, so the customer's copy names the car exactly as the
+  // printed sheet does. Picked, never spread: the id stays behind.
+  if (tx.jobCardRef) {
+    const job = pick(toPlain(tx.jobCardRef), JOB_CARD_KEYS);
+    if (Object.keys(job).length) document.jobCardRef = job;
+  }
   const party = { ...pick(c, PARTY_KEYS) };
   // Only the registration number and the registration status of a customer's VAT block, never the block itself: the invoice
   // prints "TRN ..." and "VAT status Registered" under the customer's name, and the status is the customer's own fact.
   const vat = c.vat || {};
   const status = typeof vat.status === "string" && vat.status ? vat.status : null;
   if (vat.trn || status) party.vat = { ...(status ? { status } : {}), ...(vat.trn ? { trn: vat.trn } : {}) };
+  // Where the customer is, for the locality line under their address. The two fields a tax invoice needs
+  // and nothing else from the e-invoice block - above all never `participantId`, which is a Peppol routing
+  // address and is no part of a printed document.
+  const ei = c.eInvoice || {};
+  if (ei.city || ei.countryCode) {
+    party.eInvoice = { ...(ei.city ? { city: ei.city } : {}), ...(ei.countryCode ? { countryCode: ei.countryCode } : {}) };
+  }
   return {
     kind: "tax_invoice",
     document,
@@ -62,11 +79,13 @@ function invoiceSnapshot({ transaction, customer, company, currency = orgLocale.
 // Every field path the invoice snapshot may ever contain. Exported so the test can hold the output
 // to exactly this list.
 const INVOICE_ALLOWED = {
-  document: [...DOCUMENT_KEYS, "items", "charges", "pricing"],
+  document: [...DOCUMENT_KEYS, "items", "charges", "pricing", "jobCardRef"],
+  jobCardRef: JOB_CARD_KEYS,
   line: LINE_KEYS,
   charge: CHARGE_KEYS,
   pricing: PRICING_KEYS,
-  party: [...PARTY_KEYS, "vat"],
+  party: [...PARTY_KEYS, "vat", "eInvoice"],
+  eInvoice: ["city", "countryCode"],
   company: COMPANY_KEYS,
   top: ["kind", "document", "party", "company", "currency"],
 };

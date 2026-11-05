@@ -101,7 +101,7 @@ test("setup: a vendor, a customer, three parts stocked, and three labour operati
 
 let vehicle;
 test("the vehicle: created once, found again by plate however it is typed, a duplicate refused", { skip }, async () => {
-  vehicle = await svc.Vehicle.create({ plateNumber: "A 12345", make: "Toyota", model: "Hilux", year: 2019, colour: "White", customerId: customer._id }, "tester");
+  vehicle = await svc.Vehicle.create({ plateNumber: "A 12345", chassisNo: "JTEBU29J100123456", make: "Toyota", model: "Hilux", year: 2019, colour: "White", customerId: customer._id }, "tester");
   assert.equal(vehicle.plateKey, "A12345");
 
   const found = await svc.Vehicle.findByPlateOrChassis({ plateNumber: "a-12345" });
@@ -233,7 +233,7 @@ test("tasks run and settle; the card reaches READY the moment every task is done
 
 let invoice;
 test("the invoice bills exactly the approved lines: four original plus the supplementary one, never the declined AC job", { skip }, async () => {
-  const result = await svc.JobCard.createInvoice({ jobCardId: card._id, billTo: "customer" }, "tester");
+  const result = await svc.JobCard.createInvoice({ jobCardId: card._id, billTo: "customer", serialNo: "GRG-2026-114" }, "tester");
   invoice = result.invoice;
   card = await svc.JobCardModel.findById(card._id).lean();
   assert.equal(invoice.type, "sales_order");
@@ -242,6 +242,18 @@ test("the invoice bills exactly the approved lines: four original plus the suppl
   assert.equal(card.invoiceStatus, "DRAFT");
   assert.equal(card.invoices.length, 1);
   assert.equal(card.invoices[0].billTo, "customer");
+});
+
+// What a workshop's invoice has to say beside the money: which job it was, which car, and the
+// garage's own reference. The plate and the chassis come off the job card's vehicle snapshot, so
+// neither costs a Vehicle read; the serial is typed when the invoice is raised, which is the only
+// moment it can be - an approved invoice can never be edited.
+test("the invoice names the job, the car by plate and chassis, and the serial that was typed", { skip }, async () => {
+  assert.equal(invoice.serialNo, "GRG-2026-114");
+  assert.equal(invoice.jobCardRef.jobNo, card.jobNo);
+  assert.equal(invoice.jobCardRef.plateNumber, card.vehicle.plateNumber);
+  assert.equal(invoice.jobCardRef.chassisNo, card.vehicle.chassisNo);
+  assert.ok(invoice.jobCardRef.chassisNo, "the fixture's vehicle has a chassis, so the invoice must carry it");
 });
 
 test("approving the invoice: parts move at the right cost, labour moves none, revenue lands in the right account, the books balance", { skip }, async () => {

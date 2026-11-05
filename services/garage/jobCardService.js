@@ -602,7 +602,7 @@ class JobCardService {
   // One draft invoice from the approved lines, to one bill-to. A split job (insurer pays the repair, the
   // customer pays the excess and the depreciation) calls this twice with a different lineIds/billTo/partyId -
   // see services/garage/insuranceClaimService.js splitBill, which decides which lines go where.
-  static createInvoice = withTransactionSession(async ({ jobCardId, billTo = "customer", partyId, lineIds, date }, createdBy, session) => {
+  static createInvoice = withTransactionSession(async ({ jobCardId, billTo = "customer", partyId, lineIds, date, serialNo }, createdBy, session) => {
     const card = await this.#load(jobCardId, session);
     if (!["IN_PROGRESS", "READY", "DELIVERED"].includes(card.status)) {
       throw fail("The estimate has not been approved yet, so there is nothing to invoice", 409, "JOB_NOT_READY_TO_INVOICE");
@@ -627,9 +627,20 @@ class JobCardService {
         type: "sales_order", partyId: resolvedPartyId, partyType: "Customer", partyTypeRef: "Customer",
         date: date || card.receivedAt || new Date(), items,
         notes: `Job card ${card.jobNo || "(draft)"}${billTo === "insurer" ? " - insurer's share" : ""}`, status: "DRAFT",
-        // A structured link, not only the free-text note above: the printed tax invoice reads this to
-        // show the job number and the plate, which a garage invoice needs and the note cannot answer for.
-        jobCardRef: { jobCardId: card._id, jobNo: card.jobNo || undefined, plateNumber: card.vehicle?.plateNumber || undefined },
+        // The workshop's own reference for this bill, typed when the invoice is raised. An invoice can
+        // never be edited once approved, and the garage may approve it in the same breath, so this is
+        // the only moment it can be captured.
+        serialNo: serialNo || undefined,
+        // A structured link, not only the free-text note above: the printed tax invoice reads this to show
+        // the job number and the vehicle, which a garage invoice needs and the note cannot answer for.
+        // Plate and chassis both come off the job card's own vehicle snapshot (jobCardModel.js), so neither
+        // costs a Vehicle read; a car on file with only one of the two simply carries that one.
+        jobCardRef: {
+          jobCardId: card._id,
+          jobNo: card.jobNo || undefined,
+          plateNumber: card.vehicle?.plateNumber || undefined,
+          chassisNo: card.vehicle?.chassisNo || undefined,
+        },
       },
       createdBy,
       session
