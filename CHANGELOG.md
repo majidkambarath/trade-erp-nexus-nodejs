@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.2.0.0 — 5 November 2026
+
+An invoice now carries the identifiers and references it should: a garage invoice names the car by
+its chassis as well as its plate, any invoice can carry a reference number somebody types, and the
+letterhead finally prints the city and country that this product's own e-invoice validator has
+always required. Needs frontend 2.2.0.0. Backend 2.2.0.0.
+
+### Added
+
+- **`Transaction.serialNo`** - a reference number a person types, printed beside the automatic
+  document number rather than replacing it. Deliberately a NEW field, not a relabelling of `docno`:
+  that one already holds the COUNTERPARTY's number on live records (an opening sales invoice carries
+  the customer's own `INV-2024-1187`, an opening purchase the supplier's `GGI/24/0918`), so renaming
+  it would have mislabelled every one of them. It stays editable on a draft like `docno` / `lpono` /
+  `vendorReference`, and it is in the list projection because the lists PRINT (see "a list row
+  carries `pricing` and `charges`" for the same trap).
+- **`Transaction.jobCardRef.chassisNo`**, stamped by `JobCardService.createInvoice` from the job
+  card's own vehicle snapshot, so a garage invoice prints the plate and the chassis (VIN). No
+  backfill and none needed: `jobCardRef` itself was only added on 30 October, so earlier invoices
+  carry none at all and print neither row.
+- `city`, `state` and `country` are carried by `documentSource.companyFor`, so the copy a customer
+  is emailed prints the same letterhead as the one on screen - that mapping and the browser's
+  `useCompanyProfile` must always carry the same fields.
+
+### Fixed
+
+- **`utils/shareSnapshot.js` picks the two new groups rather than spreading them.** `jobCardRef`
+  carries the job card's own `_id` and `party.eInvoice` carries far more than the city, so both are
+  built field by field (`JOB_CARD_KEYS`, and `eInvoice` reduced to `city` / `countryCode`); the
+  whitelist test was mutation-checked by spreading each instead, which leaks the planted ids.
+
 ## 2.1.0.0 — 1 November 2026
 
 A QA pass against the live deploy (Al Manara Auto Garage LLC, 30 October 2026) found 18 defects in
