@@ -84,9 +84,18 @@ const transactionSchema = new mongoose.Schema({
   companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
   branchId: { type: String, default: "main" }, // the branch it belongs to; head office is "main"
   transactionNo: { type: String, required: true, trim: true }, // unique within an organisation: see the index below
-  // Sales invoice specific fields
+  // References the person types, printed on the document beside the number it was given.
+  // `docno` is the OTHER party's own document number (an opening invoice carries the customer's
+  // pre-go-live "INV-2024-1187", an opening purchase the supplier's "GGI/24/0918"), `lpono` the
+  // customer's purchase order. Both are sales/purchase specific and keep their meaning.
   docno: { type: String, default: null, trim: true },
   lpono: { type: String, default: null, trim: true },
+  // The organisation's OWN reference for this document - a job number, a batch, whatever it files
+  // its paper by. Deliberately a field of its own rather than a reuse of `docno`, which already
+  // holds the counterparty's number on real records: relabelling it would mislabel those.
+  // It does NOT replace the document number, which is still given by the number series; a person
+  // who wants to type THAT uses the voucher type's `auto_override` method and `manualNumber`.
+  serialNo: { type: String, default: null, trim: true, maxlength: 50 },
   discount: { type: Number, default: 0, min: 0 },
   type: {
     type: String,
@@ -183,12 +192,16 @@ const transactionSchema = new mongoose.Schema({
   quoteRef: { type: String, trim: true },
   linkedRef: { type: String, trim: true },
   // The job card this invoice was raised from (services/garage/jobCardService.createInvoice), so the printed
-  // tax invoice can carry the job number and the vehicle's plate - what a garage invoice needs and a free-text
+  // tax invoice can carry the job number and the vehicle it was for - what a garage invoice needs and a free-text
   // note cannot answer for ("Job card JC-..." in `notes` cannot be read back). Absent on every other document.
+  // Plate AND chassis, as two fields: a car may be on file with one and not the other (an old import has no
+  // plate yet, a pre-1981 car no VIN - see the partial indexes on vehicleModel.js), and a single combined
+  // string could not be read back. Both come off the job card's own vehicle snapshot, so no Vehicle read.
   jobCardRef: {
     jobCardId: { type: mongoose.Schema.Types.ObjectId, ref: "JobCard" },
     jobNo: { type: String, trim: true },
     plateNumber: { type: String, trim: true },
+    chassisNo: { type: String, trim: true },
   },
   creditNoteIssued: { type: Boolean, default: false },
   // A sales order the customer will not take the rest of (utils/closeShort.js).

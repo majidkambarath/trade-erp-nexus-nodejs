@@ -14,6 +14,9 @@ const transaction = () => ({
   lastSend: { to: "LEAK-recipient" },
   attachments: [{ url: "LEAK-url" }],
   returnOf: { transactionNo: "LEAK-return" },
+  serialNo: "GRG-2026-114",
+  // The garage link. The customer's copy may name the car; it may never carry the job card's database id.
+  jobCardRef: { jobCardId: "LEAK-jobcard-id", jobNo: "JC-2026-0017", plateNumber: "A 11111", chassisNo: "JTEBU29J100123456" },
   items: [{
     _id: "LEAK-line", itemId: "LEAK-item", itemCode: "RICE5", description: "Basmati Rice 5kg", qty: 10, rate: 200,
     vatPercent: 5, vatAmount: 10, taxKind: "standard", lineTotal: 210,
@@ -29,10 +32,14 @@ const customer = () => ({
   email: "ali@alnoor.ae", trnNumber: "100123456700003", paymentTerms: "Net 30",
   vat: { trn: "100123456700003", status: "registered", registered: "LEAK-vat", tradeLicenseNo: "LEAK-licence" },
   credit: { limit: "LEAK-credit" }, bankAccounts: [{ iban: "LEAK-iban" }], documents: [{ name: "LEAK-kyc" }],
-  contacts: [{ name: "LEAK-contact" }], shippingAddress: "LEAK-ship", minShelfLifeDays: 45, eInvoice: { participantId: "LEAK-pid" },
+  contacts: [{ name: "LEAK-contact" }], shippingAddress: "LEAK-ship", minShelfLifeDays: 45,
+  // City and country are printed under the customer's name; the participant id is a Peppol routing
+  // address and must never reach a page a customer can open.
+  eInvoice: { participantId: "LEAK-pid", city: "Dubai", countryCode: "AE" },
 });
 const company = () => ({
-  companyName: "Harbour Trading LLC", companyNameArabic: "x", addressLine1: "a", addressLine2: "b", phoneNumber: "1", email: "e@h.ae",
+  companyName: "Harbour Trading LLC", companyNameArabic: "x", addressLine1: "a", addressLine2: "b",
+  city: "Dubai", state: "Dubai", country: "United Arab Emirates", phoneNumber: "1", email: "e@h.ae",
   website: "h.ae", vatNumber: "100123456700003", logo: "https://cdn.example/logo.png", bankName: "ENBD", accountNumber: "1",
   accountName: "H", ibanNumber: "AE07", swiftCode: "EBILAEAD", branch: "Dubai",
   password: "LEAK-password", companyLogo: { publicId: "LEAK-public-id" }, adminId: "LEAK-admin",
