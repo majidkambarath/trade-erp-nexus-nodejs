@@ -8,12 +8,17 @@ const { isCalendarDay } = require("../../utils/documentExpiry");
  * header). Issue and return are the only two actions; there is no valuation, no depreciation, no write-off.
  */
 class AssetAssignmentService {
-  static list({ staffId, status } = {}) {
+  /** The organisation-wide register. Joined to the employee's NAME in one extra query, not one per row -
+   * the same batch-join AttendanceService.muster already uses. */
+  static async list({ staffId, status } = {}) {
     const q = {};
     if (staffId) q.staffId = staffId;
     if (status === "withEmployee") q.returnedDate = null;
     if (status === "returned") q.returnedDate = { $ne: null };
-    return AssetAssignment.find(q).sort({ issuedDate: -1 }).limit(1000).lean();
+    const rows = await AssetAssignment.find(q).sort({ issuedDate: -1 }).limit(1000).lean();
+    const staff = await Staff.find({ _id: { $in: [...new Set(rows.map((r) => String(r.staffId)))] } }).select("name staffId").lean();
+    const byId = new Map(staff.map((s) => [String(s._id), s]));
+    return rows.map((r) => ({ ...r, staffName: byId.get(String(r.staffId))?.name, staffCode: byId.get(String(r.staffId))?.staffId }));
   }
 
   static async forStaff(staffId) {

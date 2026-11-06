@@ -81,7 +81,9 @@ test("an asset is issued, returned, and the register tells who currently has wha
   assert.equal(laptop.returnedDate, null);
 
   const withEmployee = await svc.Asset.list({ status: "withEmployee" });
-  assert.ok(withEmployee.some((a) => String(a._id) === String(laptop._id)));
+  const row = withEmployee.find((a) => String(a._id) === String(laptop._id));
+  assert.ok(row, "the register finds it");
+  assert.equal(row.staffName, "Report Org", "the register joins the employee's NAME, not only an id");
 
   await svc.Asset.markReturned(laptop._id, { returnCondition: "Working" }, "tester");
   await assert.rejects(() => svc.Asset.markReturned(laptop._id, {}, "tester"), (e) => e.code === "ALREADY_RETURNED");

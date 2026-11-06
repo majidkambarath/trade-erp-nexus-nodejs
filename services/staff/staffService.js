@@ -289,8 +289,15 @@ class StaffService {
   }
 
   static async getStaffById(id) {
-    const staff = await Staff.findById(id);
+    const staff = await Staff.findById(id).populate("managerId", "name").lean();
     if (!staff) throw new AppError("Staff member not found", 404);
+    // `managerId` populated carries the reporting line's NAME for the page to show without a second
+    // call; `managerId` itself stays the id a form needs to preselect it - both from one field, the
+    // same way a trade document's populated party is read elsewhere in the app.
+    if (staff.managerId && typeof staff.managerId === "object") {
+      staff.managerName = staff.managerId.name;
+      staff.managerId = String(staff.managerId._id);
+    }
     return staff;
   }
 
