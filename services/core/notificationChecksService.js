@@ -459,7 +459,35 @@ class NotificationChecksService {
     { key: "chequesMaturing", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesMaturing(now) },
     { key: "chequesUncleared", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesUncleared(now) },
     { key: "chequesExpiring", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesExpiring(now) },
+    { key: "emiratisationShortfall", module: "hr", run: (now) => NotificationChecksService.checkEmiratisationShortfall(now) },
   ];
+
+  /**
+   * One notice, resolved the moment the organisation stops being short - not a monthly reminder that keeps
+   * firing while nothing changes. Carries no pay data (headcount and a shortfall count only), so it needs
+   * no hr.confidential consideration: hr.view, the module floor, already decides who sees it.
+   */
+  static async checkEmiratisationShortfall(now = new Date()) {
+    const EmiratisationService = require("../hr/emiratisationService");
+    const status = await EmiratisationService.status();
+    const dedupeKey = "emiratisation_shortfall";
+    const active = [];
+    if (status && status.configured && !status.compliant) {
+      active.push(dedupeKey);
+      await NotificationService.raise({
+        kind: "emiratisation_shortfall",
+        severity: "warning",
+        title: `Short of the Emiratisation quota by ${status.shortfall}`,
+        body: `${status.nationals} of ${status.required} required against ${status.headcount} mainland employees. At AED ${status.monthlyExposure.toLocaleString()} a month if nothing changes before the next checkpoint.`,
+        link: "/hr/reports",
+        dedupeKey,
+        permission: "hr.view",
+        now,
+      });
+    }
+    await NotificationService.resolveMissing({ kind: "emiratisation_shortfall", activeDedupeKeys: active, now });
+    return { checked: 1, told: active.length };
+  }
 
   /** Every check this organisation is entitled to. One check failing never stops the others. */
   static async runAll(now = new Date(), organisation = null) {

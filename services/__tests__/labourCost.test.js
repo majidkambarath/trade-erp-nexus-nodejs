@@ -151,6 +151,11 @@ test("the labour is recorded as a cost line, stamped, and cannot be recorded twi
   assert.equal(line.labour.staffName, "Ravi");
   assert.equal(line.labour.hours, 3);
   assert.equal(line.labour.rate, 25);
+  // Mongoose's ObjectId has a self-referencing `_id` getter, so `wagesAccount()`'s bare id silently
+  // satisfied `account._id` while `account.accountCode`/`.accountName` stayed undefined - found by
+  // checking, not assuming, and fixed by resolving the real document. Pinned here so it cannot regress.
+  assert.ok(line.accountCode, "the cost line names a real account code, not undefined");
+  assert.ok(line.accountName, "and a real account name");
   assert.equal(line.labour.source, "elapsed");
 
   await assert.rejects(() => svc.Labour.record(orderId, { by: "tester" }), (e) => e.code === "NO_LABOUR_TO_COST");

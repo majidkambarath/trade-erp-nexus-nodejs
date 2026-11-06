@@ -55,4 +55,8 @@ router.delete("/contracts/:contractId", requirePermission("hr.confidential"), (r
 // labour costing means anything for that person.
 router.get("/coverage", requirePermission("hr.view"), contracts.coverage);
 
+// W2: gratuity and Emiratisation, and the dated-rule engine both read (routes/hr/complianceRoutes.js).
+// authenticateToken above already ran; this sub-router only adds its own permission gates.
+router.use(require("./complianceRoutes"));
+
 module.exports = router;

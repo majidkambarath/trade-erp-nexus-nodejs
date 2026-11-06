@@ -45,6 +45,12 @@ const SEED = [
   // product is the same expense, moved - which is why absorbing it credits the "moved to stock" contra in
   // THIS account's own group rather than crediting this account, leaving net profit where it was.
   k("salary-expense", "Salaries and wages", "EXPENSE", "account"),
+  // IAS 19 / Ind AS 19: what is accrued monthly as the gratuity liability grows (expense) and where the
+  // liability itself sits until paid (provision, under Long-term Liabilities - a non-current obligation by
+  // the same classification rule the IFRS statements already use). One journal a month, never one posting
+  // per employee (services/hr/gratuityService.js): the ledger only needs to be right in total.
+  k("gratuity-expense", "Gratuity expense", "EXPENSE", "account"),
+  k("gratuity-provision", "Employee gratuity provision", "LIABILITY", "account"),
   k("inventory-asset", "Inventory (stock on hand)", "ASSET", "account"),
   k("opening-balance-equity", "Opening balance equity", "EQUITY", "account"),
   // year-end closing: where a year's profit (or loss) goes when the year is closed

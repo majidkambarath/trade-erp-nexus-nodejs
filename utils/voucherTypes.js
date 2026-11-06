@@ -69,6 +69,11 @@ const SEED = [
   // EMP-0001 for ever is what a staff code is. (`resetPolicy: "never"` with `includeYear: true` is the one
   // combination the type master refuses - the year would move while the count did not.)
   { key: "EMP",  name: "Employee",               kind: "hr",        postsAs: null,               prefix: "EMP",  statutory: false, includeYear: false, resetPolicy: "never" },
+  // Gratuity's monthly accrual journal. Written directly by services/hr/gratuityService.js the way a
+  // year-end closing entry is - a fresh id stands in for a voucher id, this series only numbers it. One
+  // entry a month for the WHOLE organisation (never one per employee), so it keeps its year and resets
+  // yearly like an ordinary journal.
+  { key: "GRJ",  name: "Gratuity accrual",       kind: "hr",        postsAs: null,               prefix: "GRJ",  statutory: false },
   // Written by the engine itself: go-live balances, a proven bank reconciliation, the year-end entry.
   // Nobody types one of these, so they take no manual override and no reuse (see mayOverride).
   { key: "OBV",  name: "Opening balance",        kind: "system",    postsAs: null,               prefix: "OBV",  statutory: false },

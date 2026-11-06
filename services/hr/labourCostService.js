@@ -6,6 +6,7 @@ const hr = require("../../utils/hr");
 const { orgDay, classify, STATUS } = require("../../utils/documentExpiry");
 const AccountConfigService = require("../financial/accountConfigService");
 const ContractService = require("./contractService");
+const { LedgerAccount } = require("../../models/modules/financial/financialModels");
 
 /**
  * THE POINT OF THE WHOLE MODULE: joining what a person costs to the work they actually did.
@@ -150,7 +151,15 @@ class LabourCostService {
    * chose them, not a clock). Anything they do not send is taken as offered.
    */
   static async record(orderId, { lines, by } = {}) {
-    const account = await wagesAccount(); // outside the transaction: the top-up commits on its own
+    const accountId = await wagesAccount(); // outside the transaction: the top-up commits on its own - a bare id
+    // Resolved to a real document for its display fields. `accountId` is a Mongoose ObjectId, which has a
+    // self-referencing `._id` getter - accountId._id === accountId is true, which is why a first draft of
+    // this read as if it worked while quietly storing `accountCode`/`accountName` as undefined on every
+    // line (found by checking, not assuming: the actual ledger posting was unaffected, because
+    // ProductionService re-resolves the real account by id when it posts - but the cost line's OWN stored
+    // display fields were wrong until this).
+    const account = await LedgerAccount.findById(accountId).select("accountName accountCode").lean();
+    if (!account) throw new AppError("The wages account could not be found", 500, "ACCOUNT_NOT_CONFIGURED");
     const preview = await this.previewForProcessOrder(orderId);
     if (!preview.lines.length) throw new AppError("There is no labour to cost on this order", 400, "NO_LABOUR_TO_COST");
     if (preview.status !== "OPEN") throw new AppError("Only an open process order can have labour costed", 409, "PROCESS_ORDER_NOT_OPEN");
