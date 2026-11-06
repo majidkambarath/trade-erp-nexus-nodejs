@@ -7,7 +7,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "..", "..", ".env") });
 const mongoose = require("mongoose");
 
 const skip = !process.env.MONGO_URI && "MONGO_URI not set";
-const DB = `erp_test_emiratisation_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const DB = `erp_test_emir_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 
 let svc;
 test.before(async () => {

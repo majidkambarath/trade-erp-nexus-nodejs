@@ -59,4 +59,9 @@ router.get("/coverage", requirePermission("hr.view"), contracts.coverage);
 // authenticateToken above already ran; this sub-router only adds its own permission gates.
 router.use(require("./complianceRoutes"));
 
+// W3: shifts, the holiday calendar, leave types, the muster, and leave requests through the approvals
+// queue's own third kind (D13).
+router.use(require("./timeRoutes"));
+router.use(require("./leaveRoutes"));
+
 module.exports = router;

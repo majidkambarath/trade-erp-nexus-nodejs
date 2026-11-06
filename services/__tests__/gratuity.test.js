@@ -107,10 +107,6 @@ test("accruing posts Dr Gratuity Expense / Cr Employee Gratuity Provision for ex
   const expBefore = r2((await svc.LedgerAccount.findById(expAcc._id).lean()).currentBalance);
   const provBefore = r2((await svc.LedgerAccount.findById(provAcc._id).lean()).currentBalance);
 
-  console.log("DEBUG expAcc:", expAcc.accountName, expAcc._id, "provAcc:", provAcc.accountName, provAcc._id);
-  const expFull = await svc.LedgerAccount.findById(expAcc._id).lean();
-  const provFull = await svc.LedgerAccount.findById(provAcc._id).lean();
-  console.log("DEBUG expAccountType:", expFull.accountType, "provAccountType:", provFull.accountType);
   const { accrual, posted } = await svc.Gratuity.accrue(M1, "tester");
   assert.equal(posted, true);
   assert.equal(accrual.amount, 27000);

@@ -12,7 +12,10 @@ test("the catalogue is consistent: every key is module.action, every implied key
   // Raised from 45 to 50 when the CRM module was added (6 actions, 48 keys), and to 58 when the garage module
   // was added (7 actions, 55 keys): the bound is a guard against the catalogue growing into something nobody
   // can read in a role editor, not a law. Raise it again only deliberately.
-  assert.ok(p.KEYS.length >= 30 && p.KEYS.length <= 58, `a size an administrator can read: ${p.KEYS.length}`);
+  // Raised 58 -> 65 on 6 Nov 2026: HR's attendance/leave/approve actions (W3) were declared once something
+  // actually enforced them - the rule this bound exists to protect is "only declare what is enforced", not
+  // "never grow". 65 leaves room for W4's one remaining planned action (payroll) without raising this again.
+  assert.ok(p.KEYS.length >= 30 && p.KEYS.length <= 65, `a size an administrator can read: ${p.KEYS.length}`);
   for (const k of p.KEYS) assert.match(k, /^[a-z]+\.[A-Za-z]+$/, k);
   for (const [key, implied] of Object.entries(p.IMPLIES)) {
     assert.ok(p.isKey(key), `${key} is a real permission`);

@@ -49,8 +49,16 @@ class StatutoryRuleService {
     const docs = rows.map(([key, value, unit, notes]) => ({
       country, key, value, unit, notes, effectiveFrom: "2022-01-01", isSystem: true, createdBy: "system",
     }));
-    const r = await StatutoryRule.insertMany(docs, { session, ordered: false });
-    return r.length;
+    try {
+      const r = await StatutoryRule.insertMany(docs, { session, ordered: false });
+      return r.length;
+    } catch (err) {
+      // EmiratisationService.status() reads two keys through Promise.all, so two concurrent first-ever
+      // reads can both see count 0 and both try to seed - a duplicate-key error here means the OTHER one
+      // won the race, not that seeding failed.
+      if (err?.code === 11000 || err?.code === 11001) return 0;
+      throw err;
+    }
   }
 
   /** Every row for the organisation's own country, newest first - the Setup screen's list. */
@@ -64,6 +72,8 @@ class StatutoryRuleService {
    * rather than the whole table (EmiratisationService reads a few this way). */
   static async valueOn(key, { country, day } = {}) {
     const c = (country || orgLocale.country()).toUpperCase();
+    await this.ensureDefaults(c); // the same lazy seed list()/rowsFor() already trigger - a caller that
+    // reads one key directly (EmiratisationService) must not be the one path that skips it
     const rows = await StatutoryRule.find({ country: c, key }).lean();
     return compliance.ruleOn(rows, key, day || todayInOrg());
   }

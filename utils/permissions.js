@@ -139,6 +139,11 @@ const MODULES = {
       // person who chases visa renewals and keeps the directory tidy is not thereby somebody who may see
       // what the managing director is paid.
       confidential: "See pay: salaries, cost rates, and labour cost by person",
+      // W3 (6 Nov 2026): the three actions D2's original design named but left undeclared until something
+      // actually enforced them - "only declare what is enforced" is the rule a placeholder tick would break.
+      attendance: "Mark and change the muster: shifts, holidays, check-in and check-out",
+      leave: "Submit a leave request, and manage leave types",
+      approve: "Approve or reject a leave request",
     },
   },
   settings: {

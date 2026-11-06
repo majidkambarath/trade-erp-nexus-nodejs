@@ -18,6 +18,7 @@ const { Voucher } = require("../../models/modules/financial/financialModels");
 const Customer = require("../../models/modules/customerModel");
 const Vendor = require("../../models/modules/vendorModel");
 const Admin = require("../../models/core/adminModel");
+const LeaveRequest = require("../../models/modules/hr/leaveRequestModel");
 const mongoose = require("mongoose");
 const roles = require("../../utils/permissions");
 const rules = require("../../utils/approvalRules");
@@ -56,10 +57,10 @@ function ageInDays(createdAt, now = new Date()) {
 }
 
 class ApprovalQueueService {
-  /** The document types (by module permission) and whether vouchers, this person may approve. */
+  /** The document types (by module permission) and whether vouchers or leave requests, this person may approve. */
   static scopeOf(grants) {
     const documentTypes = Object.keys(DOCUMENT_LABEL).filter((t) => roles.can(grants, `${roles.moduleOfType(t)}.approve`));
-    return { documentTypes, vouchers: roles.can(grants, "finance.approve") };
+    return { documentTypes, vouchers: roles.can(grants, "finance.approve"), leave: roles.can(grants, "hr.approve") };
   }
 
   /**
@@ -70,14 +71,14 @@ class ApprovalQueueService {
     const grants = req.admin?.grants;
     const scope = this.scopeOf(grants);
     const empty = { forYou: [], others: [], counts: { forYou: 0, others: 0 }, capped: false };
-    if (!scope.documentTypes.length && !scope.vouchers) return countOnly ? { count: 0, others: 0, capped: false } : empty;
+    if (!scope.documentTypes.length && !scope.vouchers && !scope.leave) return countOnly ? { count: 0, others: 0, capped: false } : empty;
 
     const actor = ApprovalPolicyService.actorOf(req);
     const policy = await ApprovalPolicyService.policy();
     const currency = orgLocale.baseCurrency();
 
     const lean = (q) => q.sort({ createdAt: 1 }).limit(CAP + 1).lean();
-    const [documents, vouchers] = await Promise.all([
+    const [documents, vouchers, leaveRequests] = await Promise.all([
       scope.documentTypes.length
         ? lean(Transaction.find({ type: { $in: scope.documentTypes }, status: { $in: DOCUMENT_STATUSES }, isOpening: { $ne: true } })
             .select("type transactionNo partyId partyType totalAmount date createdAt createdBy approvals status branchId"))
@@ -86,11 +87,20 @@ class ApprovalQueueService {
         ? lean(Voucher.find({ status: { $in: VOUCHER_STATUSES }, voucherType: { $in: VOUCHER_TYPES } })
             .select("voucherNo voucherType partyId partyType partyName narration totalAmount date createdAt createdBy approvals status branchId"))
         : [],
+      scope.leave
+        ? lean(LeaveRequest.find({ status: "PENDING" })
+            .select("requestNo staffName leaveTypeName fromDay toDay reason createdAt createdBy approvals status branchId"))
+        : [],
     ]);
-    const capped = documents.length > CAP || vouchers.length > CAP;
+    const capped = documents.length > CAP || vouchers.length > CAP || leaveRequests.length > CAP;
     const candidates = [
       ...documents.slice(0, CAP).map((d) => ({ kind: "document", doc: d, approvals: d.approvals, preparedBy: d.createdBy, type: d.type })),
       ...vouchers.slice(0, CAP).map((v) => ({ kind: "voucher", doc: v, approvals: v.approvals, preparedBy: v.createdBy, type: v.voucherType })),
+      // Judged with amount 0 (D13): a leave request has no money, so a role's approval limit and the
+      // second-approver threshold never apply to it - decide()'s own arithmetic already makes this true
+      // (0 > any limit >= 0 is false, and normalisePolicy refuses a negative secondApprovalAbove) - but
+      // separateApprover still means what it already means: the preparer cannot approve their own request.
+      ...leaveRequests.slice(0, CAP).map((l) => ({ kind: "leaveRequest", doc: { ...l, totalAmount: 0 }, approvals: l.approvals, preparedBy: l.createdBy, type: "leave" })),
     ];
 
     // Judge each one exactly as the approve route would.
@@ -136,23 +146,24 @@ class ApprovalQueueService {
   static row(j, { policy, names, now }) {
     const { kind, doc, verdict } = j;
     const isDocument = kind === "document";
-    const number = isDocument ? doc.transactionNo : doc.voucherNo;
+    const isLeave = kind === "leaveRequest";
+    const number = isDocument ? doc.transactionNo : isLeave ? doc.requestNo : doc.voucherNo;
     const given = (j.approvals || []).filter((a) => a && a.by !== undefined && a.by !== null);
     const awaitingSecond = given.length > 0 && rules.needsSecondApproval(policy, doc.totalAmount);
-    const party = isDocument
+    const party = isLeave ? doc.staffName || "" : isDocument
       ? (doc.partyType === "Vendor" ? names.vendor : names.customer).get(String(doc.partyId)) || ""
       : doc.partyName || "";
-    const page = isDocument ? DOCUMENT_PAGE[j.type] : VOUCHER_PAGE[j.type];
+    const page = isLeave ? "/hr/leave" : isDocument ? DOCUMENT_PAGE[j.type] : VOUCHER_PAGE[j.type];
     return {
       id: String(doc._id),
       kind,
       type: j.type,
-      typeLabel: (isDocument ? DOCUMENT_LABEL : VOUCHER_LABEL)[j.type] || j.type,
+      typeLabel: isLeave ? `${doc.leaveTypeName || "Leave"} (${doc.fromDay} to ${doc.toDay})` : (isDocument ? DOCUMENT_LABEL : VOUCHER_LABEL)[j.type] || j.type,
       number,
       party,
-      narration: isDocument ? "" : doc.narration || "",
+      narration: isLeave ? doc.reason || "" : isDocument ? "" : doc.narration || "",
       amount: doc.totalAmount,
-      date: doc.date,
+      date: isLeave ? doc.fromDay : doc.date,
       createdAt: doc.createdAt,
       branchId: doc.branchId || null,
       preparedBy: names.admin.get(idString(j.preparedBy)) || (mongoose.isValidObjectId(idString(j.preparedBy)) ? "" : idString(j.preparedBy)),
