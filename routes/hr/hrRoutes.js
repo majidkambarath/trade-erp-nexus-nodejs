@@ -1,0 +1,58 @@
+const express = require("express");
+const { authenticateToken } = require("../../middleware/authMiddleware");
+const { requirePermission } = require("../../middleware/permissionGate");
+const { branchOfDocument } = require("../../middleware/branchOfDocument");
+const Staff = require("../../models/modules/staffModel");
+const EmployeeContract = require("../../models/modules/hr/employeeContractModel");
+const employees = require("../../controllers/hr/employeeController");
+const contracts = require("../../controllers/hr/contractController");
+
+// The HR module, mounted at /api/v1/hr. Every route is gated on an hr.* permission - hr is sold per
+// organisation (utils/plans.js: off in standard/trading, present in premium/trial/internal, or granted by
+// override/the hrms plan), so the plan ceiling (middleware/permissionGate.js refusalFor) answers
+// MODULE_NOT_IN_PLAN before any role is even considered. No requireFeature call: a module is capped on
+// req.admin.grants itself, inside authenticateToken, exactly as the garage module's router is.
+const router = express.Router();
+router.use(authenticateToken);
+// A head office working across branches acts in the document's OWN branch, not head office's - the same
+// rule the garage module's job cards and claims follow, and for the same reason it needs TWO param names:
+// `:id` means an employee on an /employees route and a CONTRACT on a /contracts route, and router.param is
+// keyed by name, so one branchOfDocument(Staff) on `id` would wrongly try to load a contract's id as a
+// Staff document the moment /contracts/:id ran.
+router.param("id", branchOfDocument(Staff));
+router.param("contractId", branchOfDocument(EmployeeContract));
+
+// Employees. Read is hr.view (sees the directory; pay is a separate gate, below, on contracts); write is
+// hr.manage.
+router.get("/employees", requirePermission("hr.view"), employees.list);
+router.get("/employees/stats", requirePermission("hr.view"), employees.stats);
+router.get("/employees/:id", requirePermission("hr.view"), employees.get);
+router.post("/employees", requirePermission("hr.manage"), employees.create);
+router.put("/employees/:id", requirePermission("hr.manage"), employees.update);
+router.delete("/employees/:id", requirePermission("hr.manage"), employees.remove);
+
+// Contracts: pay. Reading the list needs only hr.view (the service strips every money figure unless the
+// caller also holds hr.confidential); writing one is setting somebody's pay, so it needs hr.confidential
+// outright - see controllers/hr/contractController.js for why that is NOT the same gate as hr.manage.
+router.get("/employees/:id/contracts", requirePermission("hr.view"), (req, res, next) => {
+  req.params.staffId = req.params.id;
+  next();
+}, contracts.list);
+router.post("/employees/:id/contracts", requirePermission("hr.confidential"), (req, res, next) => {
+  req.params.staffId = req.params.id;
+  next();
+}, contracts.create);
+router.put("/contracts/:contractId", requirePermission("hr.confidential"), (req, res, next) => {
+  req.params.id = req.params.contractId;
+  next();
+}, contracts.update);
+router.delete("/contracts/:contractId", requirePermission("hr.confidential"), (req, res, next) => {
+  req.params.id = req.params.contractId;
+  next();
+}, contracts.remove);
+
+// Who, right now, cannot be costed - the one figure that tells HR and finance there is work to do before
+// labour costing means anything for that person.
+router.get("/coverage", requirePermission("hr.view"), contracts.coverage);
+
+module.exports = router;
