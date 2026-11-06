@@ -27,6 +27,12 @@ router.post("/leave-types", requirePermission("hr.manage"), t.createLeaveType);
 router.put("/leave-types/:leaveTypeId", requirePermission("hr.manage"), (req, res, next) => asId(req, res, next, "leaveTypeId"), t.updateLeaveType);
 router.delete("/leave-types/:leaveTypeId", requirePermission("hr.manage"), (req, res, next) => asId(req, res, next, "leaveTypeId"), t.removeLeaveType);
 
+// Departments: the one structured grouping (designations stay free text - see models/modules/staffModel.js).
+router.get("/departments", requirePermission("hr.view"), t.listDepartments);
+router.post("/departments", requirePermission("hr.manage"), t.createDepartment);
+router.put("/departments/:departmentId", requirePermission("hr.manage"), t.updateDepartment);
+router.delete("/departments/:departmentId", requirePermission("hr.manage"), t.removeDepartment);
+
 // The muster: marking a day is its own action (hr.attendance), separate from hr.manage (D2 - "only declare
 // what is enforced"; a muster clerk need not be able to redesign shifts or add holidays).
 router.post("/attendance", requirePermission("hr.attendance"), t.markAttendance);

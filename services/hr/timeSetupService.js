@@ -1,9 +1,10 @@
-// The three small organisation-wide masters attendance and leave read: Shift, HolidayCalendar, LeaveType.
-// Kept in one file because each is a short CRUD list, the same reasoning garageSetupService.js groups bays
-// and the service menu together rather than one file per master.
+// The small organisation-wide masters attendance, leave and the directory read: Shift, HolidayCalendar,
+// LeaveType, Department. Kept in one file because each is a short CRUD list, the same reasoning
+// garageSetupService.js groups bays and the service menu together rather than one file per master.
 const Shift = require("../../models/modules/hr/shiftModel");
 const HolidayCalendar = require("../../models/modules/hr/holidayCalendarModel");
 const LeaveType = require("../../models/modules/hr/leaveTypeModel");
+const Department = require("../../models/modules/hr/departmentModel");
 const AppError = require("../../utils/AppError");
 const { isCalendarDay } = require("../../utils/documentExpiry");
 
@@ -87,4 +88,28 @@ class LeaveTypeService {
   }
 }
 
-module.exports = { ShiftService, HolidayService, LeaveTypeService };
+class DepartmentService {
+  static list() {
+    return Department.find().sort({ name: 1 }).lean();
+  }
+  static async create(data, by) {
+    if (!data?.name?.trim()) throw new AppError("Name the department", 400, "VALIDATION_ERROR");
+    const clash = await Department.findOne({ name: data.name.trim() });
+    if (clash) throw new AppError("A department of this name already exists", 409, "DEPARTMENT_EXISTS");
+    return Department.create({ name: data.name.trim(), createdBy: by });
+  }
+  static async update(id, data, by) {
+    const set = { updatedBy: by };
+    for (const f of ["name", "isActive"]) if (f in data) set[f] = data[f];
+    const row = await Department.findByIdAndUpdate(id, { $set: set }, { new: true, runValidators: true });
+    if (!row) throw new AppError("Department not found", 404, "DEPARTMENT_NOT_FOUND");
+    return row;
+  }
+  static async remove(id) {
+    const r = await Department.deleteOne({ _id: id });
+    if (!r.deletedCount) throw new AppError("Department not found", 404, "DEPARTMENT_NOT_FOUND");
+    return { removed: true };
+  }
+}
+
+module.exports = { ShiftService, HolidayService, LeaveTypeService, DepartmentService };

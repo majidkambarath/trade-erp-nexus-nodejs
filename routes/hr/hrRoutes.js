@@ -77,4 +77,7 @@ router.use(require("./leaveRoutes"));
 // W4: salary components and a payroll run (D14), posted like a year's closing entry.
 router.use(require("./payrollRoutes"));
 
+// Assets: what was issued to whom, and when it came back - never a stock movement.
+router.use(require("./assetRoutes"));
+
 module.exports = router;

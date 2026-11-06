@@ -1,4 +1,4 @@
-const { ShiftService, HolidayService, LeaveTypeService } = require("../../services/hr/timeSetupService");
+const { ShiftService, HolidayService, LeaveTypeService, DepartmentService } = require("../../services/hr/timeSetupService");
 const AttendanceService = require("../../services/hr/attendanceService");
 const AuditService = require("../../services/core/auditService");
 const catchAsync = require("../../utils/catchAsync");
@@ -52,6 +52,24 @@ exports.updateLeaveType = catchAsync(async (req, res) => {
 exports.removeLeaveType = catchAsync(async (req, res) => {
   await LeaveTypeService.remove(req.params.id);
   await AuditService.log({ req, action: "LEAVE_TYPE_DELETED", entity: "LeaveType", entityId: req.params.id, summary: "Leave type removed" });
+  ok(res, { removed: true });
+});
+
+// Departments.
+exports.listDepartments = catchAsync(async (req, res) => ok(res, await DepartmentService.list()));
+exports.createDepartment = catchAsync(async (req, res) => {
+  const row = await DepartmentService.create(req.body, by(req));
+  await AuditService.log({ req, action: "DEPARTMENT_CREATED", entity: "Department", entityId: row._id, summary: row.name });
+  ok(res, row, 201);
+});
+exports.updateDepartment = catchAsync(async (req, res) => {
+  const row = await DepartmentService.update(req.params.departmentId, req.body, by(req));
+  await AuditService.log({ req, action: "DEPARTMENT_UPDATED", entity: "Department", entityId: row._id, summary: row.name });
+  ok(res, row);
+});
+exports.removeDepartment = catchAsync(async (req, res) => {
+  await DepartmentService.remove(req.params.departmentId);
+  await AuditService.log({ req, action: "DEPARTMENT_DELETED", entity: "Department", entityId: req.params.departmentId, summary: "Department removed" });
   ok(res, { removed: true });
 });
 

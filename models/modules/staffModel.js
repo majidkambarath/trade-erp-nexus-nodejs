@@ -24,6 +24,14 @@ const staffSchema = new mongoose.Schema({
   // Free text for now. A department master belongs with the rest of HR's setup, and inventing one here - before
   // anything reports by department - would be a form that saves nothing.
   department: { type: String, trim: true, maxlength: 80 },
+  // The structured department (W4, organisation): optional and separate from the free-text field above -
+  // an existing employee's typed department is never silently re-pointed at a master row. When set, the
+  // form keeps the two in step (the department's own name is also written into `department`), so nothing
+  // that already reads the free-text field needs to change.
+  departmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Department", default: null },
+  // Who this person reports to - another employee, never a sign-in account (adminId already exists for
+  // that bridge, for a different reason). Optional; most organisations will leave it unset at first.
+  managerId: { type: mongoose.Schema.Types.ObjectId, ref: "Staff", default: null },
   contactNo: {
     type: String,
     required: true,

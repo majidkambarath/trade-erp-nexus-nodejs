@@ -26,6 +26,28 @@ class StaffService {
     return found._id;
   }
 
+  /** The structured department, if one was named - checked against the organisation's own master. */
+  static async assertDepartment(departmentId, session = null) {
+    if (!departmentId) return null;
+    const Department = require("../../models/modules/hr/departmentModel");
+    if (!mongoose.isValidObjectId(departmentId)) throw new AppError("That department does not exist", 400, "DEPARTMENT_NOT_FOUND");
+    const q = Department.findById(departmentId).select("_id name");
+    const found = await (session ? q.session(session) : q);
+    if (!found) throw new AppError("That department does not exist", 400, "DEPARTMENT_NOT_FOUND");
+    return found;
+  }
+
+  /** Who this person reports to - another employee, never themselves. */
+  static async assertManager(managerId, selfId, session = null) {
+    if (!managerId) return null;
+    if (!mongoose.isValidObjectId(managerId)) throw new AppError("That manager does not exist", 400, "MANAGER_NOT_FOUND");
+    if (selfId && String(managerId) === String(selfId)) throw new AppError("A person cannot report to themselves", 400, "MANAGER_IS_SELF");
+    const q = Staff.findById(managerId).select("_id");
+    const found = await (session ? q.session(session) : q);
+    if (!found) throw new AppError("That manager does not exist", 400, "MANAGER_NOT_FOUND");
+    return found._id;
+  }
+
   static async createStaff(data, files, createdBy) {
     // HR's meter, before anything is written or uploaded. It sits HERE rather than on the route so that both
     // doors onto this collection are counted - the new /hr routes and the legacy /staff ones - and an
@@ -48,6 +70,8 @@ class StaffService {
         email,
         nationality,
         adminId,
+        departmentId,
+        managerId,
       } = data;
 
       // what a staff record cannot be without (text, not an object or a missing field: that used to end in a 500)
@@ -56,6 +80,8 @@ class StaffService {
       }
 
       await StaffService.assertAdminLink(adminId, session);
+      const departmentRow = await StaffService.assertDepartment(departmentId, session);
+      await StaffService.assertManager(managerId, null, session);
 
       // Check if idNo already exists
       const existingIdNo = await Staff.findOne({ idNo }).session(session);
@@ -87,7 +113,12 @@ class StaffService {
             contactNo: contactNo.trim(),
             idNo: idNo.trim(),
             joiningDate: new Date(joiningDate),
-            department: typeof department === "string" ? department.trim() : undefined,
+            // The structured department's own name is also written into the free-text field, so nothing
+            // that already reads `department` as a string needs to change - unless the caller typed their
+            // own text, which wins (an explicit choice over a derived one).
+            department: typeof department === "string" && department.trim() ? department.trim() : departmentRow?.name,
+            departmentId: departmentRow?._id || undefined,
+            managerId: managerId || undefined,
             email: typeof email === "string" ? email.trim() : undefined,
             nationality: typeof nationality === "string" && nationality.trim() ? nationality.trim().toUpperCase() : undefined,
             adminId: adminId || undefined,
@@ -134,6 +165,9 @@ class StaffService {
       }
 
       if ("adminId" in data && data.adminId) await StaffService.assertAdminLink(data.adminId, session);
+      let departmentRow = null;
+      if ("departmentId" in data && data.departmentId) departmentRow = await StaffService.assertDepartment(data.departmentId, session);
+      if ("managerId" in data && data.managerId) await StaffService.assertManager(data.managerId, id, session);
 
       // Process file uploads
       const idProofInfo = files?.idProof ? extractFileInfo(files.idProof) : null;
@@ -165,6 +199,13 @@ class StaffService {
       const EDITABLE = ["name", "designation", "department", "email", "nationality", "status", "adminId"];
       const updateData = {
         ...Object.fromEntries(EDITABLE.filter((k) => k in data).map((k) => [k, data[k]])),
+        // "" clears the link (a real ObjectId cast failure otherwise, the same explicit-null pattern
+        // exitDate below already uses) - never left as an empty string for Mongoose to choke on.
+        ...("departmentId" in data ? { departmentId: data.departmentId || null } : {}),
+        ...("managerId" in data ? { managerId: data.managerId || null } : {}),
+        // A structured department picked on this save also updates the free-text field, unless the
+        // caller's OWN text was sent in the same request (an explicit choice over a derived one).
+        ...(departmentRow && !(typeof data.department === "string" && data.department.trim()) ? { department: departmentRow.name } : {}),
         contactNo: data.contactNo ? data.contactNo.trim() : currentStaff.contactNo,
         idNo: data.idNo ? data.idNo.trim() : currentStaff.idNo,
         joiningDate: data.joiningDate ? new Date(data.joiningDate) : currentStaff.joiningDate,
