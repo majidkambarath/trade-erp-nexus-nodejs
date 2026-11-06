@@ -70,7 +70,7 @@ const ACCOUNTS = [
   ["Purchased Services", "Operating Expenses", "service-expense"],
   ["Round-off Expense (Purchases)", "Operating Expenses", "round-off-purchase"],
   ["Round-off Expense (Sales)", "Operating Expenses", "round-off-sales"],
-  ["Salaries & Wages", "Operating Expenses", null],
+  ["Salaries & Wages", "Operating Expenses", "salary-expense"],
   ["Rent Expense", "Operating Expenses", null],
   ["Utilities", "Operating Expenses", null],
   ["Bank Charges", "Operating Expenses", "bank-charges"],

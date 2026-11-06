@@ -40,6 +40,11 @@ const MODULE_INFO = {
   reports: { group: "money", sections: ["Dashboard", "Financial statements", "Ledger reports", "Trade analysis", "Ageing", "Stock reports", { feature: "ifrsStatements" }, { feature: "vatReturn" }, { feature: "einvoicing" }] },
   users: { group: "organisation", sections: ["Users", "Roles and permissions"] },
   staff: { group: "organisation", sections: ["Staff records"] },
+  // HR, sold apart from `staff` above: `staff` is the old thin directory every customer already holds, this is
+  // the module they buy. Its screens are what wave 1 actually ships - the later waves (attendance, leave,
+  // payroll) add their own sections here when they exist, because this list is what the console tells a
+  // customer they are paying for.
+  hr: { group: "organisation", sections: ["Employees", "Contracts and cost rates", "Employee documents and expiry", "Labour in a product or job"] },
   settings: { group: "organisation", sections: ["Company profile", "Business rules", "Security", { feature: "multiBranch" }, { feature: "assistant" }] },
   audit: { group: "organisation", sections: ["Activity trail"] },
   lookups: { group: "core", sections: [] },

@@ -13,6 +13,19 @@ const stepSchema = new mongoose.Schema({
   mode: { type: String, enum: ["in_house", "job_work"], required: true },
   assigneeId: { type: String }, // the person doing an in-house step (an account id); optional
   assigneeName: { type: String, trim: true, maxlength: 120 },
+  /**
+   * The EMPLOYEE doing an in-house step, which is not the same thing as `assigneeId` above: that is a
+   * sign-in ACCOUNT, and most people on a shop floor have none. The same pair already exists on a garage
+   * task (models/modules/garage/jobCardModel.js staffId + assigneeId), so this mirrors a shape the sibling
+   * module settled on rather than inventing one.
+   *
+   * It is what labour costing needs: an employee has a contract, a contract has a cost per hour, and
+   * `assigneeId` can only reach one through Staff.adminId - which works, and only for the few who log in.
+   * Both are optional and both are read (utils/hr.js, services/hr/labourCostService.js), so a step assigned
+   * the old way still costs correctly and there is nothing to migrate.
+   */
+  staffId: { type: id, ref: "Staff" },
+  staffName: { type: String, trim: true, maxlength: 120 },
   jobWorkerId: { type: id, ref: "Vendor" },
   jobWorkerName: String,
   dueDate: Date,
@@ -49,6 +62,27 @@ const processOrderSchema = new mongoose.Schema(
         amount: { type: Number, required: true, min: 0 },
         narration: { type: String, trim: true, maxlength: 300 },
         voucherId: { type: id, ref: "Voucher" }, voucherNo: String,
+        /**
+         * Where a LABOUR cost line came from: whose hours, how many, at what rate, and whether the hours
+         * were confirmed or worked out from elapsed time. No schema default, so an ordinary cost line (the
+         * coater's bill, transport) is exactly the document it always was.
+         *
+         * The rate is STAMPED here and never recomputed (utils/hr.js rule 2): a pay rise next month must
+         * not change what this order cost. And this block is the pay data on an otherwise unremarkable
+         * inventory screen, so it is only ever handed to a reader holding `hr.confidential` - without it
+         * the amounts are grouped by step with nobody named (utils/hr.js visibleLabour), because "Ravi, 3
+         * hours, 75.00" is a payslip anybody could divide.
+         */
+        labour: {
+          type: new mongoose.Schema({
+            staffId: { type: id, ref: "Staff" },
+            staffName: { type: String, trim: true, maxlength: 120 },
+            hours: { type: Number, min: 0 },
+            rate: { type: Number, min: 0 },
+            source: { type: String, enum: ["elapsed", "typed", "attendance"] },
+          }, { _id: false }),
+          default: undefined,
+        },
         addedBy: String, addedAt: Date,
       })],
       default: [],

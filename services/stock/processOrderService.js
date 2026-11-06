@@ -5,6 +5,7 @@ const JobWorkOrder = require("../../models/modules/jobWorkOrderModel");
 const Stock = require("../../models/modules/stockModel");
 const Vendor = require("../../models/modules/vendorModel");
 const Admin = require("../../models/core/adminModel");
+const Staff = require("../../models/modules/staffModel");
 const { Voucher } = require("../../models/modules/financial/financialModels");
 const { allBranches } = require("../../utils/tenantContext");
 const rules = require("../../utils/processOrders");
@@ -147,6 +148,10 @@ class ProcessOrderService {
     const peopleIds = data.steps.filter((s) => s.mode === "in_house" && s.assigneeId).map((s) => String(s.assigneeId)).filter(isId);
     const people = peopleIds.length ? await Admin.find({ _id: { $in: peopleIds } }).select("name email").session(session || null).lean() : [];
     const personById = new Map(people.map((p) => [String(p._id), p]));
+    // The employees named on in-house steps, checked like the accounts and the job workers above.
+    const staffIds = data.steps.filter((s) => s.mode === "in_house" && s.staffId).map((s) => String(s.staffId)).filter(isId);
+    const staffRows = staffIds.length ? await Staff.find({ _id: { $in: staffIds } }).select("name staffId").session(session || null).lean() : [];
+    const staffById = new Map(staffRows.map((s) => [String(s._id), s]));
 
     const date = data.date ? dayOf(data.date) : dayOf(todayInOrg());
     if (!date) throw fail("Enter a valid date", 400, "INVALID_DATE");
@@ -166,7 +171,18 @@ class ProcessOrderService {
           return { ...base, jobWorkerId: v._id, jobWorkerName: v.vendorName };
         }
         const p = s.assigneeId ? personById.get(String(s.assigneeId)) : null;
-        return { ...base, assigneeId: p ? String(p._id) : undefined, assigneeName: p ? p.name || p.email : s.assigneeName ? String(s.assigneeName).trim().slice(0, 120) : undefined };
+        // The EMPLOYEE, which is what labour costing needs: `assigneeId` above is a sign-in account, and most
+        // of a shop floor has none. Named but unknown is refused rather than dropped, or a step would quietly
+        // come back with nobody on it and cost nothing (services/hr/labourCostService.js).
+        const emp = s.staffId ? staffById.get(String(s.staffId)) : null;
+        if (s.staffId && !emp) throw fail(`Step ${i + 1}: employee not found`, 400, "STAFF_NOT_FOUND");
+        return {
+          ...base,
+          assigneeId: p ? String(p._id) : undefined,
+          assigneeName: p ? p.name || p.email : s.assigneeName ? String(s.assigneeName).trim().slice(0, 120) : undefined,
+          staffId: emp ? emp._id : undefined,
+          staffName: emp ? emp.name : undefined,
+        };
       }),
       notes: data.notes ? String(data.notes).trim().slice(0, 1000) : undefined,
     };

@@ -60,6 +60,15 @@ const SEED = [
   // its own SO number), and the insurance claim is a record, not a posting document either.
   { key: "JC",   name: "Job card",               kind: "garage",    postsAs: null,               prefix: "JC",   statutory: false },
   { key: "CLM",  name: "Insurance claim",        kind: "garage",    postsAs: null,               prefix: "CLM",  statutory: false },
+  // HR. An employee code is not a document number, but it is a number that must never be handed out twice,
+  // and this is the only engine in the product allowed to hand one out (one atomic $inc per series, with the
+  // IssuedNumber register behind it). It replaced `STF${year}-${Math.random() * 1000}`, which against a unique
+  // index gave a company of forty staff a better-than-even chance of a collision it could do nothing about.
+  //
+  // It counts CONTINUOUSLY and prints no year: an employee is not a document of 2026, and EMP-0001 reading
+  // EMP-0001 for ever is what a staff code is. (`resetPolicy: "never"` with `includeYear: true` is the one
+  // combination the type master refuses - the year would move while the count did not.)
+  { key: "EMP",  name: "Employee",               kind: "hr",        postsAs: null,               prefix: "EMP",  statutory: false, includeYear: false, resetPolicy: "never" },
   // Written by the engine itself: go-live balances, a proven bank reconciliation, the year-end entry.
   // Nobody types one of these, so they take no manual override and no reuse (see mayOverride).
   { key: "OBV",  name: "Opening balance",        kind: "system",    postsAs: null,               prefix: "OBV",  statutory: false },
@@ -97,6 +106,7 @@ const KIND_LABELS = {
   trade: "Sales and purchase",
   inventory: "Stock and production",
   crm: "CRM",
+  hr: "HR",
   system: "Written by the system",
 };
 

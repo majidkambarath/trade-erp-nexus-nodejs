@@ -3,9 +3,36 @@ const Staff = require("../../models/modules/staffModel");
 const AppError = require("../../utils/AppError");
 const { extractFileInfo, deleteFromCloudinary } = require("../../middleware/upload");
 const { searchRegex } = require("../../utils/regex");
+const NumberSeriesService = require("../core/numberSeriesService");
+const UsageService = require("../core/usageService");
+
+const Admin = require("../../models/core/adminModel");
 
 class StaffService {
+  /**
+   * The optional link from an employee to the sign-in account they use. Most employees have none - they are
+   * never Admin rows (that is what the `users` limit counts) - but a process order's step records its
+   * assignee as an ACCOUNT id, so this is the bridge labour costing crosses to find a person's cost rate.
+   *
+   * Checked against THIS organisation: Admin carries companyId and is tenant-scoped, so a scoped lookup
+   * cannot resolve a stranger's account, and an id that names one is refused rather than quietly stored.
+   */
+  static async assertAdminLink(adminId, session = null) {
+    if (!adminId) return null;
+    if (!mongoose.isValidObjectId(adminId)) throw new AppError("That sign-in account does not exist", 400, "ADMIN_NOT_FOUND");
+    const q = Admin.findById(adminId).select("_id");
+    const found = await (session ? q.session(session) : q);
+    if (!found) throw new AppError("That sign-in account does not exist", 400, "ADMIN_NOT_FOUND");
+    return found._id;
+  }
+
   static async createStaff(data, files, createdBy) {
+    // HR's meter, before anything is written or uploaded. It sits HERE rather than on the route so that both
+    // doors onto this collection are counted - the new /hr routes and the legacy /staff ones - and an
+    // organisation cannot add its 51st employee through the older URL. It is a no-op for an organisation that
+    // was never sold HR, which is every existing customer: see UsageService.assertEmployeeRoom.
+    await UsageService.assertEmployeeRoom();
+
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -17,6 +44,10 @@ class StaffService {
         idNo,
         joiningDate,
         status,
+        department,
+        email,
+        nationality,
+        adminId,
       } = data;
 
       // what a staff record cannot be without (text, not an object or a missing field: that used to end in a 500)
@@ -24,14 +55,22 @@ class StaffService {
         if (typeof value !== "string" || !value.trim()) throw new AppError(`${label} is required`, 400, "VALIDATION_ERROR");
       }
 
+      await StaffService.assertAdminLink(adminId, session);
+
       // Check if idNo already exists
       const existingIdNo = await Staff.findOne({ idNo }).session(session);
       if (existingIdNo) {
         throw new AppError("ID/Passport number already exists", 400);
       }
 
-      // Generate unique staffId
-      const staffId = `STF${new Date().toISOString().slice(0, 4).replace(/-/g, "")}-${Math.floor(Math.random() * 1000) + 100}`;
+      // The employee code, from the one engine in the product allowed to hand a number out (one atomic $inc
+      // per series, inside this transaction, with the IssuedNumber register behind it).
+      //
+      // It replaced `STF${year}-${Math.floor(Math.random() * 1000) + 100}`. Against the unique index on
+      // staffId, 900 possible suffixes gave a company of forty staff a better-than-even chance of a
+      // collision it could do nothing about - and CLAUDE.md's rule is explicit that a number never comes
+      // from Math.random() or a count. EMP counts continuously and prints no year: EMP-0001, EMP-0002.
+      const staffId = await NumberSeriesService.allocate("EMP", new Date(), { session, docType: "Staff" });
 
       // Process file uploads
       // (a plain JSON request carries no files at all: req.files is then undefined)
@@ -48,6 +87,10 @@ class StaffService {
             contactNo: contactNo.trim(),
             idNo: idNo.trim(),
             joiningDate: new Date(joiningDate),
+            department: typeof department === "string" ? department.trim() : undefined,
+            email: typeof email === "string" ? email.trim() : undefined,
+            nationality: typeof nationality === "string" && nationality.trim() ? nationality.trim().toUpperCase() : undefined,
+            adminId: adminId || undefined,
             idProof: idProofInfo?.publicId,
             idProofUrl: idProofInfo?.url,
             addressProof: addressProofInfo?.publicId,
@@ -90,6 +133,8 @@ class StaffService {
         }
       }
 
+      if ("adminId" in data && data.adminId) await StaffService.assertAdminLink(data.adminId, session);
+
       // Process file uploads
       const idProofInfo = files?.idProof ? extractFileInfo(files.idProof) : null;
       const addressProofInfo = files?.addressProof ? extractFileInfo(files.addressProof) : null;
@@ -106,12 +151,26 @@ class StaffService {
         await deleteFromCloudinary(filesToDelete);
       }
 
-      // Prepare update data
+      // Prepare update data.
+      //
+      // A WHITELIST, NOT THE REQUEST BODY. This used to be `{ ...data, ... }`, which copied whatever arrived
+      // straight onto the document: a caller could set `staffId` (the allocated employee code, and a unique
+      // index), `branchId` (moving a person into a branch to be read by people who should not see them),
+      // `createdBy`, `createdAt` - and, once HR arrived, `adminId`, which links an employee to a sign-in
+      // account. That is the mass-assignment shape `utils/adminPermissions.js` withoutSystemFields exists to
+      // refuse, and the transaction and voucher services were already swept for it.
+      //
+      // Fails closed: a field not named here cannot be written, so the next field added to the schema is not
+      // editable by accident.
+      const EDITABLE = ["name", "designation", "department", "email", "nationality", "status", "adminId"];
       const updateData = {
-        ...data,
+        ...Object.fromEntries(EDITABLE.filter((k) => k in data).map((k) => [k, data[k]])),
         contactNo: data.contactNo ? data.contactNo.trim() : currentStaff.contactNo,
         idNo: data.idNo ? data.idNo.trim() : currentStaff.idNo,
         joiningDate: data.joiningDate ? new Date(data.joiningDate) : currentStaff.joiningDate,
+        // The day somebody left. Explicitly nullable: "" or null clears it (they came back, or it was a
+        // mistake), which a plain truthiness check would have silently ignored.
+        exitDate: "exitDate" in data ? (data.exitDate ? new Date(data.exitDate) : null) : currentStaff.exitDate,
         idProof: idProofInfo ? idProofInfo.publicId : currentStaff.idProof,
         idProofUrl: idProofInfo ? idProofInfo.url : currentStaff.idProofUrl,
         addressProof: addressProofInfo ? addressProofInfo.publicId : currentStaff.addressProof,
