@@ -243,6 +243,32 @@ A new module is not just files. Every place the garage module had to be register
 
 ---
 
+## 7a. The master checklist (6 Nov 2026, researched against Zoho People, Darwinbox, SAP SuccessFactors and greytHR)
+
+Four independent sources converge on one spine. Mapped onto this workspace's own rail, status as of this
+line:
+
+| # | Module | What it covers | Status | Wave |
+| --- | --- | --- | --- | --- |
+| 1 | Overview | Headcount, coverage (who can be costed) | **Built** | W1 |
+| 2 | People | Directory, contract history, cost rate | **Built** | W1 |
+| 3 | Compliance | Emiratisation tracker, gratuity as a live liability | Next | W2 |
+| 4 | Attendance | Punch/muster, shifts, overtime | | W3 |
+| 5 | Leave | Types, balances, requests, approvals | | W3 |
+| 6 | Payroll | Pay runs, statutory deductions, payslips, WPS/bank file | | W4 |
+| 7 | Documents | Expiry register (visa, labour card) | | W4 |
+| 8 | Self-service | Phone portal, separate identity | | W5 |
+| 9 | Reports | One route, `PillTabs`, named reports | | ongoing |
+| 10 | Setup | Shifts, leave types, salary components, country pack | | W3/W4 |
+
+**Deliberately last (W6), because every source treats these as layered on top of the spine, not part of
+it:** Recruitment/ATS, Onboarding/Exit checklists, Learning, Succession planning, Expense/Travel/Asset
+(Darwinbox's own market review scores this its *weakest* module, below HROne and Keka). Compensation &
+Benefits appears as its own line only in SAP's enterprise taxonomy; every other vendor folds it into
+Payroll, and this plan does the same rather than opening a tab before Payroll itself exists.
+
+---
+
 ## 8. What I need from you before starting
 
 1. **Which client first — Al Manara (AE) or Brivox (IN)?** It decides which country pack ships in wave 2. They also pull in different directions: Brivox is a manufacturer with process orders, so shop-floor attendance and labour costing matter; Al Manara already records technician tasks on job cards.
