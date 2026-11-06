@@ -77,27 +77,39 @@ const modulesOnly = (on = [], detail = {}) => ({
 });
 
 // A limit of null means unlimited.
+//
+// `employees` is HR's own meter, and it is deliberately not `users`. The two count different things and the
+// market prices them differently: the ERP is sold per person who SIGNS IN, HR per person on the payroll, and
+// the whole HR market quotes per employee per month. They must never be the same number - a 200-worker
+// factory has 200 employees and perhaps six people who log in (and employees are never Admin rows, so they
+// could not be counted as users even by accident: see services/core/usageService.js).
+//
+// Note which plans carry a real `employees` figure: a plan WITHOUT the hr module still has one, because HR
+// is sold to a Standard customer as a module override exactly as the CRM is, and a 0 there would make that
+// override useless the moment it was granted (the trap the crm plan's own `documentsPerMonth: 0` note
+// describes). Only the CRM-only plan, which has no HR and no ERP to add it to, is 0.
 const PLANS = {
   trial: {
     name: "Trial",
     trialDays: 14,
     features: only("quotations", "deliveryNotes", "batches", "assistant"),
     modules: ALL_MODULES,
-    limits: { users: 3, branches: 1, documentsPerMonth: 200 },
+    limits: { users: 3, branches: 1, documentsPerMonth: 200, employees: 10 },
   },
   // CRM is the one module a plan has to be bought up to: the trade documents and the books are the product, the
   // pipeline in front of them is what Premium adds. An organisation on Standard that wants it gets a module override.
+  // HR is sold the same way, and for the same reason.
   standard: {
     name: "Standard",
     features: only("quotations", "deliveryNotes", "batches", "banking", "currencies", "vatReturn", "messaging", "assistant"),
-    modules: modulesExcept(["crm"]),
-    limits: { users: 10, branches: 3, documentsPerMonth: 2000 },
+    modules: modulesExcept(["crm", "hr"]),
+    limits: { users: 10, branches: 3, documentsPerMonth: 2000, employees: 25 },
   },
   premium: {
     name: "Premium",
     features: ALL,
     modules: ALL_MODULES,
-    limits: { users: 50, branches: 20, documentsPerMonth: 20000 },
+    limits: { users: 50, branches: 20, documentsPerMonth: 20000, employees: 150 },
   },
   // Buying and selling, with the stock behind it, and no books: the documents still post to the ledger (they
   // must, or stock has no cost and an invoice no entry) - this customer simply did not buy the screens that
@@ -105,8 +117,8 @@ const PLANS = {
   trading: {
     name: "Trade only",
     features: only("quotations", "deliveryNotes", "batches", "messaging", "assistant"),
-    modules: modulesExcept(["finance", "banking", "accounts", "audit", "crm"], { reports: ["view"] }),
-    limits: { users: 10, branches: 2, documentsPerMonth: 2000 },
+    modules: modulesExcept(["finance", "banking", "accounts", "audit", "crm", "hr"], { reports: ["view"] }),
+    limits: { users: 10, branches: 2, documentsPerMonth: 2000, employees: 25 },
   },
   // The CRM and nothing else: leads, deals, contacts, follow-ups, calendar and reports, plus the two things any organisation
   // needs to run it - its own people (users) and its own settings. No trade documents, no stock, no books.
@@ -122,18 +134,34 @@ const PLANS = {
     // load - the plan a customer is on has no bearing on that.
     features: only("assistant"),
     modules: modulesOnly(["crm", "users", "settings"], { reports: ["view"] }),
-    limits: { users: 10, branches: 1, documentsPerMonth: 0 },
+    limits: { users: 10, branches: 1, documentsPerMonth: 0, employees: 0 },
+  },
+  // HR and nothing else: the employee records, their contracts and their documents, plus the two things any
+  // organisation needs to run it - its own people (users) and its own settings.
+  //
+  // THIS IS THE WEAK HALF OF THE PRODUCT, AND IS SOLD AS ONE - the same honesty the crm plan above owes
+  // itself. What makes our HR worth more than the half-dozen cheaper products in this market is that it
+  // costs the WORK: a process step's hours priced at the person's own cost rate land in what the product
+  // cost, and a technician's hours against what the job was sold for give the labour margin a workshop
+  // lives on. Both need the ERP. An organisation on this plan has no process orders and no job cards, so it
+  // gets employee records, documents and expiry warnings - a tidy directory, competing on price with
+  // everybody else. The reason to add the ERP is the reason the module exists.
+  hrms: {
+    name: "HR only",
+    features: only("assistant"),
+    modules: modulesOnly(["hr", "users", "settings"], { reports: ["view"] }),
+    limits: { users: 10, branches: 1, documentsPerMonth: 0, employees: 50 },
   },
   // For the organisation that existed before plans did, and for the developers' own testing.
   internal: {
     name: "Internal",
     features: ALL,
     modules: ALL_MODULES,
-    limits: { users: null, branches: null, documentsPerMonth: null },
+    limits: { users: null, branches: null, documentsPerMonth: null, employees: null },
   },
 };
 const PLAN_CODES = Object.keys(PLANS);
-const LIMIT_KEYS = ["users", "branches", "documentsPerMonth"];
+const LIMIT_KEYS = ["users", "branches", "documentsPerMonth", "employees"];
 
 const planOf = (org) => PLANS[org?.planCode] || null;
 
@@ -228,6 +256,13 @@ function effectiveLimits(org) {
     // narrowing only: unlimited becomes the head office alone, and an unknown plan (which allows nothing) stays 0
     limits.branches = limits.branches === null ? 1 : Math.min(limits.branches, 1);
   }
+  // The same rule for the same reason, one module along: the plans carry a real `employees` figure so that
+  // selling HR to a Standard organisation as a module override works at once (a 0 would refuse the first
+  // employee it created). But an organisation that has NOT been sold HR must not be shown room it cannot
+  // use - the console would print "25 employees free" while the API answered MODULE_NOT_IN_PLAN, which is
+  // exactly the branches-against-multiBranch mismatch above. The module decides; the number applies once
+  // the module is there.
+  if (!moduleActions(org, "hr").length) limits.employees = 0;
   return limits;
 }
 
