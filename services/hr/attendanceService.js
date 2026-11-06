@@ -63,13 +63,28 @@ class AttendanceService {
     return this.muster({ from: day, to: day });
   }
 
-  /** Paid hours an employee was marked present/half-day for, on one day - what idle labour (U3) will be
-   * measured against once wired in. Null when there is no row at all, never 0 (utils/hr.js rule 1's own
-   * reasoning): a day nobody marked is unknown, not a day with zero hours worked. */
+  /** Paid hours an employee was marked present/half-day for, on one day - what idle labour (U3) is
+   * measured against. Null when there is no row at all, never 0 (utils/hr.js rule 1's own reasoning):
+   * a day nobody marked is unknown, not a day with zero hours worked. */
   static async paidHoursOn(staffId, day) {
     const row = await AttendanceDay.findOne({ staffId, day }).select("hoursWorked status").lean();
     if (!row) return null;
     return ["present", "half_day"].includes(row.status) ? (row.hoursWorked || 0) : 0;
+  }
+
+  /** The same figure for many (staffId, day) pairs at once - one query, not one per pair (U3 reads this
+   * for every employee/day a process order's or a job card's labour touches). -> Map keyed "staffId|day". */
+  static async paidHoursForMany(pairs) {
+    const unique = [...new Map(pairs.filter((p) => p?.staffId && p?.day).map((p) => [`${p.staffId}|${p.day}`, p])).values()];
+    if (!unique.length) return new Map();
+    const rows = await AttendanceDay.find({
+      $or: unique.map((p) => ({ staffId: p.staffId, day: p.day })),
+    }).select("staffId day hoursWorked status").lean();
+    const out = new Map();
+    for (const r of rows) {
+      out.set(`${r.staffId}|${r.day}`, ["present", "half_day"].includes(r.status) ? (r.hoursWorked || 0) : 0);
+    }
+    return out;
   }
 }
 

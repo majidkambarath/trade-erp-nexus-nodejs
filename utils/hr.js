@@ -286,6 +286,51 @@ function labourMargin({ revenue, cost, hours } = {}) {
   };
 }
 
+// ---- U3: paid for, not booked to any work --------------------------------------------------------------------
+
+/**
+ * Idle labour on one (employee, day): what attendance says they were PAID for, less what was actually
+ * booked to a step or a task that day. Every workshop and factory leaks here and nobody measures it.
+ *
+ * Never negative - booked hours exceeding paid hours is a different problem (overtime nobody recorded, or
+ * work logged against the wrong day), not idle time, so it is clamped at 0 rather than shown as a
+ * deficit that would read as "idle" backwards. `paidHours` is null when attendance has nothing for that
+ * day (nobody marked it) - the caller must not read that null as 0 (rule 1's own reasoning): idle is then
+ * UNKNOWN, not zero, so it is left out of the figure entirely rather than silently understating it.
+ */
+function idleHours(paidHours, bookedHours) {
+  const paid = notNegative(paidHours);
+  const booked = notNegative(bookedHours) || 0;
+  if (paid === null) return null;
+  return round2(Math.max(0, paid - booked));
+}
+
+/**
+ * Idle labour for a whole set of labour lines, grouped by (staffId, day) - the shape previewForProcessOrder
+ * and forJobCard already produce. `paidHoursByKey` is a Map "staffId|day" -> paid hours or undefined
+ * (utils, so the service resolves the lookup; this function only groups and subtracts).
+ *
+ * -> [{ staffId, staffName, day, paidHours, bookedHours, idleHours }], one row per (employee, day) that
+ * attendance actually knows about - a day nobody marked contributes NOTHING here, not a row claiming 0.
+ */
+function idleLabour(lines, paidHoursByKey) {
+  const rows = Array.isArray(lines) ? lines.filter((l) => l && l.staffId && isCalendarDay(l.day)) : [];
+  const byKey = new Map();
+  for (const l of rows) {
+    const key = `${l.staffId}|${l.day}`;
+    const at = byKey.get(key) || { staffId: l.staffId, staffName: l.staffName, day: l.day, bookedHours: 0 };
+    at.bookedHours = round2(at.bookedHours + (num(l.hours) || 0));
+    byKey.set(key, at);
+  }
+  const out = [];
+  for (const [key, row] of byKey) {
+    const paid = paidHoursByKey?.get ? paidHoursByKey.get(key) : paidHoursByKey?.[key];
+    if (paid === undefined || paid === null) continue; // attendance has nothing for this day - unknown, not 0
+    out.push({ ...row, paidHours: paid, idleHours: idleHours(paid, row.bookedHours) });
+  }
+  return out;
+}
+
 // ---- validation --------------------------------------------------------------------------------------------
 
 const MAX_RATE = 100000; // a sanity ceiling: a typo of 250000 an hour should not reach the books
@@ -360,6 +405,8 @@ module.exports = {
   labourTotal,
   visibleLabour,
   labourMargin,
+  idleHours,
+  idleLabour,
   validateContract,
   serviceDays,
 };

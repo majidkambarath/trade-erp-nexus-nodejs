@@ -6,6 +6,7 @@ const hr = require("../../utils/hr");
 const { orgDay, classify, STATUS } = require("../../utils/documentExpiry");
 const AccountConfigService = require("../financial/accountConfigService");
 const ContractService = require("./contractService");
+const AttendanceService = require("./attendanceService");
 const { LedgerAccount } = require("../../models/modules/financial/financialModels");
 
 /**
@@ -86,6 +87,16 @@ class LabourCostService {
     return null;
   }
 
+  /** U3: idle labour for a set of lines already booked to work - what attendance says they were paid for,
+   * less what was actually booked that day (utils/hr.js idleLabour). Never folded into the cost total: it
+   * is a separate figure, surfaced beside the preview, never silently subtracted from anything. */
+  static async idleFor(lines) {
+    const pairs = lines.filter((l) => l?.staffId && l?.day).map((l) => ({ staffId: l.staffId, day: l.day }));
+    if (!pairs.length) return [];
+    const paidByKey = await AttendanceService.paidHoursForMany(pairs);
+    return hr.idleLabour(lines, paidByKey);
+  }
+
   // ---- U1: the labour in a product ------------------------------------------------------------------------
 
   /**
@@ -140,7 +151,8 @@ class LabourCostService {
       lines.push({ ...line, elapsedHours: hours.elapsedHours, capped: hours.capped, spansDays: hours.spansDays, confident: hours.confident });
     }
 
-    return { orderId: String(order._id), processNo: order.processNo, status: order.status, lines, skipped, total: hr.labourTotal(lines) };
+    const idle = await this.idleFor(lines);
+    return { orderId: String(order._id), processNo: order.processNo, status: order.status, lines, skipped, total: hr.labourTotal(lines), idle };
   }
 
   /**
@@ -214,7 +226,7 @@ class LabourCostService {
    */
   static async forJobCard(card, { session } = {}) {
     const tasks = (card?.tasks || []).filter((t) => t.mode === "in_house" && Number(t.actualHours) > 0);
-    if (!tasks.length) return { lines: [], total: hr.labourTotal([]), uncosted: [] };
+    if (!tasks.length) return { lines: [], total: hr.labourTotal([]), uncosted: [], idle: [] };
     const { employees, viaAdmin } = await this.employeesFor(tasks, { session });
     const fallbackDay = orgDay(card.closedAt || card.deliveredAt || card.createdAt) || orgDay(new Date());
     const resolved = tasks.map((t) => ({ task: t, employee: this.resolveOne(t, { employees, viaAdmin }) }));
@@ -239,7 +251,8 @@ class LabourCostService {
       });
       if (line) lines.push(line);
     }
-    return { lines, total: hr.labourTotal(lines), uncosted };
+    const idle = await this.idleFor(lines);
+    return { lines, total: hr.labourTotal(lines), uncosted, idle };
   }
 
   // ---- compliance where the work is assigned --------------------------------------------------------------

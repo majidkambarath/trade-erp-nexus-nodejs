@@ -5,6 +5,7 @@ const {
   monthlyCost, hourlyCost, contractOn, rateOn,
   hoursBetween, suggestedHours,
   labourCost, labourLine, labourTotal, visibleLabour, labourMargin,
+  idleHours, idleLabour,
   validateContract, serviceDays,
 } = require("../hr");
 
@@ -334,4 +335,36 @@ test("service cannot run backwards, and junk gives nothing", () => {
   assert.equal(serviceDays("2026-06-01", "2026-01-01"), null);
   assert.equal(serviceDays("nonsense", "2026-01-01"), null);
   assert.equal(serviceDays("2026-01-01", null), null);
+});
+
+// ---- U3: idle labour - paid for, not booked to work ------------------------------------------
+
+test("idle is what was paid less what was booked, clamped at zero", () => {
+  assert.equal(idleHours(8, 5), 3);
+  assert.equal(idleHours(8, 8), 0, "a full day booked is no idle time at all");
+  assert.equal(idleHours(8, 10), 0, "booked exceeding paid is a different problem, never a negative idle figure");
+});
+
+test("a day attendance has nothing for is UNKNOWN idle, never zero (rule 1's own reasoning)", () => {
+  assert.equal(idleHours(null, 5), null);
+});
+
+test("idleLabour groups lines by employee and day, and skips any day attendance has no row for", () => {
+  const lines = [
+    { staffId: "e1", staffName: "Ravi", day: "2026-11-01", hours: 3 },
+    { staffId: "e1", staffName: "Ravi", day: "2026-11-01", hours: 2 }, // two steps, same employee, same day - booked hours add up
+    { staffId: "e2", staffName: "Anya", day: "2026-11-01", hours: 4 },
+  ];
+  const paid = new Map([["e1|2026-11-01", 8]]); // nothing for e2 - attendance never marked that day
+  const out = idleLabour(lines, paid);
+  assert.equal(out.length, 1, "e2's day is left out entirely, not shown at 0");
+  assert.deepEqual(out[0], { staffId: "e1", staffName: "Ravi", day: "2026-11-01", bookedHours: 5, paidHours: 8, idleHours: 3 });
+});
+
+test("idleLabour never folds into anything the labour total itself reads", () => {
+  const lines = [{ staffId: "e1", staffName: "Ravi", day: "2026-11-01", hours: 3, amount: 75, rate: 25, source: "typed" }];
+  const total = labourTotal(lines);
+  const idle = idleLabour(lines, new Map([["e1|2026-11-01", 8]]));
+  assert.equal(total.amount, 75, "idle labour is a SEPARATE figure - it must never change the cost total");
+  assert.equal(idle[0].idleHours, 5);
 });
