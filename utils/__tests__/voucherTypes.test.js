@@ -8,7 +8,7 @@ const type = (key, over = {}) => ({ ...V.DEFAULTS, ...V.seedFor(key), ...over })
 const num = (t, seq, { branchId = "main", yearCode = "2026" } = {}) => V.renderNumber({ type: t, branchId, yearCode, seq });
 
 test("the seed reproduces the numbering that was hardcoded, so no existing client's numbers move", () => {
-  assert.equal(V.seedRows().length, 34, "every series the app issues: 29, plus JC and CLM for the garage module (26 Oct 2026), EMP, GRJ and LV for HR (6 Nov 2026)");
+  assert.equal(V.seedRows().length, 35, "every series the app issues: 29, plus JC and CLM for the garage module (26 Oct 2026), EMP, GRJ, LV and PAY for HR (6 Nov 2026)");
   assert.equal(num(type("SO"), 1), "SO-2026-0001");
   assert.equal(num(type("PO"), 1), "PO-2026-0001");
   // An employee is not a document of 2026: EMP counts continuously and prints no year, which is what a staff

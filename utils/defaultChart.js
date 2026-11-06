@@ -73,6 +73,8 @@ const ACCOUNTS = [
   ["Salaries & Wages", "Operating Expenses", "salary-expense"],
   ["Gratuity Expense", "Operating Expenses", "gratuity-expense"],
   ["Employee Gratuity Provision", "Long-term Liabilities", "gratuity-provision"],
+  ["Salaries Payable", "Current Liabilities", "salaries-payable"],
+  ["Statutory Deductions Payable", "Current Liabilities", "statutory-deductions-payable"],
   ["Rent Expense", "Operating Expenses", null],
   ["Utilities", "Operating Expenses", null],
   ["Bank Charges", "Operating Expenses", "bank-charges"],

@@ -144,6 +144,10 @@ const MODULES = {
       attendance: "Mark and change the muster: shifts, holidays, check-in and check-out",
       leave: "Submit a leave request, and manage leave types",
       approve: "Approve or reject a leave request",
+      // W4 (6 Nov 2026): running a payroll - planning and posting a run, reversing one, salary
+      // components. Seeing what it PAID still needs `confidential` too (asserted in the controller, the
+      // same split a contract already has between view and confidential).
+      payroll: "Plan, post and reverse a payroll run, and manage salary components",
     },
   },
   settings: {

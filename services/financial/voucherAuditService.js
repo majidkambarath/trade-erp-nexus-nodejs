@@ -40,6 +40,7 @@ const SOURCE_LABEL = {
   cheque_clearance: "Cheque clearing",
   production: "Production",
   gratuity: "Gratuity accrual",
+  payroll: "Payroll run",
 };
 
 const fact = (label, value, type = "text") => (value === null || value === undefined || value === "" ? null : { label, value, type });
@@ -296,6 +297,23 @@ class VoucherAuditService {
           fact("Cumulative liability", round2(g.cumulativeLiability), "money"),
           fact("Employees costed", g.employeeCount, "number"),
           g.reversedAt ? fact("Reversed on", g.reversedAt, "datetime") : null,
+        ];
+      }
+    } else if (kind === "payroll") {
+      // the run's own id is the voucherId, like a production or a gratuity accrual - one row per period
+      // for the whole organisation, never per employee (services/hr/payrollService.js)
+      const PayrollRun = require("../../models/modules/hr/payrollRunModel");
+      const run = await PayrollRun.findById(id).lean();
+      if (run) {
+        if (run.status === "REVERSED") status = "reversed";
+        narration = `Payroll for ${run.period}`;
+        facts = [
+          fact("Period", run.period),
+          fact("Employees paid", run.employeeCount, "number"),
+          fact("Gross pay", round2(run.totalGross), "money"),
+          fact("Deductions", round2(run.totalDeductions), "money"),
+          fact("Net pay", round2(run.totalNet), "money"),
+          run.reversedAt ? fact("Reversed on", run.reversedAt, "datetime") : null,
         ];
       }
     }

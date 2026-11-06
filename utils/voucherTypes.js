@@ -77,6 +77,9 @@ const SEED = [
   // A leave request, numbered on submit. Never posts to the ledger - it is the third kind the approvals
   // queue reads (D13), judged like a document or a voucher but moving nothing financial.
   { key: "LV",   name: "Leave request",          kind: "hr",        postsAs: null,               prefix: "LV",   statutory: false },
+  // A payroll run, one for the WHOLE organisation (D14 - the same closing-entry shape GRJ already uses:
+  // a fresh id stands in for a voucher id, this series only numbers it). Keeps its year, resets yearly.
+  { key: "PAY",  name: "Payroll run",            kind: "hr",        postsAs: null,               prefix: "PAY",  statutory: false },
   // Written by the engine itself: go-live balances, a proven bank reconciliation, the year-end entry.
   // Nobody types one of these, so they take no manual override and no reuse (see mayOverride).
   { key: "OBV",  name: "Opening balance",        kind: "system",    postsAs: null,               prefix: "OBV",  statutory: false },

@@ -6,6 +6,7 @@ const Staff = require("../../models/modules/staffModel");
 const EmployeeContract = require("../../models/modules/hr/employeeContractModel");
 const employees = require("../../controllers/hr/employeeController");
 const contracts = require("../../controllers/hr/contractController");
+const employeeDocuments = require("../../controllers/hr/employeeDocumentController");
 
 // The HR module, mounted at /api/v1/hr. Every route is gated on an hr.* permission - hr is sold per
 // organisation (utils/plans.js: off in standard/trading, present in premium/trial/internal, or granted by
@@ -55,6 +56,15 @@ router.delete("/contracts/:contractId", requirePermission("hr.confidential"), (r
 // labour costing means anything for that person.
 router.get("/coverage", requirePermission("hr.view"), contracts.coverage);
 
+// W4: an employee's own KYC register - what expiry-blocks-assignment already reads (labourCostService.js
+// expiredDocumentsFor, wave 1) and what the combined expiry report (customer/vendor/staff) now reads too.
+router.get("/employees/:id/documents", requirePermission("hr.view"), (req, res, next) => { req.params.staffId = req.params.id; next(); }, employeeDocuments.forStaff);
+router.post("/employee-documents", requirePermission("hr.manage"), employeeDocuments.create);
+// :docId, not :id - the parent router keys "id" to branchOfDocument(Staff), and a document row is not one.
+router.put("/employee-documents/:docId", requirePermission("hr.manage"), (req, res, next) => { req.params.id = req.params.docId; next(); }, employeeDocuments.update);
+router.delete("/employee-documents/:docId", requirePermission("hr.manage"), (req, res, next) => { req.params.id = req.params.docId; next(); }, employeeDocuments.remove);
+router.get("/employee-documents/expiring", requirePermission("hr.view"), employeeDocuments.expiring);
+
 // W2: gratuity and Emiratisation, and the dated-rule engine both read (routes/hr/complianceRoutes.js).
 // authenticateToken above already ran; this sub-router only adds its own permission gates.
 router.use(require("./complianceRoutes"));
@@ -63,5 +73,8 @@ router.use(require("./complianceRoutes"));
 // queue's own third kind (D13).
 router.use(require("./timeRoutes"));
 router.use(require("./leaveRoutes"));
+
+// W4: salary components and a payroll run (D14), posted like a year's closing entry.
+router.use(require("./payrollRoutes"));
 
 module.exports = router;

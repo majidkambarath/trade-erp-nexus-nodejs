@@ -51,6 +51,15 @@ const SEED = [
   // per employee (services/hr/gratuityService.js): the ledger only needs to be right in total.
   k("gratuity-expense", "Gratuity expense", "EXPENSE", "account"),
   k("gratuity-provision", "Employee gratuity provision", "LIABILITY", "account"),
+  // Payroll (D14): gross pay is debited to salary-expense above and credited here in full - owed to staff
+  // until it is actually paid out through an ordinary payment voucher against this account, like any other
+  // liability. Current, not long-term: it is cleared within days, never carried the way gratuity is.
+  k("salaries-payable", "Salaries payable", "LIABILITY", "account"),
+  // The catch-all a deduction component (PF, ESI, professional tax...) credits unless it names its OWN
+  // account (utils/payroll.js's "each able to name its own expense account" - a component's accountId
+  // override, same reasoning production's cost lines already have). One pooled account is enough for an
+  // organisation that has not split them out; splitting is the component's own choice, not a second key.
+  k("statutory-deductions-payable", "Statutory deductions payable", "LIABILITY", "account"),
   k("inventory-asset", "Inventory (stock on hand)", "ASSET", "account"),
   k("opening-balance-equity", "Opening balance equity", "EQUITY", "account"),
   // year-end closing: where a year's profit (or loss) goes when the year is closed

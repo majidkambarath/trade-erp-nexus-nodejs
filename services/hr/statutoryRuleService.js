@@ -34,6 +34,16 @@ const SEED = {
     // ₹20 lakh and ₹25 lakh are both reported as the current tax-free cap - the LOWER figure is seeded for
     // the same under-warn-rather-than-over-claim reason as the Emiratisation fine above.
     ["in.gratuity.capAmount", 2000000, "INR", "reported as both ₹20 lakh and ₹25 lakh by different sources - confirm the current cap"],
+    // Payroll's W4 starter components (SalaryComponentService.ensureDefaults) read these. PF and ESI are
+    // well enough defined to generalise cleanly (utils/payroll.js's own capBase/eligibleUpTo shapes);
+    // professional tax varies by STATE, so one flat figure is seeded, not a slab table - correct it, or
+    // remove the component, in Setup. TDS is deliberately NOT seeded at all (see utils/payroll.js's header).
+    ["in.pf.employeeRate", 12, "%", "Employees' Provident Funds Act, 1952 - the employee's own share"],
+    // ₹15,000 and ₹25,000 are both reported as the current PF wage ceiling - the LOWER figure is seeded.
+    ["in.pf.wageCeiling", 15000, "INR/month", "reported as both ₹15,000 and ₹25,000 by different sources - confirm the current ceiling"],
+    ["in.esi.employeeRate", 0.75, "%", "ESI Corporation's current employee contribution rate"],
+    ["in.esi.wageThreshold", 21000, "INR/month", "above this, ESI does not apply at all - confirm the current threshold"],
+    ["in.pt.monthlyAmount", 200, "INR/month", "professional tax is STATE-specific and this is one flat figure, not a slab table - set your own state's rule or remove the component"],
   ],
 };
 
@@ -85,6 +95,17 @@ class StatutoryRuleService {
     await this.ensureDefaults(c);
     const rows = await StatutoryRule.find({ country: c }).select("key value effectiveFrom effectiveTo").lean();
     return rows.map((r) => ({ key: r.key, value: r.value, effectiveFrom: r.effectiveFrom, effectiveTo: r.effectiveTo }));
+  }
+
+  /** Many keys at once, as the Map payroll's own rulesByKey wants (utils/payroll.js payslipFor) - one query
+   * for the whole table (rowsFor), then compliance.ruleOn in memory per key, never one query a key. */
+  static async valuesOn(keys, { country, day } = {}) {
+    const c = (country || orgLocale.country()).toUpperCase();
+    const want = [...new Set((keys || []).filter(Boolean))];
+    if (!want.length) return new Map();
+    const rows = await this.rowsFor(c);
+    const on = day || todayInOrg();
+    return new Map(want.map((key) => [key, compliance.ruleOn(rows, key, on)]));
   }
 
   /** A new row. The day it starts is fixed once saved, the same reason EmployeeContract's own start day is
