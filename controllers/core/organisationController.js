@@ -22,5 +22,8 @@ exports.status = catchAsync(async (req, res) => {
     approvals: { ...(await ApprovalPolicyService.policy()), notesNeedApproval: await ApprovalPolicyService.notesNeedApproval() },
     security,
   };
-  res.status(200).json({ success: true, data: { ...status, me, policy } });
+  // Which API answered, so Settings can show it beside the app's own version without a second request -
+  // the two deploy separately, so a mismatch is worth seeing.
+  const build = require("../../utils/version");
+  res.status(200).json({ success: true, data: { ...status, me, policy, build: { api: build.version, startedAt: build.startedAt } } });
 });

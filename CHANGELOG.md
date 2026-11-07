@@ -1,5 +1,65 @@
 # Changelog
 
+## 2.3.0.0 — 7 November 2026
+
+The HRMS: employees, their cost rates, attendance, leave, payroll, gratuity, the employee's own
+self-service portal, onboarding and exit checklists, appraisals — and the figure no standalone HR
+product can produce, what a piece of WORK cost in labour rather than what the people cost. Needs
+frontend 2.3.0.0. Backend 2.3.0.0.
+
+### Added
+
+- **The HR module** (`hr` permission module: view, manage, attendance, leave, payroll, approve,
+  confidential), sold per organisation. `hr.confidential` separates *seeing people* from *seeing
+  money* — and it is never a route gate for a read: the same request answers differently depending on
+  who asked, so the controller shapes the response. An org-wide total survives for everyone; anything
+  nameable, or divisible back into one person's pay, does not.
+- **Labour into cost.** An employee's hour has a cost (`EmployeeContract`, a dated history — a raise
+  is a new row, never an edit, so a past order keeps the rate it was really built at), and that cost
+  reaches a product through the Production engine's own absorption contra and a job card's margin.
+  Idle labour (paid hours not booked to either) is its own figure, never folded into the product.
+- **Attendance, leave, payroll.** The muster (a month matrix above `md`, a day's card reading below
+  it), leave requests as a third kind in the organisation's own approvals queue rather than a second
+  queue nobody remembers to check, and a payroll run posted the way a fiscal year closes — one
+  operation, many branches' worth of entries, no `Voucher` per employee.
+- **Gratuity as a live liability**, accrued monthly into the ledger (IAS 19) as ONE journal with the
+  per-employee detail in a report, so the balance sheet is honest before anybody resigns. Plus the
+  Emiratisation tracker, which posts nothing (IAS 37: "might be fined next quarter" is not a present
+  obligation) and warns before each checkpoint.
+- **The employee self-service portal** — its own identity, its own collection, its own JWT audience,
+  held at the developer console's security weight: per-account lockout counted *before* the password is
+  weighed, and per-address limits counting FAILURES only, because a portal is signed into from a shared
+  tablet at the factory gate and counting successes would refuse the eleventh worker of the morning.
+- **Onboarding and exit checklists, and a plain appraisal.** A small dedicated model rather than
+  reusing `CrmActivity`: that service knows four regarding kinds, none of them a staff id, and its own
+  list queries would have shown HR items in a customer-facing communications log.
+- **The HR MIS dashboard** on HRMS > Overview, led by cost: payroll by month and by department, the
+  headline figures, joiners against leavers, the attendance split, and what needs attention. Every
+  number is read from the service that owns it, so a card cannot disagree with the page it links to.
+- **The running version is on screen.** `GET /api/v1/health` reports the API's `version` and
+  `startedAt` without a sign-in (a deployment check from outside), `GET /organisation/status` carries
+  it so Settings needs no second request, and Settings shows the app's version beside the server's.
+  The two deploy separately, so a mismatch that lasts means one of them did not finish.
+
+### Fixed
+
+- **The muster silently lost the earliest days of a month.** `AttendanceService.muster` ended in a
+  flat `.limit(2000)` while sorting newest-day-first, and the month matrix asks for a whole month of
+  every employee: past about 65 employees the cap bit and the days it dropped rendered as "Not marked"
+  for people who had been marked. A caller may now say how many rows it needs, clamped to a ceiling.
+- **Two holes in the portal door**: `/login` had no per-address limit at all, so one address could walk
+  through unlimited phone numbers each with a fresh five-try budget; and `changePassword` weighed the
+  current password while counting nothing, so a stolen session could guess it for ever and then replace
+  it. Both are the shapes already closed on the admin side.
+- **A salary component's posting account was never validated**, and a payroll run silently skipped a
+  component whose account had gone — it now refuses with the account named.
+- Four HR Setup masters (shifts, leave types, salary components, departments) could only be added and
+  deleted although `update` existed on both sides; fixing a typo'd department meant delete-and-recreate,
+  which orphans everyone already assigned to it.
+- `Vehicle.customerName` and the job-card line's VAT fields were computed and then dropped by the
+  schema; `normalizeContacts` minted a new `_id` per save, so editing a contact replaced the person.
+
+
 ## 2.2.0.0 — 5 November 2026
 
 An invoice now carries the identifiers and references it should: a garage invoice names the car by

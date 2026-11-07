@@ -133,6 +133,10 @@ app.get("/api/v1/health", (req, res) => {
   res.json({
     success: true,
     message: "Server is running successfully",
+    // Which API is live, and since when. The app deploys separately from this, so a version here that does
+    // not match the app's is how a half-finished deploy is spotted from outside, without signing in.
+    version: require("./utils/version").version,
+    startedAt: require("./utils/version").startedAt,
     // false until the start-up work (migrations, adopting the original organisation) is done: the server answers while it
     // is still building a fresh database, and a sign-in in that window would be refused. Health checks may ignore it.
     ready: organisationsSettled,

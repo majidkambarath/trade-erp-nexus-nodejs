@@ -197,3 +197,20 @@ test("a role with no hr.view at all is refused the dashboard, like every other H
   assert.equal(r.status, 403);
   assert.equal(r.code, "MODULE_NOT_IN_PLAN");
 });
+
+// Which version is live. The app and the API deploy as separate services, so both report their own and a
+// screen can say whether they agree - /health answers it without a sign-in (a deployment check from
+// outside), and /organisation/status carries it so Settings needs no second request.
+test("the API reports its version, unauthenticated, so a deploy can be checked from outside", { skip }, async () => {
+  const r = await fetch(`${BASE}/health`);
+  const body = await r.json();
+  assert.equal(r.status, 200);
+  assert.equal(body.version, require("../../package.json").version, "the running version, not a hardcoded string");
+  assert.match(body.startedAt, /^\d{4}-\d{2}-\d{2}T/, "and when this process started, which tells a deploy from a restart");
+});
+
+test("the status a signed-in screen already reads carries the API version too", { skip }, async () => {
+  const r = await api("hremp", "GET", "/organisation/status");
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.body.build.api, require("../../package.json").version);
+});
