@@ -1,7 +1,23 @@
+const mongoose = require("mongoose");
 const SalaryComponent = require("../../models/modules/hr/salaryComponentModel");
+const { LedgerAccount } = require("../../models/modules/financial/financialModels");
 const AppError = require("../../utils/AppError");
 const rules = require("../../utils/payroll");
 const orgLocale = require("../../utils/orgLocale");
+
+/** A component's own account override, checked the same way ledgerVoucherService.js's own
+ * postableAccounts does (it exists, is active, accepts a direct posting) - BEFORE the component is ever
+ * saved. Without this, a stale or bogus accountId would only surface when a payroll run silently dropped
+ * one leg of its posting and left the ledger unbalanced (the gap postAccounts() in payrollService.js now
+ * refuses outright, but it is cheaper and clearer to refuse here, when the component is first chosen). */
+async function assertAccount(accountId) {
+  if (!accountId) return;
+  if (!mongoose.isValidObjectId(accountId)) throw new AppError("Choose a valid account", 400, "INVALID_ACCOUNT");
+  const a = await LedgerAccount.findById(accountId).select("accountName isActive allowDirectPosting");
+  if (!a) throw new AppError("Account not found", 404, "ACCOUNT_NOT_FOUND");
+  if (!a.isActive) throw new AppError(`${a.accountName} is inactive`, 400, "ACCOUNT_INACTIVE");
+  if (a.allowDirectPosting === false) throw new AppError(`Direct posting is not allowed to ${a.accountName}`, 400, "DIRECT_POSTING_NOT_ALLOWED");
+}
 
 // Starter components for IN (PF, ESI, professional tax), seeded lazily on first read - the same
 // "on first READ" pattern VoucherTypeService.ensureDefaults and StatutoryRuleService.ensureDefaults
@@ -59,6 +75,7 @@ class SalaryComponentService {
   static async create(data, by) {
     const errors = rules.validateComponent(data);
     if (errors.length) throw new AppError(errors[0].message, 400, errors[0].code, { errors, field: errors[0].field });
+    await assertAccount(data.accountId);
     return SalaryComponent.create({
       name: String(data.name).trim(), kind: data.kind, computation: data.computation,
       rate: data.rate === "" || data.rate === undefined ? null : Number(data.rate),
@@ -74,6 +91,7 @@ class SalaryComponentService {
     const merged = { ...(await SalaryComponent.findById(id).lean()), ...data };
     const errors = rules.validateComponent(merged);
     if (errors.length) throw new AppError(errors[0].message, 400, errors[0].code, { errors, field: errors[0].field });
+    if ("accountId" in data) await assertAccount(data.accountId);
     const set = { updatedBy: by };
     for (const f of ["name", "kind", "computation", "rate", "capBase", "eligibleUpTo", "statutoryKey", "capBaseKey", "eligibleUpToKey", "accountId", "country", "isActive"]) {
       if (f in data) set[f] = data[f] === "" ? null : data[f];
@@ -91,3 +109,4 @@ class SalaryComponentService {
 }
 
 module.exports = SalaryComponentService;
+module.exports.assertAccount = assertAccount;

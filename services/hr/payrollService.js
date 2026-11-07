@@ -140,8 +140,18 @@ class PayrollService {
     }
 
     const accountIds = [...new Set([...debitTotals.keys(), ...creditTotals.keys()])];
-    const accounts = await LedgerAccount.find({ _id: { $in: accountIds } }).select("accountName accountCode").session(session).lean();
+    const accounts = await LedgerAccount.find({ _id: { $in: accountIds } }).select("accountName accountCode isActive allowDirectPosting").session(session).lean();
     const byAccount = new Map(accounts.map((a) => [String(a._id), a]));
+    // A component's own accountId override was checked when the component was SAVED
+    // (SalaryComponentService.assertAccount) - but an account can be deactivated or deleted from the
+    // chart afterwards, and silently dropping its leg here would post an unbalanced entry (debits <>
+    // credits) with nothing to say so. Refuse outright instead; the message names which account and why.
+    for (const id of accountIds) {
+      const a = byAccount.get(id);
+      if (!a) throw new AppError("A salary component's account could not be found - check Setup > Salary components", 409, "ACCOUNT_NOT_CONFIGURED");
+      if (!a.isActive) throw new AppError(`${a.accountName} is inactive - choose another account for the salary component that posts to it`, 409, "ACCOUNT_INACTIVE");
+      if (a.allowDirectPosting === false) throw new AppError(`Direct posting is not allowed to ${a.accountName}`, 409, "DIRECT_POSTING_NOT_ALLOWED");
+    }
 
     const runId = new mongoose.Types.ObjectId();
     const voucherNo = await NumberSeriesService.allocate("PAY", built.payDate, { session });
@@ -152,14 +162,15 @@ class PayrollService {
       month: d.getMonth() + 1, year: d.getFullYear(), financialYear: String(d.getFullYear()),
       createdBy: asAdminId(by), narration: `Payroll ${period}`,
     };
+    // Every id in accountIds was just proven to resolve, above - this never silently drops a leg.
     const docs = [];
     for (const [accId, amount] of debitTotals) {
       const a = byAccount.get(accId);
-      if (a) docs.push({ ...base, accountId: a._id, accountName: a.accountName, accountCode: a.accountCode, debitAmount: amount, creditAmount: 0 });
+      docs.push({ ...base, accountId: a._id, accountName: a.accountName, accountCode: a.accountCode, debitAmount: amount, creditAmount: 0 });
     }
     for (const [accId, amount] of creditTotals) {
       const a = byAccount.get(accId);
-      if (a) docs.push({ ...base, accountId: a._id, accountName: a.accountName, accountCode: a.accountCode, debitAmount: 0, creditAmount: amount });
+      docs.push({ ...base, accountId: a._id, accountName: a.accountName, accountCode: a.accountCode, debitAmount: 0, creditAmount: amount });
     }
     await writeEntries(docs, session);
 

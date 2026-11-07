@@ -18,6 +18,7 @@ router.put("/change-password", p.changePassword);
 router.get("/me", p.me);
 router.post("/punch", p.punch);
 router.get("/attendance/today", p.todayAttendance);
+router.get("/leave-types", p.leaveTypes);
 router.get("/leave-requests", p.leaveRequests);
 router.get("/leave-requests/balance", p.leaveBalance);
 router.post("/leave-requests", p.submitLeaveRequest);

@@ -8,6 +8,7 @@ const Staff = require("../../models/modules/staffModel");
 const AttendanceService = require("../../services/hr/attendanceService");
 const LeaveRequestService = require("../../services/hr/leaveRequestService");
 const PayrollService = require("../../services/hr/payrollService");
+const { LeaveTypeService } = require("../../services/hr/timeSetupService");
 const rules = require("../../utils/attendance");
 const { todayInOrg } = require("../../utils/documentExpiry");
 
@@ -54,7 +55,10 @@ exports.changePassword = catchAsync(async (req, res) => {
 exports.me = catchAsync(async (req, res) => {
   const staff = await Staff.findById(req.employeeStaffId).select("name staffId designation department joiningDate contactNo email").lean();
   if (!staff) throw new AppError("Employee record not found", 404, "STAFF_NOT_FOUND");
-  ok(res, staff);
+  // mustChangePassword lives on EmployeeUser, not Staff - carried here so a page RELOAD (not just a
+  // fresh login) still knows to hold the person at the change-password screen rather than forgetting
+  // the moment the login response is gone.
+  ok(res, { ...staff, mustChangePassword: req.employeeUser.mustChangePassword });
 });
 
 // A punch: today's own day only, real check-in/check-out only - never a manual status, and never a day
@@ -72,6 +76,10 @@ exports.todayAttendance = catchAsync(async (req, res) => {
   const rows = await AttendanceService.muster({ from: todayInOrg(), to: todayInOrg(), staffId: req.employeeStaffId });
   ok(res, rows[0] || null);
 });
+
+// Just enough to fill the submit form's picker - name and accrual rate, nothing an organisation would
+// treat as sensitive, and read-only.
+exports.leaveTypes = catchAsync(async (req, res) => ok(res, await LeaveTypeService.list()));
 
 exports.leaveRequests = catchAsync(async (req, res) => ok(res, await LeaveRequestService.list({ staffId: req.employeeStaffId, status: req.query.status })));
 
