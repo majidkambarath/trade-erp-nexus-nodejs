@@ -127,7 +127,14 @@ test("a role holding hr.view and hr.manage but not hr.confidential reads the dir
   assert.equal(list.body.length, 1);
   assert.equal(list.body[0].hourlyCost, undefined, "but the rate is hidden, not zero");
   assert.equal(list.body[0].basicPay, undefined);
-  assert.equal(JSON.stringify(list.body).includes("25"), false, "25 is nowhere in the response at all");
+  // The rate is nowhere in the response - checked over the VALUES rather than by searching the
+  // serialised text for "25", which also matched any ObjectId that happened to contain those two
+  // characters and failed this test at random (it did, about one run in several).
+  const values = (v) => (v && typeof v === "object" ? Object.values(v).flatMap(values) : [v]);
+  assert.equal(values(list.body).some((v) => Number(v) === 25), false, "25 is not a value anywhere in the response");
+  for (const field of ["hourlyCost", "monthlyCost", "basicPay", "allowances", "otherMonthlyCost", "costPerHour", "hoursPerMonth"]) {
+    assert.equal(Object.hasOwn(list.body[0], field), false, `${field} is not even a key for this reader`);
+  }
 });
 
 test("the same role is refused writing a contract outright: setting pay needs hr.confidential, not hr.manage", { skip }, async () => {
@@ -141,6 +148,52 @@ test("another organisation's employee id is a 404, never a 403 that would confir
   // hrno has no hr module at all, so the module ceiling answers first - the deeper tenant-isolation case
   // (an hr-holding organisation reading ANOTHER hr-holding organisation's id) is covered by
   // tenantPlugin.test.js and tenantBleedHttp.test.js for every tenanted collection, Staff included.
+  assert.equal(r.status, 403);
+  assert.equal(r.code, "MODULE_NOT_IN_PLAN");
+});
+
+// The MIS dashboard behind HRMS > Overview. The route is hr.view like coverage beside it; hr.confidential
+// decides what COMES BACK, never whether the request is allowed - the same split contracts.list proved
+// above, applied to a screen made almost entirely of figures.
+test("the dashboard answers hr.view, and carries the figures the whole screen needs", { skip }, async () => {
+  const r = await api("hremp", "GET", "/hr/dashboard");
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.body.period.month.length, 7, "a YYYY-MM the screen can label");
+  assert.equal(r.body.period.months.length, 6);
+  assert.ok(r.body.headcount, "headcount");
+  assert.ok(r.body.attendance, "attendance");
+  assert.ok(r.body.leave, "leave");
+  assert.ok(r.body.cost, "cost");
+  assert.ok(r.body.documents, "document expiry");
+  assert.equal(r.body.headcount.total >= 1, true, "the employee added above is on the books");
+  // Ravi costs 25/hour, so the owner's answer may name a rate; the point of the next test is that the
+  // clerk's answer may not.
+  assert.equal(r.body.confidential, true);
+});
+
+test("the dashboard hides every divisible figure from a reader without hr.confidential - and none of them come back as zero", { skip }, async () => {
+  const open = await api("hremp", "GET", "/hr/dashboard");
+  const shut = await api("clerk", "GET", "/hr/dashboard");
+  assert.equal(shut.status, 200, "the screen is not refused - it answers narrower");
+  assert.equal(shut.body.confidential, false);
+
+  // Still useful: the counts are nobody's pay.
+  assert.equal(shut.body.headcount.total, open.body.headcount.total);
+  assert.ok(Array.isArray(shut.body.headcount.byDepartment), "headcount by department is a count, so it stays");
+  assert.deepEqual(shut.body.attendance, open.body.attendance);
+
+  // Gone: anything an individual's pay could be read out of.
+  assert.equal(shut.body.cost.perEmployee, undefined, "an average beside a headcount is a salary with extra steps");
+  assert.equal(shut.body.cost.byDepartment, undefined, "a department of one names that one person's pay");
+  assert.notEqual(shut.body.cost.perEmployee, 0, "undefined is 'hidden from you'; 0 would be a lie");
+  // And the keys are not merely empty - they are not serialised at all.
+  const costKeys = Object.keys(shut.body.cost).sort();
+  assert.deepEqual(costKeys, ["byMonth", "changePct", "previousMonth", "thisMonth"], JSON.stringify(costKeys));
+  if (shut.body.gratuity) assert.equal(shut.body.gratuity.employees, undefined);
+});
+
+test("a role with no hr.view at all is refused the dashboard, like every other HR read", { skip }, async () => {
+  const r = await api("hrno", "GET", "/hr/dashboard");
   assert.equal(r.status, 403);
   assert.equal(r.code, "MODULE_NOT_IN_PLAN");
 });

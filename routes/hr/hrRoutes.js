@@ -62,6 +62,12 @@ router.delete("/contracts/:contractId", requirePermission("hr.confidential"), (r
 // labour costing means anything for that person.
 router.get("/coverage", requirePermission("hr.view"), contracts.coverage);
 
+// The MIS dashboard behind HRMS > Overview: one read for the whole screen. `hr.view` like coverage above
+// it, with every money figure stripped in the controller for a reader without hr.confidential. It takes
+// NO path param on purpose - the period rides in the query string - so the router.param("id", ...) hook
+// at the top of this file has nothing to try to load as a Staff document.
+router.get("/dashboard", requirePermission("hr.view"), require("../../controllers/hr/hrDashboardController").overview);
+
 // W4: an employee's own KYC register - what expiry-blocks-assignment already reads (labourCostService.js
 // expiredDocumentsFor, wave 1) and what the combined expiry report (customer/vendor/staff) now reads too.
 router.get("/employees/:id/documents", requirePermission("hr.view"), (req, res, next) => { req.params.staffId = req.params.id; next(); }, employeeDocuments.forStaff);
