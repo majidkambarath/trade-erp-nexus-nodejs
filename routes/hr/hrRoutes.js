@@ -95,4 +95,8 @@ router.use(require("./assetRoutes"));
 // W6: onboarding/exit checklists and a plain appraisal - the smallest wave, deliberately (D16).
 router.use(require("./talentRoutes"));
 
+// HRMS > Reports' own two derived reports (routes/hr/hrReportRoutes.js): a period's muster per employee
+// and everybody's leave balance. Query parameters only, so nothing collides with router.param("id") above.
+router.use(require("./hrReportRoutes"));
+
 module.exports = router;
