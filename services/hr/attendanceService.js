@@ -6,6 +6,12 @@ const { HolidayService } = require("./timeSetupService");
 const Shift = require("../../models/modules/hr/shiftModel");
 const { isCalendarDay, todayInOrg } = require("../../utils/documentExpiry");
 
+// How many muster rows one read may return. The default serves a day or a short range; a caller that needs
+// a whole month of every employee (the month matrix) asks for what it needs and is clamped to the ceiling,
+// so neither a forgetful caller nor a hand-typed ?limit= can turn this into an unbounded read.
+const DEFAULT_MUSTER_ROWS = 2000;
+const MAX_MUSTER_ROWS = 20000;
+
 /**
  * The muster: one row per employee per day, its status STAMPED at write time from utils/attendance.js
  * dayStatus - never recomputed on read, the same reason a labour cost line's rate is stamped, not looked up
@@ -48,13 +54,22 @@ class AttendanceService {
     );
   }
 
-  /** The muster for a range, newest first - the screen's own listing, and what U3 (idle labour) will read
-   * paid hours from once wired into labourCostService (the plan's own next step, not yet built). */
-  static async muster({ from, to, staffId } = {}) {
+  /** The muster for a range, newest first - the screen's own listing, and what U3 (idle labour) reads
+   * paid hours from (labourCostService.idleFor).
+   *
+   * `limit` exists because the month matrix asks for a WHOLE month at once: at ~65 active employees x 31
+   * days the old flat 2000 cap bit, and since the sort is newest day first the rows it dropped were the
+   * EARLIEST days of the month being looked at - which rendered as "Not marked" for people who had been
+   * marked. A silent wrong answer is the worst failure a muster can have, so a caller that knows how many
+   * rows it needs may say so. It is clamped either way: a query value is never trusted, and no caller can
+   * ask for an unbounded read. */
+  static async muster({ from, to, staffId, limit } = {}) {
     const q = {};
     if (from || to) q.day = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
     if (staffId) q.staffId = staffId;
-    const rows = await AttendanceDay.find(q).sort({ day: -1, staffId: 1 }).limit(2000).select("-location").lean();
+    const asked = Number(limit);
+    const cap = Number.isFinite(asked) && asked > 0 ? Math.min(Math.trunc(asked), MAX_MUSTER_ROWS) : DEFAULT_MUSTER_ROWS;
+    const rows = await AttendanceDay.find(q).sort({ day: -1, staffId: 1 }).limit(cap).select("-location").lean();
     const staff = await Staff.find({ _id: { $in: [...new Set(rows.map((r) => String(r.staffId)))] } }).select("name staffId").lean();
     const byId = new Map(staff.map((s) => [String(s._id), s]));
     return rows.map((r) => ({ ...r, staffName: byId.get(String(r.staffId))?.name, staffCode: byId.get(String(r.staffId))?.staffId }));
@@ -90,5 +105,9 @@ class AttendanceService {
     return out;
   }
 }
+
+// Exposed so a caller sizing its own read (and the test that pins the clamp) names the same numbers.
+AttendanceService.DEFAULT_MUSTER_ROWS = DEFAULT_MUSTER_ROWS;
+AttendanceService.MAX_MUSTER_ROWS = MAX_MUSTER_ROWS;
 
 module.exports = AttendanceService;

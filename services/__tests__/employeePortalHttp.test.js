@@ -200,3 +200,108 @@ test("an administrator disabling the portal account ends it immediately", { skip
   const stillTries = await call("POST", "/employee/login", { body: { phone: raviPhone, password: "ravipass2" } });
   assert.equal(stillTries.status, 401);
 });
+
+// The current password is a secret being guessed at, so the change-password door counts attempts exactly as
+// the sign-in door does. Without this a stolen session could try passwords here for ever and then replace
+// the real one - the same hole that was once open on the admin side. A fresh employee, so locking the
+// account cannot disturb anything above.
+test("a wrong current password is counted, and enough of them lock the account even for the right one", { skip }, async () => {
+  const meera = await admin("POST", "/hr/employees", { name: "Meera Portal", designation: "Clerk", contactNo: "0503333333", idNo: "784EPORT0003", joiningDate: "2026-01-01" });
+  assert.equal(meera.status, 201, JSON.stringify(meera.data));
+  const phone = "+971509990003";
+  await admin("POST", `/hr/employees/${meera.body._id}/portal`, { phone, password: "meerapass1" });
+
+  const signedIn = await call("POST", "/employee/login", { body: { phone, password: "meerapass1" } });
+  assert.equal(signedIn.status, 200, JSON.stringify(signedIn.data));
+  const token = signedIn.body.accessToken;
+
+  for (let i = 0; i < 5; i++) {
+    const wrong = await call("PUT", "/employee/change-password", { token, body: { currentPassword: `guess-${i}`, newPassword: "whatever1" } });
+    assert.equal(wrong.status, 400, "a wrong guess is a 400, never a 401 - a 401 would read to the browser as 'your session ended'");
+    assert.equal(wrong.code, "PASSWORD_INCORRECT");
+  }
+
+  const locked = await call("PUT", "/employee/change-password", { token, body: { currentPassword: "meerapass1", newPassword: "meerapass2" } });
+  assert.equal(locked.status, 423, "locked even with the RIGHT current password - the attempt was counted before it was weighed");
+  assert.equal(locked.code, "ACCOUNT_LOCKED");
+
+  // The lock lives on the ACCOUNT, not on the door it was earned at: the sign-in door honours it too, so
+  // somebody guessing at the change-password door cannot then go and try the same guesses at sign-in.
+  // (That the refused call changed nothing is already proved above - the 423 is thrown before the new
+  // password is ever assigned.)
+  const atTheOtherDoor = await call("POST", "/employee/login", { body: { phone, password: "meerapass1" } });
+  assert.equal(atTheOtherDoor.status, 423, "one lock, both doors - the right password waits too");
+});
+
+test("a non-string current password is a clean refusal, not a 500 out of bcrypt", { skip }, async () => {
+  const sam = await admin("POST", "/hr/employees", { name: "Sam Portal", designation: "Clerk", contactNo: "0504444444", idNo: "784EPORT0004", joiningDate: "2026-01-01" });
+  assert.equal(sam.status, 201, JSON.stringify(sam.data));
+  const phone = "+971509990004";
+  await admin("POST", `/hr/employees/${sam.body._id}/portal`, { phone, password: "sampass11" });
+  const signedIn = await call("POST", "/employee/login", { body: { phone, password: "sampass11" } });
+  assert.equal(signedIn.status, 200, JSON.stringify(signedIn.data));
+
+  for (const currentPassword of [{ $ne: null }, ["sampass11"], 12312312, null]) {
+    const hostile = await call("PUT", "/employee/change-password", { token: signedIn.body.accessToken, body: { currentPassword, newPassword: "whatever1" } });
+    assert.equal(hostile.status, 400, `a ${JSON.stringify(currentPassword)} current password must refuse, not throw`);
+    assert.equal(hostile.code, "PASSWORD_INCORRECT");
+  }
+
+  // Untouched by any of it.
+  const still = await call("POST", "/employee/login", { body: { phone, password: "sampass11" } });
+  assert.equal(still.status, 200);
+});
+
+// The per-ACCOUNT lock above only ever protects one phone number at a time, so without a per-address limit
+// one address could walk through every phone number in the country, each with its own fresh five-try
+// budget. Its own server on its own port: the throttle is in memory per process, so a tiny limit here
+// cannot disturb the buckets the tests above are using (they produce failed sign-ins of their own).
+test("one address cannot walk through phone numbers for ever, and succeeding never counts against it", { skip, timeout: 90000 }, async () => {
+  const uri = process.env.MONGO_URI.replace(/\/([^/?]*)\?/, `/${DB}?`);
+  const port = PORT + 500;
+  const base = `http://127.0.0.1:${port}/api/v1`;
+  let out = "";
+  const tiny = spawn(process.execPath, ["server.js"], {
+    cwd: ROOT,
+    env: { ...process.env, MONGO_URI: uri, PORT: String(port), LOG_SILENT: "1", TENANT_LEGACY_DEFAULT: "0", EMPLOYEE_LOGIN_LIMIT: "3" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  tiny.stdout.on("data", (d) => (out += d));
+  tiny.stderr.on("data", (d) => (out += d));
+  const post = (url, body) => fetch(`${base}${url}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .then(async (r) => ({ status: r.status, data: await r.json().catch(() => null) }));
+
+  try {
+    const deadline = Date.now() + 60000;
+    for (;;) {
+      try { const h = await fetch(`${base}/health`); if (h.ok && (await h.json()).ready !== false) break; } catch (_) { /* not up yet */ }
+      if (Date.now() > deadline) throw new Error(`second server did not start:\n${out.slice(-1500)}`);
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    // Sam's account still works and is not locked. Four SUCCESSFUL sign-ins, one more than the limit:
+    // a portal is signed into from a shared tablet at the factory gate, so counting successes would refuse
+    // the fourth worker of the morning. This is the property that makes failures-only the right tool.
+    for (let i = 0; i < 4; i++) {
+      const ok = await post("/employee/login", { phone: "+971509990004", password: "sampass11" });
+      assert.equal(ok.status, 200, `successful sign-in ${i + 1} must never count against the address`);
+    }
+
+    // Now failures, at unknown numbers so no single account is being locked - this is the walk the
+    // per-account lock cannot see.
+    for (let i = 0; i < 3; i++) {
+      const miss = await post("/employee/login", { phone: `+9715000001${i}`, password: "whatever1" });
+      assert.equal(miss.status, 401, "an unknown phone is a plain refusal, and is counted");
+    }
+
+    const refused = await post("/employee/login", { phone: "+971500000199", password: "whatever1" });
+    assert.equal(refused.status, 429, "the address is held off after its allowance of FAILED attempts");
+    assert.equal(refused.data?.errorCode, "TOO_MANY_ATTEMPTS");
+
+    // And it is the ADDRESS that is held off, not the account: a perfectly good credential is refused too.
+    const goodOne = await post("/employee/login", { phone: "+971509990004", password: "sampass11" });
+    assert.equal(goodOne.status, 429, "held off by address, so even a valid sign-in waits");
+  } finally {
+    tiny.kill();
+  }
+});

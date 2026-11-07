@@ -98,9 +98,24 @@ class EmployeeAuthService {
   }
 
   static async changePassword(userId, { currentPassword, newPassword }) {
-    const user = await EmployeeUser.findById(userId).select("+password");
+    // Typed before anything else, and before an attempt is spent: bcrypt.compare throws on a non-string,
+    // which would surface as a 500 rather than a refusal (the same shape that answered 500 on the admin
+    // side until it was typed). A malformed body is not a guess, so it must not cost an attempt either.
+    if (typeof currentPassword !== "string") throw new AppError("Your current password is not right", 400, "PASSWORD_INCORRECT");
+    const user = await EmployeeUser.findById(userId).select("+password +loginAttempts +lockUntil");
     if (!user) throw new AppError("Account not found", 404, "ACCOUNT_NOT_FOUND");
+    // The current password is a secret being GUESSED at here, so it is counted exactly as it is at the
+    // sign-in door above - reserved before it is weighed, so parallel guesses each take their own number.
+    // Without this a stolen session could try passwords here for ever and then replace the real one; that
+    // was a real hole on the admin side once (CLAUDE.md records it) and this door inherited it verbatim.
+    const reserved = await user.reserveAttempt();
+    if (reserved.locked) {
+      const minutes = Math.ceil((reserved.lockUntil - Date.now()) / 60000);
+      throw new AppError(`Too many attempts. Try again in ${minutes} minutes.`, 423, "ACCOUNT_LOCKED");
+    }
+    // 400, never 401: a wrong guess here must not read to the browser as "your session ended".
     if (!(await user.comparePassword(currentPassword))) throw new AppError("Your current password is not right", 400, "PASSWORD_INCORRECT");
+    await user.resetLoginAttempts();
     if (typeof newPassword !== "string" || newPassword.length < 8) throw new AppError("The new password needs at least 8 characters", 400, "WEAK_PASSWORD");
     user.password = newPassword; // the pre-save hook hashes it and stamps passwordChangedAt
     user.mustChangePassword = false;
