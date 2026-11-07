@@ -8,15 +8,24 @@ const type = (key, over = {}) => ({ ...V.DEFAULTS, ...V.seedFor(key), ...over })
 const num = (t, seq, { branchId = "main", yearCode = "2026" } = {}) => V.renderNumber({ type: t, branchId, yearCode, seq });
 
 test("the seed reproduces the numbering that was hardcoded, so no existing client's numbers move", () => {
-  assert.equal(V.seedRows().length, 31, "every series the app issues: 29 plus JC and CLM for the garage module (26 Oct 2026)");
+  assert.equal(V.seedRows().length, 35, "every series the app issues: 29, plus JC and CLM for the garage module (26 Oct 2026), EMP, GRJ, LV and PAY for HR (6 Nov 2026)");
   assert.equal(num(type("SO"), 1), "SO-2026-0001");
   assert.equal(num(type("PO"), 1), "PO-2026-0001");
+  // An employee is not a document of 2026: EMP counts continuously and prints no year, which is what a staff
+  // code is. It replaced `STF2026-${Math.random() * 1000}`, whose 900 possible values gave a company of forty
+  // staff a better-than-even chance of colliding against a unique index.
+  assert.equal(num(type("EMP"), 1), "EMP-0001");
+  assert.equal(num(type("EMP"), 428), "EMP-0428");
+  assert.equal(num(type("EMP"), 7, { branchId: "SHJ" }), "SHJ-EMP-0007");
   assert.equal(num(type("RV"), 1), "RV-2026-0001");
   assert.equal(num(type("SORD"), 12), "SORD-2026-0012", "a four-letter prefix");
   assert.equal(num(type("SO"), 1, { branchId: "shj" }), "SHJ-SO-2026-0001", "a branch carries its code in front");
   assert.equal(num(type("SO"), 1, { branchId: "MAIN" }), "SO-2026-0001", "head office never does, whatever its case");
-  // Every seeded row must round-trip to the old format: prefix, year, four digits.
-  for (const row of V.seedRows()) {
+  // Every seeded row must round-trip to the old format: prefix, year, four digits. EMP is the one exception,
+  // and is exempt because it is NEW: nothing was ever numbered that way, so no client's numbers can move. The
+  // rule this loop exists for - that a series which already issued numbers still issues the same ones - is
+  // untouched by it, and the EMP-0001 cases above pin its own format instead.
+  for (const row of V.seedRows().filter((r) => r.key !== "EMP")) {
     assert.match(num(row, 7), /^[A-Z]+-2026-0007$/, row.key);
   }
 });

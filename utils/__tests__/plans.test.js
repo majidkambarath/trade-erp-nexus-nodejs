@@ -33,12 +33,12 @@ test("asking about a feature that does not exist crashes, because a typo in a gu
 });
 
 test("limits come from the plan, an override replaces one, and null means unlimited", () => {
-  assert.deepEqual(p.effectiveLimits({ planCode: "trial" }), { users: 3, branches: 1, documentsPerMonth: 200 });
+  assert.deepEqual(p.effectiveLimits({ planCode: "trial" }), { users: 3, branches: 1, documentsPerMonth: 200, employees: 10 });
   assert.equal(p.effectiveLimits({ planCode: "trial", limitOverrides: { users: 8 } }).users, 8);
   assert.equal(p.effectiveLimits({ planCode: "trial", limitOverrides: { users: 8 } }).branches, 1, "the others stay");
   assert.equal(p.effectiveLimits({ planCode: "trial", limitOverrides: { users: null } }).users, null, "an override of null is unlimited");
-  assert.deepEqual(p.effectiveLimits({ planCode: "internal" }), { users: null, branches: null, documentsPerMonth: null });
-  assert.deepEqual(p.effectiveLimits({ planCode: "typo" }), { users: 0, branches: 0, documentsPerMonth: 0 }, "an unknown plan allows none");
+  assert.deepEqual(p.effectiveLimits({ planCode: "internal" }), { users: null, branches: null, documentsPerMonth: null, employees: null });
+  assert.deepEqual(p.effectiveLimits({ planCode: "typo" }), { users: 0, branches: 0, documentsPerMonth: 0, employees: 0 }, "an unknown plan allows none");
 });
 
 test("a limit is checked against what is already used", () => {
@@ -181,10 +181,21 @@ test("a module is the organisation's ceiling: the plan's set, its own overrides,
   // up to Premium, or switched on for one organisation with a module override.
   const standard = { planCode: "standard" };
   assert.deepEqual(actionsOf(standard, "crm"), [], "Standard does not include CRM");
-  const offStandard = ["crm", ...p.OPT_IN_MODULES];
+  // HR is sold the same way, and for the same reason: employee files and pay are not what the trade and the
+  // books are, so an organisation gets HR when it buys HR.
+  assert.deepEqual(actionsOf(standard, "hr"), [], "Standard does not include HR");
+  const offStandard = ["crm", "hr", ...p.OPT_IN_MODULES];
   for (const m of p.MODULE_KEYS.filter((x) => !offStandard.includes(x))) assert.deepEqual(actionsOf(standard, m), [...p.MODULE_ACTIONS[m]].sort(), `standard holds all of ${m}`);
-  assert.deepEqual(p.entitledKeys(standard), perms.KEYS.filter((k) => !offStandard.some((m) => k.startsWith(`${m}.`))).sort(), "standard holds every key but CRM's and the opt-in modules'");
+  assert.deepEqual(p.entitledKeys(standard), perms.KEYS.filter((k) => !offStandard.some((m) => k.startsWith(`${m}.`))).sort(), "standard holds every key but CRM's, HR's and the opt-in modules'");
   assert.deepEqual(actionsOf({ planCode: "standard", moduleOverrides: { crm: true } }, "crm"), [...p.MODULE_ACTIONS.crm].sort(), "and an override sells it");
+  assert.deepEqual(actionsOf({ planCode: "standard", moduleOverrides: { hr: true } }, "hr"), [...p.MODULE_ACTIONS.hr].sort(), "as it sells HR");
+  // and a module may be sold in part: the directory without the pay, which is the whole reason
+  // `hr.confidential` is its own action
+  assert.deepEqual(
+    actionsOf({ planCode: "standard", moduleOverrides: { hr: ["view", "manage"] } }, "hr"),
+    ["manage", "view"],
+    "HR without hr.confidential: a tidy directory nobody can read a wage out of"
+  );
 
   // the trade-only plan: no books, and Reports only as far as looking
   const trade = { planCode: "trading" };
@@ -192,6 +203,7 @@ test("a module is the organisation's ceiling: the plan's set, its own overrides,
   assert.deepEqual(actionsOf(trade, "accounts"), []);
   assert.deepEqual(actionsOf(trade, "banking"), []);
   assert.deepEqual(actionsOf(trade, "crm"), []);
+  assert.deepEqual(actionsOf(trade, "hr"), [], "nor HR");
   assert.deepEqual(actionsOf(trade, "reports"), ["view"], "it may look, not read the statements");
   assert.deepEqual(actionsOf(trade, "sales"), [...p.MODULE_ACTIONS.sales].sort());
   assert.equal(p.moduleAllows(trade, "reports.financial"), false);
@@ -300,7 +312,7 @@ test("a CRM-only organisation can add customers through the CRM but holds no Sal
 });
 
 test("the CRM-only plan holds no trade documents and no optional feature, and one branch", () => {
-  assert.deepEqual(p.effectiveLimits({ planCode: "crm" }), { users: 10, branches: 1, documentsPerMonth: 0 });
+  assert.deepEqual(p.effectiveLimits({ planCode: "crm" }), { users: 10, branches: 1, documentsPerMonth: 0, employees: 0 });
   // No add-on the customer BUYS comes with it. The assistant is the one exception, and it is not an
   // add-on: it answers how the product works and exists to cut our own support load, so the plan a
   // customer is on has no bearing on it. It is on for every plan, this one included.
@@ -317,7 +329,54 @@ test("the plans that already existed still answer exactly as they did", () => {
   assert.equal(p.effectiveModules({ planCode: "premium" }).crm.full, true);
   assert.equal(p.effectiveModules({ planCode: "premium" }).sales.full, true);
   assert.equal(p.effectiveModules({ planCode: "standard" }).sales.full, true);
-  assert.deepEqual(p.PLAN_CODES, ["trial", "standard", "premium", "trading", "crm", "internal"]);
+  assert.deepEqual(p.PLAN_CODES, ["trial", "standard", "premium", "trading", "crm", "hrms", "internal"]);
+  // the HR-only plan was added beside them too, and took nothing from anybody
+  assert.equal(p.effectiveModules({ planCode: "standard" }).hr.on, false);
+  assert.equal(p.effectiveModules({ planCode: "trading" }).hr.on, false);
+  assert.equal(p.effectiveModules({ planCode: "premium" }).hr.full, true);
+  assert.equal(p.effectiveModules({ planCode: "crm" }).hr.on, false, "a CRM-only organisation did not quietly gain HR");
+});
+
+test("the HR-only plan sells HR and the two things needed to run it, and no trade documents at all", () => {
+  const org = { planCode: "hrms" };
+  assert.deepEqual(p.effectiveModules(org).hr.actions, [...p.MODULE_ACTIONS.hr].sort());
+  for (const m of ["sales", "purchase", "inventory", "finance", "banking", "accounts", "crm", "audit", "staff", "garage"]) {
+    assert.deepEqual(p.moduleActions(org, m), [], `HR only does not include ${m}`);
+  }
+  assert.deepEqual(p.moduleActions(org, "users"), [...p.MODULE_ACTIONS.users].sort(), "it can add its own people");
+  assert.deepEqual(p.moduleActions(org, "reports"), ["view"], "and look at the first screen, not the statements");
+  // it holds no trade documents, exactly as the CRM-only plan holds none
+  assert.equal(p.effectiveLimits(org).documentsPerMonth, 0);
+});
+
+test("employees is HR's own meter and is never the same count as users", () => {
+  // the number the whole HR market quotes on, and the reason it cannot be `users`: a factory has many
+  // employees and few people who sign in
+  assert.equal(p.effectiveLimits({ planCode: "premium" }).employees, 150);
+  assert.equal(p.effectiveLimits({ planCode: "premium" }).users, 50);
+  assert.equal(p.effectiveLimits({ planCode: "trial" }).employees, 10);
+  assert.equal(p.effectiveLimits({ planCode: "internal" }).employees, null, "internal is unlimited");
+
+  // An organisation that was never sold HR is shown NO room, whatever figure its plan carries - the
+  // console must not print "25 employees free" while the API answers MODULE_NOT_IN_PLAN, which is the
+  // branches-against-multiBranch mismatch this file already pins above.
+  assert.equal(p.effectiveLimits({ planCode: "standard" }).employees, 0);
+  assert.equal(p.effectiveLimits({ planCode: "trading" }).employees, 0);
+  assert.equal(p.effectiveLimits({ planCode: "crm" }).employees, 0);
+  // ...and the plan's real figure applies the moment HR is sold to it as a module override, which is why
+  // the plans carry one at all: a 0 in the plan would refuse the first employee the override created.
+  assert.equal(p.effectiveLimits({ planCode: "standard", moduleOverrides: { hr: true } }).employees, 25);
+  assert.equal(p.effectiveLimits({ planCode: "trading", moduleOverrides: { hr: true } }).employees, 25);
+  // selling the directory without the pay still sells HR, so the room is real
+  assert.equal(p.effectiveLimits({ planCode: "standard", moduleOverrides: { hr: ["view", "manage"] } }).employees, 25);
+  // and switching HR off narrows a premium organisation to nothing, both ways round
+  assert.equal(p.effectiveLimits({ planCode: "premium", moduleOverrides: { hr: false } }).employees, 0);
+
+  // the developer can raise it for one organisation, like any other limit
+  assert.equal(p.effectiveLimits({ planCode: "premium", limitOverrides: { employees: 400 } }).employees, 400);
+  assert.equal(p.effectiveLimits({ planCode: "premium", limitOverrides: { employees: null } }).employees, null);
+  assert.deepEqual(p.checkLimit({ planCode: "premium" }, "employees", 150, 1), { ok: false, limit: 150, used: 150, remaining: 0 });
+  assert.equal(p.checkLimit({ planCode: "premium" }, "employees", 149, 1).ok, true);
 });
 
 test("the developer can add a module to a CRM-only organisation, and its plan does not change", () => {

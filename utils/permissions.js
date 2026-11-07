@@ -116,6 +116,40 @@ const MODULES = {
       manage: "Add, change and delete staff records",
     },
   },
+  // HR proper, and deliberately NOT more actions on `staff` above. `staff` is in ALL_MODULES, so every
+  // existing customer already holds it: adding payroll or pay rates there would hand them to all of them
+  // for nothing. This module is sold (utils/plans.js: off in standard and trading), so an organisation gets
+  // HR when it buys HR.
+  //
+  // ONLY THE ACTIONS THAT ARE ENFORCED ARE DECLARED. The role editor draws this catalogue, so declaring
+  // `payroll` before payroll exists would offer a tick that changes nothing - a placeholder control. Each
+  // wave adds its own action here (and to the zarvia mirror, which deep-equals this file).
+  //
+  // Like `garage`, this is in no built-in role but Owner and Administrator (who hold every key): employee
+  // files and pay are the same data `staff` is already kept private for, so anyone else gets HR from a
+  // custom role rather than by surprise. Posting payroll to the ledger will be a separate ask asserted in
+  // the controller, not implied here - the rule garage's `invoice` already follows.
+  hr: {
+    label: "HR",
+    hint: "Employee records, what an hour of work costs, and the labour in a product or job",
+    actions: {
+      view: "See the employee records and what labour cost",
+      manage: "Add and change employees, their contracts and their documents",
+      // The one that decides whether a colleague's wage can be read. Separated from `view` on purpose: the
+      // person who chases visa renewals and keeps the directory tidy is not thereby somebody who may see
+      // what the managing director is paid.
+      confidential: "See pay: salaries, cost rates, and labour cost by person",
+      // W3 (6 Nov 2026): the three actions D2's original design named but left undeclared until something
+      // actually enforced them - "only declare what is enforced" is the rule a placeholder tick would break.
+      attendance: "Mark and change the muster: shifts, holidays, check-in and check-out",
+      leave: "Submit a leave request, and manage leave types",
+      approve: "Approve or reject a leave request",
+      // W4 (6 Nov 2026): running a payroll - planning and posting a run, reversing one, salary
+      // components. Seeing what it PAID still needs `confidential` too (asserted in the controller, the
+      // same split a contract already has between view and confidential).
+      payroll: "Plan, post and reverse a payroll run, and manage salary components",
+    },
+  },
   settings: {
     label: "Settings",
     hint: "Company profile, sending, e-invoicing and business rules",

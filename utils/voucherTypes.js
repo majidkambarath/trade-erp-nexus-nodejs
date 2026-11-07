@@ -60,6 +60,26 @@ const SEED = [
   // its own SO number), and the insurance claim is a record, not a posting document either.
   { key: "JC",   name: "Job card",               kind: "garage",    postsAs: null,               prefix: "JC",   statutory: false },
   { key: "CLM",  name: "Insurance claim",        kind: "garage",    postsAs: null,               prefix: "CLM",  statutory: false },
+  // HR. An employee code is not a document number, but it is a number that must never be handed out twice,
+  // and this is the only engine in the product allowed to hand one out (one atomic $inc per series, with the
+  // IssuedNumber register behind it). It replaced `STF${year}-${Math.random() * 1000}`, which against a unique
+  // index gave a company of forty staff a better-than-even chance of a collision it could do nothing about.
+  //
+  // It counts CONTINUOUSLY and prints no year: an employee is not a document of 2026, and EMP-0001 reading
+  // EMP-0001 for ever is what a staff code is. (`resetPolicy: "never"` with `includeYear: true` is the one
+  // combination the type master refuses - the year would move while the count did not.)
+  { key: "EMP",  name: "Employee",               kind: "hr",        postsAs: null,               prefix: "EMP",  statutory: false, includeYear: false, resetPolicy: "never" },
+  // Gratuity's monthly accrual journal. Written directly by services/hr/gratuityService.js the way a
+  // year-end closing entry is - a fresh id stands in for a voucher id, this series only numbers it. One
+  // entry a month for the WHOLE organisation (never one per employee), so it keeps its year and resets
+  // yearly like an ordinary journal.
+  { key: "GRJ",  name: "Gratuity accrual",       kind: "hr",        postsAs: null,               prefix: "GRJ",  statutory: false },
+  // A leave request, numbered on submit. Never posts to the ledger - it is the third kind the approvals
+  // queue reads (D13), judged like a document or a voucher but moving nothing financial.
+  { key: "LV",   name: "Leave request",          kind: "hr",        postsAs: null,               prefix: "LV",   statutory: false },
+  // A payroll run, one for the WHOLE organisation (D14 - the same closing-entry shape GRJ already uses:
+  // a fresh id stands in for a voucher id, this series only numbers it). Keeps its year, resets yearly.
+  { key: "PAY",  name: "Payroll run",            kind: "hr",        postsAs: null,               prefix: "PAY",  statutory: false },
   // Written by the engine itself: go-live balances, a proven bank reconciliation, the year-end entry.
   // Nobody types one of these, so they take no manual override and no reuse (see mayOverride).
   { key: "OBV",  name: "Opening balance",        kind: "system",    postsAs: null,               prefix: "OBV",  statutory: false },
@@ -97,6 +117,7 @@ const KIND_LABELS = {
   trade: "Sales and purchase",
   inventory: "Stock and production",
   crm: "CRM",
+  hr: "HR",
   system: "Written by the system",
 };
 

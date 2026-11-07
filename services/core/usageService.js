@@ -7,12 +7,13 @@ const { countryFeatures, hasCountryFeature, featureAppliesIn, countryOf } = requ
 const Admin = require("../../models/core/adminModel");
 const Branch = require("../../models/core/branchModel");
 const Transaction = require("../../models/modules/transactionModel");
+const Staff = require("../../models/modules/staffModel");
 const AppError = require("../../utils/AppError");
 const plans = require("../../utils/plans");
 const { getTenant } = require("../../utils/tenant");
-const { DEFAULT_TENANT, legacyDefaultEnabled } = require("../../utils/tenantContext");
+const { DEFAULT_TENANT, legacyDefaultEnabled, allBranches } = require("../../utils/tenantContext");
 
-const LABELS = { users: "users", branches: "branches", documentsPerMonth: "documents this month" };
+const LABELS = { users: "users", branches: "branches", documentsPerMonth: "documents this month", employees: "employees" };
 
 class UsageService {
   // The organisation the call is running for. Loaded fresh: a limit or a feature the developer changed a moment
@@ -35,12 +36,20 @@ class UsageService {
   // quotations, delivery notes and vouchers are not counted.
   static async current(org, now = new Date()) {
     const start = plans.monthStartIn(org.timezone, now);
-    const [users, branches, documentsPerMonth] = await Promise.all([
+    const [users, branches, documentsPerMonth, employees] = await Promise.all([
       Admin.countDocuments({ isActive: true, status: "active" }),
       Branch.countDocuments({ isActive: true }),
       Transaction.countDocuments({ createdAt: { $gte: start }, isOpening: { $ne: true } }),
+      // HR's own meter, and NOT the same count as `users`: a factory has two hundred employees and perhaps six
+      // people who sign in. They cannot be confused even by accident, because an employee is never an Admin row.
+      //
+      // Read across EVERY branch. An employee belongs to one branch (Staff is branchScoped), but the limit is
+      // what the organisation may employ in total, so counting it inside a branch view would let an
+      // organisation of three branches employ three times its plan. A leaver does not count: the meter is the
+      // people on the payroll, which is also why `users` counts only active accounts.
+      allBranches(() => Staff.countDocuments({ status: "Active" })),
     ]);
-    return { users, branches, documentsPerMonth };
+    return { users, branches, documentsPerMonth, employees };
   }
 
   static async used(org, key) {
@@ -48,6 +57,24 @@ class UsageService {
   }
 
   // Refuses with LIMIT_REACHED when `adding` more would go over. A null limit is unlimited and is never counted.
+  /**
+   * HR's meter, and it is applied ONLY where HR was sold.
+   *
+   * The employee record is the old `staff` directory grown up, and `staff` is bundled into every plan - so
+   * metering it unconditionally would refuse the next employee to every existing customer at once, because
+   * `effectiveLimits` narrows `employees` to 0 for an organisation that holds no HR. That would be a live
+   * regression introduced by a feature those customers did not buy.
+   *
+   * So: an organisation that was sold HR is metered, through BOTH doors (this sits in the service, not the
+   * route, so the legacy /staff route cannot be used to dodge the count). One that was not is exactly as it
+   * was - an unmetered directory, and no HR features to go with it.
+   */
+  static async assertEmployeeRoom(adding = 1, org = null) {
+    org = org || (await this.organisation());
+    if (!plans.moduleActions(org, "hr").length) return { ok: true, limit: null, unmetered: true };
+    return this.assertRoom("employees", adding, org);
+  }
+
   static async assertRoom(key, adding = 1, org = null) {
     org = org || (await this.organisation());
     if (plans.effectiveLimits(org)[key] === null) return { ok: true, limit: null };

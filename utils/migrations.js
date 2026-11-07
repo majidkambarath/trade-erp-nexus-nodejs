@@ -153,7 +153,10 @@ async function backfillChequeBranches() {
 // indexes are built over them. Idempotent: a repeat finds nothing to assign and nothing to drop.
 const CORE = [
   ["Transaction", true], ["Voucher", true], ["LedgerEntry", true], ["LedgerAccount"], ["Customer"], ["Vendor"], ["Stock"],
-  ["Category"], ["UOM"], ["UOMConversion"], ["Staff"], ["Transactor"], ["ExpenseCategory"], ["Sequence"], ["VATReport"],
+  // Staff gained a branchId when it became the employee record (HR): an employee belongs to one branch, so a
+  // branch manager sees their own people. Every row written before that has no branchId at all, and a missing
+  // field does not match a branch filter, so they would vanish from a branch view until this backfills them.
+  ["Category"], ["UOM"], ["UOMConversion"], ["Staff", true], ["Transactor"], ["ExpenseCategory"], ["Sequence"], ["VATReport"],
   ["StockPurchaseLog", true], ["CreditLog"], ["DebitLog"], ["InventoryMovement", true], ["OpeningBalanceVoucher"],
 ];
 const missing = (field) => ({ $or: [{ [field]: { $exists: false } }, { [field]: null }] });
