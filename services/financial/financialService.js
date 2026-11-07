@@ -1407,7 +1407,18 @@ class FinancialService {
 
     const voucher = await Voucher.findById(id)
       .populate("createdBy", "name username")
-      .populate("partyId", "customerName vendorName name email phone")
+      // The printed voucher shows who paid: name, address, tax number, email and the credit terms
+      // (components/finance/VoucherSheet.jsx). Customer keeps its address in `billingAddress` and its
+      // tax number in `trnNumber`, Vendor in `address` / `trnNO`; both also carry `vat.trn`.
+      // This stays an EXPLICIT list, never a bare populate: `creditLimit`, `cashBalance`,
+      // `bankAccounts`, `documents` (KYC) and `contacts` must not reach anyone who can read a
+      // voucher. See CLAUDE.md "What a LIST row may carry" - the 21 Oct leak was a read with no
+      // projection. The list route (getAllVouchers) is deliberately left narrower still.
+      .populate(
+        "partyId",
+        "customerName vendorName name email phone billingAddress address "
+          + "trnNumber trnNO vat.trn paymentTerms credit.days",
+      )
       .populate({
         path: "expenseCategoryId",
         select: "name parentCategory isMainCategory createdBy",

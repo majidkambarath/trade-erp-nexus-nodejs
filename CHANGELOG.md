@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A printed voucher could not name who paid beyond their name.** `getVoucherById` populated the
+  party with `customerName vendorName name email phone` only, so the address, tax number and credit
+  terms the printed receipt shows were simply not available. The projection now also selects
+  `billingAddress address trnNumber trnNO vat.trn paymentTerms credit.days` - Customer and Vendor
+  spell the first two differently - and stays an explicit INCLUSION list: `creditLimit`,
+  `cashBalance`, `bankAccounts`, `documents` (KYC) and `contacts` must not reach anyone who can read
+  a voucher (see CLAUDE.md "What a LIST row may carry"). The voucher LIST route is unchanged and
+  narrower still. Mutation-checked: dropping the projection fails the new leak test, which names
+  every field that would have escaped.
+
 ## 2.4.0.0 — 7 November 2026
 
 The two HR reports nothing could assemble honestly: a period's muster per employee, and everybody's
