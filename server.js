@@ -162,6 +162,7 @@ app.use("/api/v1/process-orders", require("./routes/stock/processOrderRoutes"));
 app.use("/api/v1/process-routes", require("./routes/stock/processRouteRoutes")); // saved routes per product: before adminRouter, like every new top-level GET
 app.use("/api/v1/garage", require("./routes/garage/garageRoutes")); // the garage module: vehicles and job cards; before adminRouter, like every new top-level GET
 app.use("/api/v1/hr", require("./routes/hr/hrRoutes")); // the HR module: employees and their contracts/cost rates; before adminRouter, like every new top-level GET
+app.use("/api/v1/employee", require("./routes/hr/employeePortalRoutes")); // D15: the employee's own self-service door, a SEPARATE identity from /api/v1/hr
 app.use("/api/v1/ifrs", require("./routes/reports/ifrsRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/dashboard-summary", require("./routes/reports/dashboardRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/opening-balances", require("./routes/financial/openingBalanceRoutes")); // before adminRouter, whose bare GET /:id would capture it

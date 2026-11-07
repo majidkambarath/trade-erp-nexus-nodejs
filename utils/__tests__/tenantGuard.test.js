@@ -23,6 +23,10 @@ const NOT_YET = {}; // empty: every model that carries companyId is scoped. Keep
 // be unique WITHIN an organisation, or a second organisation could not use the same invoice number, SKU or TRN.
 const GLOBAL_UNIQUE = {
   Admin: { email: "one person belongs to one organisation, so sign-in needs no organisation picker" },
+  EmployeeUser: {
+    phone: "an employee's own sign-in (D15), the same reasoning as Admin.email: one organisation, no picker",
+    staffId: "names a Staff._id, already globally unique by construction, so a second organisation can never collide on it even without a companyId prefix",
+  },
   Organisation: { code: "the registry of organisations: its code is the companyId" },
   Attachment: { key: "a random server-generated storage path, not something a person chooses" },
   PlatformUser: { email: "the developer console's own people belong to no organisation at all: their own collection, their own sign-in" },

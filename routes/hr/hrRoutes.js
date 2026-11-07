@@ -32,6 +32,12 @@ router.post("/employees", requirePermission("hr.manage"), employees.create);
 router.put("/employees/:id", requirePermission("hr.manage"), employees.update);
 router.delete("/employees/:id", requirePermission("hr.manage"), employees.remove);
 
+// D15: the employee's own self-service portal account - set up or reset by HR, never read back once set
+// (setPortalAccount answers only whether it worked, not the password).
+router.get("/employees/:id/portal", requirePermission("hr.view"), employees.portalStatus);
+router.post("/employees/:id/portal", requirePermission("hr.manage"), employees.setPortalAccount);
+router.delete("/employees/:id/portal", requirePermission("hr.manage"), employees.disablePortalAccount);
+
 // Contracts: pay. Reading the list needs only hr.view (the service strips every money figure unless the
 // caller also holds hr.confidential); writing one is setting somebody's pay, so it needs hr.confidential
 // outright - see controllers/hr/contractController.js for why that is NOT the same gate as hr.manage.

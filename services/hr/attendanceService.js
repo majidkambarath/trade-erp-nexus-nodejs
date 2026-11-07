@@ -36,7 +36,10 @@ class AttendanceService {
     const set = {
       shiftId: data.shiftId || null, checkIn: data.checkIn || null, checkOut: data.checkOut || null,
       status, hoursWorked: hours, overtimeHours: hours !== null ? rules.overtimeHours(hours, shift?.hours) : null,
-      source: data.source === "import" ? "import" : "manual", notes: data.notes, updatedBy: by,
+      // "self" (the employee's own punch, D15) must survive here too - a check against only "import" sent
+      // every self-service punch back as "manual", which is indistinguishable from an HR clerk's own entry.
+      source: ["import", "self"].includes(data.source) ? data.source : "manual",
+      notes: data.notes, updatedBy: by,
     };
     return AttendanceDay.findOneAndUpdate(
       { staffId: data.staffId, day: data.day },

@@ -1,4 +1,5 @@
 const StaffService = require("../../services/staff/staffService");
+const EmployeeAuthService = require("../../services/hr/employeeAuthService");
 const AuditService = require("../../services/core/auditService");
 const catchAsync = require("../../utils/catchAsync");
 const { uploadFields } = require("../../middleware/upload");
@@ -46,4 +47,18 @@ exports.remove = catchAsync(async (req, res) => {
   await StaffService.deleteStaff(req.params.id);
   await AuditService.log({ req, action: "EMPLOYEE_DELETED", entity: "Staff", entityId: req.params.id, summary: "Removed an employee" });
   ok(res, { deleted: true });
+});
+
+// D15: setting up or resetting the employee's OWN sign-in to the self-service portal - a door HR holds,
+// never a password HR learns (setAccount hashes it the moment it is saved, the same as every account's own).
+exports.portalStatus = catchAsync(async (req, res) => ok(res, await EmployeeAuthService.statusFor(req.params.id)));
+exports.setPortalAccount = catchAsync(async (req, res) => {
+  const row = await EmployeeAuthService.setAccount({ staffId: req.params.id, phone: req.body?.phone, password: req.body?.password }, by(req));
+  await AuditService.log({ req, action: "EMPLOYEE_PORTAL_SET", entity: "EmployeeUser", entityId: row._id, summary: `Portal access set for employee ${req.params.id}` });
+  ok(res, { phone: row.phone, status: row.status }, 201);
+});
+exports.disablePortalAccount = catchAsync(async (req, res) => {
+  await EmployeeAuthService.disable(req.params.id);
+  await AuditService.log({ req, action: "EMPLOYEE_PORTAL_DISABLED", entity: "EmployeeUser", entityId: req.params.id, summary: `Portal access disabled for employee ${req.params.id}` });
+  ok(res, { disabled: true });
 });

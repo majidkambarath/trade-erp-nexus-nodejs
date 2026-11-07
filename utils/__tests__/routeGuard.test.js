@@ -15,7 +15,11 @@ const ROUTES = path.join(ROOT, "routes");
 
 // The developer console is a separate identity with its own token and its own login (middleware/platformAuth.js): it has
 // no organisation, no role and no permission to hold. Everything else under /api/v1 belongs to a customer's people.
-const OTHER_IDENTITY = new Set(["routes/platform/platformRoutes.js"]);
+// The employee self-service portal (D15, middleware/employeeAuth.js) is the same kind of exception in the
+// opposite direction: it IS bound to one organisation, but the person behind it holds no Admin role and no
+// permission key at all - every route is gated by employeeAuth's own self-only rule (req.employeeStaffId),
+// not by utils/permissions.js.
+const OTHER_IDENTITY = new Set(["routes/platform/platformRoutes.js", "routes/hr/employeePortalRoutes.js"]);
 
 const walk = (dir) =>
   fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : e.name.endsWith(".js") ? [path.join(dir, e.name)] : []));
