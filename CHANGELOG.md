@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 2.5.0.0 — 7 November 2026
+
+The printed receipt or payment voucher could not name who paid beyond their name. Needs frontend
+2.5.0.0, which is what prints the extra details. Backend 2.5.0.0.
 
 ### Fixed
 
