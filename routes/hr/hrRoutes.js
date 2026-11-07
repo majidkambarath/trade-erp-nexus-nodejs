@@ -86,4 +86,7 @@ router.use(require("./payrollRoutes"));
 // Assets: what was issued to whom, and when it came back - never a stock movement.
 router.use(require("./assetRoutes"));
 
+// W6: onboarding/exit checklists and a plain appraisal - the smallest wave, deliberately (D16).
+router.use(require("./talentRoutes"));
+
 module.exports = router;
