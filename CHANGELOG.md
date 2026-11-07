@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.4.0.0 — 7 November 2026
+
+The two HR reports nothing could assemble honestly: a period's muster per employee, and everybody's
+leave balance on a day. Needs frontend 2.4.0.0. Backend 2.4.0.0.
+
+### Added
+
+- **`GET /hr/reports/attendance?from=&to=`** (`hr.attendance`): a muster per employee and in total.
+  The counting is a `$group` in the database, keyed on (employee, status) - deliberately NOT a read
+  through `AttendanceService.muster`, which is capped and whose own comment says the rows it drops
+  are the EARLIEST days of the range. A report that quietly loses a fortnight is worse than no
+  report. Range capped at 400 days (`RANGE_TOO_LONG`); a backwards or unreadable range is
+  `INVALID_RANGE`.
+- **`GET /hr/reports/leave-balances?day=`** (`hr.leave`): every active employee in every active
+  leave type, from three reads whatever the headcount - `LeaveRequestService.balance` answers for
+  one employee and one type, so a register would have been N x M requests.
+- `utils/hrReports.js` (pure) and `services/hr/hrReportService.js`. Both reports go through rules
+  that already exist rather than new arithmetic - `utils/hrDashboard.js` `attendanceSplit` and
+  `utils/leave.js` `leaveBalance` - and the database tests pin them to it: the report's totals must
+  EQUAL the Overview dashboard's figures for the same month, and a balance here must equal what the
+  employee's own screen answers.
+
+### Notes
+
+- **Neither report invents a zero.** Every active employee is listed, including one nobody marked
+  all month - that row is the point of an attendance report - and it carries a null rate, unknown
+  rather than 0%, because there is nothing to divide by. An employee with no joining date is named
+  in `missing` with the reason instead of being shown as owing nothing.
+- **No new permission key**, so `utils/permissions.js` is untouched and the zarvia-platform parity
+  suites are unaffected. Both routes take query parameters only, so the
+  `router.param("id", branchOfDocument(Staff))` collision that bit `/contracts/:id` cannot arise.
+- The payroll register and the expiring-documents report needed no backend change at all: both
+  endpoints already existed and nothing read them.
+
 ## 2.3.0.0 — 7 November 2026
 
 The HRMS: employees, their cost rates, attendance, leave, payroll, gratuity, the employee's own
