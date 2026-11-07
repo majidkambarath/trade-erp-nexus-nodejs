@@ -392,3 +392,47 @@ test("documents whose status an older version overwrote with paid / partial are 
   assert.equal((await svc.Transaction.findById(doc._id)).status, "APPROVED");
   assert.equal((await require("../../utils/migrations").runMigrations()).settledStatusRepaired, 0, "running it again changes nothing");
 });
+
+// The printed voucher names who paid: their address, tax number and credit terms. That is one
+// widened populate on getVoucherById, and the whole point of naming the fields rather than
+// dropping the projection is everything it must NOT carry - a voucher reader is not entitled to
+// the party's bank details, KYC papers or credit limit. See CLAUDE.md "What a LIST row may carry".
+test("the voucher read carries what the paper prints, and nothing else about the party", { skip }, async () => {
+  await svc.Customer.updateOne({ _id: customer._id }, {
+    $set: {
+      billingAddress: "M 5, West, Musaffah, Abu Dhabi",
+      shippingAddress: "LEAK-shipping-address",
+      paymentTerms: "Net 15",
+      trnNumber: "104144306800003",
+      creditLimit: 777777,
+      bankAccounts: [{ bankName: "LEAK-bank", accountNumber: "LEAK-account", ibanNumber: "LEAK-iban" }],
+      documents: [{ documentName: "LEAK-trade-licence", documentNumber: "LEAK-licence-no" }],
+    },
+  });
+
+  const made = await receipt({ paymentMode: "cash" });
+  const { voucher } = await svc.Financial.getVoucherById(made._id);
+  const party = voucher.partyId;
+
+  // what the sheet prints
+  assert.equal(party.customerName, "Al Noor");
+  assert.equal(party.billingAddress, "M 5, West, Musaffah, Abu Dhabi");
+  assert.equal(party.trnNumber, "104144306800003");
+  assert.equal(party.paymentTerms, "Net 15");
+
+  // and nothing beyond it: an allowlist, so a new sensitive field on either master fails here
+  // rather than quietly reaching every voucher.
+  const allowed = new Set([
+    "_id", "customerName", "vendorName", "name", "email", "phone",
+    "billingAddress", "address", "trnNumber", "trnNO", "vat", "paymentTerms", "credit",
+  ]);
+  const extra = Object.keys(party).filter((k) => !allowed.has(k));
+  assert.deepEqual(extra, [], `the voucher read leaked party fields: ${extra.join(", ")}`);
+
+  // belt and braces: search the whole serialised voucher for the planted secrets, the way
+  // purchaseFlow.test.js does, so a leak through some other path is caught too.
+  const wire = JSON.stringify(voucher);
+  for (const secret of ["LEAK-iban", "LEAK-account", "LEAK-bank", "LEAK-trade-licence", "LEAK-licence-no", "LEAK-shipping-address", "777777"]) {
+    assert.ok(!wire.includes(secret), `the voucher read leaked ${secret}`);
+  }
+});
