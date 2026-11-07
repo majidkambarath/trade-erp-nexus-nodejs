@@ -4,6 +4,11 @@ const LeaveRequest = require("../../models/modules/hr/leaveRequestModel");
 const PayrollRun = require("../../models/modules/hr/payrollRunModel");
 const Payslip = require("../../models/modules/hr/payslipModel");
 const StaffChecklistItem = require("../../models/modules/hr/staffChecklistModel");
+// Required for its SIDE EFFECT of registering the model, not for a query here: DocumentExpiryService
+// resolves it through mongoose.models.EmployeeDocument and quietly skips the whole staff branch when it
+// is not registered yet - so without this the expiry card reported a confident 0 expiring documents for
+// an organisation that had six. A silent zero on a compliance figure is the worst shape of wrong.
+require("../../models/modules/hr/employeeDocumentModel");
 const StaffService = require("../staff/staffService");
 const ContractService = require("./contractService");
 const GratuityService = require("./gratuityService");

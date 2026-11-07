@@ -26,6 +26,7 @@ test.before(async () => {
     LeaveType: require("../hr/timeSetupService").LeaveTypeService,
     Dept: require("../hr/timeSetupService").DepartmentService,
     Dash: require("../hr/hrDashboardService"),
+    Doc: require("../hr/employeeDocumentService"),
     days: require("../../utils/documentExpiry"),
   };
   await mongoose.connection.syncIndexes();
@@ -169,6 +170,21 @@ test("the reader split: without hr.confidential no money survives, and nothing w
     if (!Number.isFinite(secret) || secret === full.cost.thisMonth) continue; // the org total is allowed
     assert.equal(serialised.includes(String(secret)), false, `the figure ${secret} must not reach this reader`);
   }
+});
+
+// A silent zero is the worst shape of wrong on a compliance figure, and this one really happened:
+// DocumentExpiryService resolves EmployeeDocument through mongoose.models and skips the whole staff branch
+// when it is not registered, so the card reported 0 expiring for an organisation that had six.
+test("expiring documents are COUNTED, never reported as a confident zero", { skip }, async () => {
+  const today = svc.days.todayInOrg();
+  await svc.Doc.create({ staffId: ravi._id, name: "Labour card", number: "LC-1", expiryDate: svc.days.addDays(today, -5) }, "tester");
+  await svc.Doc.create({ staffId: anya._id, name: "Residence visa", number: "VS-1", expiryDate: svc.days.addDays(today, 12) }, "tester");
+  await svc.Doc.create({ staffId: ravi._id, name: "Passport", number: "P-1", expiryDate: svc.days.addDays(today, 300) }, "tester");
+
+  const d = await svc.Dash.overview();
+  assert.equal(d.documents.expired, 1, "the one already gone");
+  assert.equal(d.documents.expiringSoon, 1, "the one inside 30 days - and NOT the one 300 days out");
+  assert.equal(d.documents.total, 2);
 });
 
 test("the period can be asked for by month, and a past month is read whole", { skip }, async () => {
