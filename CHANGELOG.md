@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.6.0.0 — 8 November 2026
+
+The garage module: the estimate becomes a document the customer can decide on, plus the ageing and
+filter work behind the module's screens. Frontend and backend both at 2.6.0.0.
+
+### Added
+
+- **The customer's own decision on an estimate.** `estimateSnapshot` (built field by field from a
+  whitelist, never spread - mutation-checked), a `job_estimate` loader beside the tax invoice, and
+  `POST /share/:token/estimate-decision`: **the one write a stranger can make in this API.** It is
+  idempotent per estimate version, re-checks every named line against the live card, carries its own
+  tighter per-link rate limit, and writes an audit row naming the link's `publicId` - never the token.
+  A photo route serves exactly the inspection pictures that snapshot names, and nothing else.
+- `recordCustomerDecision` reuses `recordApproval` rather than re-implementing it, so which lines a
+  first decision settles - and that a later one can only approve - stay in one place.
+- `recordInspection`: the technician's findings, a traffic-light condition with photographs.
+- Claims ageing rows widened into something worth a screen (claim, insurer, job, amount at stake),
+  age-in-workshop banded on the register, period filters on both registers, the plate's code and
+  emirate on the board card, and a per-job breakdown behind Reports.
+
+### Fixed
+
+- An empty `lineIds` array was read as "approve everything" instead of being refused - caught before
+  the frontend could reach it.
+
+
 ## 2.5.0.1 — 8 November 2026
 
 No product change. The number is aligned with the frontend's 2.5.0.1 so the app's own version check
