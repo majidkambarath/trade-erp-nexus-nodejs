@@ -1,4 +1,6 @@
-# How the backend runs on Render, written down so production can be rebuilt from the repository.
+# How the GOLDEN ARROW backend runs on Render. This file is on the branch `production/golden-arrow`
+# and describes that client's own service - a backend talks to ONE MONGO_URI, so a client on its own
+# database needs its own backend. Deploy this service from THIS BRANCH.
 #
 # Read this before relying on it:
 #  - Render applies a render.yaml only through a Blueprint. Merging this file does NOT change a
@@ -6,58 +8,104 @@
 #    the dashboard against, and as what a Blueprint would create.
 #  - Secrets are never written here. `sync: false` makes Render ask for the value once, when the
 #    Blueprint creates the service.
-#  - `region` is left out on purpose: it cannot be changed after a service exists, so decide it
-#    deliberately before the first apply (nearest to the UAE among Render's: frankfurt, singapore).
+#  - `region` is left out on purpose: it CANNOT be changed after a service exists. Put it in the SAME
+#    region as the Atlas cluster - the approve and post paths make many sequential database calls, so
+#    a cross-region pair is felt on every save. Render offers oregon, ohio, virginia, frankfurt,
+#    singapore; for a UAE client, singapore or frankfurt. CHECK THE ATLAS CLUSTER'S REGION FIRST.
 #  - Node version: .nvmrc / engines.node are used unless a NODE_VERSION variable is set in the
 #    dashboard, which wins over both.
-#  - Optional variables (defaults are fine) are listed at the bottom as comments.
 services:
   - type: web
-    name: trade-erp-nexus-nodejs
+    name: golden-arrow-api
     runtime: node
-    plan: free
+    # A PAYING client, so not `free`: the free plan sleeps and its first request after idle was
+    # MEASURED at 32.6 s. The garage QA report's "5-20 s waits" are that plan, not a missing
+    # busy indicator. Starter is always on.
+    plan: starter
     buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /api/v1/health
     envVars:
       - key: NODE_ENV
         value: production
-      # The server refuses to start in production without these two (JWT_SECRET: 32+ characters,
-      # no placeholder).
+
+      # ---- the two the server REFUSES TO START without, in production -------------------------
+      # MONGO_URI is this client's OWN cluster. It is the one value that must never be copied from
+      # another installation. Keep the mongodb+srv:// form: a legacy seed-list URI fails the TLS
+      # handshake on a shared-tier Atlas cluster with what looks like a certificate error.
       - key: MONGO_URI
         sync: false
+      # 32+ characters, 8+ distinct, not a placeholder.
       - key: JWT_SECRET
         sync: false
-      # Warned about when missing. PLATFORM_JWT_SECRET must differ from JWT_SECRET. SECRET_BOX_KEY
-      # is 64 hex characters; set it BEFORE people enrol in two-factor, or recovery codes break.
+
+      # ---- warned about when missing, and each one matters here -------------------------------
+      # Must DIFFER from JWT_SECRET: the developer console and the customers must not share a key.
       - key: PLATFORM_JWT_SECRET
         sync: false
+      # 64 hex. Encrypts stored provider keys, two-factor secrets and recovery-code hashes.
+      # SET IT BEFORE ANYONE ENROLS IN TWO-FACTOR: changing it afterwards makes their recovery codes
+      # unreadable. Nothing in this client's database is encrypted yet (checked 8 Nov 2026), so it is
+      # still free to choose.
       - key: SECRET_BOX_KEY
         sync: false
+
+      # THE BASE OF EVERY PASSWORD-RESET LINK AND CUSTOMER DOCUMENT LINK, and never the request's
+      # Origin. It MUST be this client's own frontend. Left pointing at another client's site, a
+      # Golden Arrow user's "forgot my password" link would open that other site, where the token
+      # means nothing - reset simply would not work, and the address leaks.
       - key: PUBLIC_APP_URL
-        value: https://zarvia.onrender.com
-      # App and API are the same origin now (the frontend's /api/* rewrite, below): the backend may no
-      # longer see an Origin header to check, so SameSite=Lax is the CSRF defence in its place and MUST
-      # ship in the same deploy as that rewrite (CLAUDE.md "Deployment (Render)"). A deploy with the
-      # rewrite but not this still defaults to SameSite=None in production, which current browsers treat
-      # as third-party on a Render host and drop - the garage QA report's D13 ("session lost after a full
-      # page navigation") matches that symptom exactly.
+        value: https://golden-arrow.onrender.com
+
+      # App and API are one origin (the frontend's /api/* rewrite), so the backend may no longer see
+      # an Origin header to check and CORS stops being the CSRF defence. Lax is the stronger
+      # replacement and MUST ship in the same deploy as that rewrite. Without it, production defaults
+      # to SameSite=None, which current browsers drop as third-party on a Render host - the symptom
+      # is "signed out after a full page reload".
       - key: SESSION_COOKIE_SAMESITE
         value: lax
-      # Pictures and logos
+
+      # Pictures, logos and document attachments. WITHOUT THESE, attachments are written to the
+      # instance's disk and LOST on every deploy: the Attachment rows survive, so the client sees a
+      # file in the list and gets a 404 opening it.
       - key: CLOUDINARY_CLOUD_NAME
         sync: false
       - key: CLOUDINARY_API_KEY
         sync: false
       - key: CLOUDINARY_API_SECRET
         sync: false
+
       # Token lifetimes
       - key: JWT_EXPIRES_IN
-        sync: false
+        value: 15m
       - key: JWT_REFRESH_EXPIRES_IN
+        value: 30d
+
+      # Platform mail: password-reset links and security notices. Left unset, the provider is
+      # `console` and "forgot my password" answers the person normally and SENDS NOTHING. Outbound
+      # SMTP is blocked on Render's free plan (25/465/587); Resend over HTTPS works on any plan.
+      - key: SYSTEM_MAIL_PROVIDER
         sync: false
-      # Optional: CORS_ORIGINS, TRUST_PROXY_HOPS, SESSION_COOKIE_SAMESITE, SUPPORT_CONTACT /
-      # SUPPORT_EMAIL, TWO_FACTOR_ISSUER, SYSTEM_MAIL_PROVIDER (console | resend | smtp) with
-      # SYSTEM_MAIL_FROM / _FROM_NAME / _REPLY_TO / _API_KEY / _SMTP_HOST|PORT|USER|PASS, and the
-      # limits (LOGIN_FAILURE_LIMIT, FORGOT_PASSWORD_IP_LIMIT, JSON_BODY_LIMIT, ...).
-      # Outbound SMTP is blocked on Render's free plan; use the resend provider there.
+      - key: SYSTEM_MAIL_API_KEY
+        sync: false
+      - key: SYSTEM_MAIL_FROM
+        sync: false
+      - key: SYSTEM_MAIL_FROM_NAME
+        value: Golden Arrow Auto Garage
+
+      # Printed on a "your subscription has expired" refusal. Unset prints no contact.
+      - key: SUPPORT_CONTACT
+        sync: false
+
+      # NOT set on purpose: CORS_ORIGINS. App and API are the same origin through the rewrite, and the
+      # developer console uses that same relative path (src/platform/platformApi.js builds on
+      # API_BASE_URL - there is no VITE_PLATFORM_API_URL in the code), so there is no cross-origin
+      # browser request to allow. Add it only if something really is served from another host.
+      #
+      # NOT set on purpose: TRUST_PROXY_HOPS / TRUST_CF_CONNECTING_IP. Both default correctly when
+      # RENDER is set, and the visitor's address through the rewrite was MEASURED as the real client
+      # IP (27 Oct 2026). Check after deploying: GET /api/v1/health -> `yourAddress` must be your own
+      # address, must not change when you send a fake X-Forwarded-For, and must be stable across
+      # calls. SHARED_CLIENT_ADDRESS must stay OFF.
+      #
+      # Optional: TWO_FACTOR_ISSUER, LOGIN_FAILURE_LIMIT, FORGOT_PASSWORD_IP_LIMIT, JSON_BODY_LIMIT.
