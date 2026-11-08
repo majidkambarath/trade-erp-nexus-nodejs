@@ -403,6 +403,24 @@ test("the workshop's numbers: revenue by stream, efficiency, effective rate, com
   // Per technician: Raj sold 4 and took 4, and waited an hour to start the first job.
   assert.equal(a.people.length, 1);
   assert.deepEqual([a.people[0].label, a.people[0].done, a.people[0].efficiencyPct, a.people[0].waitHours], ["Raj", 2, 100, 1]);
+
+  // G6: the per-job breakdown the two totals above are made of, newest delivery first (L2 before L1).
+  assert.equal(a.jobRows.length, 2);
+  assert.deepEqual(a.jobRows.map((r) => r.jobCardId), [L(2), L(1)]);
+  assert.deepEqual([a.jobRows[0].total, a.jobRows[0].hoursSold, a.jobRows[0].hoursTaken], [100, 1, 2]);
+  assert.deepEqual([a.jobRows[1].total, a.jobRows[1].hoursSold, a.jobRows[1].hoursTaken], [700, 3, 2]);
+  // L1 was delivered the day it was promised (on time); L2 a day late.
+  assert.deepEqual([a.jobRows[0].onTime, a.jobRows[1].onTime], [false, true]);
+  // L2 is the comeback (comebackOf: L1); L1 is not.
+  assert.deepEqual([a.jobRows[0].comeback, a.jobRows[1].comeback], [true, false]);
+});
+
+test("a per-job row with no promise date reads onTime as null, never late", () => {
+  const a = G.analysis(
+    [{ _id: L(9), jobNo: "JC-9", delivery: { gatePassAt: "2026-10-21T08:00:00Z" }, lines: [], tasks: [] }],
+    { from: "2026-10-01", to: "2026-10-31", dayOf }
+  );
+  assert.equal(a.jobRows[0].onTime, null);
 });
 
 test("a rate with nothing to measure is null, never zero", () => {

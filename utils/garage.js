@@ -474,6 +474,23 @@ function analysis(cards = [], { from, to, dayOf } = {}) {
   const onTime = withPromise.filter((c) => dayOf(c.delivery.gatePassAt) <= dayOf(c.promisedAt));
   const comebacks = finished.filter((c) => c.comebackOf);
 
+  // The per-job breakdown the report never had (G6): one row for each job this period's totals above are
+  // MADE OF, so a figure that looks wrong can be traced to the job that caused it. `onTime` is null (never
+  // true/false) for a job with no promise date - it was never judged, which is not the same as being late.
+  const jobRows = finished.map((c) => {
+    const hours = taskHours(c);
+    return {
+      jobCardId: idOf(c._id), jobNo: c.jobNo,
+      plate: c.vehicle?.plateNumber || "", vehicle: [c.vehicle?.make, c.vehicle?.model].filter(Boolean).join(" "),
+      customer: c.customer?.name || "",
+      deliveredAt: c.delivery.gatePassAt,
+      total: jobTotals(c).total,
+      hoursSold: hours.standard, hoursTaken: hours.actual,
+      onTime: c.promisedAt ? dayOf(c.delivery.gatePassAt) <= dayOf(c.promisedAt) : null,
+      comeback: Boolean(c.comebackOf),
+    };
+  });
+
   const people = new Map();
   const bucket = (key, label) => {
     if (!people.has(key)) people.set(key, { key, label, done: 0, standard: 0, actual: 0, wait: [], late: 0, withDue: 0 });
@@ -512,6 +529,8 @@ function analysis(cards = [], { from, to, dayOf } = {}) {
     people: [...people.values()]
       .map((r) => ({ key: r.key, label: r.label, done: r.done, hoursSold: r.standard, hoursTaken: r.actual, efficiencyPct: pct(r.standard, r.actual), waitHours: avg(r.wait) }))
       .sort((a, b) => b.done - a.done || a.label.localeCompare(b.label)),
+    // Newest delivery first - the same order every other garage register reads in.
+    jobRows: jobRows.slice().sort((a, b) => (a.deliveredAt < b.deliveredAt ? 1 : a.deliveredAt > b.deliveredAt ? -1 : 0)),
   };
 }
 
