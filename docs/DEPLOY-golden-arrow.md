@@ -9,7 +9,7 @@ Both services deploy from the branch **`production/golden-arrow`** in their own 
 
 ```
   browser ──→ golden-arrow.onrender.com         (static site, the SPA)
-                 │  /api/*  rewrite  ─────────→ golden-arrow-api.onrender.com  (web service)
+                 │  /api/*  rewrite  ─────────→ api-golden-arrow.onrender.com  (web service)
                  │                                        │
                  └─ /*      → index.html                  └──→ golden-arrow.kejvhzf.mongodb.net
 ```
@@ -19,7 +19,7 @@ why the cookie is `SameSite=Lax` rather than relying on a CORS check.
 
 ---
 
-## 1. Backend — Web Service `golden-arrow-api`
+## 1. Backend — Web Service `api-golden-arrow`
 
 | Setting | Value |
 | --- | --- |
@@ -106,7 +106,7 @@ rules, in this order:
 
 | # | Source | Destination | Type |
 | --- | --- | --- | --- |
-| 1 | `/api/*` | `https://golden-arrow-api.onrender.com/api/*` | Rewrite |
+| 1 | `/api/*` | `https://api-golden-arrow.onrender.com/api/*` | Rewrite |
 | 2 | `/*` | `/index.html` | Rewrite |
 
 **Rule 1 must be above rule 2.** Below it, `/*` answers every API call with `index.html` and the app
@@ -139,7 +139,7 @@ the live site answered only `nosniff` and Render's own HSTS. So add these by han
 
 1. **Backend first**, with its variables. It will not start in production without `MONGO_URI` and a
    real `JWT_SECRET` — a weak key fails the deploy and Render keeps the previous version running.
-2. `GET https://golden-arrow-api.onrender.com/api/v1/health` → `{"ready": true}`.
+2. `GET https://api-golden-arrow.onrender.com/api/v1/health` → `{"ready": true}`.
    On a cold shared-tier cluster the first boot can exceed the 20 s gate; wait for `ready: true`
    before signing in.
 3. Same URL again, and read **`yourAddress`**: it must be *your* address, must **not** change when you
@@ -162,7 +162,7 @@ the live site answered only `nosniff` and Render's own HSTS. So add these by han
 Git Bash. Set the two hosts once:
 
 ```bash
-API=https://golden-arrow-api.onrender.com
+API=https://api-golden-arrow.onrender.com
 APP=https://golden-arrow.onrender.com
 ```
 

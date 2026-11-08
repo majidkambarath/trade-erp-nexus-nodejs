@@ -16,7 +16,7 @@
 #    dashboard, which wins over both.
 services:
   - type: web
-    name: golden-arrow-api
+    name: api-golden-arrow
     runtime: node
     # A PAYING client, so not `free`: the free plan sleeps and its first request after idle was
     # MEASURED at 32.6 s. The garage QA report's "5-20 s waits" are that plan, not a missing
