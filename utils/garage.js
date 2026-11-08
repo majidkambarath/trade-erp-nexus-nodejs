@@ -401,7 +401,8 @@ function board(cards = [], { today, tomorrow, dayOf, me = null } = {}) {
     const task = open[0] || null;
     const card = {
       jobCardId: idOf(c._id), jobNo: c.jobNo, status: c.status, jobType: c.jobType,
-      plate: c.vehicle?.plateNumber || "", vehicle: [c.vehicle?.make, c.vehicle?.model].filter(Boolean).join(" "),
+      plate: c.vehicle?.plateNumber || "", plateCode: c.vehicle?.plateCode || "", plateEmirate: c.vehicle?.plateEmirate || "",
+      vehicle: [c.vehicle?.make, c.vehicle?.model].filter(Boolean).join(" "),
       customer: c.customer?.name || "",
       taskId: task ? idOf(task._id) : null, taskName: task ? task.name : null, taskStatus: task ? task.status : null,
       openTasks: open.length, taskCount: (c.tasks || []).length,

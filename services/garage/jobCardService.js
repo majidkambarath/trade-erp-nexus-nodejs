@@ -441,7 +441,10 @@ class JobCardService {
     return {
       jobType: data.jobType || "retail",
       vehicleId: vehicle._id,
-      vehicle: { plateNumber: vehicle.plateNumber, make: vehicle.make, model: vehicle.model, year: vehicle.year, colour: vehicle.colour, chassisNo: vehicle.chassisNo },
+      vehicle: {
+        plateNumber: vehicle.plateNumber, plateCode: vehicle.plateCode, plateEmirate: vehicle.plateEmirate,
+        make: vehicle.make, model: vehicle.model, year: vehicle.year, colour: vehicle.colour, chassisNo: vehicle.chassisNo,
+      },
       customerId: customer._id,
       customer: { name: customer.customerName, phone: customer.phone || "" },
       receivedAt: data.receivedAt || existing?.receivedAt || new Date(),

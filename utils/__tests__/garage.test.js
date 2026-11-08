@@ -296,7 +296,7 @@ test("the next service is due on a date or a reading, whichever comes first", ()
 // ---- the board -----------------------------------------------------------------------------------------
 
 const boardCards = [
-  { _id: L(1), jobNo: "JC-1", status: "AWAITING_APPROVAL", vehicle: { plateNumber: "A 11111", make: "Toyota", model: "Hilux" }, customer: { name: "Ali" }, tasks: [], promisedAt: "2026-10-25T00:00:00Z", estimate: { total: 500 } },
+  { _id: L(1), jobNo: "JC-1", status: "AWAITING_APPROVAL", vehicle: { plateNumber: "11111", plateCode: "A", plateEmirate: "Dubai", make: "Toyota", model: "Hilux" }, customer: { name: "Ali" }, tasks: [], promisedAt: "2026-10-25T00:00:00Z", estimate: { total: 500 } },
   { _id: L(2), jobNo: "JC-2", status: "IN_PROGRESS", vehicle: { plateNumber: "B 22222" }, customer: { name: "Sara" }, promisedAt: "2026-10-26T00:00:00Z", receivedAt: "2026-10-22T06:00:00Z", tasks: [{ _id: L(7), name: "Brakes", mode: "in_house", stage: 1, status: "IN_PROGRESS", assigneeId: "tech1", staffName: "Raj" }] },
   { _id: L(3), jobNo: "JC-3", status: "READY", vehicle: { plateNumber: "C 33333" }, customer: { name: "Omar" }, promisedAt: "2026-10-27T00:00:00Z", receivedAt: "2026-10-11T06:00:00Z", tasks: [{ name: "Service", mode: "in_house", status: "DONE", doneAt: "2026-10-26T09:00:00Z" }] },
   { _id: L(4), jobNo: "JC-4", status: "DELIVERED", vehicle: { plateNumber: "D 44444" }, customer: { name: "Zayn" }, tasks: [], invoiceStatus: "NONE" },
@@ -313,6 +313,18 @@ test("the board shows what is in the workshop, and leaves closed jobs out", () =
   );
   assert.equal(b.counts.doneToday, 1);
   assert.deepEqual([b.counts.overdue, b.counts.dueToday, b.counts.dueTomorrow], [1, 1, 1]);
+});
+
+test("a board card carries the plate's own code and emirate too, for the full plate on screen (G7)", () => {
+  const jc1 = B().columns.flatMap((c) => c.cards).find((c) => c.jobNo === "JC-1");
+  assert.equal(jc1.plate, "11111");
+  assert.equal(jc1.plateCode, "A");
+  assert.equal(jc1.plateEmirate, "Dubai");
+  // A car with neither set (JC-2..JC-5 below) reads as empty strings, never undefined - the frontend
+  // helper joins truthy parts, and an empty string is falsy there too.
+  const jc2 = B().columns.flatMap((c) => c.cards).find((c) => c.jobNo === "JC-2");
+  assert.equal(jc2.plateCode, "");
+  assert.equal(jc2.plateEmirate, "");
 });
 
 test("the board's columns are what is actually holding each car up", () => {

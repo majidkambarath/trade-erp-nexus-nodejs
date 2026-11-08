@@ -160,6 +160,13 @@ const jobCardSchema = new mongoose.Schema(
     vehicleId: { type: id, ref: "Vehicle", required: true },
     vehicle: {
       plateNumber: String,
+      // The UAE plate's own code/category box and issuing emirate (Vehicle.plateCode/plateEmirate) -
+      // added 8 Nov 2026 (G7) so the board and the job-card snapshot can show the plate in full, the
+      // same way VehicleView already reads it off the live Vehicle. Optional and additive: a card
+      // snapshotted before this has neither and simply shows its plate number alone, like a job card
+      // with no jobCardRef before invoiceDocuments gained one.
+      plateCode: String,
+      plateEmirate: String,
       make: String,
       model: String,
       year: Number,
