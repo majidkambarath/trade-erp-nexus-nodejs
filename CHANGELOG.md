@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.7.0.0 — 9 November 2026
+
+The garage module: a reports section, not one page. Frontend and backend both at 2.7.0.0.
+
+### Added
+
+- **Seven reports, each its own endpoint**, replacing the one report the module had (which only ever
+  read cars that had already left). `GET /garage/reports/{overview,wip,profit,people,customers,vehicles,insurers}`:
+  - **Overview** — the old report, plus what was actually invoiced beside the estimate, and a
+    previous-period trend.
+  - **Work in progress** — as at today: value on the floor by stage and age, what is on hold and why,
+    what is owed (the real `Transaction.outstandingAmount`, never an invoice's gross total).
+  - **Profit** — revenue against cost per stream. Parts/consumables from `Stock.purchasePrice`, labour
+    from the organisation's own contract rates (`LabourCostService.forJobCards`, a new batch sibling of
+    `forJobCard`), sublet left honestly unknown. A stream with no known cost reports a blank margin,
+    never zero.
+  - **People & bays** — hours sold against taken, by technician AND by bay (`bayModel.js`'s own fields,
+    read by nothing until now).
+  - **Customers** — spend, repeat visits, average repair order.
+  - **Vehicles** — as at today: registration/policy expiring, service due, most visited - all read
+    straight off the `Vehicle` master, which has carried them and reported on none of them.
+  - **Insurers** — claimed vs approved, the shortfall, excess and depreciation, and the gap closed
+    here: a REJECTED claim's own value, which `claimAgeing`'s `LIVE_STATUS` filter has always left
+    invisible.
+- `utils/garageReports.js` (pure), `services/garage/garageReportService.js`,
+  `controllers/garage/garageReportController.js`.
+
+### Fixed
+
+- `JobCardService.analysis()` read only cards delivered in the window, so a technician's hours on a car
+  still in the shop never reached its `people` figures at all. Widened to also match a task finished in
+  the window; bounded and projected for the first time (it had neither before).
+
+### Not changed
+
+- No new permission key - the Profit report is gated on the existing `reports.financial` / `finance.view`
+  pair, the same shape `TradeReports`' own Receivables/Payables tabs already use.
+
 ## 2.6.0.0 — 8 November 2026
 
 The garage module: the estimate becomes a document the customer can decide on, plus the ageing and
