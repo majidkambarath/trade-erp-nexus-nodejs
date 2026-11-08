@@ -147,6 +147,25 @@ const damagePointSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// One line of the technician's inspection, and the photographs that prove it. This is what turns "you
+// need new front pads" into a picture of worn front pads, and it is the half of the estimate a customer
+// actually understands - the trade's "digital vehicle inspection".
+//
+// It is kept APART from checkIn.damagePoints on purpose: that records the car's cosmetic condition when
+// it arrived, as the garage's defence against a later claim. This records what was found wrong
+// mechanically and is shown to the customer to justify the work.
+const inspectionSchema = new mongoose.Schema(
+  {
+    item: { type: String, trim: true, maxlength: 80, required: true }, // "front brake pads", "battery"
+    // A traffic light, because that is what makes a photograph persuasive: fine / will need doing /
+    // needs doing now. The estimate line beside it is the price of putting it right.
+    condition: { type: String, enum: ["ok", "advisory", "urgent"], default: "ok" },
+    note: { type: String, trim: true, maxlength: 300, default: "" },
+    photos: { type: [String], default: [] }, // Attachment ids (AttachmentService, ownerType "jobcard")
+  },
+  { _id: true }
+);
+
 const jobCardSchema = new mongoose.Schema(
   {
     jobNo: { type: String, trim: true }, // given when the card is created (like a delivery note's own number)
@@ -160,6 +179,13 @@ const jobCardSchema = new mongoose.Schema(
     vehicleId: { type: id, ref: "Vehicle", required: true },
     vehicle: {
       plateNumber: String,
+      // The UAE plate's own code/category box and issuing emirate (Vehicle.plateCode/plateEmirate) -
+      // added 8 Nov 2026 (G7) so the board and the job-card snapshot can show the plate in full, the
+      // same way VehicleView already reads it off the live Vehicle. Optional and additive: a card
+      // snapshotted before this has neither and simply shows its plate number alone, like a job card
+      // with no jobCardRef before invoiceDocuments gained one.
+      plateCode: String,
+      plateEmirate: String,
       make: String,
       model: String,
       year: Number,
@@ -183,6 +209,7 @@ const jobCardSchema = new mongoose.Schema(
     },
 
     complaints: { type: [complaintSchema], default: [] },
+    inspection: { type: [inspectionSchema], default: [] },
     tasks: { type: [taskSchema], default: [] },
     lines: { type: [lineSchema], default: [] },
 
@@ -196,6 +223,27 @@ const jobCardSchema = new mongoose.Schema(
       reference: { type: String, trim: true, maxlength: 60, default: "" }, // an LPO number, a message id, ...
       note: { type: String, trim: true, maxlength: 300, default: "" },
       total: { type: Number, default: 0 },
+      // What the CUSTOMER did at the public link, kept apart from decidedAt/decidedBy above - those
+      // record what the advisor entered, whatever way the customer actually replied, and still do for
+      // a decision given by phone or at the counter. Both are present for an online decision: this is
+      // the evidence, and recordApproval was then called with method "portal".
+      //
+      // An approval authorises work and the bill that follows it, so the evidence is kept: the name the
+      // customer typed, when, from which link (its publicId - NEVER the token, which is the credential)
+      // and the coarse address. Nothing here is trusted as input; it is a record of what happened.
+      online: {
+        at: Date,
+        name: { type: String, trim: true, maxlength: 120 },
+        outcome: { type: String, enum: ["approved", "declined"] },
+        linkId: { type: String, trim: true, maxlength: 24 },
+        ip: { type: String, trim: true, maxlength: 60 },
+        note: { type: String, trim: true, maxlength: 300, default: "" }, // what the customer wrote back
+        // Which VERSION of the estimate was answered. This is what makes the public endpoint
+        // idempotent without freezing the card for ever: a second tap, a retry or a refreshed page
+        // answering the same version does nothing, while a supplementary estimate (a new version
+        // after teardown found more) can be sent and answered again.
+        version: { type: Number },
+      },
     },
     estimateHistory: { type: [mongoose.Schema.Types.Mixed], default: [] }, // a copy of `estimate` each time it changed
 

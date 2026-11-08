@@ -122,13 +122,34 @@ class JobCardService {
     if (query.jobType) filter.jobType = query.jobType;
     if (query.vehicleId && isId(query.vehicleId)) filter.vehicleId = query.vehicleId;
     if (query.customerId && isId(query.customerId)) filter.customerId = query.customerId;
+    // The register's own period filter (the QA report's D16 remainder: no date filter at all) - by
+    // receivedAt, the day the register's own "Received" column shows, in the organisation's zone like
+    // every other list period (dayEnd is exclusive, so a same-day range still gets the whole day).
+    if (query.from || query.to) {
+      filter.receivedAt = {};
+      if (query.from) filter.receivedAt.$gte = tz.dayStart(String(query.from), orgLocale.timezone());
+      if (query.to) filter.receivedAt.$lt = tz.dayEnd(String(query.to), orgLocale.timezone());
+    }
     const search = String(query.search || "").trim();
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       // D16: "Toyota" found nothing - the vehicle snapshot's own make was never searched, only its plate.
       filter.$or = [{ jobNo: rx }, { "vehicle.plateNumber": rx }, { "vehicle.make": rx }, { "customer.name": rx }];
     }
-    return JobCard.find(filter).sort({ createdAt: -1 }).limit(300).lean();
+    const rows = await JobCard.find(filter).sort({ createdAt: -1 }).limit(300).lean();
+    // Age in the workshop, the same field the board's cards already wear (utils/garage.js daysSince/ageBand) -
+    // computed here, once, rather than re-derived from a raw receivedAt on the frontend: day arithmetic
+    // across the organisation's own calendar belongs to one tested place, not two.
+    const today = todayInOrg();
+    for (const r of rows) {
+      r.daysIn = rules.daysSince(r.receivedAt ? toExpiryDay(r.receivedAt) : null, today);
+      r.ageBand = rules.ageBand(r.daysIn);
+    }
+    // Filtered here, not folded into the receivedAt Mongo range above: a band is a function of TODAY, not a
+    // fixed range the period filter could share, and a job the period filter already excluded should not be
+    // revived by matching a band.
+    if (query.ageBand) return rows.filter((r) => r.ageBand === query.ageBand);
+    return rows;
   }
 
   static async assignees() {
@@ -420,7 +441,10 @@ class JobCardService {
     return {
       jobType: data.jobType || "retail",
       vehicleId: vehicle._id,
-      vehicle: { plateNumber: vehicle.plateNumber, make: vehicle.make, model: vehicle.model, year: vehicle.year, colour: vehicle.colour, chassisNo: vehicle.chassisNo },
+      vehicle: {
+        plateNumber: vehicle.plateNumber, plateCode: vehicle.plateCode, plateEmirate: vehicle.plateEmirate,
+        make: vehicle.make, model: vehicle.model, year: vehicle.year, colour: vehicle.colour, chassisNo: vehicle.chassisNo,
+      },
       customerId: customer._id,
       customer: { name: customer.customerName, phone: customer.phone || "" },
       receivedAt: data.receivedAt || existing?.receivedAt || new Date(),
@@ -491,6 +515,36 @@ class JobCardService {
     return existing;
   });
 
+  // What the technician found, with the photographs that prove it. Replaces the whole list in one call,
+  // the way recordCheckIn does: the screen edits a list and saves it, so a partial patch would only
+  // invent a way for two advisors to half-overwrite each other.
+  //
+  // It is allowed right up to delivery on purpose - an inspection is often what a supplementary
+  // estimate is argued from, so it must still be editable once work has started.
+  static recordInspection = withTransactionSession(async (id, data, updatedBy, session) => {
+    const card = await this.#load(id, session);
+    if (["CLOSED", "CANCELLED"].includes(card.status)) {
+      throw fail(`This job is ${String(card.status).toLowerCase()}`, 409, "JOB_NOT_OPEN");
+    }
+    const rows = Array.isArray(data?.inspection) ? data.inspection : [];
+    if (rows.length > 60) throw fail("That is more inspection items than a job card holds", 400, "TOO_MANY_INSPECTION_ITEMS");
+    const bad = rows.find((r) => r?.condition && !rules.INSPECTION_CONDITIONS.includes(r.condition));
+    if (bad) throw fail(`"${bad.condition}" is not a condition this records`, 400, "INVALID_INSPECTION_CONDITION");
+    card.inspection = rows
+      .map((r) => ({
+        item: rules.text(r?.item, 80),
+        condition: rules.INSPECTION_CONDITIONS.includes(r?.condition) ? r.condition : "ok",
+        note: rules.text(r?.note, 300),
+        // Only ids, and only ones that are really files of THIS card: a photo list is shown to the
+        // customer, so a stray id would be a way to ask us to serve somebody else's picture.
+        photos: Array.isArray(r?.photos) ? r.photos.filter((p) => isId(p)).slice(0, 10) : [],
+      }))
+      .filter((r) => r.item);
+    card.updatedBy = updatedBy;
+    await card.save({ session });
+    return card;
+  });
+
   // ---- the estimate and its approval ---------------------------------------------------------------------
 
   static sendEstimate = withTransactionSession(async (id, sentBy, session) => {
@@ -541,6 +595,54 @@ class JobCardService {
     }
     await card.save({ session });
     return card;
+  });
+
+  // The customer's OWN decision, made at the public link (routes/messaging/shareRoutes.js). This is the
+  // only way into a job card with no signed-in person behind it, so it is deliberately narrow: it may
+  // approve lines that are already on the card, or record a refusal, and it can do nothing else. It
+  // never sees a price - the caller passes line ids and a name, and every figure stays where it was.
+  //
+  // It reuses recordApproval rather than re-implementing it, so the rules that matter (which lines a
+  // first decision settles, that a later one can only approve, releasing the first stage of tasks) are
+  // in one place and cannot drift between the counter and the link.
+  static recordCustomerDecision = withTransactionSession(async (id, input, meta, session) => {
+    const card = await this.#load(id, session);
+    const version = Number(card.estimate?.version) || 0;
+    // Idempotent per version: a double tap, a retried request or a refreshed page must never approve
+    // the same work twice, but a supplementary estimate can still be answered.
+    if (card.estimate?.online?.at && Number(card.estimate.online.version) === version) {
+      return { card, already: true };
+    }
+    if (!["AWAITING_APPROVAL", "IN_PROGRESS"].includes(card.status)) {
+      throw fail("This job is no longer waiting for your decision. Please speak to the workshop.", 409, "JOB_NOT_AWAITING_APPROVAL");
+    }
+    const name = rules.text(input?.name, 120);
+    if (!name) throw fail("Enter your name, so we have a record of who approved the work", 400, "NAME_REQUIRED");
+    const note = rules.text(input?.note, 300);
+    const online = {
+      at: new Date(), name, outcome: input?.outcome === "approved" ? "approved" : "declined",
+      linkId: meta?.linkId, ip: meta?.ip, note, version,
+    };
+
+    if (online.outcome === "declined") {
+      // A refusal changes nothing about the car or the work: it is a message to the advisor, who then
+      // revises the estimate or cancels the job. Deciding that for them - cancelling a job because a
+      // customer tapped Decline on a phone - is not this endpoint's to make.
+      card.estimate.online = online;
+      await card.save({ session });
+      return { card, declined: true };
+    }
+
+    // No lineIds AT ALL means "all of it", which is how an estimate is accepted most of the time. An
+    // EMPTY array is a different thing - the customer unchecked every line and still pressed Approve -
+    // and must NOT be coerced to "all of it": it is passed through as-is, so checkApproval's own
+    // NOTHING_APPROVED refusal catches it, exactly as it would a staff member's empty selection.
+    const lineIds = Array.isArray(input?.lineIds) ? input.lineIds : undefined;
+    await this.recordApproval(id, { method: "portal", reference: meta?.linkId || "", note, lineIds }, `${name} (online)`, session);
+    const fresh = await this.#load(id, session);
+    fresh.estimate.online = online;
+    await fresh.save({ session });
+    return { card: fresh };
   });
 
   // Teardown found more: a new version of the SAME card (never a second document), its new lines pending

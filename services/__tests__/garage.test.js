@@ -364,3 +364,128 @@ test("a walk-in customer can be added on the spot from the vehicle or job card f
 
   await assert.rejects(() => svc.JobCard.createCustomer("   "), (e) => e.code === "CUSTOMER_NAME_REQUIRED");
 });
+
+test("the register: a period filter by receivedAt, the age-in-workshop band stamped on each row, and the age-band filter", { skip }, async () => {
+  const oldCard = await svc.JobCard.create(
+    {
+      vehicleId: vehicle._id, customerId: customer._id, jobType: "retail",
+      complaints: [{ concern: "Rattling noise" }],
+      receivedAt: new Date(Date.now() - 12 * 86400000), // comfortably inside the 10-14 day band either side of a timezone wobble
+    },
+    "tester"
+  );
+  const freshCard = await svc.JobCard.create(
+    { vehicleId: vehicle._id, customerId: customer._id, jobType: "insurance", complaints: [{ concern: "Bumper scrape" }] },
+    "tester"
+  );
+
+  const all = await svc.JobCard.list({});
+  const oldRow = all.find((r) => String(r._id) === String(oldCard._id));
+  const freshRow = all.find((r) => String(r._id) === String(freshCard._id));
+  assert.equal(oldRow.ageBand, "b10_14", "twelve days in is the 10-14 day band, like the board's own cards");
+  assert.equal(oldRow.daysIn, 12);
+  assert.equal(freshRow.ageBand, "u5", "received today is under 5 days, never null or 0 read as missing");
+
+  const byAgeBand = await svc.JobCard.list({ ageBand: "b10_14" });
+  assert.ok(byAgeBand.some((r) => String(r._id) === String(oldCard._id)), "the old card is in its own band");
+  assert.ok(!byAgeBand.some((r) => String(r._id) === String(freshCard._id)), "a fresh card does not leak into another band");
+
+  const byType = await svc.JobCard.list({ jobType: "insurance" });
+  assert.ok(byType.every((r) => r.jobType === "insurance"));
+  assert.ok(byType.some((r) => String(r._id) === String(freshCard._id)));
+
+  const todayOnly = await svc.JobCard.list({ from: new Date().toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10) });
+  assert.ok(todayOnly.some((r) => String(r._id) === String(freshCard._id)), "received today is inside today's own range");
+  assert.ok(!todayOnly.some((r) => String(r._id) === String(oldCard._id)), "received twelve days ago is outside today's range");
+});
+
+// ===================================== the customer's own decision ======================================
+// A self-contained slice (its own vehicle and card, like the register test above), exercising
+// recordInspection and recordCustomerDecision - the two new pieces of Wave 1 (the approval bottleneck:
+// a customer can now say yes or no from the link they were sent, instead of the advisor phoning them).
+
+test("the inspection: what the technician found, with photographs, replaces the whole list each time", { skip }, async () => {
+  const v2 = await svc.Vehicle.create({ plateNumber: "B 99999", make: "Nissan", model: "Patrol", year: 2021, colour: "Black", customerId: customer._id }, "tester");
+  const c2 = await svc.JobCard.create({ vehicleId: v2._id, customerId: customer._id, jobType: "retail", complaints: [{ concern: "Grinding noise when braking" }] }, "tester");
+
+  const withInspection = await svc.JobCard.recordInspection(
+    c2._id,
+    { inspection: [{ item: "Front brake pads", condition: "urgent", note: "2mm left", photos: [] }, { item: "Battery", condition: "ok" }] },
+    "tech1"
+  );
+  assert.equal(withInspection.inspection.length, 2);
+  assert.equal(withInspection.inspection[0].condition, "urgent");
+
+  // Replaces, does not append - the screen saves a whole list, like recordCheckIn.
+  const replaced = await svc.JobCard.recordInspection(c2._id, { inspection: [{ item: "Battery", condition: "advisory" }] }, "tech1");
+  assert.equal(replaced.inspection.length, 1);
+  assert.equal(replaced.inspection[0].item, "Battery");
+
+  await assert.rejects(
+    () => svc.JobCard.recordInspection(c2._id, { inspection: [{ item: "x", condition: "critical" }] }, "tech1"),
+    { code: "INVALID_INSPECTION_CONDITION" }
+  );
+});
+
+let shareCard, shareLines;
+test("a job card reaches AWAITING_APPROVAL with an inspection, ready for the customer's own decision", { skip }, async () => {
+  const v3 = await svc.Vehicle.create({ plateNumber: "C 55555", make: "Honda", model: "Civic", year: 2020, colour: "Grey", customerId: customer._id }, "tester");
+  shareCard = await svc.JobCard.create(
+    {
+      vehicleId: v3._id, customerId: customer._id, jobType: "retail",
+      complaints: [{ concern: "Front brakes squealing" }],
+      lines: [
+        { kind: "part", itemId: brakePads._id, qty: 1, price: 150 },
+        { kind: "labour", itemId: labourBrake._id, qty: 1, price: 200 },
+      ],
+    },
+    "tester"
+  );
+  shareCard = await svc.JobCard.recordInspection(shareCard._id, { inspection: [{ item: "Front brake pads", condition: "urgent", note: "Worn to the backing plate" }] }, "tech1");
+  shareCard = await svc.JobCard.sendEstimate(shareCard._id, "advisor1");
+  assert.equal(shareCard.status, "AWAITING_APPROVAL");
+  shareLines = shareCard.lines.map((l) => String(l._id));
+});
+
+test("the customer's own decision: approves exactly the lines named, releases the first stage, and is idempotent per estimate version", { skip }, async () => {
+  const meta = { linkId: "pub123456", ip: "1.2.3.4" };
+  const { card: approved } = await svc.JobCard.recordCustomerDecision(shareCard._id, { outcome: "approved", name: "Ali Hassan", lineIds: shareLines }, meta);
+  assert.equal(approved.status, "IN_PROGRESS");
+  assert.equal(approved.lines[0].approved, true);
+  assert.equal(approved.estimate.method, "portal", "the decided-how field says portal, like the counter or a call");
+  assert.equal(approved.estimate.online.name, "Ali Hassan");
+  assert.equal(approved.estimate.online.outcome, "approved");
+  assert.equal(approved.estimate.online.linkId, "pub123456");
+  assert.equal(approved.estimate.online.version, 1);
+
+  // Replayed at the SAME version: a double tap, a retry, a refreshed page - does nothing a second time.
+  const { already } = await svc.JobCard.recordCustomerDecision(shareCard._id, { outcome: "approved", name: "Ali Hassan", lineIds: shareLines }, meta);
+  assert.equal(already, true);
+  const stillOne = await svc.JobCardModel.findById(shareCard._id).lean();
+  assert.equal(stillOne.status, "IN_PROGRESS", "unchanged by the replay");
+});
+
+test("a line not on the estimate, and a missing name, are both refused before anything is written", { skip }, async () => {
+  const v4 = await svc.Vehicle.create({ plateNumber: "D 44444", make: "Kia", model: "Sportage", year: 2022, colour: "Blue", customerId: customer._id }, "tester");
+  let c4 = await svc.JobCard.create({ vehicleId: v4._id, customerId: customer._id, jobType: "retail", complaints: [{ concern: "AC not cold" }], lines: [{ kind: "labour", itemId: labourAc._id, qty: 1, price: 100 }] }, "tester");
+  c4 = await svc.JobCard.sendEstimate(c4._id, "advisor1");
+
+  await assert.rejects(
+    () => svc.JobCard.recordCustomerDecision(c4._id, { outcome: "approved", name: "Someone", lineIds: ["111111111111111111111111"] }, {}),
+    { code: "LINE_NOT_ON_CARD" }
+  );
+  await assert.rejects(() => svc.JobCard.recordCustomerDecision(c4._id, { outcome: "approved", name: "" }, {}), { code: "NAME_REQUIRED" });
+  // An EMPTY selection is not the same as no selection at all: unchecking every line and pressing
+  // Approve must be refused, never silently read as "approve everything" (recordApproval's own
+  // default for a bare request with no lineIds, which stays correct for the counter and the phone).
+  await assert.rejects(
+    () => svc.JobCard.recordCustomerDecision(c4._id, { outcome: "approved", name: "Someone", lineIds: [] }, {}),
+    { code: "NOTHING_APPROVED" }
+  );
+
+  // A refusal changes nothing about the car or the work - it is a message to the advisor.
+  const declined = (await svc.JobCard.recordCustomerDecision(c4._id, { outcome: "declined", name: "Mona K", note: "Too expensive" }, { linkId: "pubzzz" })).card;
+  assert.equal(declined.status, "AWAITING_APPROVAL", "a decline does not move the card");
+  assert.equal(declined.estimate.online.outcome, "declined");
+  assert.equal(declined.estimate.online.note, "Too expensive");
+});

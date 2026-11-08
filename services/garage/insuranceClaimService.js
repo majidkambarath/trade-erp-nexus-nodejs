@@ -12,6 +12,8 @@ const TransactionService = require("../orderPurchase/transactionService");
 const NumberSeriesService = require("../core/numberSeriesService");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { getTenant } = require("../../utils/tenant");
+const orgLocale = require("../../utils/orgLocale");
+const tz = require("../../utils/tz");
 
 // The insurance side of a job card (utils/insuranceClaims.js has the pure rules: validation, the survey and
 // approval checks, and splitBill - the money). DRAFT -> SUBMITTED -> SURVEYED -> APPROVED | PARTLY_APPROVED |
@@ -60,6 +62,13 @@ class InsuranceClaimService {
     const filter = {};
     if (query.status) filter.status = query.status;
     if (query.insurerId && isId(query.insurerId)) filter.insurerId = query.insurerId;
+    // By submittedAt, the same date claimAgeing's own buckets count from - a period filter that agreed
+    // with Ageing's own "how long has it waited" would be confusing if it counted a different date.
+    if (query.from || query.to) {
+      filter.submittedAt = {};
+      if (query.from) filter.submittedAt.$gte = tz.dayStart(String(query.from), orgLocale.timezone());
+      if (query.to) filter.submittedAt.$lt = tz.dayEnd(String(query.to), orgLocale.timezone());
+    }
     const search = String(query.search || "").trim();
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
@@ -69,9 +78,19 @@ class InsuranceClaimService {
   }
 
   // Open claims, bucketed by how long they have been waiting for a decision - the register's own ageing.
+  // claimAgeing (utils/insuranceClaims.js) is pure, so the one thing it cannot do itself is look up what
+  // an UNDECIDED claim's job card is actually worth - that join happens here, before the pure rule runs,
+  // and is attached as `jobEstimateTotal` / `jobNo` on each claim. One extra read, never per claim.
   static async ageing(today) {
     const claims = await InsuranceClaim.find({ status: { $in: [...insRules.LIVE_STATUS] } }).lean();
-    return insRules.claimAgeing(claims, { today, dayOf: (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10)) });
+    const jobIds = [...new Set(claims.map((c) => idOf(c.jobCardId)).filter(Boolean))];
+    const jobs = jobIds.length ? await JobCard.find({ _id: { $in: jobIds } }).select("jobNo estimate.total").lean() : [];
+    const byJob = new Map(jobs.map((j) => [String(j._id), j]));
+    const enriched = claims.map((c) => {
+      const job = byJob.get(idOf(c.jobCardId));
+      return { ...c, jobNo: job?.jobNo || "", jobEstimateTotal: Number(job?.estimate?.total) || 0 };
+    });
+    return insRules.claimAgeing(enriched, { today, dayOf: (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10)) });
   }
 
   // ---- the lazily-created charge items (the excess and parts depreciation) ------------------------------
