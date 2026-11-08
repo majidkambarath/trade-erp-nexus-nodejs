@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.5.0.1 — 8 November 2026
+
+No product change. The number is aligned with the frontend's 2.5.0.1 so the app's own version check
+reads "matched".
+
+Frontend 2.5.0.1 was a frontend-only fix, and its changelog said "backend stays at 2.5.0.0". The code
+does not agree with that: `src/lib/version.js` `buildState()` compares the two with exact string
+equality, so Settings showed a permanent "The app and the server are different versions — if this
+lasts, one of the two has not finished deploying." A warning that is always on is a warning nobody
+reads, which costs the check its whole value the day a deploy really does half-finish.
+
+Aligning the number is the cheaper of the two fixes. The other would be to compare only the first
+three segments, which is a change to shipped behaviour in both repos and would also make the fourth
+segment mean nothing.
+
 ## 2.5.0.0 — 7 November 2026
 
 The printed receipt or payment voucher could not name who paid beyond their name. Needs frontend
