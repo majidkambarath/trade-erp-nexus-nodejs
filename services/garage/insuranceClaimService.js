@@ -69,9 +69,19 @@ class InsuranceClaimService {
   }
 
   // Open claims, bucketed by how long they have been waiting for a decision - the register's own ageing.
+  // claimAgeing (utils/insuranceClaims.js) is pure, so the one thing it cannot do itself is look up what
+  // an UNDECIDED claim's job card is actually worth - that join happens here, before the pure rule runs,
+  // and is attached as `jobEstimateTotal` / `jobNo` on each claim. One extra read, never per claim.
   static async ageing(today) {
     const claims = await InsuranceClaim.find({ status: { $in: [...insRules.LIVE_STATUS] } }).lean();
-    return insRules.claimAgeing(claims, { today, dayOf: (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10)) });
+    const jobIds = [...new Set(claims.map((c) => idOf(c.jobCardId)).filter(Boolean))];
+    const jobs = jobIds.length ? await JobCard.find({ _id: { $in: jobIds } }).select("jobNo estimate.total").lean() : [];
+    const byJob = new Map(jobs.map((j) => [String(j._id), j]));
+    const enriched = claims.map((c) => {
+      const job = byJob.get(idOf(c.jobCardId));
+      return { ...c, jobNo: job?.jobNo || "", jobEstimateTotal: Number(job?.estimate?.total) || 0 };
+    });
+    return insRules.claimAgeing(enriched, { today, dayOf: (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10)) });
   }
 
   // ---- the lazily-created charge items (the excess and parts depreciation) ------------------------------

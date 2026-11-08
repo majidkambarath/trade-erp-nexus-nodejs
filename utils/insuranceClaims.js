@@ -62,6 +62,14 @@ function splitBill(jobTotal, { approvedAmount, excess = 0, depreciationPct = 0, 
 
 // How long a claim has been open, for the claims register - only claims still being chased (not yet
 // invoiced, not rejected) are aged; a rejected or invoiced claim is settled one way or the other.
+//
+// Widened from a bare {claimNo, insurer, days} (nothing to click through on, no money) to carry an id,
+// the job it is for, and the amount at stake, plus a count and total per bucket - the register this is
+// meant to carry needs all of that or it is a list nobody can act from. The amount is the insurer's own
+// decided figure once there is one (DECIDED: approved, partly approved, rejected - a rejected claim is
+// never aged at all, it is filtered out above); an undecided claim has no amount of its own, so the job
+// card's estimate total is the honest figure - the caller (InsuranceClaimService.ageing) joins that in
+// as `jobEstimateTotal` before calling this, since the pure rule has no database to read it from itself.
 function claimAgeing(claims = [], { today, dayOf } = {}) {
   const open = claims.filter((c) => LIVE_STATUS.has(c.status));
   const days = (c) => {
@@ -69,13 +77,33 @@ function claimAgeing(claims = [], { today, dayOf } = {}) {
     if (!since) return 0;
     return Math.max(0, Math.round((new Date(today) - new Date(dayOf ? dayOf(since) : since)) / 86400000));
   };
+  const amountOf = (c) => {
+    const decided = DECIDED.has(c.status) ? num(c.approval?.approvedAmount) : NaN;
+    return round2(Number.isFinite(decided) && decided > 0 ? decided : num(c.jobEstimateTotal) || 0);
+  };
   const bucket = (c) => {
     const d = days(c);
     return d <= 7 ? "0-7" : d <= 14 ? "8-14" : d <= 30 ? "15-30" : "30+";
   };
-  const buckets = { "0-7": [], "8-14": [], "15-30": [], "30+": [] };
-  for (const c of open) buckets[bucket(c)].push({ claimNo: c.claimNo, insurer: c.insurer?.name, days: days(c) });
-  return buckets;
+  const buckets = {
+    "0-7": { count: 0, total: 0, rows: [] },
+    "8-14": { count: 0, total: 0, rows: [] },
+    "15-30": { count: 0, total: 0, rows: [] },
+    "30+": { count: 0, total: 0, rows: [] },
+  };
+  let total = 0;
+  for (const c of open) {
+    const amount = amountOf(c);
+    const b = buckets[bucket(c)];
+    b.rows.push({
+      claimId: idOf(c._id), claimNo: c.claimNo, insurer: c.insurer?.name, status: c.status,
+      jobCardId: idOf(c.jobCardId), jobNo: c.jobNo || "", days: days(c), amount,
+    });
+    b.count += 1;
+    b.total = round2(b.total + amount);
+    total = round2(total + amount);
+  }
+  return { buckets, total, count: open.length };
 }
 
 module.exports = {

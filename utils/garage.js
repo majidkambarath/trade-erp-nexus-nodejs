@@ -357,6 +357,27 @@ function dueState(dueDay, today, tomorrow) {
   return "later";
 }
 
+// ---- how long a job has been in the workshop -------------------------------------------------------------
+// `receivedAt` and `today` are both day strings ("YYYY-MM-DD") by the time this runs - dayOf already turned
+// the instant into the organisation's own calendar day, the same rule dueState's own `due` follows - so the
+// gap is a plain calendar subtraction, never a reading of the clock.
+function daysSince(day, today) {
+  if (!day) return null;
+  return Math.max(0, Math.round((new Date(`${today}T00:00:00Z`) - new Date(`${day}T00:00:00Z`)) / 86400000));
+}
+
+// Four bands, non-overlapping (the upper bound of one is the lower bound of the next, same convention
+// claimAgeing's own buckets use): under 5 days, 5 to 9, 10 to 14, 15 or more. A job with no receivedAt at
+// all (every job has one, but a hand-made fixture in a test might not) bands as null, never 0 - 0 reads as
+// "today", which a missing day is not.
+function ageBand(days) {
+  if (days == null) return null;
+  if (days < 5) return "u5";
+  if (days < 10) return "b5_9";
+  if (days < 15) return "b10_14";
+  return "o15";
+}
+
 // ---- the board ------------------------------------------------------------------------------------------
 // What is in the workshop right now, by the stage each car is at. A column per task name, like the process
 // board, plus three of our own: waiting for approval (the commonest reason a car sits untouched), ready for
@@ -391,8 +412,11 @@ function board(cards = [], { today, tomorrow, dayOf, me = null } = {}) {
       due: c.promisedAt ? dayOf(c.promisedAt) : null,
       total: Number(c.estimate?.total) || 0,
       invoiceStatus: c.invoiceStatus || "NONE",
+      receivedAt: c.receivedAt ? dayOf(c.receivedAt) : null,
     };
     card.dueState = dueState(card.due, today, tomorrow);
+    card.daysIn = daysSince(card.receivedAt, today);
+    card.ageBand = ageBand(card.daysIn);
     if (card.dueState === "overdue") counts.overdue += 1;
     if (card.dueState === "today") counts.dueToday += 1;
     if (card.dueState === "tomorrow") counts.dueTomorrow += 1;
@@ -498,5 +522,5 @@ module.exports = {
   isApproved, approvedLines, declinedLines, billableLines, lineValue, jobTotals, planEstimate, checkApproval,
   stagesOf, release, advance, checkCompletion, allTasksSettled, currentTasks, taskHours,
   mayRelease, billableValue, warrantyUntil, comebackCandidates, serviceDue,
-  dueState, board, analysis,
+  dueState, daysSince, ageBand, board, analysis,
 };

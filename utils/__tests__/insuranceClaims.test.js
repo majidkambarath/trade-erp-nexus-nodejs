@@ -52,17 +52,35 @@ test("splitBill: nothing approved at all - the whole job falls to the customer",
   const s = C.splitBill(5000, { approvedAmount: 0 });
   assert.deepEqual(s, { total: 5000, approved: 0, depreciationAmount: 0, notApproved: 5000, insurerAmount: 0, customerAmount: 5000 });
 });
-
-test("claimAgeing: open claims are bucketed by days since submission; invoiced and rejected ones are not aged", () => {
+test("claimAgeing: open claims are bucketed by days since submission, each row carries an id and the money at stake, and invoiced/rejected ones are not aged", () => {
   const dayOf = (v) => v;
   const claims = [
-    { claimNo: "CLM-1", status: "SUBMITTED", submittedAt: "2026-10-20", insurer: { name: "Orient" } },
-    { claimNo: "CLM-2", status: "SURVEYED", submittedAt: "2026-10-05", insurer: { name: "Sukoon" } },
-    { claimNo: "CLM-3", status: "INVOICED", submittedAt: "2026-09-01", insurer: { name: "AXA" } },
-    { claimNo: "CLM-4", status: "REJECTED", submittedAt: "2026-09-01", insurer: { name: "AXA" } },
+    // Undecided (SUBMITTED/SURVEYED): no approval amount of its own, so the amount at stake falls back
+    // to the job card's own estimate total - the join the service makes before calling this.
+    { _id: "cl1", claimNo: "CLM-1", status: "SUBMITTED", submittedAt: "2026-10-20", insurer: { name: "Orient" }, jobCardId: J, jobNo: "JC-2026-0001", jobEstimateTotal: 4200 },
+    { _id: "cl2", claimNo: "CLM-2", status: "SURVEYED", submittedAt: "2026-10-05", insurer: { name: "Sukoon" }, jobCardId: J, jobNo: "JC-2026-0002", jobEstimateTotal: 6100 },
+    // Decided and approved for a real amount: that figure wins over the job's own estimate.
+    { _id: "cl5", claimNo: "CLM-5", status: "APPROVED", submittedAt: "2026-10-24", insurer: { name: "AXA" }, jobCardId: J, jobNo: "JC-2026-0005", approval: { approvedAmount: 5000 }, jobEstimateTotal: 7000 },
+    // Decided but approved for nothing (0): the decided figure is not usable, so this falls back too -
+    // "how much is tied up" is better answered by the job's total than by a bare 0.
+    { _id: "cl6", claimNo: "CLM-6", status: "PARTLY_APPROVED", submittedAt: "2026-09-20", insurer: { name: "Dubai Insurance" }, jobCardId: J, jobNo: "JC-2026-0006", approval: { approvedAmount: 0 }, jobEstimateTotal: 1800 },
+    // Settled one way or the other - never aged at all, not even in "30+".
+    { _id: "cl3", claimNo: "CLM-3", status: "INVOICED", submittedAt: "2026-09-01", insurer: { name: "AXA" }, jobCardId: J, jobEstimateTotal: 9999 },
+    { _id: "cl4", claimNo: "CLM-4", status: "REJECTED", submittedAt: "2026-09-01", insurer: { name: "AXA" }, jobCardId: J, jobEstimateTotal: 9999 },
   ];
-  const buckets = C.claimAgeing(claims, { today: "2026-10-26", dayOf });
-  assert.deepEqual(buckets["0-7"].map((c) => c.claimNo), ["CLM-1"]);
-  assert.deepEqual(buckets["15-30"].map((c) => c.claimNo), ["CLM-2"]);
-  assert.equal(buckets["30+"].length, 0, "the invoiced and rejected claims are not aged at all");
+  const ag = C.claimAgeing(claims, { today: "2026-10-26", dayOf });
+
+  assert.deepEqual(ag.buckets["0-7"].rows.map((c) => c.claimNo), ["CLM-1", "CLM-5"]);
+  assert.deepEqual(ag.buckets["15-30"].rows.map((c) => c.claimNo), ["CLM-2"]);
+  assert.deepEqual(ag.buckets["30+"].rows.map((c) => c.claimNo), ["CLM-6"]);
+  assert.equal(ag.buckets["8-14"].count, 0, "the invoiced and rejected claims are not aged at all");
+
+  assert.equal(ag.buckets["0-7"].count, 2);
+  assert.equal(ag.buckets["0-7"].total, 9200); // 4200 (fallback) + 5000 (decided)
+  assert.equal(ag.buckets["30+"].total, 1800); // the 0 approval falls back to the job's own estimate
+  assert.equal(ag.total, 17100);
+  assert.equal(ag.count, 4);
+
+  const clm5 = ag.buckets["0-7"].rows.find((r) => r.claimNo === "CLM-5");
+  assert.deepEqual(clm5, { claimId: "cl5", claimNo: "CLM-5", insurer: "AXA", status: "APPROVED", jobCardId: J, jobNo: "JC-2026-0005", days: 2, amount: 5000 });
 });

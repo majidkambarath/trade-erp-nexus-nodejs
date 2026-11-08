@@ -87,6 +87,9 @@ test("validateJobCard: a task needs a name, a mode and a whole-numbered stage", 
   assert.deepEqual(codes(card({ tasks: [{ ...task, mode: "magic" }] })), ["INVALID_MODE"]);
   assert.deepEqual(codes(card({ tasks: [{ ...task, mode: "sublet" }] })), ["SUBLET_VENDOR_REQUIRED"]);
   assert.deepEqual(codes(card({ tasks: [{ ...task, stage: 1.5 }] })), ["INVALID_STAGE"]);
+  assert.deepEqual(codes(card({ tasks: [{ ...task, stage: 0 }] })), ["INVALID_STAGE"]);
+  assert.deepEqual(codes(card({ tasks: [{ ...task, stage: 51 }] })), ["INVALID_STAGE"]);
+  assert.deepEqual(codes(card({ tasks: [{ ...task, stage: 50 }] })), [], "50 is the last valid stage, not an off-by-one refusal");
   assert.deepEqual(codes(card({ tasks: [{ ...task, standardHours: -1 }] })), ["INVALID_HOURS"]);
   // No stage given means stage 1, which is the mechanical case: everything can start at once.
   assert.deepEqual(codes(card({ tasks: [{ name: "Oil change", mode: "in_house" }] })), []);
@@ -294,8 +297,8 @@ test("the next service is due on a date or a reading, whichever comes first", ()
 
 const boardCards = [
   { _id: L(1), jobNo: "JC-1", status: "AWAITING_APPROVAL", vehicle: { plateNumber: "A 11111", make: "Toyota", model: "Hilux" }, customer: { name: "Ali" }, tasks: [], promisedAt: "2026-10-25T00:00:00Z", estimate: { total: 500 } },
-  { _id: L(2), jobNo: "JC-2", status: "IN_PROGRESS", vehicle: { plateNumber: "B 22222" }, customer: { name: "Sara" }, promisedAt: "2026-10-26T00:00:00Z", tasks: [{ _id: L(7), name: "Brakes", mode: "in_house", stage: 1, status: "IN_PROGRESS", assigneeId: "tech1", staffName: "Raj" }] },
-  { _id: L(3), jobNo: "JC-3", status: "READY", vehicle: { plateNumber: "C 33333" }, customer: { name: "Omar" }, promisedAt: "2026-10-27T00:00:00Z", tasks: [{ name: "Service", mode: "in_house", status: "DONE", doneAt: "2026-10-26T09:00:00Z" }] },
+  { _id: L(2), jobNo: "JC-2", status: "IN_PROGRESS", vehicle: { plateNumber: "B 22222" }, customer: { name: "Sara" }, promisedAt: "2026-10-26T00:00:00Z", receivedAt: "2026-10-22T06:00:00Z", tasks: [{ _id: L(7), name: "Brakes", mode: "in_house", stage: 1, status: "IN_PROGRESS", assigneeId: "tech1", staffName: "Raj" }] },
+  { _id: L(3), jobNo: "JC-3", status: "READY", vehicle: { plateNumber: "C 33333" }, customer: { name: "Omar" }, promisedAt: "2026-10-27T00:00:00Z", receivedAt: "2026-10-11T06:00:00Z", tasks: [{ name: "Service", mode: "in_house", status: "DONE", doneAt: "2026-10-26T09:00:00Z" }] },
   { _id: L(4), jobNo: "JC-4", status: "DELIVERED", vehicle: { plateNumber: "D 44444" }, customer: { name: "Zayn" }, tasks: [], invoiceStatus: "NONE" },
   { _id: L(5), jobNo: "JC-5", status: "CLOSED", vehicle: { plateNumber: "E 55555" }, customer: { name: "Gone" }, tasks: [] },
 ];
@@ -326,6 +329,34 @@ test("a technician's own work is picked out of the board", () => {
   assert.equal(mine[0].who, "Raj");
   // Somebody else's board has nothing of theirs on it.
   assert.equal(G.board(boardCards, { today: "2026-10-26", tomorrow: "2026-10-27", dayOf, me: "tech9" }).mine.length, 0);
+});
+
+test("daysSince and ageBand: how long a job has been in the workshop, in four non-overlapping bands", () => {
+  assert.equal(G.daysSince(null, "2026-10-26"), null);
+  assert.equal(G.daysSince("2026-10-26", "2026-10-26"), 0);
+  assert.equal(G.daysSince("2026-10-22", "2026-10-26"), 4);
+  assert.equal(G.daysSince("2026-10-11", "2026-10-26"), 15);
+  assert.equal(G.ageBand(null), null);
+  assert.equal(G.ageBand(0), "u5");
+  assert.equal(G.ageBand(4), "u5");
+  assert.equal(G.ageBand(5), "b5_9");
+  assert.equal(G.ageBand(9), "b5_9");
+  assert.equal(G.ageBand(10), "b10_14");
+  assert.equal(G.ageBand(14), "b10_14");
+  assert.equal(G.ageBand(15), "o15");
+  assert.equal(G.ageBand(40), "o15");
+});
+
+test("the board stamps each card with how long it has been in the workshop", () => {
+  const byJobNo = Object.fromEntries(B().columns.flatMap((c) => c.cards).map((c) => [c.jobNo, c]));
+  assert.equal(byJobNo["JC-2"].daysIn, 4);
+  assert.equal(byJobNo["JC-2"].ageBand, "u5");
+  assert.equal(byJobNo["JC-3"].daysIn, 15);
+  assert.equal(byJobNo["JC-3"].ageBand, "o15");
+  // A card with no receivedAt (the fixture leaves JC-4 without one) is null, not 0 - a missing day
+  // must never read as "received today".
+  assert.equal(byJobNo["JC-4"].daysIn, null);
+  assert.equal(byJobNo["JC-4"].ageBand, null);
 });
 
 // ---- analysis ------------------------------------------------------------------------------------------
