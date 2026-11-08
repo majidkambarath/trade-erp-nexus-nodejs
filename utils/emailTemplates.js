@@ -14,6 +14,7 @@ const DOC_LABEL = {
   quotation: "Quotation",
   delivery_note: "Delivery note",
   statement: "Statement of account",
+  job_estimate: "Estimate",
 };
 
 const escapeHtml = (v) =>
@@ -62,6 +63,11 @@ function factLine(d) {
       return `Please find ${label} ${d.documentNo} dated ${fmtDay(d.date)} for the goods delivered to you.`;
     case "statement":
       return `Please find your ${label}${periodText(d.period) ? ` for ${periodText(d.period)}` : ""}. The balance at the end of the period is ${money}.`;
+    // The only kind that asks the customer to DO something. It says what the car is, what the work
+    // comes to, and that the decision is theirs to make on the link - a workshop estimate is an offer,
+    // not a bill, and nothing is done to the car until they say so.
+    case "job_estimate":
+      return `Please find the ${label} for ${d.vehicleText || "your vehicle"} (job ${d.documentNo}), which comes to ${money}. Open the link below to see what we found, with photographs, and approve or decline each item.`;
     default:
       return `Please find ${label} ${d.documentNo}.`;
   }

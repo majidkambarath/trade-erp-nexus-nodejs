@@ -42,6 +42,9 @@ const FUEL_LEVELS = ["E", "1/4", "1/2", "3/4", "F"];
 // handful and a missing spare wheel is the commonest dispute there is.
 const CHECK_IN_ITEMS = ["Spare wheel", "Jack and tools", "Wheel spanner", "Stereo / screen", "Floor mats", "First-aid kit", "Fire extinguisher", "Registration card", "Fuel card", "Personal items"];
 const DAMAGE_KINDS = ["scratch", "dent", "crack", "chip", "rust", "missing", "broken"];
+// A traffic light for an inspection item - see jobCardModel.js inspectionSchema for why this is kept
+// apart from the damage points above (cosmetic arrival condition vs mechanical findings).
+const INSPECTION_CONDITIONS = ["ok", "advisory", "urgent"];
 // Why a technician could not finish, offered as quick picks; anything else may be typed.
 const HOLD_REASONS = ["Waiting for a part", "Waiting for approval", "Waiting for the job worker", "Diagnosis incomplete", "Special tool needed", "Other"];
 
@@ -357,6 +360,27 @@ function dueState(dueDay, today, tomorrow) {
   return "later";
 }
 
+// ---- how long a job has been in the workshop -------------------------------------------------------------
+// `receivedAt` and `today` are both day strings ("YYYY-MM-DD") by the time this runs - dayOf already turned
+// the instant into the organisation's own calendar day, the same rule dueState's own `due` follows - so the
+// gap is a plain calendar subtraction, never a reading of the clock.
+function daysSince(day, today) {
+  if (!day) return null;
+  return Math.max(0, Math.round((new Date(`${today}T00:00:00Z`) - new Date(`${day}T00:00:00Z`)) / 86400000));
+}
+
+// Four bands, non-overlapping (the upper bound of one is the lower bound of the next, same convention
+// claimAgeing's own buckets use): under 5 days, 5 to 9, 10 to 14, 15 or more. A job with no receivedAt at
+// all (every job has one, but a hand-made fixture in a test might not) bands as null, never 0 - 0 reads as
+// "today", which a missing day is not.
+function ageBand(days) {
+  if (days == null) return null;
+  if (days < 5) return "u5";
+  if (days < 10) return "b5_9";
+  if (days < 15) return "b10_14";
+  return "o15";
+}
+
 // ---- the board ------------------------------------------------------------------------------------------
 // What is in the workshop right now, by the stage each car is at. A column per task name, like the process
 // board, plus three of our own: waiting for approval (the commonest reason a car sits untouched), ready for
@@ -380,7 +404,8 @@ function board(cards = [], { today, tomorrow, dayOf, me = null } = {}) {
     const task = open[0] || null;
     const card = {
       jobCardId: idOf(c._id), jobNo: c.jobNo, status: c.status, jobType: c.jobType,
-      plate: c.vehicle?.plateNumber || "", vehicle: [c.vehicle?.make, c.vehicle?.model].filter(Boolean).join(" "),
+      plate: c.vehicle?.plateNumber || "", plateCode: c.vehicle?.plateCode || "", plateEmirate: c.vehicle?.plateEmirate || "",
+      vehicle: [c.vehicle?.make, c.vehicle?.model].filter(Boolean).join(" "),
       customer: c.customer?.name || "",
       taskId: task ? idOf(task._id) : null, taskName: task ? task.name : null, taskStatus: task ? task.status : null,
       openTasks: open.length, taskCount: (c.tasks || []).length,
@@ -391,8 +416,11 @@ function board(cards = [], { today, tomorrow, dayOf, me = null } = {}) {
       due: c.promisedAt ? dayOf(c.promisedAt) : null,
       total: Number(c.estimate?.total) || 0,
       invoiceStatus: c.invoiceStatus || "NONE",
+      receivedAt: c.receivedAt ? dayOf(c.receivedAt) : null,
     };
     card.dueState = dueState(card.due, today, tomorrow);
+    card.daysIn = daysSince(card.receivedAt, today);
+    card.ageBand = ageBand(card.daysIn);
     if (card.dueState === "overdue") counts.overdue += 1;
     if (card.dueState === "today") counts.dueToday += 1;
     if (card.dueState === "tomorrow") counts.dueTomorrow += 1;
@@ -449,6 +477,23 @@ function analysis(cards = [], { from, to, dayOf } = {}) {
   const onTime = withPromise.filter((c) => dayOf(c.delivery.gatePassAt) <= dayOf(c.promisedAt));
   const comebacks = finished.filter((c) => c.comebackOf);
 
+  // The per-job breakdown the report never had (G6): one row for each job this period's totals above are
+  // MADE OF, so a figure that looks wrong can be traced to the job that caused it. `onTime` is null (never
+  // true/false) for a job with no promise date - it was never judged, which is not the same as being late.
+  const jobRows = finished.map((c) => {
+    const hours = taskHours(c);
+    return {
+      jobCardId: idOf(c._id), jobNo: c.jobNo,
+      plate: c.vehicle?.plateNumber || "", vehicle: [c.vehicle?.make, c.vehicle?.model].filter(Boolean).join(" "),
+      customer: c.customer?.name || "",
+      deliveredAt: c.delivery.gatePassAt,
+      total: jobTotals(c).total,
+      hoursSold: hours.standard, hoursTaken: hours.actual,
+      onTime: c.promisedAt ? dayOf(c.delivery.gatePassAt) <= dayOf(c.promisedAt) : null,
+      comeback: Boolean(c.comebackOf),
+    };
+  });
+
   const people = new Map();
   const bucket = (key, label) => {
     if (!people.has(key)) people.set(key, { key, label, done: 0, standard: 0, actual: 0, wait: [], late: 0, withDue: 0 });
@@ -487,16 +532,18 @@ function analysis(cards = [], { from, to, dayOf } = {}) {
     people: [...people.values()]
       .map((r) => ({ key: r.key, label: r.label, done: r.done, hoursSold: r.standard, hoursTaken: r.actual, efficiencyPct: pct(r.standard, r.actual), waitHours: avg(r.wait) }))
       .sort((a, b) => b.done - a.done || a.label.localeCompare(b.label)),
+    // Newest delivery first - the same order every other garage register reads in.
+    jobRows: jobRows.slice().sort((a, b) => (a.deliveredAt < b.deliveredAt ? 1 : a.deliveredAt > b.deliveredAt ? -1 : 0)),
   };
 }
 
 module.exports = {
   JOB_STATUS, LIVE_STATUS, JOB_TYPES, TASK_MODES, TASK_STATUS, OPEN_TASK, LINE_KINDS, STOCKED_KINDS,
-  COMPLAINT_STATUS, APPROVAL_METHODS, FUEL_LEVELS, CHECK_IN_ITEMS, DAMAGE_KINDS, HOLD_REASONS, BAY_KINDS,
+  COMPLAINT_STATUS, APPROVAL_METHODS, FUEL_LEVELS, CHECK_IN_ITEMS, DAMAGE_KINDS, INSPECTION_CONDITIONS, HOLD_REASONS, BAY_KINDS,
   num, round2, round3, idOf, text, plateKey, chassisKey,
   validateVehicle, validateJobCard, validateBay, validateGarageService, planFromService,
   isApproved, approvedLines, declinedLines, billableLines, lineValue, jobTotals, planEstimate, checkApproval,
   stagesOf, release, advance, checkCompletion, allTasksSettled, currentTasks, taskHours,
   mayRelease, billableValue, warrantyUntil, comebackCandidates, serviceDue,
-  dueState, board, analysis,
+  dueState, daysSince, ageBand, board, analysis,
 };

@@ -67,6 +67,12 @@ exports.recordCheckIn = catchAsync(async (req, res) => {
   ok(res, JobCardService.present(c));
 });
 
+exports.recordInspection = catchAsync(async (req, res) => {
+  const c = await JobCardService.recordInspection(req.params.id, req.body || {}, by(req));
+  await log(req, "JOB_CARD_INSPECTION_RECORDED", c, `Inspection recorded for ${describe(c)}`);
+  ok(res, JobCardService.present(c));
+});
+
 exports.sendEstimate = catchAsync(async (req, res) => {
   const c = await JobCardService.sendEstimate(req.params.id, by(req));
   await log(req, "JOB_CARD_ESTIMATE_SENT", c, `Estimate sent for ${describe(c)}`);

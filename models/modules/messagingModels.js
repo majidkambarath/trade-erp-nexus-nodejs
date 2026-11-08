@@ -6,8 +6,8 @@
 const mongoose = require("mongoose");
 const tenantPlugin = require("../../utils/tenantPlugin");
 
-const DOC_TYPES = ["tax_invoice", "quotation", "delivery_note", "statement"];
-const SOURCE_TYPES = ["Transaction", "Quotation", "DeliveryNote", "Customer"];
+const DOC_TYPES = ["tax_invoice", "quotation", "delivery_note", "statement", "job_estimate"];
+const SOURCE_TYPES = ["Transaction", "Quotation", "DeliveryNote", "Customer", "JobCard"];
 // SENT means the provider accepted the message. It does NOT mean delivered: nothing in version one
 // learns of a bounce. DELIVERED and BOUNCED are reserved for the provider webhook and nothing writes
 // them yet. HANDED_OFF is WhatsApp: the message was given to the person's own WhatsApp, and the

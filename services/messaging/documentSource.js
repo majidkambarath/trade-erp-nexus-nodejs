@@ -18,7 +18,9 @@ const orgLocale = require("../../utils/orgLocale");
 const CompanySettings = require("../../models/modules/financial/companySettingsModel");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
-const { invoiceSnapshot } = require("../../utils/shareSnapshot");
+const { invoiceSnapshot, estimateSnapshot } = require("../../utils/shareSnapshot");
+const JobCard = require("../../models/modules/garage/jobCardModel");
+const rules = require("../../utils/garage");
 
 const notSendable = (reason) => new AppError(reason, 422, "DOCUMENT_NOT_SENDABLE");
 const clean = (v) => String(v ?? "").trim();
@@ -92,7 +94,53 @@ async function loadInvoice(sourceId, req) {
   };
 }
 
-const LOADERS = { tax_invoice: loadInvoice };
+// The workshop's estimate, the one document here the customer is asked to ACT on rather than file.
+// It is sendable only while a decision is actually outstanding: AWAITING_APPROVAL, or IN_PROGRESS with
+// lines a revision added that nobody has decided yet (utils/garage.js recordApproval's "later decision").
+// Sending a card that is already settled would invite a second approval of work in hand.
+async function loadEstimate(sourceId, req) {
+  if (!mongoose.isValidObjectId(sourceId)) throw new AppError("Job card not found", 404, "DOCUMENT_NOT_FOUND");
+  const card = await JobCard.findById(sourceId).lean();
+  if (!card) throw new AppError("Job card not found", 404, "DOCUMENT_NOT_FOUND");
+  if (!card.lines?.length) throw notSendable("There is nothing to approve on this job card yet");
+  const pending = card.status === "AWAITING_APPROVAL" || (card.status === "IN_PROGRESS" && card.lines.some((l) => l.approved === false));
+  if (!pending) {
+    throw notSendable(
+      card.status === "DRAFT"
+        ? "This estimate has not been sent for approval yet. Send the estimate first."
+        : `This job is ${String(card.status).toLowerCase()}, so there is no decision outstanding`
+    );
+  }
+  const customer = await Customer.findById(card.customerId).lean();
+  if (!customer) throw new AppError("The customer of this job card was not found", 404, "CUSTOMER_NOT_FOUND");
+  const { company, currency } = await companyFor(req);
+  // Worked out here, server-side, and frozen into the snapshot: the page never adds money up itself.
+  const kinds = rules.jobTotals(card);
+  const vat = (card.lines || []).filter(rules.isApproved).reduce((sum, l) => sum + (Number(l.vatAmount) || 0), 0);
+  const net = Number(kinds.total) || 0;
+  const totals = { part: kinds.part, labour: kinds.labour, sublet: kinds.sublet, consumable: kinds.consumable, net, vat: Math.round(vat * 100) / 100, total: Math.round((net + vat) * 100) / 100 };
+  const vehicleText = [card.vehicle?.plateNumber, [card.vehicle?.make, card.vehicle?.model].filter(Boolean).join(" ")].filter(Boolean).join(" - ");
+  return {
+    docType: "job_estimate",
+    sourceType: "JobCard",
+    sourceId: card._id,
+    documentNo: card.jobNo || "",
+    date: card.receivedAt,
+    dueDate: null,
+    total: totals.total,
+    currency,
+    vehicleText, // the email says which car, because a customer may have several with us
+    partyId: customer._id,
+    partyName: customer.customerName,
+    contactPerson: customer.contactPerson || "",
+    recipients: recipientsOf(customer),
+    phone: card.customer?.phone || customer.phone || (customer.contacts || []).find((c) => c.isPrimary)?.phone || "",
+    company,
+    snapshot: estimateSnapshot({ card, customer, company, totals, currency }),
+  };
+}
+
+const LOADERS = { tax_invoice: loadInvoice, job_estimate: loadEstimate };
 const SUPPORTED = Object.keys(LOADERS);
 
 // docType + id -> the document, or a clear refusal.

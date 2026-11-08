@@ -67,6 +67,7 @@ router.post("/job-cards/:id/purchase-orders", requirePermission("garage.edit"), 
 router.put("/job-cards/:id", requirePermission("garage.edit"), j.update);
 router.delete("/job-cards/:id", requirePermission("garage.delete"), j.remove);
 router.put("/job-cards/:id/check-in", requirePermission("garage.edit"), j.recordCheckIn);
+router.put("/job-cards/:id/inspection", requirePermission("garage.edit"), j.recordInspection);
 router.get("/job-cards/:id/attachments", requirePermission("garage.view"), files.jobCardFiles.list);
 router.post("/job-cards/:id/attachments", requirePermission("garage.edit"), uploadOne, files.jobCardFiles.add);
 router.post("/job-cards/:id/send-estimate", requirePermission("garage.edit"), j.sendEstimate);
