@@ -42,6 +42,9 @@ const FUEL_LEVELS = ["E", "1/4", "1/2", "3/4", "F"];
 // handful and a missing spare wheel is the commonest dispute there is.
 const CHECK_IN_ITEMS = ["Spare wheel", "Jack and tools", "Wheel spanner", "Stereo / screen", "Floor mats", "First-aid kit", "Fire extinguisher", "Registration card", "Fuel card", "Personal items"];
 const DAMAGE_KINDS = ["scratch", "dent", "crack", "chip", "rust", "missing", "broken"];
+// A traffic light for an inspection item - see jobCardModel.js inspectionSchema for why this is kept
+// apart from the damage points above (cosmetic arrival condition vs mechanical findings).
+const INSPECTION_CONDITIONS = ["ok", "advisory", "urgent"];
 // Why a technician could not finish, offered as quick picks; anything else may be typed.
 const HOLD_REASONS = ["Waiting for a part", "Waiting for approval", "Waiting for the job worker", "Diagnosis incomplete", "Special tool needed", "Other"];
 
@@ -536,7 +539,7 @@ function analysis(cards = [], { from, to, dayOf } = {}) {
 
 module.exports = {
   JOB_STATUS, LIVE_STATUS, JOB_TYPES, TASK_MODES, TASK_STATUS, OPEN_TASK, LINE_KINDS, STOCKED_KINDS,
-  COMPLAINT_STATUS, APPROVAL_METHODS, FUEL_LEVELS, CHECK_IN_ITEMS, DAMAGE_KINDS, HOLD_REASONS, BAY_KINDS,
+  COMPLAINT_STATUS, APPROVAL_METHODS, FUEL_LEVELS, CHECK_IN_ITEMS, DAMAGE_KINDS, INSPECTION_CONDITIONS, HOLD_REASONS, BAY_KINDS,
   num, round2, round3, idOf, text, plateKey, chassisKey,
   validateVehicle, validateJobCard, validateBay, validateGarageService, planFromService,
   isApproved, approvedLines, declinedLines, billableLines, lineValue, jobTotals, planEstimate, checkApproval,

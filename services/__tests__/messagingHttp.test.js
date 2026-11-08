@@ -287,3 +287,119 @@ test("SMTP setup over HTTP: the password never comes back and never reaches the 
 
   await call("PUT", "/messaging/settings", { body: { provider: "console" } }); // leave the setup as the other tests expect it
 });
+
+// ===================================== the garage estimate, over HTTP ======================================
+// Wave 1 (the approval bottleneck): a workshop customer approves or declines an estimate from the link
+// they were sent, with no login at all - the one write a stranger can make in this API. Security first:
+// a forged line, a revoked link, a link minted for a different document, a replay, the rate limit, and
+// that the audit row names nobody who was signed in and carries no token.
+
+let G; // garage fixtures, built directly (same pattern as the Customer/Stock fixtures above): a vehicle,
+// a job card sent for approval, reached through the REAL /messaging/send route so the share link it
+// returns is exactly what production mints.
+const EG = {};
+
+test("setup: a job card is estimated and sent for approval", { skip }, async () => {
+  G = {
+    Vehicle: require("../garage/vehicleService"),
+    JobCard: require("../garage/jobCardService"),
+    JobCardModel: require("../../models/modules/garage/jobCardModel"),
+  };
+  const part = await M.Stock.create({ itemId: "GPART1", sku: "GPART1", itemName: "Front brake pads", category: new mongoose.Types.ObjectId() });
+  const labour = await M.Stock.create({ itemId: "GLAB1", sku: "GLAB1", itemName: "Labour - brake job", itemType: "service", category: new mongoose.Types.ObjectId() });
+  const vehicle = await G.Vehicle.create({ plateNumber: "E 70001", make: "Toyota", model: "Camry", year: 2021, colour: "Silver", customerId: S.customer._id }, "tester");
+  let card = await G.JobCard.create(
+    { vehicleId: vehicle._id, customerId: S.customer._id, jobType: "retail", complaints: [{ concern: "Brakes squealing" }], lines: [{ kind: "part", itemId: part._id, qty: 1, price: 150 }, { kind: "labour", itemId: labour._id, qty: 1, price: 200 }] },
+    "tester"
+  );
+  card = await G.JobCard.recordInspection(card._id, { inspection: [{ item: "Front brake pads", condition: "urgent", note: "Worn out" }] }, "tech1");
+  card = await G.JobCard.sendEstimate(card._id, "advisor1");
+  EG.cardId = String(card._id);
+  EG.lineIds = card.lines.map((l) => String(l._id));
+
+  const sent = await call("POST", "/messaging/send", { body: { docType: "job_estimate", sourceId: EG.cardId, force: true }, headers: { "Idempotency-Key": "http-test-estimate-0001" } });
+  assert.equal(sent.status, 201, JSON.stringify(sent.data));
+  assert.equal(sent.body.send.status, "SENT");
+  EG.token = sent.body.share.url.split("/d/")[1];
+});
+
+test("the public page reads the estimate: lines, an inspection photo's id, totals worked out server-side, no cost and no sublet vendor", { skip }, async () => {
+  const r = await call("GET", `/share/${EG.token}`, { token: null });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.body.kind, "job_estimate");
+  assert.equal(r.body.job.lines.length, 2);
+  assert.equal(r.body.job.inspection[0].condition, "urgent");
+  assert.equal(r.body.totals.total, r.body.job.lines.reduce((s, l) => s + l.lineTotal, 0), "the server's own total, not the page's arithmetic");
+  const text = JSON.stringify(r.data);
+  assert.equal(/vendorId|vendorName|itemId|taxCodeId|purchasePrice/.test(text), false, "nothing internal reaches this page either");
+});
+
+test("a line not shown on this estimate is refused before anything is written", { skip }, async () => {
+  const r = await call("POST", `/share/${EG.token}/estimate-decision`, { token: null, body: { outcome: "approved", name: "Khalid", lineIds: ["111111111111111111111111"] } });
+  assert.equal(r.status, 400);
+  assert.equal(r.data.errorCode, "LINE_NOT_ON_ESTIMATE");
+});
+
+test("a tax-invoice link cannot be used to approve work, whatever is posted to it", { skip }, async () => {
+  const r = await call("POST", `/share/${S.token2}/estimate-decision`, { token: null, body: { outcome: "approved", name: "Khalid" } });
+  assert.equal(r.status, 404, "the same refusal as an unknown token - the link simply does not do this");
+  assert.equal(r.data.errorCode, "SHARE_NOT_FOUND");
+});
+
+test("the customer approves, the card moves on, and the SAME decision replayed changes nothing further", { skip }, async () => {
+  const r = await call("POST", `/share/${EG.token}/estimate-decision`, { token: null, body: { outcome: "approved", name: "Khalid Rahman", lineIds: EG.lineIds } });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.body.outcome, "approved");
+  assert.equal(r.body.status, "IN_PROGRESS");
+  assert.equal(r.body.already, false);
+
+  const again = await call("POST", `/share/${EG.token}/estimate-decision`, { token: null, body: { outcome: "approved", name: "Khalid Rahman", lineIds: EG.lineIds } });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.already, true, "a double tap, or a retried request, does nothing a second time");
+
+  const card = await G.JobCardModel.findById(EG.cardId).lean();
+  assert.equal(card.status, "IN_PROGRESS");
+  assert.equal(card.lines[0].approved, true);
+  assert.equal(card.estimate.online.name, "Khalid Rahman");
+  assert.equal(card.estimate.online.linkId, EG.token.split(".")[0], "the link's publicId, never the secret");
+
+  await settleAudit();
+  const ActivityLog = require("../../models/modules/financial/activityLogModel");
+  const row = await ActivityLog.findOne({ action: "GARAGE_ESTIMATE_APPROVED_ONLINE", entityId: EG.cardId }).lean();
+  assert.ok(row, "the decision is audited");
+  assert.equal(row.userId, null, "nobody was signed in");
+  assert.equal(row.username, null);
+  assert.ok(row.summary.includes("Khalid Rahman"));
+  assert.equal(row.summary.includes(EG.token), false, "the token - the credential itself - is never written to the trail");
+  assert.ok(row.summary.includes(EG.token.split(".")[0]), "the link's own public id is, so a leaked row cannot be used to find the token either way round");
+});
+
+test("a revoked estimate link refuses a decision with 410, not 200", { skip }, async () => {
+  const vehicle2 = await G.Vehicle.create({ plateNumber: "E 70002", make: "Toyota", model: "Yaris", year: 2020, colour: "Red", customerId: S.customer._id }, "tester");
+  const filter = await M.Stock.create({ itemId: "GPART2", sku: "GPART2", itemName: "Oil filter", category: new mongoose.Types.ObjectId() });
+  let card2 = await G.JobCard.create(
+    { vehicleId: vehicle2._id, customerId: S.customer._id, jobType: "retail", complaints: [{ concern: "Oil change" }], lines: [{ kind: "part", itemId: filter._id, qty: 1, price: 40 }] },
+    "tester"
+  );
+  card2 = await G.JobCard.sendEstimate(card2._id, "advisor1");
+  const sent = await call("POST", "/messaging/send", { body: { docType: "job_estimate", sourceId: String(card2._id), force: true }, headers: { "Idempotency-Key": "http-test-estimate-0002" } });
+  const token2 = sent.body.share.url.split("/d/")[1];
+  const shares = await call("GET", `/messaging/shares?sourceType=JobCard&sourceId=${card2._id}`);
+  const row = shares.body.find((s) => s.publicId === token2.split(".")[0]);
+  await call("POST", `/messaging/shares/${row._id}/revoke`, { body: { reason: "sent to the wrong customer" } });
+
+  const r = await call("POST", `/share/${token2}/estimate-decision`, { token: null, body: { outcome: "approved", name: "Someone" } });
+  assert.equal(r.status, 410);
+  assert.equal(r.data.errorCode, "SHARE_REVOKED");
+});
+
+test("the estimate-decision door has its own (tighter) rate limit, per link", { skip }, async () => {
+  const bogus = "ZZZZZZZZZZZ.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  let limited = null;
+  for (let i = 0; i < 25 && !limited; i += 1) {
+    const r = await call("POST", `/share/${bogus}/estimate-decision`, { token: null, body: { outcome: "approved", name: "x" }, headers: { "X-Forwarded-For": "198.51.100.88" } });
+    if (r.status === 429) limited = r;
+  }
+  assert.ok(limited, "the 21st decision against one link in an hour is refused");
+  assert.equal(limited.data.errorCode, "SHARE_RATE_LIMIT");
+});

@@ -515,6 +515,36 @@ class JobCardService {
     return existing;
   });
 
+  // What the technician found, with the photographs that prove it. Replaces the whole list in one call,
+  // the way recordCheckIn does: the screen edits a list and saves it, so a partial patch would only
+  // invent a way for two advisors to half-overwrite each other.
+  //
+  // It is allowed right up to delivery on purpose - an inspection is often what a supplementary
+  // estimate is argued from, so it must still be editable once work has started.
+  static recordInspection = withTransactionSession(async (id, data, updatedBy, session) => {
+    const card = await this.#load(id, session);
+    if (["CLOSED", "CANCELLED"].includes(card.status)) {
+      throw fail(`This job is ${String(card.status).toLowerCase()}`, 409, "JOB_NOT_OPEN");
+    }
+    const rows = Array.isArray(data?.inspection) ? data.inspection : [];
+    if (rows.length > 60) throw fail("That is more inspection items than a job card holds", 400, "TOO_MANY_INSPECTION_ITEMS");
+    const bad = rows.find((r) => r?.condition && !rules.INSPECTION_CONDITIONS.includes(r.condition));
+    if (bad) throw fail(`"${bad.condition}" is not a condition this records`, 400, "INVALID_INSPECTION_CONDITION");
+    card.inspection = rows
+      .map((r) => ({
+        item: rules.text(r?.item, 80),
+        condition: rules.INSPECTION_CONDITIONS.includes(r?.condition) ? r.condition : "ok",
+        note: rules.text(r?.note, 300),
+        // Only ids, and only ones that are really files of THIS card: a photo list is shown to the
+        // customer, so a stray id would be a way to ask us to serve somebody else's picture.
+        photos: Array.isArray(r?.photos) ? r.photos.filter((p) => isId(p)).slice(0, 10) : [],
+      }))
+      .filter((r) => r.item);
+    card.updatedBy = updatedBy;
+    await card.save({ session });
+    return card;
+  });
+
   // ---- the estimate and its approval ---------------------------------------------------------------------
 
   static sendEstimate = withTransactionSession(async (id, sentBy, session) => {
@@ -603,8 +633,11 @@ class JobCardService {
       return { card, declined: true };
     }
 
-    // Nothing named means "all of it", which is how an estimate is accepted most of the time.
-    const lineIds = Array.isArray(input?.lineIds) && input.lineIds.length ? input.lineIds : undefined;
+    // No lineIds AT ALL means "all of it", which is how an estimate is accepted most of the time. An
+    // EMPTY array is a different thing - the customer unchecked every line and still pressed Approve -
+    // and must NOT be coerced to "all of it": it is passed through as-is, so checkApproval's own
+    // NOTHING_APPROVED refusal catches it, exactly as it would a staff member's empty selection.
+    const lineIds = Array.isArray(input?.lineIds) ? input.lineIds : undefined;
     await this.recordApproval(id, { method: "portal", reference: meta?.linkId || "", note, lineIds }, `${name} (online)`, session);
     const fresh = await this.#load(id, session);
     fresh.estimate.online = online;
