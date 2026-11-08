@@ -255,6 +255,42 @@ class LabourCostService {
     return { lines, total: hr.labourTotal(lines), uncosted, idle };
   }
 
+  /**
+   * forJobCard for MANY cards at once - one employee query and one contract query for the whole set,
+   * never one pair per card. Built for the garage's Profit report, which otherwise could not cost a
+   * period's labour without N+1 queries (a page of job cards, each its own employeesFor/contractsFor
+   * round trip). Aggregate only: returns one total, plus the hours nobody could be costed for, named -
+   * never idle (that is a separate HR concept this report does not need) and never folded into "free".
+   */
+  static async forJobCards(cards = [], { session } = {}) {
+    const rows = [];
+    for (const card of cards) {
+      for (const t of card?.tasks || []) {
+        if (t.mode === "in_house" && t.status === "DONE" && Number(t.actualHours) > 0) rows.push({ task: t, card });
+      }
+    }
+    if (!rows.length) return { total: hr.labourTotal([]), uncostedHours: 0, uncosted: [] };
+    const { employees, viaAdmin } = await this.employeesFor(rows.map((r) => r.task), { session });
+    const resolved = rows.map((r) => ({ ...r, employee: this.resolveOne(r.task, { employees, viaAdmin }) }));
+    const contracts = await ContractService.contractsFor(resolved.map((r) => r.employee?._id).filter(Boolean), { session });
+
+    const lines = [];
+    const uncosted = [];
+    for (const { task, card, employee } of resolved) {
+      const fallbackDay = orgDay(card.closedAt || card.deliveredAt || card.createdAt) || orgDay(new Date());
+      const day = orgDay(task.doneAt) || fallbackDay;
+      const rate = employee ? hr.rateOn(contracts.get(String(employee._id)) || [], day) : null;
+      if (rate === null || rate === undefined) {
+        uncosted.push({ taskId: task._id, taskName: task.name, hours: Number(task.actualHours) || 0, staffName: employee?.name || task.staffName || null, reason: employee ? "NO_COST_RATE" : "NO_EMPLOYEE" });
+        continue;
+      }
+      const line = hr.labourLine({ staffId: employee._id, staffName: employee.name, hours: Number(task.actualHours), rate, source: hr.HOURS_SOURCE.TYPED, stepId: task._id, stepName: task.name, day });
+      if (line) lines.push(line);
+    }
+    const uncostedHours = Math.round((uncosted.reduce((t, u) => t + u.hours, 0) + Number.EPSILON) * 100) / 100;
+    return { total: hr.labourTotal(lines), uncostedHours, uncosted };
+  }
+
   // ---- compliance where the work is assigned --------------------------------------------------------------
 
   /**

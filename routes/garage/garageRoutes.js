@@ -12,6 +12,7 @@ const j = require("../../controllers/garage/jobCardController");
 const ic = require("../../controllers/garage/insuranceClaimController");
 const files = require("../../controllers/garage/garageAttachmentController");
 const setup = require("../../controllers/garage/garageSetupController");
+const reports = require("../../controllers/garage/garageReportController");
 
 // A file arrives in memory and is validated (extension AND contents) by AttachmentService before anything is
 // stored, exactly as routes/crm/crmRoutes.js does it.
@@ -31,6 +32,18 @@ const router = express.Router();
 router.use(authenticateToken);
 router.param("id", branchOfDocument(JobCard)); // a head office working across branches acts in the card's own branch
 router.param("claimId", branchOfDocument(InsuranceClaim));
+
+// Reports: the workshop's own numbers, beyond the one `analysis` ever gave (fixed paths, no document to
+// scope by branch - every report already reads across the branches its own query names). `profit` is the
+// one that exposes cost and margin, so it additionally needs reports.financial or finance.view - the same
+// dual-permission shape routes/reports/tradeReportRoutes.js already uses for its own Receivables/Payables.
+router.get("/reports/overview", requirePermission("garage.view"), reports.overview);
+router.get("/reports/wip", requirePermission("garage.view"), reports.workInProgress);
+router.get("/reports/profit", requirePermission(["reports.financial", "finance.view"]), reports.profit);
+router.get("/reports/people", requirePermission("garage.view"), reports.people);
+router.get("/reports/customers", requirePermission("garage.view"), reports.customers);
+router.get("/reports/vehicles", requirePermission("garage.view"), reports.vehicles);
+router.get("/reports/insurers", requirePermission("garage.view"), reports.insurers);
 
 // Vehicles: an organisation-wide master, so no branchOfDocument on its own id.
 router.get("/vehicles", requirePermission("garage.view"), v.list);
