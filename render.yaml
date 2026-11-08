@@ -97,10 +97,15 @@ services:
       - key: SUPPORT_CONTACT
         sync: false
 
-      # NOT set on purpose: CORS_ORIGINS. App and API are the same origin through the rewrite, and the
-      # developer console uses that same relative path (src/platform/platformApi.js builds on
-      # API_BASE_URL - there is no VITE_PLATFORM_API_URL in the code), so there is no cross-origin
-      # browser request to allow. Add it only if something really is served from another host.
+      # REQUIRED, and the reasoning that said otherwise was wrong. The /api/* rewrite is a PROXY: it
+      # forwards the browser's Origin header to the backend, so the backend does see an Origin and
+      # does check it - being "one origin" in the browser is not the same as the backend seeing none.
+      # In production utils/allowedOrigins.js trusts only https://zarvia.onrender.com (the localhost
+      # defaults are dropped there), so this client's own frontend must be named here or every
+      # browser call is refused 403 CORS_ORIGIN_NOT_ALLOWED - sign-in and the developer console
+      # included. Comma-separated; a trailing slash is stripped.
+      - key: CORS_ORIGINS
+        value: https://golden-arrow.onrender.com
       #
       # NOT set on purpose: TRUST_PROXY_HOPS / TRUST_CF_CONNECTING_IP. Both default correctly when
       # RENDER is set, and the visitor's address through the rewrite was MEASURED as the real client

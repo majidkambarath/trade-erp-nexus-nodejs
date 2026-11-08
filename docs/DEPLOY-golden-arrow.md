@@ -51,6 +51,7 @@ You asked to keep the existing values and change only the Mongo URL. That holds 
 | `JWT_EXPIRES_IN` / `JWT_REFRESH_EXPIRES_IN` | `15m` / `30d` | yes |
 | `SYSTEM_MAIL_PROVIDER` + its key and from-address | | yes |
 | `SUPPORT_CONTACT` | | yes |
+| `CORS_ORIGINS` | `https://golden-arrow.onrender.com` | **NO — this client's own frontend** |
 
 **Why `PUBLIC_APP_URL` cannot be copied.** It is the base of every password-reset link *and* every
 customer document link, and it is never taken from the request's `Origin`. Left at
@@ -58,10 +59,14 @@ customer document link, and it is never taken from the request's `Origin`. Left 
 other installation, where the token means nothing — reset would simply not work, and the client's
 people would be pointed at another client's address.
 
-**`CORS_ORIGINS` is deliberately not set.** App and API are one origin through the rewrite, and the
-developer console uses that same relative path (`src/platform/platformApi.js` builds on
-`API_BASE_URL`; there is no `VITE_PLATFORM_API_URL` in the code any more, whatever CLAUDE.md still
-says). There is no cross-origin browser request to allow.
+**`CORS_ORIGINS` is required, and the reasoning that said otherwise was wrong.** The `/api/*`
+rewrite is a *proxy*: it forwards the browser's `Origin` header to the backend, so the backend
+does see an Origin and does check it. "One origin in the browser" is not "no Origin at the
+server". In production `utils/allowedOrigins.js` trusts only `https://zarvia.onrender.com` (the
+localhost defaults are dropped there), so this client's own frontend must be named or every
+browser call is refused **403 `CORS_ORIGIN_NOT_ALLOWED`** — sign-in and the developer console
+included. The console does share the app's relative path (`platformApi.js` builds on
+`API_BASE_URL`; there is no `VITE_PLATFORM_API_URL` any more), which is why it fails the same way.
 
 **`TRUST_PROXY_HOPS` and `TRUST_CF_CONNECTING_IP` are deliberately not set.** Both default correctly
 when `RENDER` is set, and the visitor's real address was measured to survive the rewrite. Verify it
