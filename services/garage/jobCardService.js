@@ -136,7 +136,20 @@ class JobCardService {
       // D16: "Toyota" found nothing - the vehicle snapshot's own make was never searched, only its plate.
       filter.$or = [{ jobNo: rx }, { "vehicle.plateNumber": rx }, { "vehicle.make": rx }, { "customer.name": rx }];
     }
-    return JobCard.find(filter).sort({ createdAt: -1 }).limit(300).lean();
+    const rows = await JobCard.find(filter).sort({ createdAt: -1 }).limit(300).lean();
+    // Age in the workshop, the same field the board's cards already wear (utils/garage.js daysSince/ageBand) -
+    // computed here, once, rather than re-derived from a raw receivedAt on the frontend: day arithmetic
+    // across the organisation's own calendar belongs to one tested place, not two.
+    const today = todayInOrg();
+    for (const r of rows) {
+      r.daysIn = rules.daysSince(r.receivedAt ? toExpiryDay(r.receivedAt) : null, today);
+      r.ageBand = rules.ageBand(r.daysIn);
+    }
+    // Filtered here, not folded into the receivedAt Mongo range above: a band is a function of TODAY, not a
+    // fixed range the period filter could share, and a job the period filter already excluded should not be
+    // revived by matching a band.
+    if (query.ageBand) return rows.filter((r) => r.ageBand === query.ageBand);
+    return rows;
   }
 
   static async assignees() {

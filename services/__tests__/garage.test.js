@@ -364,3 +364,37 @@ test("a walk-in customer can be added on the spot from the vehicle or job card f
 
   await assert.rejects(() => svc.JobCard.createCustomer("   "), (e) => e.code === "CUSTOMER_NAME_REQUIRED");
 });
+
+test("the register: a period filter by receivedAt, the age-in-workshop band stamped on each row, and the age-band filter", { skip }, async () => {
+  const oldCard = await svc.JobCard.create(
+    {
+      vehicleId: vehicle._id, customerId: customer._id, jobType: "retail",
+      complaints: [{ concern: "Rattling noise" }],
+      receivedAt: new Date(Date.now() - 12 * 86400000), // comfortably inside the 10-14 day band either side of a timezone wobble
+    },
+    "tester"
+  );
+  const freshCard = await svc.JobCard.create(
+    { vehicleId: vehicle._id, customerId: customer._id, jobType: "insurance", complaints: [{ concern: "Bumper scrape" }] },
+    "tester"
+  );
+
+  const all = await svc.JobCard.list({});
+  const oldRow = all.find((r) => String(r._id) === String(oldCard._id));
+  const freshRow = all.find((r) => String(r._id) === String(freshCard._id));
+  assert.equal(oldRow.ageBand, "b10_14", "twelve days in is the 10-14 day band, like the board's own cards");
+  assert.equal(oldRow.daysIn, 12);
+  assert.equal(freshRow.ageBand, "u5", "received today is under 5 days, never null or 0 read as missing");
+
+  const byAgeBand = await svc.JobCard.list({ ageBand: "b10_14" });
+  assert.ok(byAgeBand.some((r) => String(r._id) === String(oldCard._id)), "the old card is in its own band");
+  assert.ok(!byAgeBand.some((r) => String(r._id) === String(freshCard._id)), "a fresh card does not leak into another band");
+
+  const byType = await svc.JobCard.list({ jobType: "insurance" });
+  assert.ok(byType.every((r) => r.jobType === "insurance"));
+  assert.ok(byType.some((r) => String(r._id) === String(freshCard._id)));
+
+  const todayOnly = await svc.JobCard.list({ from: new Date().toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10) });
+  assert.ok(todayOnly.some((r) => String(r._id) === String(freshCard._id)), "received today is inside today's own range");
+  assert.ok(!todayOnly.some((r) => String(r._id) === String(oldCard._id)), "received twelve days ago is outside today's range");
+});
