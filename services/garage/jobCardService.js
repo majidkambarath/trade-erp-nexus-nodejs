@@ -230,6 +230,13 @@ class JobCardService {
     return rules.board(cards, { today, tomorrow, dayOf: (v) => toExpiryDay(v), me: me || null });
   }
 
+  // The query used to read ONLY cards delivered in the window - so a technician's work this week on a car
+  // still in the shop was invisible to `people`, and a card delivered last month but touched again this
+  // month would never be re-read. Widened to match EITHER the delivery OR a task finished in the window:
+  // the pure rule (utils/garage.js analysis) already filters `jobRows`/`revenue` to delivered-in-period and
+  // `people` to doneAt-in-period independently, so handing it a wider card set only ever adds rows it was
+  // always going to filter correctly itself - it never double-counts. Also bounded for the first time: with
+  // no dates the filter used to be `{}` (the whole collection, no projection, no limit).
   static async analysis({ from, to } = {}) {
     const fromDay = from ? toExpiryDay(from) : null;
     const toDay = to ? toExpiryDay(to) : null;
@@ -239,9 +246,13 @@ class JobCardService {
     const match = {};
     if (fromDay) match.$gte = new Date(`${fromDay}T00:00:00.000Z`);
     if (toDay) match.$lte = new Date(Date.parse(`${toDay}T00:00:00.000Z`) + 86400000);
-    const filter = Object.keys(match).length ? { "delivery.gatePassAt": match } : {};
-    const cards = await JobCard.find(filter).lean();
-    return rules.analysis(cards, { from: fromDay, to: toDay, dayOf: (v) => toExpiryDay(v) });
+    const filter = Object.keys(match).length ? { $or: [{ "delivery.gatePassAt": match }, { "tasks.doneAt": match }] } : {};
+    const PROJECTION = "jobNo vehicle customer receivedAt promisedAt comebackOf delivery lines tasks";
+    const LIMIT = 3000;
+    const cards = await JobCard.find(filter).select(PROJECTION).sort({ "delivery.gatePassAt": -1 }).limit(LIMIT + 1).lean();
+    const capped = cards.length > LIMIT;
+    if (capped) cards.length = LIMIT;
+    return { ...rules.analysis(cards, { from: fromDay, to: toDay, dayOf: (v) => toExpiryDay(v) }), capped };
   }
 
   // How much of an item is promised to a live, not-yet-invoiced job card: the stock list's own honest
