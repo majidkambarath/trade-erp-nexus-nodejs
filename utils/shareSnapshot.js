@@ -76,6 +76,63 @@ function invoiceSnapshot({ transaction, customer, company, currency = orgLocale.
   };
 }
 
+// ---- the job card's estimate -------------------------------------------------------------------
+// What a workshop customer sees before they approve the work, and the ONE snapshot a customer may act
+// on rather than only read (routes/messaging/shareRoutes.js estimate-decision).
+//
+// THE LINE _id IS DELIBERATELY INCLUDED HERE, and it is the only id in any snapshot. A decision names
+// the lines it approves, so the id has to make the round trip. It is a subdocument id of a line on a
+// card whose secret link the caller already holds, it addresses nothing on its own, and every id that
+// comes back is checked against the live card again (utils/garage.js checkApproval) before anything is
+// written. Every OTHER id stays behind exactly as it does for the invoice - above all itemId, which
+// points at a Stock record.
+//
+// What a line must never carry to a customer: `vendorId`/`vendorName` (who we sublet the work to is
+// ours, not theirs), `issuedQty` and `invoiced` (internal progress), `itemId`/`taxCodeId` (database
+// ids), and anything the costing engine knows. The parts of a job card that are purely internal -
+// tasks, who is working on it, purchase orders raised, the claim, estimateHistory, notes - are not
+// listed at all, so they cannot appear by accident.
+const ESTIMATE_LINE_KEYS = [
+  "_id", "kind", "description", "qty", "price", "discountPercent", "discountAmount",
+  "vatPercent", "vatAmount", "lineTotal", "approved", "complaintId", "addedInVersion",
+];
+// The 3 Cs, less the third: "correction" is what was done to fix it, which is not yet a fact when the
+// customer is being asked to approve the work. `status` is the workshop's own progress word.
+const COMPLAINT_KEYS = ["seq", "concern", "cause"];
+// An inspection item the customer is being shown the evidence for. `photos` are attachment ids, fetched
+// back through the token-scoped photo route - never a URL to the authenticated attachment door.
+const INSPECTION_KEYS = ["_id", "item", "condition", "note", "photos"];
+const VEHICLE_KEYS = ["plateNumber", "plateCode", "plateEmirate", "make", "model", "year", "colour", "chassisNo"];
+const ESTIMATE_KEYS = ["version", "total", "sentAt", "decidedAt", "method"];
+const JOB_KEYS = ["jobNo", "status", "receivedAt", "promisedAt", "odometerIn"];
+// The customer's own name and how to reach them. A workshop customer is a Customer record like any
+// other, so the same rule applies: never the credit limit, the balance, the bank accounts or the KYC.
+const ESTIMATE_PARTY_KEYS = ["customerName", "phone", "email", "trnNumber"];
+const TOTAL_KEYS = ["part", "labour", "sublet", "consumable", "net", "vat", "total"];
+
+function estimateSnapshot({ card, customer, company, totals, currency = orgLocale.baseCurrency() }) {
+  const c = toPlain(card) || {};
+  const party = toPlain(customer) || {};
+  const job = {
+    ...pick(c, JOB_KEYS),
+    vehicle: pick(toPlain(c.vehicle), VEHICLE_KEYS),
+    estimate: pick(toPlain(c.estimate), ESTIMATE_KEYS),
+    complaints: (c.complaints || []).map((x) => pick(toPlain(x), COMPLAINT_KEYS)),
+    lines: (c.lines || []).map((l) => pick(toPlain(l), ESTIMATE_LINE_KEYS)),
+    inspection: (c.inspection || []).map((i) => pick(toPlain(i), INSPECTION_KEYS)),
+  };
+  return {
+    kind: "job_estimate",
+    job,
+    // What the lines come to, worked out server-side (utils/garage.js jobTotals) and passed in, so the
+    // page never adds money up for itself and a tampered line cannot change a total.
+    totals: pick(totals, TOTAL_KEYS),
+    party: pick(party, ESTIMATE_PARTY_KEYS),
+    company: pick(toPlain(company), COMPANY_KEYS),
+    currency,
+  };
+}
+
 // Every field path the invoice snapshot may ever contain. Exported so the test can hold the output
 // to exactly this list.
 const INVOICE_ALLOWED = {
@@ -90,4 +147,19 @@ const INVOICE_ALLOWED = {
   top: ["kind", "document", "party", "company", "currency"],
 };
 
-module.exports = { invoiceSnapshot, INVOICE_ALLOWED, pick };
+// The same contract for the estimate: the test holds the output to exactly this list, so a field added
+// to the job card, the vehicle or a line later is invisible here until someone adds it on purpose.
+const ESTIMATE_ALLOWED = {
+  top: ["kind", "job", "totals", "party", "company", "currency"],
+  job: [...JOB_KEYS, "vehicle", "estimate", "complaints", "lines", "inspection"],
+  vehicle: VEHICLE_KEYS,
+  estimate: ESTIMATE_KEYS,
+  complaint: COMPLAINT_KEYS,
+  line: ESTIMATE_LINE_KEYS,
+  inspection: INSPECTION_KEYS,
+  totals: TOTAL_KEYS,
+  party: ESTIMATE_PARTY_KEYS,
+  company: COMPANY_KEYS,
+};
+
+module.exports = { invoiceSnapshot, INVOICE_ALLOWED, estimateSnapshot, ESTIMATE_ALLOWED, pick };

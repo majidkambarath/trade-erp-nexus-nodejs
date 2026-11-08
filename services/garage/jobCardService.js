@@ -567,6 +567,51 @@ class JobCardService {
     return card;
   });
 
+  // The customer's OWN decision, made at the public link (routes/messaging/shareRoutes.js). This is the
+  // only way into a job card with no signed-in person behind it, so it is deliberately narrow: it may
+  // approve lines that are already on the card, or record a refusal, and it can do nothing else. It
+  // never sees a price - the caller passes line ids and a name, and every figure stays where it was.
+  //
+  // It reuses recordApproval rather than re-implementing it, so the rules that matter (which lines a
+  // first decision settles, that a later one can only approve, releasing the first stage of tasks) are
+  // in one place and cannot drift between the counter and the link.
+  static recordCustomerDecision = withTransactionSession(async (id, input, meta, session) => {
+    const card = await this.#load(id, session);
+    const version = Number(card.estimate?.version) || 0;
+    // Idempotent per version: a double tap, a retried request or a refreshed page must never approve
+    // the same work twice, but a supplementary estimate can still be answered.
+    if (card.estimate?.online?.at && Number(card.estimate.online.version) === version) {
+      return { card, already: true };
+    }
+    if (!["AWAITING_APPROVAL", "IN_PROGRESS"].includes(card.status)) {
+      throw fail("This job is no longer waiting for your decision. Please speak to the workshop.", 409, "JOB_NOT_AWAITING_APPROVAL");
+    }
+    const name = rules.text(input?.name, 120);
+    if (!name) throw fail("Enter your name, so we have a record of who approved the work", 400, "NAME_REQUIRED");
+    const note = rules.text(input?.note, 300);
+    const online = {
+      at: new Date(), name, outcome: input?.outcome === "approved" ? "approved" : "declined",
+      linkId: meta?.linkId, ip: meta?.ip, note, version,
+    };
+
+    if (online.outcome === "declined") {
+      // A refusal changes nothing about the car or the work: it is a message to the advisor, who then
+      // revises the estimate or cancels the job. Deciding that for them - cancelling a job because a
+      // customer tapped Decline on a phone - is not this endpoint's to make.
+      card.estimate.online = online;
+      await card.save({ session });
+      return { card, declined: true };
+    }
+
+    // Nothing named means "all of it", which is how an estimate is accepted most of the time.
+    const lineIds = Array.isArray(input?.lineIds) && input.lineIds.length ? input.lineIds : undefined;
+    await this.recordApproval(id, { method: "portal", reference: meta?.linkId || "", note, lineIds }, `${name} (online)`, session);
+    const fresh = await this.#load(id, session);
+    fresh.estimate.online = online;
+    await fresh.save({ session });
+    return { card: fresh };
+  });
+
   // Teardown found more: a new version of the SAME card (never a second document), its new lines pending
   // until named in a later recordApproval. Work already released keeps running.
   static reviseEstimate = withTransactionSession(async (id, input, by, session) => {

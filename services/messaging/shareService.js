@@ -104,6 +104,74 @@ class ShareService {
     }
   }
 
+  // The customer approves or declines the estimate they were sent. THE ONLY WRITE A STRANGER CAN MAKE
+  // IN THIS API, so read the rules it keeps before changing it:
+  //
+  //  - the secret is the whole credential, so `resolve` has already run and a revoked or expired link
+  //    was refused before we got here;
+  //  - the link must BE an estimate. Any other docType answers the same 404 as a made-up token: a
+  //    tax-invoice link must not become a way to approve work;
+  //  - **no figure is read from the request.** The body carries line ids, a name and a note. Prices,
+  //    quantities and totals stay exactly as the workshop priced them;
+  //  - a named line must have been ON THE SNAPSHOT the customer was actually shown, and is checked
+  //    again against the live card by utils/garage.js checkApproval. Two gates, because this one is
+  //    worth two;
+  //  - everything runs AS the organisation named on the row, never one from the request.
+  static async recordEstimateDecision(link, body, req) {
+    if (link.docType !== "job_estimate" || link.sourceType !== "JobCard") throw notFound();
+    // Required lazily: the garage service pulls in a good part of the trade engine, and this file is
+    // loaded by the messaging pipeline at start-up.
+    const JobCardService = require("../garage/jobCardService");
+    const AuditService = require("../core/auditService");
+    return runWithTenant({ companyId: link.companyId, branchId: link.branchId }, async () => {
+      const shown = new Set((link.snapshot?.job?.lines || []).map((l) => String(l._id)));
+      const asked = Array.isArray(body?.lineIds) ? body.lineIds.map((v) => String(v)) : [];
+      if (asked.some((id) => !shown.has(id))) {
+        throw new AppError("That is not an item on this estimate.", 400, "LINE_NOT_ON_ESTIMATE");
+      }
+      const outcome = body?.outcome === "approved" ? "approved" : "declined";
+      const { card, already, declined } = await JobCardService.recordCustomerDecision(
+        link.sourceId,
+        { outcome, name: body?.name, note: body?.note, lineIds: asked },
+        { linkId: link.publicId, ip: coarseIp(req?.ip) }
+      );
+      if (!already) {
+        const who = String(body?.name || "").slice(0, 120);
+        // No userId and no username: nobody was signed in, and the trail should say so plainly. The
+        // link is named by its publicId, never by the token, which is the credential itself.
+        await AuditService.log({
+          req,
+          action: declined ? "GARAGE_ESTIMATE_DECLINED_ONLINE" : "GARAGE_ESTIMATE_APPROVED_ONLINE",
+          entity: "JobCard",
+          entityId: link.sourceId,
+          summary: `${who} ${declined ? "declined" : "approved"} the estimate for job ${card.jobNo || ""} at the link sent to them (${link.publicId})`,
+          after: { outcome, lines: asked.length || "all", status: card.status },
+        });
+      }
+      return { outcome, already: Boolean(already), status: card.status, jobNo: card.jobNo || "" };
+    });
+  }
+
+  // One inspection photograph, fetched by the customer's page. The authenticated attachment doors all
+  // answer to a permission a customer could never hold, so this is its own narrow door, and it opens
+  // for EXACTLY the files named in the snapshot's inspection and nothing else: an attachment id that
+  // was not shown to this customer - a check-in photo, another job's file, another organisation's -
+  // answers the same 404 as a made-up one. The id is therefore not a capability; the snapshot is.
+  static async openEstimatePhoto(link, attachmentId) {
+    if (link.docType !== "job_estimate") throw notFound();
+    const allowed = new Set(
+      (link.snapshot?.job?.inspection || []).flatMap((i) => (i.photos || []).map((p) => String(p)))
+    );
+    if (!allowed.has(String(attachmentId))) throw notFound();
+    const Attachment = require("../../models/modules/financial/attachmentModel");
+    const AttachmentService = require("../core/attachmentService");
+    return runWithTenant({ companyId: link.companyId, branchId: link.branchId }, async () => {
+      const a = await Attachment.findOne({ _id: attachmentId, ownerType: "jobcard", ownerId: link.sourceId });
+      if (!a) throw notFound();
+      return { attachment: a, stream: await AttachmentService.open(a) };
+    });
+  }
+
   static async list(req, { sourceType, sourceId }) {
     const { companyId } = getTenant(req);
     const rows = await ShareLink.find({ companyId, sourceType, sourceId })

@@ -94,3 +94,94 @@ test("a sparse record gives a sparse snapshot instead of undefined fields", () =
   assert.deepEqual(s.company, {});
   assert.equal(s.currency, "AED");
 });
+
+// ---- the job card's estimate ---------------------------------------------------------------------
+// The same discipline as the invoice, with one deliberate difference: a line's own _id DOES travel,
+// because the customer's decision has to name the lines it approves. Everything else stays behind.
+const { estimateSnapshot, ESTIMATE_ALLOWED } = require("../shareSnapshot");
+
+const card = () => ({
+  _id: "LEAK-card-id", jobNo: "JC-2026-0001", status: "AWAITING_APPROVAL",
+  receivedAt: "2026-11-01", promisedAt: "2026-11-03", odometerIn: 84500,
+  companyId: "LEAK-company", branchId: "LEAK-branch", createdBy: "LEAK-admin", updatedBy: "LEAK-admin2",
+  vehicleId: "LEAK-vehicle-id", customerId: "LEAK-customer-id", claimId: "LEAK-claim-id",
+  comebackOf: "LEAK-comeback", notes: "LEAK-internal-note", invoiceStatus: "NONE",
+  vehicle: {
+    plateNumber: "12345", plateCode: "A", plateEmirate: "Dubai", make: "Toyota", model: "Land Cruiser",
+    year: 2019, colour: "White", chassisNo: "JTEBU29J100123456", secretValuation: "LEAK-value",
+  },
+  customer: { name: "LEAK-snapshot-name", phone: "LEAK-snapshot-phone" },
+  estimate: {
+    version: 2, total: 1500, sentAt: "2026-11-01", decidedAt: null, method: "portal",
+    sentBy: "LEAK-advisor", decidedBy: "LEAK-decider", reference: "LEAK-reference", note: "LEAK-estimate-note",
+    online: { ip: "LEAK-ip", linkId: "LEAK-link" },
+  },
+  complaints: [{ _id: "LEAK-complaint-id", seq: 1, concern: "Noise when braking", cause: "Front pads worn", correction: "LEAK-correction", status: "LEAK-status" }],
+  inspection: [{ _id: "insp1", item: "Front brake pads", condition: "urgent", note: "2mm left", photos: ["a1b2c3"], inspectedBy: "LEAK-tech" }],
+  lines: [{
+    _id: "line1", kind: "part", description: "Front brake pads", qty: 1, price: 420,
+    discountPercent: 0, discountAmount: 0, vatPercent: 5, vatAmount: 21, lineTotal: 441,
+    approved: undefined, complaintId: "c1", addedInVersion: 1,
+    itemId: "LEAK-item-id", itemCode: "LEAK-sku", taxCodeId: "LEAK-tax", issuedQty: "LEAK-issued",
+    invoiced: "LEAK-invoiced", itemType: "LEAK-type", grossAmount: "LEAK-gross", taxableAmount: "LEAK-taxable",
+    rcmVat: "LEAK-rcm", taxKind: "LEAK-kind",
+    // Who we send sublet work to is the workshop's own business, never the customer's.
+    vendorId: "LEAK-vendor-id", vendorName: "LEAK-vendor-name",
+  }],
+  // None of these are listed in the snapshot at all, so they cannot appear by accident.
+  tasks: [{ name: "LEAK-task", staffName: "LEAK-technician", actualHours: "LEAK-hours", bayName: "LEAK-bay" }],
+  purchaseOrders: [{ no: "LEAK-po", vendorName: "LEAK-po-vendor" }],
+  invoices: [{ no: "LEAK-invoice" }],
+  estimateHistory: [{ total: "LEAK-old-total" }],
+  checkIn: { damagePoints: [{ panel: "LEAK-panel" }], photos: ["LEAK-checkin-photo"], notes: "LEAK-checkin" },
+});
+const totals = () => ({ part: 420, labour: 600, sublet: 0, consumable: 0, net: 1020, vat: 51, total: 1071, cogs: "LEAK-cogs" });
+
+test("the estimate snapshot holds exactly the whitelisted fields, group by group", () => {
+  const s = estimateSnapshot({ card: card(), customer: customer(), company: company(), totals: totals() });
+  assert.deepEqual(keys(s), allowed(ESTIMATE_ALLOWED.top));
+  assert.deepEqual(keys(s.job), allowed(ESTIMATE_ALLOWED.job));
+  assert.deepEqual(keys(s.job.vehicle), allowed(ESTIMATE_ALLOWED.vehicle));
+  assert.deepEqual(keys(s.job.complaints[0]), allowed(ESTIMATE_ALLOWED.complaint));
+  assert.deepEqual(keys(s.job.inspection[0]), allowed(ESTIMATE_ALLOWED.inspection));
+  assert.deepEqual(keys(s.job.lines[0]), allowed(ESTIMATE_ALLOWED.line.filter((k) => k !== "approved")), "an undecided line carries no `approved` at all");
+  assert.deepEqual(keys(s.totals), allowed(ESTIMATE_ALLOWED.totals));
+  assert.deepEqual(keys(s.party), allowed(ESTIMATE_ALLOWED.party));
+  assert.deepEqual(keys(s.company), allowed(ESTIMATE_ALLOWED.company));
+});
+
+test("the estimate leaks nothing: no cost, no sublet vendor, no technician, no internal note", () => {
+  const out = JSON.stringify(estimateSnapshot({ card: card(), customer: customer(), company: company(), totals: totals() }));
+  assert.equal(out.includes("LEAK"), false, `leaked: ${out.match(/LEAK[\w-]*/g)}`);
+  for (const word of ["vendorId", "vendorName", "itemId", "taxCodeId", "issuedQty", "invoiced", "tasks", "purchaseOrders", "estimateHistory", "checkIn", "claimId", "notes", "customerId", "vehicleId", "companyId"]) {
+    assert.equal(out.includes(`"${word}"`), false, `${word} is in the estimate snapshot`);
+  }
+});
+
+test("a line's own id travels, because the customer's decision has to name the lines it approves", () => {
+  const s = estimateSnapshot({ card: card(), customer: customer(), company: company(), totals: totals() });
+  assert.equal(s.job.lines[0]._id, "line1");
+  // ...and it is the ONLY id: the card's, the vehicle's, the customer's and the item's all stay behind.
+  assert.equal("_id" in s.job, false);
+  assert.equal("_id" in s.job.vehicle, false);
+  assert.equal("itemId" in s.job.lines[0], false);
+});
+
+test("a field added to a job card later does not appear until someone adds it on purpose", () => {
+  const c = card();
+  c.brandNewSecret = "LEAK-new";
+  c.lines[0].brandNewCostField = "LEAK-new";
+  c.vehicle.brandNewField = "LEAK-new";
+  c.inspection[0].brandNewField = "LEAK-new";
+  const out = JSON.stringify(estimateSnapshot({ card: c, customer: customer(), company: company(), totals: totals() }));
+  assert.equal(out.includes("LEAK"), false);
+});
+
+test("a declined line says so, and the totals are the ones worked out on the server", () => {
+  const c = card();
+  c.lines[0].approved = false;
+  const s = estimateSnapshot({ card: c, customer: customer(), company: company(), totals: totals() });
+  assert.equal(s.job.lines[0].approved, false);
+  assert.deepEqual(s.totals, { part: 420, labour: 600, sublet: 0, consumable: 0, net: 1020, vat: 51, total: 1071 });
+  assert.equal(s.kind, "job_estimate");
+});
