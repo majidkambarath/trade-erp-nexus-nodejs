@@ -122,6 +122,14 @@ class JobCardService {
     if (query.jobType) filter.jobType = query.jobType;
     if (query.vehicleId && isId(query.vehicleId)) filter.vehicleId = query.vehicleId;
     if (query.customerId && isId(query.customerId)) filter.customerId = query.customerId;
+    // The register's own period filter (the QA report's D16 remainder: no date filter at all) - by
+    // receivedAt, the day the register's own "Received" column shows, in the organisation's zone like
+    // every other list period (dayEnd is exclusive, so a same-day range still gets the whole day).
+    if (query.from || query.to) {
+      filter.receivedAt = {};
+      if (query.from) filter.receivedAt.$gte = tz.dayStart(String(query.from), orgLocale.timezone());
+      if (query.to) filter.receivedAt.$lt = tz.dayEnd(String(query.to), orgLocale.timezone());
+    }
     const search = String(query.search || "").trim();
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");

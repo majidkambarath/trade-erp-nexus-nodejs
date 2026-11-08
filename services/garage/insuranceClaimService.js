@@ -12,6 +12,8 @@ const TransactionService = require("../orderPurchase/transactionService");
 const NumberSeriesService = require("../core/numberSeriesService");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { getTenant } = require("../../utils/tenant");
+const orgLocale = require("../../utils/orgLocale");
+const tz = require("../../utils/tz");
 
 // The insurance side of a job card (utils/insuranceClaims.js has the pure rules: validation, the survey and
 // approval checks, and splitBill - the money). DRAFT -> SUBMITTED -> SURVEYED -> APPROVED | PARTLY_APPROVED |
@@ -60,6 +62,13 @@ class InsuranceClaimService {
     const filter = {};
     if (query.status) filter.status = query.status;
     if (query.insurerId && isId(query.insurerId)) filter.insurerId = query.insurerId;
+    // By submittedAt, the same date claimAgeing's own buckets count from - a period filter that agreed
+    // with Ageing's own "how long has it waited" would be confusing if it counted a different date.
+    if (query.from || query.to) {
+      filter.submittedAt = {};
+      if (query.from) filter.submittedAt.$gte = tz.dayStart(String(query.from), orgLocale.timezone());
+      if (query.to) filter.submittedAt.$lt = tz.dayEnd(String(query.to), orgLocale.timezone());
+    }
     const search = String(query.search || "").trim();
     if (search) {
       const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
