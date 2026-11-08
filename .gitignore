@@ -1,4 +1,10 @@
 .env
+
+# One env file per live client (.env.golden-arrow, ...): a production MONGO_URI and its password.
+# Without this line `git check-ignore .env.golden-arrow` finds nothing and the credential is one
+# `git add` away from being committed.
+.env.*
+
 /node_modules
 uploads/
 
