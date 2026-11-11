@@ -6,7 +6,7 @@ const { runWithTenant } = require("../tenantContext");
 test.afterEach(() => { L.forget(); L.useLoader(null); });
 
 test("outside any scope it is what the whole system assumed until now: AED and Asia/Dubai", () => {
-  assert.deepEqual(L.current(), { baseCurrency: "AED", timezone: "Asia/Dubai", country: "AE" });
+  assert.deepEqual(L.current(), { baseCurrency: "AED", timezone: "Asia/Dubai", country: "AE", dateFormat: "DD/MM/YYYY" });
   assert.equal(L.baseCurrency(), "AED");
   assert.equal(L.timezone(), "Asia/Dubai");
 });
@@ -15,7 +15,7 @@ test("an organisation that is known reads as its own, inside its scope and only 
   L.warm({ code: "mumbai", baseCurrency: "inr", timezone: "Asia/Kolkata", country: "in" });
   L.warm({ code: "london", baseCurrency: "GBP", timezone: "Europe/London", country: "GB" });
   runWithTenant({ companyId: "mumbai", branchId: "main" }, () => {
-    assert.deepEqual(L.current(), { baseCurrency: "INR", timezone: "Asia/Kolkata", country: "IN" }, "tidied: upper case");
+    assert.deepEqual(L.current(), { baseCurrency: "INR", timezone: "Asia/Kolkata", country: "IN", dateFormat: "DD/MM/YYYY" }, "tidied: upper case");
     assert.equal(L.baseCurrency(), "INR");
   });
   runWithTenant({ companyId: "london", branchId: "main" }, () => assert.equal(L.baseCurrency(), "GBP"));
@@ -24,7 +24,7 @@ test("an organisation that is known reads as its own, inside its scope and only 
 
 test("a bad zone or a blank currency never breaks a read: the default stands in for that part", () => {
   L.warm({ code: "odd", baseCurrency: "  ", timezone: "Nowhere/Land", country: "" });
-  runWithTenant({ companyId: "odd", branchId: "main" }, () => assert.deepEqual(L.current(), { baseCurrency: "AED", timezone: "Asia/Dubai", country: "AE" }));
+  runWithTenant({ companyId: "odd", branchId: "main" }, () => assert.deepEqual(L.current(), { baseCurrency: "AED", timezone: "Asia/Dubai", country: "AE", dateFormat: "DD/MM/YYYY" }));
 });
 
 test("the day helpers use the zone of the organisation in scope", () => {
