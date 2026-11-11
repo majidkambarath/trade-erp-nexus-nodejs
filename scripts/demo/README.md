@@ -80,3 +80,71 @@ receipts, 162 payments, 180 expenses and 78 journals.
 | `abc-treasury.cjs` | 2026 cash moves between the company's own accounts and an owner's capital injection |
 | `abc-check.cjs` | Read-only trial balance and stock-against-ledger check |
 | `abc-profile.cjs` | Sets the company letterhead |
+
+---
+
+# A workshop's month, into an organisation that already exists
+
+`workshopDemo.js` and `wipeOrgData.js` are a pair, and newer than the `abc-*` engine above. They exist
+because that engine cannot do this job: it drives the HTTP API and hardcodes 2025–2026 dates in
+fourteen places across five files, and it builds a *trading* company. `garageDemo.js` is the right
+domain but makes its own organisation, writes **no vouchers at all**, buys once, and lands everything
+at wall-clock now.
+
+These two call the real services in process, as `garageDemo.js` does, with every document placed on a
+day you choose.
+
+```bash
+node scripts/demo/wipeOrgData.js  --env=.env.<client> --org=<code>                               # shows the plan
+node scripts/demo/wipeOrgData.js  --env=.env.<client> --org=<code> --yes                         # does it
+node scripts/demo/workshopDemo.js --env=.env.<client> --org=<code> --from=2026-11-01 --to=2026-11-11 --yes
+```
+
+Both refuse without `--yes`, refuse an implied organisation, refuse `NODE_ENV=test`, and take
+`--expect-host=` so a mistyped env file cannot reach the wrong cluster.
+
+## What the seed writes
+
+Masters (16 parts, 4 vendors, 12 customers + 2 insurers, 12 vehicles, 4 staff), then a capital
+introduction journal, 12 purchase invoices, 18 job cards across **all six** statuses, 10 insurance
+claims each billed to the insurer *and* the customer, **10+ of every voucher type** (receipt, payment,
+journal, contra, expense, credit note, debit note), 6 sales returns, 6 purchase returns and 10
+quotations. Roughly 250 records.
+
+Sequential on purpose: the number-series counter is one row per series, the party ledger balance one
+row per party and the `Stock` cost pool one row per part, so parallel approvals contend on all three
+and burn the eight retries of `utils/withTransactionSession.js`.
+
+Idempotent — a second run writes nothing. There is no `--undo`: a job card past DRAFT cannot be
+deleted and a statutory number is never recycled. That is what `wipeOrgData.js` is for.
+
+## Four rules this seeder had to learn, each from a failed run
+
+- **`Voucher.createdBy` is an ObjectId**, while `Transaction.createdBy` and `JobCard.createdBy` are
+  strings. Vouchers are attributed to a real administrator.
+- **Nothing may credit Inventory Stock by journal.** It writes stock down with no movement behind it,
+  and `StockReportsService.ledgerCheck` then reports the gap as *"posted to the ledger by hand; no
+  stock movement stands behind them"*. Stock leaves through a document or a stock adjustment.
+- **Buy every part before anything sells it**, or an item ends the month on hand below zero.
+- **Cash cannot go negative.** Paying 18,000 rent out of the till is how that happens: small things go
+  to petty cash, rent and the licence go by bank, and the petty top-ups must exceed the petty spend.
+
+## What the wipe means by "wiped"
+
+*Back to exactly what `scripts/setup/garageClient.js` produces* — so it is checkable, and the script
+prints the counts against the expected figures rather than claiming success.
+
+It deletes every document, voucher, ledger entry, movement, job card, claim, party and — the part
+people forget — the **number counters** (`numberseries`, `issuednumbers`, `sequences`), so the next
+document issued is 0001 of its series rather than 0047. It also removes the `Customer - …` / `Vendor
+- …` **party ledger accounts**, which `services/financial/partyAccounts.js` creates on demand and
+which otherwise outlive the parties and sit in the chart for ever.
+
+It keeps the chart, the labour service items, bays, the service menu, roles, tax codes, units,
+voucher types, settings and the fiscal year. It is an **allowlist**, not a delete-list: a collection
+nobody thought of defaults to being removed rather than quietly surviving into the client's books.
+
+A `scripts/backup/export.js` dump is taken first unless `--no-backup`.
+
+**This is the right tool for demo data and the wrong one for real books.** It does not reverse
+anything in accounting terms; it deletes.

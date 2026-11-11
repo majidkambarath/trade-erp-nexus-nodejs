@@ -25,7 +25,7 @@ const HEAD_OFFICE = "main"; // the branchId every existing document already carr
 
 // How utils/orgLocale.js learns an organisation it has not been told about: the registry row, which holds its base currency
 // and time zone. (The registry is not tenant-scoped, so this is a plain read.)
-orgLocale.useLoader((code) => Organisation.findOne({ code }).select("code baseCurrency timezone country").lean());
+orgLocale.useLoader((code) => Organisation.findOne({ code }).select("code baseCurrency timezone country dateFormat").lean());
 const DEFAULT_CODE = DEFAULT_TENANT.companyId;
 
 const bad = (message, code, details) => new AppError(message, 400, code, details);
@@ -149,8 +149,25 @@ class OrganisationService {
   // An organisation whose subscription has ended (or that is read-only) is skipped: a job must not send its
   // customers' email, submit its e-invoices or post its backlog while the organisation cannot change anything.
   // `includeLocked` is for the few jobs that only look.
+  /**
+   * How this organisation writes a date on everything it prints. Deliberately its OWN method and not
+   * `update`: that one is the developer console's and can move a plan, a status or a subscription, none
+   * of which a customer's own Settings screen may touch. This changes one field and nothing else.
+   */
+  static async setDateFormat(code, value) {
+    if (!orgLocale.DATE_FORMATS.includes(value)) {
+      throw bad(`Choose a date format: ${orgLocale.DATE_FORMATS.join(", ")}`, "DATE_FORMAT_INVALID");
+    }
+    const org = await Organisation.findOne({ code });
+    if (!org) throw bad("Organisation not found", "ORGANISATION_NOT_FOUND");
+    org.dateFormat = value;
+    await org.save();
+    orgLocale.warm(org); // applies from the very next read, here and in every background job
+    return org.dateFormat;
+  }
+
   static async forEach(fn, { label = "job", includeLocked = false, now = new Date() } = {}) {
-    const found = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code status planCode subscription baseCurrency timezone country featureOverrides moduleOverrides limitOverrides").lean();
+    const found = await Organisation.find({ status: { $in: ["trial", "active"] } }).select("code status planCode subscription baseCurrency timezone country dateFormat featureOverrides moduleOverrides limitOverrides").lean();
     const orgs = includeLocked ? found : found.filter((o) => plans.subscriptionState(o, now).canWrite);
     const out = [];
     for (const org of orgs) {
@@ -266,7 +283,7 @@ class OrganisationService {
   // Teach utils/orgLocale.js every organisation's base currency and time zone. Run at start-up, so the first request already
   // reads the right ones; it is also refreshed whenever an organisation is loaded.
   static async warmLocales() {
-    const rows = await Organisation.find({}).select("code baseCurrency timezone country").lean();
+    const rows = await Organisation.find({}).select("code baseCurrency timezone country dateFormat").lean();
     rows.forEach((o) => orgLocale.warm(o));
     return rows.length;
   }
@@ -325,6 +342,14 @@ class OrganisationService {
       const zone = tz.supportedZone(String(patch.timezone).trim());
       if (!zone.ok) throw bad(zone.reason, "TIMEZONE_UNSUPPORTED");
       org.timezone = String(patch.timezone).trim();
+    }
+    // How every date this organisation prints is written. One answer for the whole organisation,
+    // so two people printing the same invoice cannot produce two different dates.
+    if (patch.dateFormat !== undefined) {
+      if (!orgLocale.DATE_FORMATS.includes(patch.dateFormat)) {
+        throw bad(`Choose a date format: ${orgLocale.DATE_FORMATS.join(", ")}`, "DATE_FORMAT_INVALID");
+      }
+      org.dateFormat = patch.dateFormat;
     }
     if (patch.planCode !== undefined) {
       if (!plans.PLAN_CODES.includes(patch.planCode)) throw bad(`Choose a plan: ${plans.PLAN_CODES.join(", ")}`, "PLAN_INVALID");

@@ -87,7 +87,7 @@ test("three organisations, each with an owner, in Dubai, Mumbai and London", { s
 
 test("each organisation's locale is what it was made with, read inside its own scope", { skip }, async () => {
   for (const o of ORGS) {
-    as(o.code, () => assert.deepEqual(L.current(), { baseCurrency: o.baseCurrency, timezone: o.timezone, country: o.country }));
+    as(o.code, () => assert.deepEqual(L.current(), { baseCurrency: o.baseCurrency, timezone: o.timezone, country: o.country, dateFormat: o.dateFormat || "DD/MM/YYYY" }));
   }
   assert.equal(L.baseCurrency(), "AED", "outside any scope it is still the original default");
 });
@@ -137,6 +137,33 @@ test("a change of time zone is picked up, and refused if it would go west", { sk
   as("lon", () => assert.equal(L.timezone(), "Europe/Berlin", "the next read already uses it"));
   await assert.rejects(() => Org.update("lon", { timezone: "America/Chicago" }), (e) => e.code === "TIMEZONE_UNSUPPORTED");
   assert.equal((await Org.get("lon")).timezone, "Europe/Berlin", "unchanged by the refusal");
+});
+
+// How a date is WRITTEN is the organisation's too, beside its zone and currency. It used to be each
+// browser's localStorage, so two people printing one invoice produced two different dates and the
+// customer's own copy rendered in THEIR browser's default.
+test("the date format is the organisation's own, and a change is picked up at once", { skip }, async () => {
+  // every organisation starts on the UAE convention, whatever its country
+  for (const o of ORGS) as(o.code, () => assert.equal(L.dateFormat(), "DD/MM/YYYY", `${o.code} default`));
+
+  assert.equal(await Org.setDateFormat("mum", "YYYY-MM-DD"), "YYYY-MM-DD");
+  as("mum", () => assert.equal(L.dateFormat(), "YYYY-MM-DD", "the next read already uses it"));
+  as("dxb", () => assert.equal(L.dateFormat(), "DD/MM/YYYY", "and no other organisation moved"));
+
+  // it rides on the status the app reads, so a screen knows without a second request
+  const status = await api("mum", "GET", "/organisation/status");
+  assert.equal(status.status, 200, JSON.stringify(status.body).slice(0, 200));
+  assert.equal(status.body?.organisation?.dateFormat, "YYYY-MM-DD");
+
+  await assert.rejects(() => Org.setDateFormat("mum", "DD.MM.YY"), (e) => e.code === "DATE_FORMAT_INVALID");
+  as("mum", () => assert.equal(L.dateFormat(), "YYYY-MM-DD", "unchanged by the refusal"));
+
+  // the customer's own copy carries it, so the page they open reads what the sender printed
+  const { invoiceSnapshot } = require("../../utils/shareSnapshot");
+  const snap = as("mum", () => invoiceSnapshot({ transaction: { transactionNo: "SO-1" }, customer: {}, company: {} }));
+  assert.deepEqual(snap.locale, { dateFormat: "YYYY-MM-DD", timezone: "Asia/Kolkata", country: "IN" });
+
+  await Org.setDateFormat("mum", "DD/MM/YYYY");
 });
 
 test("the invoice email dates and money use the organisation's own zone and currency", { skip }, async () => {

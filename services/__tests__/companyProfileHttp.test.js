@@ -103,6 +103,21 @@ test("every person sees the organisation's one copy - the earliest owner's, adop
   assert.ok(stored.profile.letterheadAdoptedAt, "it is marked as adopted");
 });
 
+// The heading on an invoice is "Tax invoice" only when the organisation says it is registered AND has a
+// number to print, so the letterhead has to carry BOTH. It used to carry the number alone, which is why
+// the "Registered for VAT" tick box in Settings decided nothing at all.
+test("the letterhead carries whether the organisation is registered, not only its number", { skip }, async () => {
+  assert.equal((await api("aowner", "GET", "/company/profile")).body.vatRegistered, true, "nothing stored reads as registered, as the model defaults");
+
+  await as("alpha", () => M.CompanySettings.updateOne({ companyId: "alpha" }, { $set: { "profile.vatRegistered": false } }));
+  const off = await api("aviewer", "GET", "/company/profile");
+  assert.equal(off.body.vatRegistered, false, "switched off, and said so - this is what makes the sheet print Invoice");
+  assert.equal(off.body.vatNumber, "100999888700003", "the number stays on file; it is simply no longer used");
+
+  await as("alpha", () => M.CompanySettings.updateOne({ companyId: "alpha" }, { $set: { "profile.vatRegistered": true } }));
+  assert.equal((await api("aviewer", "GET", "/company/profile")).body.vatRegistered, true);
+});
+
 test("adoption happens once: a person changing their own old copy afterwards changes nothing", { skip }, async () => {
   await as("alpha", () => M.Admin.updateOne({ email: "aowner@alpha.test" }, { $set: { "companyInfo.companyName": "Changed On The Person" } }));
   assert.equal((await api("aviewer", "GET", "/company/profile")).body.companyName, "Alpha Foods LLC");

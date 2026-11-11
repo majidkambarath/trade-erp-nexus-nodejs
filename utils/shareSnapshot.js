@@ -34,8 +34,19 @@ const PARTY_KEYS = ["customerName", "customerId", "billingAddress", "phone", "em
 const COMPANY_KEYS = [
   "companyName", "companyNameArabic", "addressLine1", "addressLine2", "city", "state", "country",
   "phoneNumber", "email", "website",
-  "vatNumber", "logo", "bankName", "accountNumber", "accountName", "ibanNumber", "swiftCode", "branch",
+  // `vatRegistered` rides beside the number because the heading is built from BOTH: without it the
+  // customer's own copy could head a document "Tax invoice" that the sender's screen and PDF call an
+  // "Invoice". It is a fact about us that is already printed on the sheet, not anything of theirs.
+  "vatNumber", "vatRegistered", "logo", "bankName", "accountNumber", "accountName", "ibanNumber", "swiftCode", "branch",
 ];
+
+// How the SENDING organisation writes a date, what calendar it writes it in, and which country it is
+// in - so the customer's own copy reads exactly what the sender printed. Without this the public page
+// renders in the VISITOR's browser: their date format, and Asia/Dubai regardless of where the seller
+// is, which can print the wrong calendar DAY for any organisation outside that zone. None of the three
+// is customer-sensitive; they are facts already printed on the document.
+const LOCALE_KEYS = ["dateFormat", "timezone", "country"];
+const localeBlock = () => ({ dateFormat: orgLocale.dateFormat(), timezone: orgLocale.timezone(), country: orgLocale.country() });
 
 const toPlain = (v) => (v && typeof v.toObject === "function" ? v.toObject() : v);
 
@@ -73,6 +84,7 @@ function invoiceSnapshot({ transaction, customer, company, currency = orgLocale.
     party,
     company: pick(toPlain(company), COMPANY_KEYS),
     currency,
+    locale: localeBlock(),
   };
 }
 
@@ -130,6 +142,7 @@ function estimateSnapshot({ card, customer, company, totals, currency = orgLocal
     party: pick(party, ESTIMATE_PARTY_KEYS),
     company: pick(toPlain(company), COMPANY_KEYS),
     currency,
+    locale: localeBlock(),
   };
 }
 
@@ -144,13 +157,15 @@ const INVOICE_ALLOWED = {
   party: [...PARTY_KEYS, "vat", "eInvoice"],
   eInvoice: ["city", "countryCode"],
   company: COMPANY_KEYS,
-  top: ["kind", "document", "party", "company", "currency"],
+  locale: LOCALE_KEYS,
+  top: ["kind", "document", "party", "company", "currency", "locale"],
 };
 
 // The same contract for the estimate: the test holds the output to exactly this list, so a field added
 // to the job card, the vehicle or a line later is invisible here until someone adds it on purpose.
 const ESTIMATE_ALLOWED = {
-  top: ["kind", "job", "totals", "party", "company", "currency"],
+  locale: LOCALE_KEYS,
+  top: ["kind", "job", "totals", "party", "company", "currency", "locale"],
   job: [...JOB_KEYS, "vehicle", "estimate", "complaints", "lines", "inspection"],
   vehicle: VEHICLE_KEYS,
   estimate: ESTIMATE_KEYS,

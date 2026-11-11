@@ -27,3 +27,15 @@ exports.status = catchAsync(async (req, res) => {
   const build = require("../../utils/version");
   res.status(200).json({ success: true, data: { ...status, me, policy, build: { api: build.version, startedAt: build.startedAt } } });
 });
+
+// How every date this organisation PRINTS is written. It is one setting for the whole organisation
+// on purpose: it used to be each browser's own, so two people printing the same invoice produced two
+// different dates and the customer's copy rendered in THEIR browser's default.
+exports.setDateFormat = catchAsync(async (req, res) => {
+  const OrganisationService = require("../../services/core/organisationService");
+  const AuditService = require("../../services/core/auditService");
+  const { getTenant } = require("../../utils/tenant");
+  const value = await OrganisationService.setDateFormat(getTenant().companyId, req.body?.dateFormat);
+  await AuditService.log({ req, action: "ORGANISATION_DATE_FORMAT_CHANGED", entity: "Organisation", summary: `Dates are now written ${value}` });
+  res.status(200).json({ success: true, data: { dateFormat: value } });
+});
