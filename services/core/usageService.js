@@ -139,7 +139,7 @@ class UsageService {
         view: who.tenant?.branchView || null,
       },
       support: { contact: process.env.SUPPORT_CONTACT || process.env.SUPPORT_EMAIL || null },
-      organisation: { code: org.code, legalName: org.legalName, country: org.country, baseCurrency: org.baseCurrency, timezone: org.timezone, planCode: org.planCode, planName: plans.PLANS[org.planCode]?.name || org.planCode },
+      organisation: { code: org.code, legalName: org.legalName, country: org.country, baseCurrency: org.baseCurrency, timezone: org.timezone, dateFormat: org.dateFormat || "DD/MM/YYYY", planCode: org.planCode, planName: plans.PLANS[org.planCode]?.name || org.planCode },
       subscription: plans.subscriptionState(org, now),
       features: countryFeatures(org), // the plan's, less what does not apply in the organisation's country (utils/countryRules.js)
       // The modules the organisation bought, so a screen can say "not included in your plan" instead of blaming the

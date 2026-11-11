@@ -9,6 +9,9 @@ const { PLAN_CODES, FEATURE_KEYS, LIMIT_KEYS, moduleOverrideError } = require(".
 
 // Lower-case letters, digits and hyphens; not starting or ending with a hyphen. It becomes a key in every
 // collection and may appear in a URL, so it stays boring on purpose.
+// The patterns a date may be written in. Mirrored by DATE_FORMATS in the app's utils/format.js.
+const DATE_FORMATS = ["DD/MM/YYYY", "MM/DD/YYYY", "YYYY-MM-DD", "DD-MM-YYYY", "DD MMM YYYY"];
+
 const CODE_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const RESERVED_CODES = ["platform", "admin", "system", "api", "root", "www", "null", "undefined", "tenant", "organisation", "organization"];
 
@@ -51,6 +54,12 @@ const organisationSchema = new mongoose.Schema(
     country: { type: String, required: true, uppercase: true, trim: true, match: [/^[A-Z]{2}$/, "Country must be a two-letter code, for example AE"] },
     baseCurrency: { type: String, required: true, uppercase: true, trim: true, match: [/^[A-Z]{3}$/, "Currency must be a three-letter code, for example AED"] },
     timezone: { type: String, required: true, trim: true },
+    // How every date this organisation PRINTS is written. It belongs here, beside country,
+    // currency and zone, because it is the same class of fact: one organisation, one answer.
+    // It used to live in each browser's localStorage, so two people printing the same invoice
+    // produced two different dates and the customer's own copy rendered in THEIR browser's
+    // default. A schema default means no migration - an existing organisation reads as it did.
+    dateFormat: { type: String, enum: DATE_FORMATS, default: "DD/MM/YYYY" },
 
     // trial and active behave alike; suspended and closed block the organisation outright (utils/plans.js).
     status: { type: String, enum: ["trial", "active", "suspended", "closed"], default: "trial" },
