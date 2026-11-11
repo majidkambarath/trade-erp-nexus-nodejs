@@ -16,7 +16,7 @@
 #    dashboard, which wins over both.
 services:
   - type: web
-    name: api-golden-arrow
+    name: api-golden-arrow-385b
     runtime: node
     # A PAYING client, so not `free`: the free plan sleeps and its first request after idle was
     # MEASURED at 32.6 s. The garage QA report's "5-20 s waits" are that plan, not a missing
@@ -55,7 +55,7 @@ services:
       # Golden Arrow user's "forgot my password" link would open that other site, where the token
       # means nothing - reset simply would not work, and the address leaks.
       - key: PUBLIC_APP_URL
-        value: https://golden-arrow.onrender.com
+        value: https://goldenarrow.onrender.com
 
       # App and API are one origin (the frontend's /api/* rewrite), so the backend may no longer see
       # an Origin header to check and CORS stops being the CSRF defence. Lax is the stronger
@@ -105,7 +105,7 @@ services:
       # browser call is refused 403 CORS_ORIGIN_NOT_ALLOWED - sign-in and the developer console
       # included. Comma-separated; a trailing slash is stripped.
       - key: CORS_ORIGINS
-        value: https://golden-arrow.onrender.com
+        value: https://goldenarrow.onrender.com
       #
       # NOT set on purpose: TRUST_PROXY_HOPS / TRUST_CF_CONNECTING_IP. Both default correctly when
       # RENDER is set, and the visitor's address through the rewrite was MEASURED as the real client

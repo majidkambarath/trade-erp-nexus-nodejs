@@ -8,8 +8,8 @@ Both services deploy from the branch **`production/golden-arrow`** in their own 
 `render.yaml` on that branch in each repo already carries everything below.
 
 ```
-  browser ──→ golden-arrow.onrender.com         (static site, the SPA)
-                 │  /api/*  rewrite  ─────────→ api-golden-arrow.onrender.com  (web service)
+  browser ──→ goldenarrow.onrender.com         (static site, the SPA)
+                 │  /api/*  rewrite  ─────────→ api-golden-arrow-385b.onrender.com  (web service)
                  │                                        │
                  └─ /*      → index.html                  └──→ golden-arrow.kejvhzf.mongodb.net
 ```
@@ -19,7 +19,7 @@ why the cookie is `SameSite=Lax` rather than relying on a CORS check.
 
 ---
 
-## 1. Backend — Web Service `api-golden-arrow`
+## 1. Backend — Web Service `api-golden-arrow-385b`
 
 | Setting | Value |
 | --- | --- |
@@ -40,7 +40,7 @@ You asked to keep the existing values and change only the Mongo URL. That holds 
 | Variable | Value | Copy from the existing service? |
 | --- | --- | --- |
 | `MONGO_URI` | the `mongodb+srv://…@golden-arrow.kejvhzf.mongodb.net/ERP?retryWrites=true&w=majority` line from `.env.golden-arrow` | **NO — this is the one you change** |
-| `PUBLIC_APP_URL` | `https://golden-arrow.onrender.com` | **NO — must be this client's own site** |
+| `PUBLIC_APP_URL` | `https://goldenarrow.onrender.com` | **NO — must be this client's own site** |
 | `SYSTEM_MAIL_FROM_NAME` | `Golden Arrow Auto Garage` | NO — cosmetic, but it signs the client's mail |
 | `NODE_ENV` | `production` | yes |
 | `SESSION_COOKIE_SAMESITE` | `lax` | yes |
@@ -51,7 +51,7 @@ You asked to keep the existing values and change only the Mongo URL. That holds 
 | `JWT_EXPIRES_IN` / `JWT_REFRESH_EXPIRES_IN` | `15m` / `30d` | yes |
 | `SYSTEM_MAIL_PROVIDER` + its key and from-address | | yes |
 | `SUPPORT_CONTACT` | | yes |
-| `CORS_ORIGINS` | `https://golden-arrow.onrender.com` | **NO — this client's own frontend** |
+| `CORS_ORIGINS` | `https://goldenarrow.onrender.com` | **NO — this client's own frontend** |
 
 **Why `PUBLIC_APP_URL` cannot be copied.** It is the base of every password-reset link *and* every
 customer document link, and it is never taken from the request's `Origin`. Left at
@@ -111,7 +111,7 @@ rules, in this order:
 
 | # | Source | Destination | Type |
 | --- | --- | --- | --- |
-| 1 | `/api/*` | `https://api-golden-arrow.onrender.com/api/*` | Rewrite |
+| 1 | `/api/*` | `https://api-golden-arrow-385b.onrender.com/api/*` | Rewrite |
 | 2 | `/*` | `/index.html` | Rewrite |
 
 **Rule 1 must be above rule 2.** Below it, `/*` answers every API call with `index.html` and the app
@@ -144,7 +144,7 @@ the live site answered only `nosniff` and Render's own HSTS. So add these by han
 
 1. **Backend first**, with its variables. It will not start in production without `MONGO_URI` and a
    real `JWT_SECRET` — a weak key fails the deploy and Render keeps the previous version running.
-2. `GET https://api-golden-arrow.onrender.com/api/v1/health` → `{"ready": true}`.
+2. `GET https://api-golden-arrow-385b.onrender.com/api/v1/health` → `{"ready": true}`.
    On a cold shared-tier cluster the first boot can exceed the 20 s gate; wait for `ready: true`
    before signing in.
 3. Same URL again, and read **`yourAddress`**: it must be *your* address, must **not** change when you
@@ -152,7 +152,7 @@ the live site answered only `nosniff` and Render's own HSTS. So add these by han
    Cloudflare address or changes each time, every per-address limit is dead — stop and fix it before
    go-live.
 4. **Frontend**, with `VITE_API_URL` and both rewrites.
-5. `GET https://golden-arrow.onrender.com/api/v1/health` → the same JSON. If it returns HTML, rule 1
+5. `GET https://goldenarrow.onrender.com/api/v1/health` → the same JSON. If it returns HTML, rule 1
    is below rule 2.
 6. **Sign in, then hard-reload a deep link** such as `/garage/board`. This is the check nothing in code
    can make: it proves the rewrite passes `Set-Cookie` back and `Cookie` forward. If the reload signs
@@ -167,8 +167,8 @@ the live site answered only `nosniff` and Render's own HSTS. So add these by han
 Git Bash. Set the two hosts once:
 
 ```bash
-API=https://api-golden-arrow.onrender.com
-APP=https://golden-arrow.onrender.com
+API=https://api-golden-arrow-385b.onrender.com
+APP=https://goldenarrow.onrender.com
 ```
 
 ### Is it up, and has it finished building the database?
