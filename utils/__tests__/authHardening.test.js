@@ -8,6 +8,8 @@ const path = require("path");
 const jwt = require("jsonwebtoken");
 const { weakness, configProblems, assertProductionConfig, jwtSecret, MIN_SECRET_LENGTH } = require("../productionConfig");
 const { trustProxyHops } = require("../trustProxy");
+const { EventEmitter } = require("events");
+const { loginThrottle, sharedClientAddress } = require("../../middleware/loginThrottle");
 
 const STRONG = "k3Jd9sL0pQx7VbN2mZc8TyH5wRf1GaE6uIo4PtYq3XnMvB0cDjSl9AkWe7UhZr2F";
 
@@ -148,4 +150,92 @@ test("no controller, service, route or middleware prints a request or a document
   };
   for (const dir of ["controllers", "services", "routes", "middleware"]) walk(path.join(ROOT, dir));
   assert.deepEqual(offenders, [], `console.log in code that handles requests: ${offenders.join(", ")}. Use utils/logger (logger.debug).`);
+});
+
+// =====================================================================================================================
+// the sign-in throttle when the address is not the visitor's
+// =====================================================================================================================
+// Put the API behind the app's own origin (a Render static-site rewrite) and every request reaches the backend from ONE
+// address. An address bucket is then a GLOBAL bucket: twenty failures by anybody would shut the door on every client in
+// the world. SHARED_CLIENT_ADDRESS=true says so and moves the counting onto the two keys that still mean something.
+// Unset, nothing about the throttle changes - which is what the first two tests below are for.
+
+// One pass through the middleware. `status` is what the request ends as, and only a failure is counted.
+const doorFor = (options) => {
+  const mw = loginThrottle(options);
+  return (ip, email, status = 401) =>
+    new Promise((resolve) => {
+      const req = { ip, body: email === null ? {} : { email }, socket: {} };
+      const res = new EventEmitter();
+      res.statusCode = status;
+      res.sent = {};
+      res.set = (k, v) => { res.sent[k] = v; };
+      mw(req, res, (err) => {
+        if (err) return resolve({ refused: true, code: err.code, status: err.statusCode, message: err.message, retryAfter: res.sent["Retry-After"] });
+        res.emit("finish");
+        resolve({ refused: false });
+      });
+    });
+};
+
+test("SHARED_CLIENT_ADDRESS is read as a plain true or false, and says nothing unless it is set", () => {
+  assert.equal(sharedClientAddress({}), false);
+  assert.equal(sharedClientAddress({ SHARED_CLIENT_ADDRESS: "" }), false);
+  assert.equal(sharedClientAddress({ SHARED_CLIENT_ADDRESS: "   " }), false);
+  for (const yes of ["1", "true", "TRUE", "yes", "on"]) assert.equal(sharedClientAddress({ SHARED_CLIENT_ADDRESS: yes }), true, yes);
+  for (const no of ["0", "false", "no", "off"]) assert.equal(sharedClientAddress({ SHARED_CLIENT_ADDRESS: no }), false, no);
+  assert.throws(() => sharedClientAddress({ SHARED_CLIENT_ADDRESS: "maybe" }), /must be true or false/);
+});
+
+test("with the address its own, the throttle counts per address exactly as it always did", async () => {
+  const door = doorFor({ shared: false, max: 3, windowMs: 60000 });
+  for (const who of ["a", "b", "c"]) assert.equal((await door("1.1.1.1", who + "@x.test")).refused, false);
+  const shut = await door("1.1.1.1", "d@x.test");
+  assert.equal(shut.refused, true, "three failures from one address and the fourth was still answered");
+  assert.equal(shut.code, "TOO_MANY_ATTEMPTS");
+  assert.equal(shut.status, 429);
+  assert.match(shut.message, /from this address/);
+  assert.ok(Number(shut.retryAfter) > 0, "a refusal says how long to wait");
+  assert.equal((await door("2.2.2.2", "e@x.test")).refused, false, "another address keeps its own allowance");
+});
+
+test("only failures count, so an office signing in successfully all morning is never held up", async () => {
+  const door = doorFor({ shared: false, max: 2, windowMs: 60000 });
+  for (let i = 0; i < 10; i += 1) assert.equal((await door("1.1.1.1", "a@x.test", 200)).refused, false);
+});
+
+test("behind a shared address the address bucket is off, so one proxy cannot lock out every client at once", async () => {
+  const door = doorFor({ shared: true, max: 3, accountMax: 50, overallMax: 1000, windowMs: 60000 });
+  for (let i = 0; i < 20; i += 1) {
+    assert.equal((await door("10.0.0.1", "person-" + i + "@x.test")).refused, false, "attempt " + i + " was refused on the address everyone arrives from");
+  }
+});
+
+test("behind a shared address, guessing at one account is still stopped wherever it comes from", async () => {
+  const door = doorFor({ shared: true, accountMax: 3, overallMax: 1000, windowMs: 60000 });
+  for (let i = 0; i < 3; i += 1) await door("10.0.0." + i, "victim@x.test");
+  const shut = await door("10.0.0.9", "  VICTIM@X.test  ");
+  assert.equal(shut.refused, true, "case and spacing bought a fresh allowance: the key is not normalised as sign-in normalises it");
+  assert.match(shut.message, /for this account/);
+  assert.equal((await door("10.0.0.9", "someone-else@x.test")).refused, false, "another account is unaffected");
+
+  // the body is the client's to write, so anything that is not a string names nobody
+  const hostile = doorFor({ shared: true, accountMax: 1, overallMax: 1000, windowMs: 60000 });
+  await hostile("10.0.0.1", { $ne: null });
+  assert.equal((await hostile("10.0.0.2", { $ne: null })).refused, false, "an object was taken for an account name");
+});
+
+test("behind a shared address one overall ceiling is all that is left to catch credential stuffing", async () => {
+  const door = doorFor({ shared: true, accountMax: 50, overallMax: 5, windowMs: 60000 });
+  for (let i = 0; i < 5; i += 1) assert.equal((await door("10.0.0.1", "stuff-" + i + "@x.test")).refused, false);
+  const shut = await door("10.0.0.1", "stuff-6@x.test");
+  assert.equal(shut.refused, true, "every try named a different account from the one address, so only the ceiling could stop it");
+  assert.equal(shut.code, "TOO_MANY_ATTEMPTS");
+  assert.doesNotMatch(shut.message, /this address|this account/, "the ceiling is neither, and must not claim to be");
+});
+
+test("the second sign-in step names no account, so behind a shared address only the ceiling holds it", async () => {
+  const door = doorFor({ shared: true, accountMax: 2, overallMax: 4, windowMs: 60000 });
+  for (let i = 0; i < 4; i += 1) assert.equal((await door("10.0.0.1", null)).refused, false);
+  assert.equal((await door("10.0.0.1", null)).refused, true);
 });
