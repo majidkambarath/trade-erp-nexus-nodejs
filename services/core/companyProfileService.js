@@ -43,6 +43,11 @@ function toApi(profile = {}, baseCurrency = orgLocale.baseCurrency()) {
     emailAddress: clean(p.email),
     website: clean(p.website),
     vatNumber: clean(p.trn),
+    // Whether the organisation says it IS registered, which is a different fact from having a number on
+    // file: a document is a tax invoice only when both are true, and a number left behind after
+    // deregistering must not go on making one. Absent on the stored profile reads as registered, which
+    // is the model's own default.
+    vatRegistered: p.vatRegistered !== false,
     companyLogo: p.logo?.url ? { url: p.logo.url } : null,
     bankDetails: {
       bankName: clean(bank.bankName), accountName: clean(bank.accountName), accountNumber: clean(bank.accountNumber),

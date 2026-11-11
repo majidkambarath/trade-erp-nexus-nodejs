@@ -26,6 +26,9 @@ router.post("/:id/reject", requirePermission("sales.approve"), c.reject);
 router.post("/:id/revise", requirePermission("sales.create"), c.revise);
 router.post("/:id/convert", requirePermission("sales.approve"), c.convert); // -> a draft sales INVOICE, for a deal that goes out in one go
 router.post("/:id/sales-order", requirePermission("sales.approve"), c.toTradeOrder); // -> a draft sales ORDER (SORD), delivered in stages
-router.post("/:id/delivery-note", requirePermission("sales.approve"), c.toDeliveryNote); // -> a delivery note, to be invoiced after
+// -> a delivery note, to be invoiced after. Its own feature gate, because this is a door INTO delivery
+// notes from a router that only asks for "quotations": an organisation that did not buy them could make
+// one here, which is how the screen's ungated "Create delivery note" button went unnoticed.
+router.post("/:id/delivery-note", requireFeature("deliveryNotes"), requirePermission("sales.approve"), c.toDeliveryNote);
 
 module.exports = router;

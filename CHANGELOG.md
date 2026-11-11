@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.9.0.0 — 11 November 2026
+
+What a document is CALLED, who may raise one, and the cheque life cycle. Frontend and backend both at
+2.9.0.0.
+
+### Added
+
+- **The post-dated cheque life cycle.** A cheque is followed the way a finance desk follows one: held
+  in the drawer, taken to the bank, cleared or sent back, with the reason and the cost of a bounce on
+  file, a view of what falls due, and reminders so nobody has to remember which cheque is due on
+  Thursday. Every new state is a state of the REGISTER - no new posting key, no new voucher type and no
+  new voucher status - so the day book, the reports and the Phase 2 parity mirrors are untouched.
+- A quotation leads with ONE action and keeps the rest behind "More actions", the hierarchy the garage
+  job cards already use. Six buttons in a row wrapped to several lines on a phone.
+
+### Fixed
+
+- **A tax invoice is a tax invoice only when the organisation IS registered.** Settings > Business
+  rules has a "Registered for VAT" tick box; nothing read it. The heading was decided by "is a number
+  typed in", so an organisation that unticked the box and left its old number on file went on heading
+  every sale "Tax invoice" - and the flag was not even sent to the browser. Both facts are asked now,
+  because they are different facts: a tax invoice must carry the seller's own number (UAE Decree-Law
+  Art. 65, CGST s.31), so no number can never be one, and a number kept after deregistering does not
+  make one either. An ABSENT flag reads as registered, so no document issued before this moves.
+- **The emailed copy no longer contradicts its own attachment.** An unregistered organisation sent its
+  customer a mail headed "Tax invoice INV-123", saying "Please find tax invoice ...", with a PDF
+  attached reading "Invoice". Subject, body and attachment now agree, and the registration travels to
+  the customer's own web copy so that page cannot disagree either.
+- **A quotation no longer offers a delivery note to an organisation that did not buy them.** The button
+  was drawn from the INVOICE's own flag and consulted no plan at all, and the route behind it asked
+  only for "quotations" - so an organisation without Delivery notes could raise one through it. The
+  delivery note has its own action flag now and the route carries its own feature gate.
+- The "more actions" menu no longer opens off the left edge of a phone. It hung from the button's right
+  edge, which is right for a table row and wrong for a header button at the left; nothing caught it,
+  because a fixed box off to the left makes the page no wider.
+- The warning under an invoice heading says WHICH reason it is - no number on file, or registration
+  switched off - instead of always telling somebody to add a number that is already there.
+- Dates follow the organisation, including on the customer's own copy, rather than the browser that
+  happens to be reading them.
+
 ## 2.8.0.0 — 11 November 2026
 
 A QA pass on the live books: what a document says about a party, what a switched-off feature leaves

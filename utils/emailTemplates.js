@@ -17,6 +17,18 @@ const DOC_LABEL = {
   job_estimate: "Estimate",
 };
 
+// `tax_invoice` is the machine kind, not the words. An organisation that is not registered issues a
+// plain "Invoice", and the sheet it attaches already says so - this used to be the constant above, so
+// the customer was sent a mail headed "Tax invoice INV-123" with a PDF inside reading "Invoice".
+//
+// The same rule as isTaxInvoice in the browser's PurchaseOrder/shared/invoiceDocuments.js: a number to
+// print AND a registration not switched off, with an absent flag reading as registered. It is repeated
+// rather than imported because this module is pure and shares nothing with the view layer - if one
+// side changes, the other must change with it, or the subject line and the attachment disagree again.
+const sellerRegistered = (c) => Boolean(String(c?.vatNumber ?? "").trim()) && c?.vatRegistered !== false;
+const labelFor = (docType, company) =>
+  (docType === "tax_invoice" && !sellerRegistered(company) ? "Invoice" : DOC_LABEL[docType]) || "Document";
+
 const escapeHtml = (v) =>
   String(v ?? "")
     .replace(/&/g, "&amp;")
@@ -43,7 +55,7 @@ const periodText = (p) => (p?.from && p?.to ? `${fmtDay(p.from)} to ${fmtDay(p.t
 const { orgTaxTerms } = require("./countryRules");
 
 function subjectFor({ docType, documentNo, company, validUntil, period }) {
-  const label = DOC_LABEL[docType] || "Document";
+  const label = labelFor(docType, company);
   const from = company?.companyName ? ` from ${company.companyName}` : "";
   if (docType === "statement") return `${label}${periodText(period) ? ` - ${periodText(period)}` : ""}${from}`;
   const base = `${label} ${documentNo}${from}`;
@@ -52,7 +64,7 @@ function subjectFor({ docType, documentNo, company, validUntil, period }) {
 
 // The one factual sentence, per kind.
 function factLine(d) {
-  const label = (DOC_LABEL[d.docType] || "document").toLowerCase();
+  const label = labelFor(d.docType, d.company).toLowerCase();
   const money = fmtMoney(d.total, d.currency);
   switch (d.docType) {
     case "tax_invoice":

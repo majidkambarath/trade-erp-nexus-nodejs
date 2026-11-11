@@ -12,7 +12,8 @@
 const tz = require("./tz");
 const { ambientTenant } = require("./tenantContext");
 
-const DEFAULT = Object.freeze({ baseCurrency: "AED", timezone: "Asia/Dubai", country: "AE" });
+const DATE_FORMATS = ["DD/MM/YYYY", "MM/DD/YYYY", "YYYY-MM-DD", "DD-MM-YYYY", "DD MMM YYYY"];
+const DEFAULT = Object.freeze({ baseCurrency: "AED", timezone: "Asia/Dubai", country: "AE", dateFormat: "DD/MM/YYYY" });
 const LEASE_MS = 60 * 1000;
 const cache = new Map(); // companyId -> { baseCurrency, timezone, country, at }
 let loader = null; // set by the service that can read the registry, so this file never requires a model
@@ -21,6 +22,7 @@ const valid = (v) => ({
   baseCurrency: typeof v?.baseCurrency === "string" && v.baseCurrency.trim() ? v.baseCurrency.trim().toUpperCase() : DEFAULT.baseCurrency,
   timezone: tz.validZone(v?.timezone) ? v.timezone : DEFAULT.timezone,
   country: typeof v?.country === "string" && v.country.trim() ? v.country.trim().toUpperCase() : DEFAULT.country,
+  dateFormat: DATE_FORMATS.includes(v?.dateFormat) ? v.dateFormat : DEFAULT.dateFormat,
 });
 
 /** Remember an organisation (a registry row, or anything with its code, baseCurrency, timezone and country). */
@@ -51,7 +53,9 @@ function forCompany(code) {
   const hit = code ? cache.get(code) : null;
   if (hit) {
     if (Date.now() - hit.at > LEASE_MS) { hit.at = Date.now(); refresh(code); } // serve what we have, read again in the background
-    return { baseCurrency: hit.baseCurrency, timezone: hit.timezone, country: hit.country };
+    // Named field by field rather than spread, so the cache's own `at` does not leak out. Anything
+    // added to the locale must be added HERE too, or it is cached and then silently dropped on read.
+    return { baseCurrency: hit.baseCurrency, timezone: hit.timezone, country: hit.country, dateFormat: hit.dateFormat };
   }
   if (code) refresh(code);
   return { ...DEFAULT };
@@ -66,6 +70,7 @@ function current() {
 const timezone = () => current().timezone;
 const baseCurrency = () => current().baseCurrency;
 const country = () => current().country;
+const dateFormat = () => current().dateFormat;
 
 // The day helpers of utils/tz.js, already in the organisation's zone.
 const dayOf = (instant) => tz.dayOf(instant, timezone());
@@ -77,6 +82,6 @@ const noonOf = (ymd) => tz.noonOf(ymd, timezone());
 const yearOf = (instant) => tz.yearOf(instant, timezone());
 
 module.exports = {
-  DEFAULT, warm, forget, useLoader, forCompany, current, timezone, baseCurrency, country,
+  DEFAULT, DATE_FORMATS, warm, forget, useLoader, forCompany, current, timezone, baseCurrency, country, dateFormat,
   dayOf, today, dayStart, dayEnd, endOfDay, noonOf, yearOf,
 };

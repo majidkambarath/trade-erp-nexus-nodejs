@@ -42,6 +42,11 @@ function present(q, now = new Date()) {
       // Its own flag, although the test is the same one today: the two targets are different documents with
       // different rules behind them, and a screen must never invent its own answer to "may this be converted".
       convertToOrder: QUOTATION_CONVERTIBLE.includes(q.status) && !expiry.expired,
+      // Its own flag for the same reason convertToOrder has one. The screen used to draw "Create delivery
+      // note" from `convert`, which is the INVOICE's answer: a delivery note is a different document with
+      // its own rules, and whether the organisation even holds delivery notes is a separate question again
+      // (the Delivery notes feature, which the route now checks and the screen reads from its plan).
+      deliveryNote: QUOTATION_CONVERTIBLE.includes(q.status) && !expiry.expired,
       revise: QUOTATION_REVISABLE.includes(q.status),
     },
   };
