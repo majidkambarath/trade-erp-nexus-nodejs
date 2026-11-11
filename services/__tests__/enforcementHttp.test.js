@@ -113,6 +113,29 @@ test("a feature outside the plan is refused, switching it on takes effect at onc
   await setOrg("acme", { featureOverrides: {} });
 });
 
+// A door INTO delivery notes that hangs off the QUOTATION router, which only asks for "quotations" - so an
+// organisation holding quotations but not delivery notes could make one here. Found on a live organisation
+// whose quotation screen was still offering "Create delivery note" with no plan behind it.
+test("turning a quotation into a delivery note needs the delivery notes feature, not just quotations", { skip }, async () => {
+  await setOrg("acme", { "featureOverrides.deliveryNotes": false });
+  const made = await api("acme", "POST", "/quotations", {
+    partyId: T.acme.customer, items: [{ itemId: T.acme.stock, qty: 2, price: 50, vatPercent: 5 }],
+  });
+  assert.equal(made.status, 201, "the quotation itself is still allowed");
+  const id = made.body._id;
+  assert.equal((await api("acme", "POST", `/quotations/${id}/send`)).status, 200);
+
+  const refused = await api("acme", "POST", `/quotations/${id}/delivery-note`, { date: "2026-11-11" });
+  assert.equal(refused.status, 403);
+  assert.equal(refused.code, "FEATURE_NOT_IN_PLAN");
+  assert.equal(refused.details.feature, "deliveryNotes");
+  assert.equal((await api("acme", "GET", "/delivery-notes")).code, "FEATURE_NOT_IN_PLAN", "the front door is shut too");
+
+  await setOrg("acme", { "featureOverrides.deliveryNotes": true });
+  assert.equal((await api("acme", "POST", `/quotations/${id}/delivery-note`, { date: "2026-11-11" })).status, 201, "allowed once the organisation holds them");
+  await setOrg("acme", { featureOverrides: {} });
+});
+
 test("cheques and cards need the banking feature, cash does not", { skip }, async () => {
   const PaymentModes = require("../banking/paymentModeService");
   await setOrg("acme", { "featureOverrides.banking": false });
