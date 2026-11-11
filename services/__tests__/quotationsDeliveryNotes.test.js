@@ -522,7 +522,7 @@ test("quotation: converting to a sales order document makes a draft SORD that po
   const stock0 = await onHand(rice);
   const { quotation, tradeOrder } = await svc.Q.convertToTradeOrder(q._id, { expectedDate: ymd(7) }, "t");
 
-  assert.match(tradeOrder.orderNo, /SORD-d{4}-d{4}$/);
+  assert.match(tradeOrder.orderNo, /^SORD-\d{4}-\d{4}$/);
   assert.equal(tradeOrder.kind, "sales");
   assert.equal(tradeOrder.status, "DRAFT");
   assert.equal(tradeOrder.quoteRef, q.quotationNo, "the order remembers the offer by number, as the invoice does");
