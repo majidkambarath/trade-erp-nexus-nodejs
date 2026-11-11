@@ -33,6 +33,7 @@ test.before(async () => {
     Vendor: require("../../models/modules/vendorModel"),
     Customer: require("../../models/modules/customerModel"),
     Admin: require("../../models/core/adminModel"),
+    CompanySettings: require("../../models/modules/financial/companySettingsModel"),
   };
   await mongoose.connection.syncIndexes();
   await svc.seed({ log: () => {} });
@@ -63,6 +64,10 @@ test("setup: an admin with a company profile, a customer, stock, and an approved
     name: "Boss", email: "boss@test.uae", password: "12312312", type: "super_admin", status: "active", isActive: true,
     companyInfo: { companyName: "Harbour Trading LLC", addressLine1: "Al Quoz, Dubai", phoneNumber: "04 123 4567", emailAddress: "accounts@harbour.ae", website: "harbour.ae" },
   }).save();
+  // A registered seller, so the document it sends really is a tax invoice. Without a number here the
+  // subject used to read "Tax invoice" anyway while the PDF inside said "Invoice"; the tax number is not
+  // writable through /company/profile (it belongs to the tax identity), so it is set where it lives.
+  await svc.CompanySettings.updateOne({}, { $set: { "profile.trn": "100999888700003" } }, { upsert: true });
   const vendor = await svc.Vendor.create({ vendorId: "V1", vendorName: "Vend", contactPerson: "x", address: "y" });
   customer = await svc.Customer.create({ customerId: "C1", customerName: "Al Noor Trading", contactPerson: "Ali", email: "Ali@AlNoor.ae", phone: "050 111 2222", billingAddress: "Al Quoz", paymentTerms: "Net 30", contacts: [{ name: "Sara", email: "sara@alnoor.ae", isPrimary: true }] });
   mute = await svc.Customer.create({ customerId: "C2", customerName: "No Contact Trading", contactPerson: "Nobody" });
@@ -178,6 +183,29 @@ test("an invoice is emailed: one row, a link, the message wiped, the invoice rem
   assert.equal(tx.lastSend.to, "ali@alnoor.ae");
   assert.equal(tx.lastSend.openedAt ?? null, null, "not opened yet");
   assert.equal(tx.lastSend.provider, "console", "the document remembers the mode, so a screen can say Recorded only, never Emailed");
+});
+
+// The whole chain, not just the wording: Settings > Business rules > "Registered for VAT" reaches the
+// mail through CompanySettings.profile -> CompanyProfileService -> documentSource.companyFor ->
+// emailTemplates. Before this the tick box was read by nothing, so an organisation that is not
+// registered told its customer in the subject line that it was issuing a tax invoice, with a PDF
+// attached that said "Invoice".
+test("an organisation marked as not registered emails an Invoice, not a Tax invoice", { skip }, async () => {
+  await configure();
+  await reset();
+  await svc.CompanySettings.updateOne({}, { $set: { "profile.vatRegistered": false } });
+  try {
+    const off = await send({});
+    assert.match(off.send.subject, /^Invoice SO-\d{4}-\d{4} from Harbour Trading LLC$/);
+    assert.equal(/tax invoice/i.test(off.send.subject), false);
+    assert.equal(/tax invoice/i.test(off.send.bodyPreview || ""), false, "and the body agrees with the subject");
+  } finally {
+    await svc.CompanySettings.updateOne({}, { $set: { "profile.vatRegistered": true } });
+  }
+
+  await reset();
+  const on = await send({});
+  assert.match(on.send.subject, /^Tax invoice SO-\d{4}-\d{4} from Harbour Trading LLC$/, "ticked again, and the number was on file throughout");
 });
 
 test("the customer's primary contact is a recipient too, and a copy to oneself is added when asked", { skip }, async () => {

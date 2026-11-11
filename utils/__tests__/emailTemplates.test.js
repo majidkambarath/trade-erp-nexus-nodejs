@@ -13,7 +13,30 @@ test("subject names the document and the sender", () => {
   assert.equal(subjectFor({ ...base, docType: "quotation", documentNo: "QT-2026-0007", validUntil: "2026-11-14T00:00:00Z" }), "Quotation QT-2026-0007 from Harbour Trading LLC - valid until 14 Nov 2026");
   assert.equal(subjectFor({ ...base, docType: "delivery_note", documentNo: "DLN-2026-0031" }), "Delivery note DLN-2026-0031 from Harbour Trading LLC");
   assert.equal(subjectFor({ ...base, docType: "statement", period: { from: "2026-01-01", to: "2026-03-31" } }), "Statement of account - 1 Jan 2026 to 31 Mar 2026 from Harbour Trading LLC");
-  assert.equal(subjectFor({ ...base, company: {} }), "Tax invoice INV-2026-0042");
+  // no sender NAME, so no "from ..." - the company still has its number, so it is still a tax invoice
+  assert.equal(subjectFor({ ...base, company: { vatNumber: "100123456700003" } }), "Tax invoice INV-2026-0042");
+});
+
+// The email used to say "Tax invoice" whatever the sender was, while the PDF it carried said "Invoice":
+// an organisation with no tax number, or one marked as not registered, told its customer in the subject
+// line that it was issuing a tax invoice. Same rule as isTaxInvoice in the browser's invoiceDocuments.js.
+test("an unregistered sender's email says Invoice, exactly as the sheet it carries does", () => {
+  const noNumber = { ...company, vatNumber: "" };
+  const deregistered = { ...company, vatRegistered: false }; // number still on file, registration switched off
+
+  assert.equal(subjectFor({ ...base, company: noNumber }), "Invoice INV-2026-0042 from Harbour Trading LLC");
+  assert.equal(subjectFor({ ...base, company: deregistered }), "Invoice INV-2026-0042 from Harbour Trading LLC");
+  assert.equal(subjectFor({ ...base, company: { ...company, vatRegistered: true } }), "Tax invoice INV-2026-0042 from Harbour Trading LLC");
+  // absent reads as registered, so an older caller that sends no flag is unchanged
+  assert.equal(subjectFor(base), "Tax invoice INV-2026-0042 from Harbour Trading LLC");
+
+  // and the sentence in the body agrees with it
+  assert.match(renderDocumentEmail({ ...base, company: deregistered }).text, /Please find invoice INV-2026-0042 dated/);
+  assert.equal(/tax invoice/i.test(renderDocumentEmail({ ...base, company: deregistered }).html), false);
+  assert.match(renderDocumentEmail(base).text, /Please find tax invoice INV-2026-0042 dated/);
+
+  // the kind is unchanged - only the words a person reads
+  assert.equal(subjectFor({ ...base, docType: "quotation", company: noNumber }), "Quotation INV-2026-0042 from Harbour Trading LLC");
 });
 
 test("the body states the facts: number, date, amount and due date", () => {

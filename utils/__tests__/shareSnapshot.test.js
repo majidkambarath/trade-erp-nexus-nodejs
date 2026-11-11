@@ -40,7 +40,7 @@ const customer = () => ({
 const company = () => ({
   companyName: "Harbour Trading LLC", companyNameArabic: "x", addressLine1: "a", addressLine2: "b",
   city: "Dubai", state: "Dubai", country: "United Arab Emirates", phoneNumber: "1", email: "e@h.ae",
-  website: "h.ae", vatNumber: "100123456700003", logo: "https://cdn.example/logo.png", bankName: "ENBD", accountNumber: "1",
+  website: "h.ae", vatNumber: "100123456700003", vatRegistered: true, logo: "https://cdn.example/logo.png", bankName: "ENBD", accountNumber: "1",
   accountName: "H", ibanNumber: "AE07", swiftCode: "EBILAEAD", branch: "Dubai",
   password: "LEAK-password", companyLogo: { publicId: "LEAK-public-id" }, adminId: "LEAK-admin",
 });
@@ -184,4 +184,22 @@ test("a declined line says so, and the totals are the ones worked out on the ser
   assert.equal(s.job.lines[0].approved, false);
   assert.deepEqual(s.totals, { part: 420, labour: 600, sublet: 0, consumable: 0, net: 1020, vat: 51, total: 1071 });
   assert.equal(s.kind, "job_estimate");
+});
+
+// The heading on the customer's own copy is built from the number AND the registration, so both have to
+// travel. `false` is the whole point and is exactly what a careless whitelist would drop: `pick` keeps
+// anything that is not undefined or null, and this is what says so out loud.
+test("the seller's registration travels with its number, false included", () => {
+  const off = invoiceSnapshot({ transaction: transaction(), customer: customer(), company: { ...company(), vatRegistered: false } });
+  assert.equal(off.company.vatRegistered, false);
+  assert.equal(off.company.vatNumber, "100123456700003");
+
+  const on = invoiceSnapshot({ transaction: transaction(), customer: customer(), company: company() });
+  assert.equal(on.company.vatRegistered, true);
+
+  // absent stays absent rather than becoming false: the page reads it as registered, as every copy
+  // taken before the flag was carried must go on doing
+  const older = { ...company() };
+  delete older.vatRegistered;
+  assert.equal("vatRegistered" in invoiceSnapshot({ transaction: transaction(), customer: customer(), company: older }).company, false);
 });

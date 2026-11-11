@@ -49,6 +49,7 @@ async function companyFor(req) {
     email: c.emailAddress,
     website: c.website,
     vatNumber: c.vatNumber,
+    vatRegistered: c.vatRegistered,
     logo: c.companyLogo?.url || null,
     bankName: bank.bankName, accountNumber: bank.accountNumber, accountName: bank.accountName,
     ibanNumber: bank.ibanNumber, swiftCode: bank.swiftCode, branch: c.branch,
