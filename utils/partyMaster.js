@@ -86,8 +86,8 @@ function cleanWebsite(value) {
 // Payment terms stay as the text the rest of the system reads ("Net 30", "45 days", "COD"); the
 // number of days is derived from it by ageing, so credit.days and paymentTerms are kept in step here.
 const STANDARD_TERMS = {
-  customer: ["Net 30", "Net 45", "Net 60", "Cash on Delivery", "Prepaid"],
-  vendor: ["30 days", "Net 30", "45 days", "Net 60", "60 days", "COD"],
+  customer: ["Cash", "Net 30", "Net 45", "Net 60", "Cash on Delivery", "Prepaid"],
+  vendor: ["Cash", "30 days", "Net 30", "45 days", "Net 60", "60 days", "COD"],
 };
 const DEFAULT_TERMS = { customer: "Net 30", vendor: "30 days" };
 const MAX_CREDIT_DAYS = 365;

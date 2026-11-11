@@ -492,6 +492,9 @@ class DeliveryNoteService {
     quote.convertedAt = new Date();
     if (!quote.acceptedAt) quote.acceptedAt = quote.convertedAt;
     await quote.save({ session });
+    // Same bug class as everything else in this change: this path spent the offer without telling the CRM, so a
+    // goods-first deal never had links.orderId written. The invoice path has always fired it (quotationService).
+    await require("../crm/crmHooks").onQuotationChanged(quote, { session, event: "converted" });
     return { quotation: quote, deliveryNote: dn };
   });
 
@@ -668,6 +671,8 @@ class DeliveryNoteService {
         lpono: refs.join(", ") || null,
         linkedRef: nos.join(", "),
         notes: `Delivery notes ${nos.join(", ")}`,
+        // the offer this all began with, carried through so the invoice and the quotation are one story
+        quoteRef: extras.quoteRef || undefined,
         status: "DRAFT",
       },
       createdBy,

@@ -99,8 +99,13 @@ class TradeOrderService {
   // Charges (freight, handling) and a header discount belong to the WHOLE order, so they go on its first invoice, once. `docs`
   // are the receipts / delivery notes being invoiced; nothing is carried unless they all belong to one order that has no
   // other document already on an invoice.
+  // It also carries the order's `quoteRef` onto that first invoice, which is what keeps the chain
+  // quotation -> order -> delivery note -> invoice whole: without it the CRM falls back to guessing from
+  // "the customer's one open deal", and the customer's document flow shows the offer and the invoice as two
+  // unrelated chains. The FIRST invoice is the right one to carry it - that is the one that wins the deal,
+  // and the CRM re-points links.orderId at it there.
   static async firstInvoiceExtras(kind, docs, { session } = {}) {
-    const none = { charges: [], discount: 0 };
+    const none = { charges: [], discount: 0, quoteRef: "" };
     const sourceKind = kind === "sales" ? "trade_order" : "purchase_order";
     if (!docs.length || docs.some((d) => d.source?.kind !== sourceKind || !d.source.id)) return none;
     const ids = [...new Set(docs.map((d) => String(d.source.id)))];
@@ -112,7 +117,7 @@ class TradeOrderService {
     const Model = kind === "sales" ? DeliveryNote : GoodsReceipt;
     const other = Model.exists({ companyId, "source.id": order._id, invoiceStatus: { $ne: "NONE" }, status: { $ne: "CANCELLED" }, _id: { $nin: docs.map((d) => d._id) } });
     if (await (session ? other.session(session) : other)) return none;
-    return { charges: (order.charges || []).map((c) => ({ ...c })), discount: Number(order.discount) || 0 };
+    return { charges: (order.charges || []).map((c) => ({ ...c })), discount: Number(order.discount) || 0, quoteRef: order.quoteRef || "" };
   }
 
   // Raise the invoice for what has been delivered / received against an order and not yet invoiced: all of it, as one draft.
@@ -283,6 +288,9 @@ class TradeOrderService {
     if (!order) throw fail("Order not found", 404, "ORDER_NOT_FOUND");
     if (order.status !== "DRAFT") throw fail(`${order.orderNo} is ${order.status.toLowerCase()} and cannot be deleted. Cancel it instead.`, 409, "ORDER_NOT_DELETABLE");
     await TradeOrder.deleteOne({ _id: order._id }, { session });
+    // an offer that became this order is not spent after all: it goes back to ACCEPTED, as it does when a
+    // delivery note raised from it is deleted (deliveryNoteService.remove)
+    await require("./deliveryNoteLinks").releaseQuotationsFor(order._id, { session });
     return { orderNo: order.orderNo, kind: order.kind, totalAmount: order.totalAmount };
   });
 
@@ -316,6 +324,7 @@ class TradeOrderService {
       }
       order.cancelledAt = new Date();
       order.cancelReason = String(input?.reason || "").trim();
+      await require("./deliveryNoteLinks").releaseQuotationsFor(order._id, { session });
     })
   );
 

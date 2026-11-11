@@ -1,5 +1,42 @@
 # Changelog
 
+## 2.8.0.0 — 11 November 2026
+
+A QA pass on the live books: what a document says about a party, what a switched-off feature leaves
+behind, and the sales order a quotation could not become. Frontend and backend both at 2.8.0.0.
+
+### Added
+
+- **A quotation can become a sales ORDER.** The button labelled "Convert to sales order" made a draft
+  INVOICE, so a customer who orders now and takes the goods in stages had no document for the
+  commitment - although `TradeOrder` (SORD) is exactly that. The offer now offers all three, each named
+  for what it really makes: Convert to sales order, Convert to invoice (the old button, relabelled) and
+  Create delivery note. The order carries `quoteRef` onto the invoice it eventually raises, so the chain
+  quotation -> order -> delivery note -> invoice stays whole for the CRM and the customer's document flow.
+- Giving such an order up - deleting or cancelling it - hands the offer back as Accepted, the way a
+  delivery note raised from one already did.
+- A static scan that fails when a new link into an optional feature's own screen appears without naming
+  that feature (`src/config/__tests__/featureGates.test.js`).
+
+### Fixed
+
+- **"VAT status Unregistered" is no longer printed on any document.** It was shown both for a party
+  nobody had classified and for one carrying the party form's own default - and the form seeds every new
+  party with it - so the paper asserted a tax position for almost every customer that the business had
+  never stated. Only a positive classification prints now: Registered, Exempt, Designated zone. A tax
+  number is left off a record that says "not registered", so a TRN in the Bill to block means what it says.
+- **A feature the organisation did not buy no longer leaves its buttons behind.** The plan gate was
+  tab-level, so every cross-module link survived it: the sales invoice row went on offering "Delivery
+  note", the dashboard went on linking to /batches, and Send was drawn for an organisation that never
+  bought messaging. One rule now: an action or a nudge needs the role AND the plan; a record of what
+  already happened needs neither, so "Emailed 6 Oct" survives the feature being switched off.
+- A deal's stepper drops a stage the organisation can never reach, rather than showing one nobody can
+  complete - but a document that exists is never hidden; it simply stops being a link.
+- The customer's deal list no longer heads every approved order "Tax invoice". That is a claim about the
+  SELLER's registration, which the printed sheet has always decided correctly.
+- A receipt and a payment voucher open on the copy that is handed over, not the office copy.
+- The garage gate pass's second copy can be printed; the dialog drew only the first copy of any sheet.
+
 ## 2.7.0.0 — 9 November 2026
 
 The garage module: a reports section, not one page. Frontend and backend both at 2.7.0.0.

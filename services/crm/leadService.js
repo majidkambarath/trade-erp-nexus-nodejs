@@ -353,6 +353,9 @@ class LeadService {
         billingAddress: rules.text(input?.billingAddress, 300),
         shippingAddress: rules.text(input?.shippingAddress, 300),
         creditLimit: rules.num(input?.creditLimit),
+        // The qualify dialog asks for no payment terms, so without this the new customer lands on
+        // the server's Net 30 fallback with nobody having chosen it. Cash until someone decides.
+        paymentTerms: "Cash",
         status: "Active",
         salesPerson: rules.text(lead.ownerName, 150),
       });
