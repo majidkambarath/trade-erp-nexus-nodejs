@@ -25,6 +25,12 @@ const tradeOrderSchema = new mongoose.Schema(
     date: { type: Date, required: true },
     expectedDate: { type: Date, default: null }, // delivery date asked for / date the vendor promised
     reference: { type: String, trim: true, default: "" }, // the customer's LPO, or the vendor's quotation / reference
+    // The quotation this order came from, by NUMBER and not by id: that is what crmHooks.dealFor matches against
+    // Opportunity.links.quotationNo, and what utils/documentFlow.js joins an invoice to its offer with. Same field
+    // name as Transaction.quoteRef, so it carries onto the invoice this order raises with a one-line copy and the
+    // chain quotation -> order -> delivery note -> invoice stays whole. Never read from a request body: the
+    // conversion sets it after the order is made (quotationService.convertToTradeOrder).
+    quoteRef: { type: String, trim: true, default: "" },
     status: { type: String, required: true, default: "DRAFT" },
 
     items: { type: [orderLine], default: [] },

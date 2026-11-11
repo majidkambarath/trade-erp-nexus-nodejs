@@ -26,6 +26,8 @@ test.before(async () => {
     seed: require("../../utils/seedAccounting").seedAccounting,
     Tx: require("../orderPurchase/transactionService"),
     Q: require("../orderPurchase/quotationService"),
+    T: require("../orderPurchase/tradeOrderService"),
+    TradeOrder: require("../../models/modules/tradeOrderModel"),
     D: require("../orderPurchase/deliveryNoteService"),
     Quotation: require("../../models/modules/quotationModel"),
     DeliveryNote: require("../../models/modules/deliveryNoteModel"),
@@ -502,4 +504,74 @@ test("lists: filter by state, party and text; every document is in its own colle
   assert.equal(await svc.NumberSeries.countDocuments({ series: "DN" }), 0, "the debit-note series was never touched");
   assert.ok(await svc.NumberSeries.exists({ series: "QT" }));
   assert.ok(await svc.NumberSeries.exists({ series: "DLN" }));
+});
+
+// The other conversion: the offer becomes the sales ORDER DOCUMENT (SORD), which commits nothing - the shape a
+// customer who orders now and takes the goods in stages needs. The one above makes the INVOICE directly.
+test("quotation: converting to a sales order document makes a draft SORD that posts nothing, and gives the offer back if it goes away", { skip }, async () => {
+  const q = await svc.Q.create(
+    { partyId: customer._id, reference: "RFQ-11", validUntil: ymd(30), items: [L(rice, 6, 20), L(oil, 2, 50, { discountPercent: 10 })], terms: "Net 30" },
+    "t"
+  );
+  assert.equal(svc.Q.present(q.toObject()).actions.convertToOrder, false, "a draft was never offered");
+  await assert.rejects(() => svc.Q.convertToTradeOrder(q._id, {}, "t"), { code: "QUOTATION_STATE" });
+  await svc.Q.transition(q._id, "send", {}, "t");
+  assert.equal(svc.Q.present((await svc.Quotation.findById(q._id)).toObject()).actions.convertToOrder, true);
+
+  const before = await footprint();
+  const stock0 = await onHand(rice);
+  const { quotation, tradeOrder } = await svc.Q.convertToTradeOrder(q._id, { expectedDate: ymd(7) }, "t");
+
+  assert.match(tradeOrder.orderNo, /SORD-d{4}-d{4}$/);
+  assert.equal(tradeOrder.kind, "sales");
+  assert.equal(tradeOrder.status, "DRAFT");
+  assert.equal(tradeOrder.quoteRef, q.quotationNo, "the order remembers the offer by number, as the invoice does");
+  assert.equal(tradeOrder.reference, "RFQ-11");
+  assert.equal(tradeOrder.totalAmount, q.totalAmount, "priced by the same code as the offer");
+  assert.deepEqual(
+    tradeOrder.items.map((i) => [i.qty, i.price, i.discountAmount, i.lineTotal]),
+    q.items.map((i) => [i.qty, i.price, i.discountAmount, i.lineTotal])
+  );
+
+  // a commitment is not a posting: no transaction, no ledger entry, no voucher, no movement, and no stock moved
+  assert.deepEqual(await footprint(), before, "an order document writes nothing a report can read");
+  assert.equal(await onHand(rice), stock0);
+
+  assert.equal(quotation.status, "CONVERTED");
+  assert.equal(quotation.convertedTo.kind, "trade_order");
+  assert.equal(quotation.convertedTo.no, tradeOrder.orderNo);
+  assert.ok(quotation.acceptedAt, "ordering is accepting");
+
+  // one-shot, like every other conversion
+  await assert.rejects(() => svc.Q.convertToTradeOrder(q._id, {}, "t"), { code: "QUOTATION_STATE" });
+  await assert.rejects(() => svc.Q.convertToSalesOrder(q._id, {}, "t"), { code: "QUOTATION_STATE" });
+  await assert.rejects(() => svc.Q.revise(q._id, "t"), { code: "QUOTATION_STATE" });
+
+  // the order is given up: the offer was accepted and nothing was delivered, so it stands again
+  await svc.T.remove(tradeOrder._id, "t");
+  const back = await svc.Quotation.findById(q._id);
+  assert.equal(back.status, "ACCEPTED");
+  assert.equal(back.convertedTo, undefined);
+  const again = await svc.Q.convertToTradeOrder(q._id, {}, "t");
+  assert.notEqual(again.tradeOrder.orderNo, tradeOrder.orderNo, "a number is never handed out twice");
+
+  // cancelling a confirmed order releases it the same way
+  await svc.T.confirm(again.tradeOrder._id, {}, "t");
+  await svc.T.cancel(again.tradeOrder._id, { reason: "customer changed their mind" }, "t");
+  assert.equal((await svc.Quotation.findById(q._id)).status, "ACCEPTED");
+});
+
+// An expired offer cannot become an order either, and a typed date that means nothing is refused rather
+// than silently read as today (TradeOrderService.create falls back on one it cannot parse).
+test("quotation: an expired offer and an unreadable date are both refused by the order conversion", { skip }, async () => {
+  const live = await svc.Q.create({ partyId: customer._id, validUntil: ymd(30), items: [L(rice, 1, 20)] }, "t");
+  await svc.Q.transition(live._id, "send", {}, "t");
+  await assert.rejects(() => svc.Q.convertToTradeOrder(live._id, { date: "not-a-date" }, "t"), { code: "INVALID_DATE" });
+  await assert.rejects(() => svc.Q.convertToTradeOrder(live._id, { expectedDate: "31/02/2026" }, "t"), { code: "INVALID_DATE" });
+  assert.equal((await svc.Quotation.findById(live._id)).status, "SENT", "a refusal leaves the offer alone");
+
+  const stale = await svc.Q.create({ partyId: customer._id, validUntil: ymd(1), items: [L(rice, 1, 20)] }, "t");
+  await svc.Q.transition(stale._id, "send", {}, "t");
+  await svc.Quotation.updateOne({ _id: stale._id }, { $set: { validUntil: new Date(Date.now() - 5 * 864e5) } });
+  await assert.rejects(() => svc.Q.convertToTradeOrder(stale._id, {}, "t"), { code: "QUOTATION_EXPIRED" });
 });
