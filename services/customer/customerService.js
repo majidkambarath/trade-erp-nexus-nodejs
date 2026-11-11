@@ -5,6 +5,7 @@ const Sequence = require("../../models/modules/sequenceModel");
 const PartyAccounts = require("../financial/partyAccounts");
 const PartyMaster = require("../masters/partyMasterService");
 const { searchRegex } = require("../../utils/regex");
+const { isValidTerms, STANDARD_TERMS } = require("../../utils/partyMaster");
 const { retryTransientTransaction } = require("../../utils/withTransactionSession");
 
 // Customer-only fields the model has always had; the create path used to drop them.
@@ -321,10 +322,11 @@ exports.getCustomerStats = async () => {
 };
 
 exports.updateCustomerByCustomerId = async (customerId, data) => {
-  const validPaymentTerms = ["Net 30", "Net 45", "Net 60", "Cash on Delivery", "Prepaid"];
-  if (data.paymentTerms && !validPaymentTerms.includes(data.paymentTerms)) {
+  // One list, shared with PartyMaster.resolveTerms, so this older path cannot refuse a term
+  // the master form and the quick add accept (it used to reject "Cash" and any custom "Net 90").
+  if (data.paymentTerms && !isValidTerms("customer", data.paymentTerms)) {
     throw new AppError(
-      `Invalid paymentTerms. Must be one of: ${validPaymentTerms.join(", ")}`,
+      `Invalid paymentTerms. Use ${STANDARD_TERMS.customer.join(", ")} or Net <days>.`,
       400
     );
   }

@@ -291,6 +291,52 @@ test("credit days and payment terms stay in step, and ageing reads the same numb
   assert.equal(v90.paymentTerms, "Net 90");
 });
 
+// A party quick-added from an order, a job card or a qualified lead sends "Cash": those screens ask
+// for no terms, and before this they sent "" and fell through to the Net 30 default, so a walk-in
+// silently carried a month's credit into their first due date and ageing bucket.
+test("a party quick-added on Cash terms is due on the day, and can be changed afterwards", { skip }, async () => {
+  const c = await svc.Customers.createCustomer(customer("Quick Cash", { paymentTerms: "Cash" }));
+  assert.equal(c.paymentTerms, "Cash");
+  assert.equal(c.credit.days, 0);
+  assert.equal(svc.Ageing.termDays(c.paymentTerms), 0, "ageing reads Cash as due on the day");
+
+  const v = await svc.Vendors.createVendor(vendor("Quick Cash Vendor", { paymentTerms: "Cash" }));
+  assert.deepEqual([v.paymentTerms, v.credit.days], ["Cash", 0]);
+
+  // 0 days keeps the label it was given rather than flipping to Cash on Delivery / COD
+  const same = await svc.Customers.updateCustomer(c._id, { credit: { days: 0 } });
+  assert.equal(same.paymentTerms, "Cash");
+
+  // and the term is editable afterwards, which is what every due date and ageing bucket then reads
+  const net45 = await svc.Customers.updateCustomer(c._id, { paymentTerms: "Net 45" });
+  assert.deepEqual([net45.paymentTerms, net45.credit.days], ["Net 45", 45]);
+  assert.equal(svc.Ageing.termDays(net45.paymentTerms), 45);
+});
+
+// The quick-add dialog sends the tax number inside `vat`, never as a top-level trnNumber/trnNO:
+// the create services take an explicit field whitelist and would drop an unknown key in silence.
+test("a party quick-added as registered gets its tax number on both keys", { skip }, async () => {
+  const c = await svc.Customers.createCustomer(
+    customer("Quick Registered", { paymentTerms: "Cash", vat: { status: "registered", trn: "100777000000003" } })
+  );
+  assert.equal(c.vat.status, "registered");
+  assert.equal(c.vat.trn, "100777000000003");
+  assert.equal(c.trnNumber, "100777000000003", "the legacy key the e-invoice builder reads");
+
+  const plain = await svc.Customers.createCustomer(customer("Quick Unregistered", { paymentTerms: "Cash", vat: { status: "unregistered", trn: "" } }));
+  assert.equal(plain.vat.status, "unregistered");
+  assert.ok(!plain.vat.trn);
+
+  // ticking it later on the master screen reaches both keys too
+  const now = await svc.Customers.updateCustomer(plain._id, { vat: { status: "registered", trn: "100777000000004" } });
+  assert.equal(now.vat.trn, "100777000000004");
+  assert.equal(now.trnNumber, "100777000000004");
+
+  const v = await svc.Vendors.createVendor(vendor("Quick Reg Vendor", { paymentTerms: "Cash", vat: { status: "registered", trn: "100777000000005" } }));
+  assert.equal(v.vat.trn, "100777000000005");
+  assert.equal(v.trnNO, "100777000000005");
+});
+
 test("createCustomer keeps the e-invoice details and the shelf-life minimum it used to drop", { skip }, async () => {
   const c = await svc.Customers.createCustomer(customer("E-Invoice Buyer", {
     trnNumber: TRN_B.replace("11", "37"), eInvoice: { participantId: "0235:100123456700037", city: "Dubai", countryCode: "ae" }, minShelfLifeDays: 45,
