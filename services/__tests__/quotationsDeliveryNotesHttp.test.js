@@ -167,6 +167,49 @@ test("quotation over HTTP: save, send, accept, convert; the order and the offer 
   assert.ok(activity.body.rows.every((r) => r.username === "boss@test.uae"), "who did it is recorded");
 });
 
+// The other conversion over HTTP: the offer becomes the sales ORDER DOCUMENT (SORD). An order is a
+// commitment, not a posting, so it is an ordinary trade order to the rest of the app from the moment it exists.
+test("quotation over HTTP: converting to a sales order document, and the order cannot forge the link itself", { skip }, async () => {
+  const made = await call("POST", "/quotations", {
+    body: { partyId: String(S.customer._id), validUntil: day(14), reference: "RFQ-2", items: [{ itemId: String(S.rice._id), qty: 4, price: 25, vatPercent: 5 }] },
+  });
+  assert.equal(made.status, 201);
+  const q = made.body;
+  assert.equal(q.actions.convertToOrder, false, "a draft was never offered");
+
+  assert.equal((await call("POST", `/quotations/${q._id}/send`, { body: {} })).body.status, "SENT");
+  const sent = await call("GET", `/quotations/${q._id}`);
+  assert.equal(sent.body.actions.convertToOrder, true);
+
+  const conv = await call("POST", `/quotations/${q._id}/sales-order`, { body: { expectedDate: day(7) } });
+  assert.equal(conv.status, 201, JSON.stringify(conv.data));
+  assert.equal(conv.body.quotation.status, "CONVERTED");
+  assert.equal(conv.body.quotation.convertedTo.kind, "trade_order");
+  const order = conv.body.tradeOrder;
+  assert.equal(order.status, "DRAFT");
+  assert.equal(order.kind, "sales");
+  assert.equal(order.quoteRef, q.quotationNo);
+  assert.equal(order.totalAmount, 105); // 4 x 25 = 100, + 5%
+
+  // an ordinary sales order to the rest of the app, with a trail that says where it came from
+  const listed = await call("GET", "/trade-orders?kind=sales&status=DRAFT");
+  assert.ok(listed.body.some((o) => String(o._id) === String(order._id)));
+  const trail = await call("GET", `/trade-orders/${order._id}/activity`);
+  assert.ok(JSON.stringify(trail.data).includes(q.quotationNo), "the order says which offer it came from");
+  const qActivity = await call("GET", `/quotations/${q._id}/activity`);
+  assert.ok(qActivity.body.rows.map((r) => r.action).includes("QUOTATION_CONVERTED"));
+
+  // one-shot over HTTP too
+  assert.equal((await call("POST", `/quotations/${q._id}/sales-order`, { body: {} })).data.errorCode, "QUOTATION_STATE");
+
+  // The link is set by the conversion, never read from a body: an order cannot claim an offer it did not come from.
+  const forged = await call("POST", "/trade-orders", {
+    body: { kind: "sales", partyId: String(S.customer._id), quoteRef: "FORGED-QUOTE", items: [{ itemId: String(S.rice._id), qty: 1, price: 10, vatPercent: 5 }] },
+  });
+  assert.equal(forged.status, 201, JSON.stringify(forged.data));
+  assert.equal(forged.body.quoteRef || "", "", "the body does not choose which offer an order came from");
+});
+
 test("delivery note over HTTP: against the order, dispatch, deliver short, then invoice it on its own", { skip }, async () => {
   const pre = await call("GET", `/delivery-notes/from-order/${S.order._id}`);
   assert.equal(pre.status, 200);

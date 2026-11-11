@@ -74,6 +74,22 @@ exports.convert = catchAsync(async (req, res) => {
   ok(res, { quotation: QuotationService.present(quotation.toObject()), salesOrder }, 201);
 });
 
+// The order is a sales order in its own right, so it gets the audit row any sales order gets - the same
+// action and entity tradeOrderController.create writes, so the order's own activity says where it came from.
+exports.toTradeOrder = catchAsync(async (req, res) => {
+  const { quotation, tradeOrder } = await QuotationService.convertToTradeOrder(req.params.id, req.body, resolveCreatedBy(req));
+  await AuditService.log({
+    req, action: "ORDER_CREATED", entity: "TradeOrder", entityId: tradeOrder._id,
+    summary: `Sales order ${tradeOrder.orderNo} - ${money(tradeOrder.totalAmount)} saved as draft, from quotation ${quotation.quotationNo}`,
+    after: {
+      orderNo: tradeOrder.orderNo, kind: tradeOrder.kind, status: tradeOrder.status, partyId: tradeOrder.partyId,
+      date: tradeOrder.date, totalAmount: tradeOrder.totalAmount, lines: tradeOrder.items?.length || 0, quoteRef: tradeOrder.quoteRef,
+    },
+  });
+  await log(req, "QUOTATION_CONVERTED", quotation, `${describe(quotation)} converted to sales order ${tradeOrder.orderNo}`);
+  ok(res, { quotation: QuotationService.present(quotation.toObject()), tradeOrder: tradeOrder.toObject() }, 201);
+});
+
 exports.toDeliveryNote = catchAsync(async (req, res) => {
   const { quotation, deliveryNote } = await DeliveryNoteService.createFromQuotation(req.params.id, req.body, resolveCreatedBy(req));
   await AuditService.log({

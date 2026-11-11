@@ -195,7 +195,10 @@ class JobCardService {
     const trimmed = rules.text(name, 150);
     if (!trimmed) throw fail("Enter the customer's name", 400, "CUSTOMER_NAME_REQUIRED");
     const customerService = require("../customer/customerService");
-    const c = await customerService.createCustomer({ customerName: trimmed, contactPerson: trimmed });
+    // Cash, not the Net 30 the server falls back to: a walk-in at a garage counter pays on the
+    // day, and the term chosen here drives the due date, the ageing bucket and the printed
+    // "Payment terms" row on their first invoice. Editable afterwards on the Customers screen.
+    const c = await customerService.createCustomer({ customerName: trimmed, contactPerson: trimmed, paymentTerms: "Cash" });
     return { id: String(c._id), name: c.customerName, code: c.customerId, phone: c.phone || "", active: true, isInsurer: false };
   }
 

@@ -37,7 +37,7 @@ const quotationSchema = new mongoose.Schema(
     rejectedAt: { type: Date, default: null },
     rejectionReason: { type: String, trim: true, default: "" },
 
-    convertedTo: { type: linkSchema(["sales_order", "delivery_note"]), default: undefined },
+    convertedTo: { type: linkSchema(["sales_order", "delivery_note", "trade_order"]), default: undefined },
     convertedAt: { type: Date, default: null },
 
     createdBy: { type: String, required: true, trim: true },

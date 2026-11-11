@@ -39,6 +39,9 @@ function present(q, now = new Date()) {
       accept: QUOTATION_ACTIONS.accept.from.includes(q.status) && !expiry.expired,
       reject: QUOTATION_ACTIONS.reject.from.includes(q.status),
       convert: QUOTATION_CONVERTIBLE.includes(q.status) && !expiry.expired,
+      // Its own flag, although the test is the same one today: the two targets are different documents with
+      // different rules behind them, and a screen must never invent its own answer to "may this be converted".
+      convertToOrder: QUOTATION_CONVERTIBLE.includes(q.status) && !expiry.expired,
       revise: QUOTATION_REVISABLE.includes(q.status),
     },
   };
@@ -338,6 +341,65 @@ class QuotationService {
     await doc.save({ session });
     await CrmHooks.onQuotationChanged(doc, { session, event: "converted" });
     return { quotation: doc, salesOrder };
+  });
+
+  // ---- becoming a sales ORDER (the commitment) -----------------------------------------------
+
+  // The customer ordered and will take the goods in stages: raise the sales order DOCUMENT (SORD), which
+  // commits nothing to the ledger and moves no stock. Delivery notes against it say what went out, and the
+  // invoice is raised from those. The other conversion above makes the INVOICE directly, for a deal that
+  // goes out in one go; this is the one for a deal that does not.
+  //
+  // Priced afresh on the order's own date like every other conversion, and in one transaction, so there is
+  // never an accepted quotation with half an order behind it.
+  static convertToTradeOrder = withTransactionSession(async (id, input, createdBy, session) => {
+    const doc = await Quotation.findById(id).session(session);
+    if (!doc) throw fail("Quotation not found", 404, "QUOTATION_NOT_FOUND");
+    if (!QUOTATION_CONVERTIBLE.includes(doc.status)) {
+      const why = doc.status === "CONVERTED" ? `already became ${doc.convertedTo?.no || "an order"}` : `is ${doc.status.toLowerCase()}`;
+      throw fail(`${doc.quotationNo} ${why}`, 409, "QUOTATION_STATE");
+    }
+    const expiry = quotationExpiry(doc);
+    if (expiry.expired) throw fail(`${doc.quotationNo} expired on ${expiry.validDay}. Revise it to offer it again.`, 409, "QUOTATION_EXPIRED");
+
+    // TradeOrderService.create falls back to today on a date it cannot read, so a typed one is checked here
+    // rather than silently ignored. The same for the delivery date the customer asked for.
+    if (input?.date && !S.dayToDate(input.date)) throw fail("Enter a valid date", 400, "INVALID_DATE");
+    if (input?.expectedDate && !S.dayToDate(input.expectedDate)) throw fail("Enter a valid date", 400, "INVALID_DATE");
+
+    // required here, not at the top: the order service reaches back into this side of the house
+    const TradeOrderService = require("./tradeOrderService");
+    const order = await TradeOrderService.create(
+      {
+        kind: "sales",
+        partyId: doc.partyId,
+        date: input?.date,
+        expectedDate: input?.expectedDate,
+        reference: doc.reference || "",
+        items: doc.items.map((l) => S.toPricingInput(l.toObject())),
+        charges: doc.charges.map((c) => c.toObject()),
+        discount: doc.discount,
+        terms: doc.terms,
+        notes: `From quotation ${doc.quotationNo}${doc.notes ? `. ${doc.notes}` : ""}`,
+      },
+      createdBy,
+      session
+    );
+    // set here and never read from `data`, so POST /trade-orders cannot forge a quotation link
+    order.quoteRef = doc.quotationNo;
+    await order.save({ session });
+
+    doc.status = "CONVERTED";
+    doc.convertedTo = { kind: "trade_order", id: order._id, no: order.orderNo };
+    doc.convertedAt = new Date();
+    if (!doc.acceptedAt) {
+      // ordering is accepting, whether or not anyone pressed Accept first
+      doc.acceptedAt = doc.convertedAt;
+      doc.acceptedBy = doc.acceptedBy || String(input?.acceptedBy || "").trim();
+    }
+    await doc.save({ session });
+    await CrmHooks.onQuotationChanged(doc, { session, event: "converted" });
+    return { quotation: doc, tradeOrder: order };
   });
 }
 
