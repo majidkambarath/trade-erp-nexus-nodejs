@@ -203,6 +203,16 @@ const transactionSchema = new mongoose.Schema({
     plateNumber: { type: String, trim: true },
     chassisNo: { type: String, trim: true },
   },
+  // The sales order (TradeOrder, SORD) this invoice was converted from in ONE step, for an organisation that
+  // does not hold delivery notes (TradeOrderService.createInvoice, the direct path). It is what the order reads
+  // back to know it has been invoiced - live, so deleting or rejecting the invoice gives the order back with no
+  // link to keep in step - and what the printed sheet prints as "Sales order no.". Set only by that service;
+  // a request body can never reach it (stripped in transactionController.js and updateTransaction, like
+  // jobCardRef). Absent on every other document, including an invoice raised through delivery notes.
+  tradeOrderRef: {
+    tradeOrderId: { type: mongoose.Schema.Types.ObjectId, ref: "TradeOrder" },
+    orderNo: { type: String, trim: true },
+  },
   creditNoteIssued: { type: Boolean, default: false },
   // A sales order the customer will not take the rest of (utils/closeShort.js).
   closedShort: { type: closedShortSchema, default: undefined },
@@ -252,6 +262,7 @@ transactionSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
 // Indexes
 transactionSchema.index({ partyId: 1, partyType: 1 });
 transactionSchema.index({ "returnOf.transactionId": 1 }, { sparse: true });
+transactionSchema.index({ "tradeOrderRef.tradeOrderId": 1 }, { sparse: true });
 transactionSchema.index({ status: 1 });
 // The order lists read one type, newest first, by date or by when it was saved: without these every list sorted the whole collection.
 // The _id on the end is the tie-breaker that keeps a page boundary stable; without it the sort falls back to an

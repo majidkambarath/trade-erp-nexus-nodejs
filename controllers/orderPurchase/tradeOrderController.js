@@ -1,3 +1,4 @@
+const { hasCountryFeature } = require("../../utils/countryRules");
 const TradeOrderService = require("../../services/orderPurchase/tradeOrderService");
 const AuditService = require("../../services/core/auditService");
 const catchAsync = require("../../utils/catchAsync");
@@ -49,7 +50,9 @@ const transition = (name, action, text) =>
   });
 
 exports.invoice = catchAsync(async (req, res) => {
-  const out = await TradeOrderService.createInvoice(req.params.id, req.body, resolveCreatedBy(req));
+  // Whether the order may be invoiced in one step is the ORGANISATION's (no delivery notes), never the request's.
+  const input = { date: req.body?.date, vendorInvoiceNo: req.body?.vendorInvoiceNo, fromOrderLines: !hasCountryFeature(req.organisation, "deliveryNotes") };
+  const out = await TradeOrderService.createInvoice(req.params.id, input, resolveCreatedBy(req));
   const DocumentAuditService = require("../../services/orderPurchase/documentAuditService");
   await AuditService.log({
     req, action: "TRANSACTION_CREATED", entity: "Transaction", entityId: out.invoice._id,

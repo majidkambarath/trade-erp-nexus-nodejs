@@ -9,7 +9,7 @@ const NumberSeriesService = require("../core/numberSeriesService");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { getTenant } = require("../../utils/tenant");
 const { todayInOrg } = require("../../utils/documentExpiry");
-const { ORDER_ACTIONS, ORDER_EDITABLE, ORDER_OPEN, orderProgress, progressLabel } = require("../../utils/tradeOrders");
+const { ORDER_ACTIONS, ORDER_EDITABLE, ORDER_OPEN, orderProgress, progressLabel, directInvoiceLines } = require("../../utils/tradeOrders");
 const S = require("./salesDocumentSupport");
 
 // Sales orders and purchase orders. A commitment, never a posting (utils/tradeOrders.js): the order holds the lines, the
@@ -66,6 +66,21 @@ async function receiptLinesFor(kind, orderIds, { session } = {}) {
         });
       }
     }
+    // An order converted straight to its invoice (no delivery notes): read live, so deleting or rejecting that invoice
+    // gives the order back, and approving it makes the order "Invoiced".
+    const Transaction = require("../../models/modules/transactionModel");
+    const dq = Transaction.find({ companyId, type: "sales_order", "tradeOrderRef.tradeOrderId": { $in: orderIds }, status: { $in: ["DRAFT", "APPROVED"] } })
+      .select("status tradeOrderRef.tradeOrderId")
+      .lean();
+    const direct = await (session ? dq.session(session) : dq);
+    if (direct.length) {
+      const oq = TradeOrder.find({ _id: { $in: direct.map((d) => d.tradeOrderRef.tradeOrderId) } }).select("items._id items.qty").lean();
+      const orders = new Map((await (session ? oq.session(session) : oq)).map((o) => [String(o._id), o]));
+      for (const d of direct) {
+        const o = orders.get(String(d.tradeOrderRef.tradeOrderId));
+        if (o) out.get(String(o._id))?.push(...directInvoiceLines(o.items, d.status));
+      }
+    }
   }
   return out;
 }
@@ -88,6 +103,9 @@ function present(order, progress) {
       // goods can be received / delivered against a confirmed order while something is left
       receive: ORDER_OPEN.includes(status) && toReceive > 0,
       invoice: ["CONFIRMED", "CLOSED"].includes(status) && toInvoice > 0,
+      // The whole order to ONE draft invoice, for an organisation without delivery notes (the screen and the
+      // controller apply the feature; this is the order's own state: confirmed, nothing delivered or invoiced).
+      invoiceOrder: order.kind === "sales" && status === "CONFIRMED" && !started && !Object.values(progress.lines).some((l) => l.draftInvoice > 0 || l.invoiced > 0),
     },
   };
 }
@@ -130,6 +148,7 @@ class TradeOrderService {
     const { companyId } = getTenant();
     if (order.kind === "sales") {
       const notes = await DeliveryNote.find({ companyId, "source.kind": "trade_order", "source.id": order._id, status: "DELIVERED", invoiceStatus: "NONE" }).select("_id").session(session);
+      if (!notes.length && input?.fromOrderLines) return TradeOrderService.#invoiceWholeOrder(order, input, createdBy, session);
       if (!notes.length) throw fail(`Nothing has been delivered on ${order.orderNo} that is waiting for an invoice. Confirm a delivery note first.`, 409, "NOTHING_TO_INVOICE");
       const DeliveryNoteService = require("./deliveryNoteService");
       const out = await DeliveryNoteService.createInvoice({ deliveryNoteIds: notes.map((n) => String(n._id)), date: input?.date }, createdBy, session);
@@ -141,6 +160,32 @@ class TradeOrderService {
     const out = await GoodsReceiptService.createInvoice({ receiptIds: receipts.map((r) => String(r._id)), date: input?.date, vendorInvoiceNo: input?.vendorInvoiceNo }, createdBy, session);
     return { kind: "purchase", invoice: out.purchaseInvoice, documents: out.goodsReceipts };
   });
+
+  // The whole order as ONE draft invoice, in one step: for an organisation that holds no delivery notes, so the order
+  // could otherwise never be invoiced. Priced as the order was (the same lines through the same pricing), carrying the
+  // order's reference, charges, discount and quotation number; the invoice points back through tradeOrderRef.
+  static #invoiceWholeOrder = async (order, input, createdBy, session) => {
+    const { companyId } = getTenant();
+    const Transaction = require("../../models/modules/transactionModel");
+    const live = await Transaction.findOne({ companyId, type: "sales_order", "tradeOrderRef.tradeOrderId": order._id, status: { $in: ["DRAFT", "APPROVED"] } }).select("transactionNo").session(session);
+    if (live) throw fail(`${order.orderNo} has already been invoiced as ${live.transactionNo}. Delete or reject that invoice first to invoice it again.`, 409, "ALREADY_INVOICED");
+    const noted = await DeliveryNote.exists({ companyId, "source.id": order._id, status: { $ne: "CANCELLED" } }).session(session);
+    if (noted) throw fail(`${order.orderNo} has delivery notes against it. Invoice what was delivered instead.`, 409, "ORDER_HAS_DOCUMENTS");
+    const TransactionService = require("./transactionService");
+    const invoice = await TransactionService.createTransaction(
+      {
+        type: "sales_order", partyId: order.partyId, partyType: "Customer", date: input?.date || todayInOrg(),
+        items: order.items.map((l) => S.toPricingInput(l.toObject())),
+        charges: (order.charges || []).map((c) => (c.toObject ? c.toObject() : c)), discount: Number(order.discount) || 0,
+        lpono: order.reference || null, terms: order.terms || "", notes: order.notes || `Sales order ${order.orderNo}`,
+        quoteRef: order.quoteRef || undefined, status: "DRAFT",
+        tradeOrderRef: { tradeOrderId: order._id, orderNo: order.orderNo },
+      },
+      createdBy,
+      session
+    );
+    return { kind: "sales", invoice, documents: [] };
+  };
 
   // ---- reading -----------------------------------------------------------------------------
   static async list(filters = {}) {
@@ -210,6 +255,10 @@ class TradeOrderService {
     const Model = order.kind === "sales" ? DeliveryNote : GoodsReceipt;
     const rows = await Model.find({ "source.id": order._id, "invoice.id": { $ne: null } }).select("invoice").lean();
     const ids = [...new Set(rows.map((r) => String(r.invoice.id)))];
+    if (order.kind === "sales") {
+      const direct = await require("../../models/modules/transactionModel").find({ "tradeOrderRef.tradeOrderId": order._id }).select("_id").lean();
+      for (const d of direct) if (!ids.includes(String(d._id))) ids.push(String(d._id));
+    }
     if (!ids.length) return [];
     const Transaction = require("../../models/modules/transactionModel");
     const docs = await Transaction.find({ _id: { $in: ids } })
@@ -320,7 +369,7 @@ class TradeOrderService {
       // goods that were received (or are on the way) against it keep it standing: cancel those first
       const lines = (await receiptLinesFor(order.kind, [order._id], { session })).get(String(order._id)) || [];
       if (lines.length) {
-        throw fail(`${order.orderNo} has ${order.kind === "sales" ? "delivery notes" : "goods received"} against it. Cancel those first, or close the order instead.`, 409, "ORDER_HAS_DOCUMENTS");
+        throw fail(`${order.orderNo} has ${order.kind === "sales" ? "delivery notes or an invoice" : "goods received"} against it. Cancel, delete or reject those first, or close the order instead.`, 409, "ORDER_HAS_DOCUMENTS");
       }
       order.cancelledAt = new Date();
       order.cancelReason = String(input?.reason || "").trim();

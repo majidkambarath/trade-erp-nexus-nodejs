@@ -79,3 +79,15 @@ test("the action tables say where each can start", () => {
   assert.deepEqual(RECEIPT_ACTIONS.receive.from, ["DRAFT"]);
   assert.ok(RECEIPT_ACTIONS.cancel.from.includes("RECEIVED"));
 });
+
+test("an order converted straight to its invoice reads as delivered, drafted, then invoiced", () => {
+  const { directInvoiceLines } = require("../tradeOrders");
+  assert.deepEqual(directInvoiceLines(order, "REJECTED"), [], "a rejected invoice gives the order back");
+  const draft = orderProgress(order, directInvoiceLines(order, "DRAFT"));
+  assert.equal(draft.lines.l1.draftInvoice, 100);
+  assert.equal(draft.lines.l1.toInvoice, 0);
+  assert.equal(draft.invoicing, "NONE", "a draft invoice is not invoiced yet");
+  const done = orderProgress(order, directInvoiceLines(order, "APPROVED"));
+  assert.equal(done.invoicing, "ALL");
+  assert.equal(progressLabel(done, "sales"), "Invoiced");
+});
