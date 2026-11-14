@@ -105,7 +105,7 @@ function present(order, progress) {
       invoice: ["CONFIRMED", "CLOSED"].includes(status) && toInvoice > 0,
       // The whole order to ONE draft invoice, for an organisation without delivery notes (the screen and the
       // controller apply the feature; this is the order's own state: confirmed, nothing delivered or invoiced).
-      invoiceOrder: order.kind === "sales" && status === "CONFIRMED" && !started && !Object.values(progress.lines).some((l) => l.draftInvoice > 0 || l.invoiced > 0),
+      invoiceOrder: order.kind === "sales" && ["DRAFT", "CONFIRMED"].includes(status) && !started && !Object.values(progress.lines).some((l) => l.draftInvoice > 0 || l.invoiced > 0),
     },
   };
 }
@@ -142,7 +142,9 @@ class TradeOrderService {
   static createInvoice = withTransactionSession(async (id, input, createdBy, session) => {
     const order = await TradeOrder.findById(id).session(session);
     if (!order) throw fail("Order not found", 404, "ORDER_NOT_FOUND");
-    if (!["CONFIRMED", "CLOSED"].includes(order.status)) {
+    // One-step conversion (no delivery notes) also takes a DRAFT order: converting confirms it in the same breath.
+    const direct = order.kind === "sales" && input?.fromOrderLines && order.status === "DRAFT";
+    if (!direct && !["CONFIRMED", "CLOSED"].includes(order.status)) {
       throw fail(`${order.orderNo} is ${order.status.toLowerCase()}; it can only be invoiced once it is confirmed`, 409, "ORDER_STATE");
     }
     const { companyId } = getTenant();
@@ -171,6 +173,13 @@ class TradeOrderService {
     if (live) throw fail(`${order.orderNo} has already been invoiced as ${live.transactionNo}. Delete or reject that invoice first to invoice it again.`, 409, "ALREADY_INVOICED");
     const noted = await DeliveryNote.exists({ companyId, "source.id": order._id, status: { $ne: "CANCELLED" } }).session(session);
     if (noted) throw fail(`${order.orderNo} has delivery notes against it. Invoice what was delivered instead.`, 409, "ORDER_HAS_DOCUMENTS");
+    if (order.status === "DRAFT") {
+      if (!order.items.length) throw fail("An order with no items cannot be invoiced", 400, "ITEMS_REQUIRED");
+      order.status = "CONFIRMED";
+      order.confirmedAt = new Date();
+      order.confirmedBy = String(createdBy || "");
+      await order.save({ session });
+    }
     const TransactionService = require("./transactionService");
     const invoice = await TransactionService.createTransaction(
       {

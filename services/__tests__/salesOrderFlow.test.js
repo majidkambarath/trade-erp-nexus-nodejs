@@ -222,3 +222,14 @@ test("without the one-step flag an order with nothing delivered is still refused
   const o = await svc.Orders.confirm((await svc.Orders.create({ kind: "sales", partyId: noor._id, items: [line(3, 15)] }, "tester"))._id, {}, "tester");
   await assert.rejects(() => svc.Orders.createInvoice(o._id, {}, "tester"), { code: "NOTHING_TO_INVOICE" });
 });
+
+test("a DRAFT order converts straight to its invoice, confirming itself", { skip }, async () => {
+  const o = await svc.Orders.create({ kind: "sales", partyId: noor._id, items: [line(4, 15)] }, "tester");
+  assert.equal((await svc.Orders.getById(o._id)).actions.invoiceOrder, true);
+  await assert.rejects(() => svc.Orders.createInvoice(o._id, {}, "tester"), { code: "ORDER_STATE" });
+  const out = await svc.Orders.createInvoice(o._id, { fromOrderLines: true }, "tester");
+  assert.equal(out.invoice.status, "DRAFT");
+  const read = await svc.Orders.getById(o._id);
+  assert.equal(read.status, "CONFIRMED");
+  assert.equal(read.actions.invoiceOrder, false);
+});
