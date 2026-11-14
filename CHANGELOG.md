@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.10.0.0 — 14 November 2026
+
+No backend change. Kept in lockstep with the frontend's 2.10.0.0 (Customers/Vendors moved to the
+front of the Sales/Purchase tabs; the order forms are denser and keyboard-driven end to end) so
+`GET /organisation/status` and `GET /api/v1/health` report the same version the app does.
+
 ## 2.9.0.0 — 11 November 2026
 
 What a document is CALLED, who may raise one, and the cheque life cycle. Frontend and backend both at
