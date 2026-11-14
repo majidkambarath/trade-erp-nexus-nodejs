@@ -93,6 +93,8 @@ async function loadTradeOrder(id, { session } = {}) {
   if (!TradeRules.ORDER_OPEN.includes(order.status)) {
     throw fail(`${order.orderNo} is ${order.status.toLowerCase()}; nothing can be delivered against it${order.status === "DRAFT" ? ". Confirm it first" : ""}`, 409, "ORDER_NOT_DELIVERABLE");
   }
+  const direct = await require("../../models/modules/transactionModel").findOne({ companyId: order.companyId, type: "sales_order", "tradeOrderRef.tradeOrderId": order._id, status: { $in: ["DRAFT", "APPROVED"] } }).select("transactionNo").lean();
+  if (direct) throw fail(`${order.orderNo} has already been invoiced as ${direct.transactionNo}; nothing more can be delivered against it`, 409, "ORDER_INVOICED");
   return order;
 }
 

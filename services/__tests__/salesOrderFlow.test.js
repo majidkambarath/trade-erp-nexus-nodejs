@@ -185,3 +185,51 @@ test("a list row carries the figures the printed invoice needs", { skip }, async
   const lines = (row.items || []).reduce((t, i) => t + (i.taxableAmount || 0) + (i.vatAmount || 0), 0);
   assert.notEqual(Math.round(lines * 100), Math.round(row.totalAmount * 100), "summing the lines is NOT the total: that is why pricing is on the row");
 });
+
+test("an order is converted straight to ONE draft invoice that carries it, and the order follows the invoice", { skip }, async () => {
+  const o = await svc.Orders.confirm((await svc.Orders.create({ kind: "sales", partyId: noor._id, reference: "LPO-77", charges: [{ description: "Freight", amount: 20 }], items: [line(10, 15)] }, "tester"))._id, {}, "tester");
+  const before = { ledger: await ledgerCount(), stock: await stockOf() };
+  assert.equal((await svc.Orders.getById(o._id)).actions.invoiceOrder, true);
+  const out = await svc.Orders.createInvoice(o._id, { date: D(2, 9), fromOrderLines: true }, "tester");
+  const inv = out.invoice;
+  assert.equal(inv.status, "DRAFT");
+  assert.equal(inv.type, "sales_order");
+  assert.equal(String(inv.tradeOrderRef.tradeOrderId), String(o._id));
+  assert.equal(inv.tradeOrderRef.orderNo, o.orderNo);
+  assert.equal(inv.lpono, "LPO-77");
+  assert.equal(inv.items[0].qty, 10);
+  assert.equal(inv.charges.length, 1);
+  assert.equal(await ledgerCount(), before.ledger, "a draft invoice posts nothing");
+  assert.equal(await stockOf(), before.stock);
+
+  let read = await svc.Orders.getById(o._id);
+  assert.equal(read.actions.invoiceOrder, false);
+  assert.equal(read.actions.cancel, false, "an invoiced order cannot be cancelled");
+  assert.equal(read.invoices.length, 1);
+  await assert.rejects(() => svc.Orders.createInvoice(o._id, { fromOrderLines: true }, "tester"), { code: "ALREADY_INVOICED" });
+  await assert.rejects(() => svc.Notes.create({ sourceTradeOrderId: String(o._id), items: [{ sourceLineId: String(o.items[0]._id), qty: 1 }] }, "tester"), { code: "ORDER_INVOICED" });
+
+  await svc.Tx.processTransaction(inv._id, "approve", "tester");
+  read = await svc.Orders.getById(o._id);
+  assert.equal(read.progress.label, "Invoiced");
+
+  await svc.Tx.deleteTransaction(inv._id, "tester");
+  read = await svc.Orders.getById(o._id);
+  assert.equal(read.actions.invoiceOrder, true, "deleting the invoice gives the order back");
+});
+
+test("without the one-step flag an order with nothing delivered is still refused", { skip }, async () => {
+  const o = await svc.Orders.confirm((await svc.Orders.create({ kind: "sales", partyId: noor._id, items: [line(3, 15)] }, "tester"))._id, {}, "tester");
+  await assert.rejects(() => svc.Orders.createInvoice(o._id, {}, "tester"), { code: "NOTHING_TO_INVOICE" });
+});
+
+test("a DRAFT order converts straight to its invoice, confirming itself", { skip }, async () => {
+  const o = await svc.Orders.create({ kind: "sales", partyId: noor._id, items: [line(4, 15)] }, "tester");
+  assert.equal((await svc.Orders.getById(o._id)).actions.invoiceOrder, true);
+  await assert.rejects(() => svc.Orders.createInvoice(o._id, {}, "tester"), { code: "ORDER_STATE" });
+  const out = await svc.Orders.createInvoice(o._id, { fromOrderLines: true }, "tester");
+  assert.equal(out.invoice.status, "DRAFT");
+  const read = await svc.Orders.getById(o._id);
+  assert.equal(read.status, "CONFIRMED");
+  assert.equal(read.actions.invoiceOrder, false);
+});

@@ -95,6 +95,7 @@ test("a trade document: the server decides its number, totals, state, branch, au
     // Set only by jobCardService.createInvoice (the garage module, 26 Oct 2026) - a request body must
     // never be able to claim an invoice came from a job card it did not.
     jobCardRef: { jobCardId: FORGED_ID, jobNo: "FORGED-JC", plateNumber: "FORGED-PLATE" },
+    tradeOrderRef: { tradeOrderId: FORGED_ID, orderNo: "FORGED-ORDER" },
   });
   // naming an original document on something that is not a return is refused outright
   const notReturn = await api("owner", "POST", "/transactions/transactions", { type: "sales_order", partyId: R.ids.customer[0], partyType: "Customer", partyTypeRef: "Customer", notes: "MASS-tx-notreturn", items: [line()], returnOf: { transactionId: R.ids.transaction[0] } });
@@ -119,6 +120,7 @@ test("a trade document: the server decides its number, totals, state, branch, au
   expect(problems, "quoteRef", doc.quoteRef ?? null, null);
   expect(problems, "linkedRef", doc.linkedRef ?? null, null);
   expect(problems, "jobCardRef", doc.jobCardRef?.jobCardId ?? null, null);
+  expect(problems, "tradeOrderRef", doc.tradeOrderRef?.tradeOrderId ?? null, null);
   expect(problems, "returnOf on a sales order", doc.returnOf?.transactionId ?? null, null);
   expect(problems, "line allocations", doc.items?.[0]?.allocations || [], []);
   expect(problems, "line itemType comes from the item master", doc.items?.[0]?.itemType, "goods");
@@ -145,6 +147,7 @@ test("a trade document: the server decides its number, totals, state, branch, au
   expect(problems, "quoteRef after the edit", after.quoteRef ?? null, null);
   expect(problems, "linkedRef after the edit", after.linkedRef ?? null, null);
   expect(problems, "jobCardRef after the edit", after.jobCardRef?.jobCardId ?? null, null);
+  expect(problems, "tradeOrderRef after the edit", after.tradeOrderRef?.tradeOrderId ?? null, null);
   expect(problems, "approvals after the edit", after.approvals || [], []);
   expect(problems, "lastSend after the edit", after.lastSend ?? null, null);
   expect(problems, "closedShort after the edit", after.closedShort ?? null, null);

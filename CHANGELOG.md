@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.9.2.0 — 14 November 2026
+
+A sales order can be turned into its invoice where delivery notes are not held.
+
+### Added
+
+- **Convert to invoice** on a sales order (organisations without Delivery notes): the whole order becomes one
+  DRAFT sales invoice carrying the order's lines, prices, charges, discount, reference and quotation number.
+  A draft order confirms itself in the same step. The invoice records `tradeOrderRef`; the order reads it live,
+  so deleting or rejecting the invoice gives the order back.
+- A delivery note is refused against an order already invoiced whole (`ORDER_INVOICED`).
+
 ## 2.10.0.0 — 14 November 2026
 
 No backend change. Kept in lockstep with the frontend's 2.10.0.0 (Customers/Vendors moved to the

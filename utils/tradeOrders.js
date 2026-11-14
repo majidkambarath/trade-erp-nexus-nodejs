@@ -118,7 +118,20 @@ function overBilled(invoiceLines, receiptLines) {
   return over;
 }
 
+/**
+ * An order converted straight to its invoice (an organisation without delivery notes): the whole order counts as
+ * delivered, and as invoiced once that invoice is approved, otherwise as on a draft invoice. Returns the lines in the
+ * shape orderProgress reads, so the progress words need no second set of rules.
+ *   orderItems [{ _id, qty }]; invoiceStatus the invoice's own status (APPROVED | DRAFT; anything else is not live).
+ */
+function directInvoiceLines(orderItems, invoiceStatus) {
+  const state = invoiceStatus === "APPROVED" ? INVOICE_STATE.INVOICED : invoiceStatus === "DRAFT" ? INVOICE_STATE.DRAFT : null;
+  if (!state) return [];
+  return (orderItems || []).map((l) => ({ sourceLineId: l._id, status: RECEIPT_STATUS.RECEIVED, qty: l.qty, receivedQty: l.qty, invoiceStatus: state }));
+}
+
 module.exports = {
+  directInvoiceLines,
   ORDER_STATUS, ORDER_ACTIONS, ORDER_EDITABLE, ORDER_OPEN, RECEIPT_STATUS, RECEIPT_ACTIONS, RECEIPT_EDITABLE, INVOICE_STATE,
   orderProgress, progressLabel, overBilled,
 };
