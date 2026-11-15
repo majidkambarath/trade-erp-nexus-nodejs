@@ -8,6 +8,7 @@ const { getTenant } = require("../../utils/tenant");
 const { encrypt, decrypt } = require("../../utils/secretBox");
 const { PROVIDERS, formatFrom } = require("./providers");
 const { companyFor } = require("./documentSource");
+const Organisation = require("../../models/core/organisationModel");
 const { ProviderError } = require("../../utils/providerError");
 const { checkSmtpTarget } = require("../../utils/smtp");
 const { orgTaxTerms } = require("../../utils/countryRules");
@@ -27,7 +28,12 @@ class SettingsService {
   static async load(companyId, { withSecrets = false } = {}) {
     let q = MessagingSettings.findOne({ companyId });
     if (withSecrets) q = q.select("+apiKeyEnc +smtpPassEnc");
-    return (await q) || new MessagingSettings({ companyId });
+    const s = (await q) || new MessagingSettings({ companyId });
+    // A demonstration organisation never sends: every send, CRM email and meeting invitation reads its
+    // settings here, so one override keeps all three inside the building (the record-only provider).
+    const org = await Organisation.findOne({ code: companyId }).select("demo").lean();
+    if (org && org.demo === true) s.provider = "console";
+    return s;
   }
 
   static publicSettings(s) {

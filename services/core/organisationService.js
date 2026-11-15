@@ -68,6 +68,7 @@ function clean(input = {}) {
   out.legalName = String(input.legalName || "").trim();
   if (out.legalName.length < 2) throw bad("The organisation needs a legal name", "LEGAL_NAME_REQUIRED");
   out.tradeName = input.tradeName ? String(input.tradeName).trim() : undefined;
+  out.demo = input.demo === true;
 
   out.country = String(input.country || "").trim().toUpperCase();
   if (!/^[A-Z]{2}$/.test(out.country)) throw bad("Choose the country, as a two-letter code such as AE", "COUNTRY_REQUIRED");
@@ -206,7 +207,7 @@ class OrganisationService {
           status: c.planCode === "trial" ? "trial" : "active", planCode: c.planCode,
           featureOverrides: c.featureOverrides, moduleOverrides: c.moduleOverrides, limitOverrides: c.limitOverrides,
           subscription: { startsAt, endsAt: endsAt || null, graceDays: c.graceDays, onExpiry: c.onExpiry },
-          provisioning: {}, createdBy: by, notes: c.notes,
+          demo: c.demo === true, provisioning: {}, createdBy: by, notes: c.notes,
         }],
         { session }
       );
@@ -350,6 +351,11 @@ class OrganisationService {
         throw bad(`Choose a date format: ${orgLocale.DATE_FORMATS.join(", ")}`, "DATE_FORMAT_INVALID");
       }
       org.dateFormat = patch.dateFormat;
+    }
+    // Marks a demonstration company (sales team): its sends are recorded only and demoReset may wipe it.
+    if (patch.demo !== undefined) {
+      if (typeof patch.demo !== "boolean") throw bad("demo must be true or false", "DEMO_INVALID");
+      org.demo = patch.demo;
     }
     if (patch.planCode !== undefined) {
       if (!plans.PLAN_CODES.includes(patch.planCode)) throw bad(`Choose a plan: ${plans.PLAN_CODES.join(", ")}`, "PLAN_INVALID");
