@@ -182,6 +182,7 @@ app.use("/api/v1/messaging", require("./routes/messaging/messagingRoutes")); // 
 app.use("/api/v1/access", require("./routes/core/accessRoutes")); // people and roles; before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/organisation", require("./routes/core/organisationRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/approvals", require("./routes/core/approvalRoutes")); // what waits for the signed-in person's approval; before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/onboarding", require("./routes/core/onboardingRoutes")); // getting-started checklist; before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/notifications", require("./routes/core/notificationRoutes")); // the in-app feed; before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/crm", require("./routes/crm/crmRoutes")); // leads, the pipeline and follow-ups; before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/auth", require("./routes/core/authRoutes")); // forgot / reset password, the second sign-in step, two-factor; before adminRouter, whose bare GET /:id would capture it
