@@ -15,8 +15,7 @@
 const roles = require("../../utils/permissions");
 const rules = require("../../utils/assistantProposals");
 const orgLocale = require("../../utils/orgLocale");
-const vendorService = require("../vendor/vendorService");
-const customerService = require("../customer/customerService");
+const { live, choiceReply, findParty, sameName } = require("./partyLookup");
 const StockService = require("../stock/stockService");
 const AgeingService = require("../financial/ageingService");
 const PaymentModeService = require("../banking/paymentModeService");
@@ -30,10 +29,6 @@ const MAX_INVOICE_LINES = 20;
 const ok = (data) => ({ ok: true, data });
 const refused = (error) => ({ ok: false, error });
 const fmt = (n, currency) => `${currency} ${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-/** "Which vendor do you mean? Al Noor Steel, Al Noor Trading." The answer when a name fits several things. */
-const choiceReply = (question, names, more = 0) =>
-  `${question} ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}. Tell me which one and I will prepare it.`;
 
 /** What the answer says about a prepared document. Written here, from the books, never by the model. */
 const READY = "Check the details below and press the button to confirm. Nothing is saved until you do.";
@@ -52,6 +47,20 @@ const paymentSchema = (party) => ({
     note: { type: "string", description: "A note for the narration, only if the person gave one." },
   },
   required: [party],
+  additionalProperties: false,
+});
+
+const partySchema = (kind) => ({
+  type: "object",
+  properties: {
+    name: { type: "string", description: `The new ${kind}'s name exactly as the person said it.` },
+    contact_person: { type: "string", description: "Who to deal with there, only if the person said." },
+    phone: { type: "string", description: "Phone number, only if the person gave one." },
+    email: { type: "string", description: "Email address, only if the person gave one." },
+    address: { type: "string", description: "Address, only if the person gave one." },
+    tax_number: { type: "string", description: "Tax registration number (TRN or GSTIN), only if the person gave one." },
+  },
+  required: ["name"],
   additionalProperties: false,
 });
 
@@ -98,6 +107,26 @@ const DEFINITIONS = [
     },
     strict: true,
     needs: ["finance.create"],
+    needsAny: [],
+  },
+  {
+    name: "prepare_customer",
+    description:
+      "Prepare a NEW customer for the person to check and confirm. Use it when they ask to add or create a customer. " +
+      "It saves NOTHING: the person confirms on a card.",
+    input_schema: partySchema("customer"),
+    strict: true,
+    needs: ["sales.create"],
+    needsAny: [],
+  },
+  {
+    name: "prepare_vendor",
+    description:
+      "Prepare a NEW vendor (supplier) for the person to check and confirm. Use it when they ask to add or create a vendor or supplier. " +
+      "It saves NOTHING: the person confirms on a card.",
+    input_schema: partySchema("vendor"),
+    strict: true,
+    needs: ["purchase.create"],
     needsAny: [],
   },
   {
@@ -148,19 +177,6 @@ const names = () => DEFINITIONS.map((d) => d.name);
 const isActionTool = (name) => names().includes(name);
 
 // ---- lookups, all through the product's own services --------------------------------------------
-
-const live = (rows, statusField = "status") => (rows || []).filter((r) => !/inactive|blocked/i.test(String(r[statusField] || "")));
-
-async function findParty(kind, query) {
-  const search = String(query || "").trim();
-  if (!search) return { error: `Who is the ${kind}?` };
-  const rows = live(await (kind === "vendor" ? vendorService.getAllVendors({ search }) : customerService.getAllCustomers({ search })));
-  const nameField = kind === "vendor" ? "vendorName" : "customerName";
-  const r = rules.rankByName(rows, search, (x) => x[nameField]);
-  if (r.match) return { party: { id: String(r.match._id), name: r.match[nameField] } };
-  if (r.choices) return { choices: r.choices.map((c) => c.name), more: r.more };
-  return { error: `I could not find a ${kind} called "${search}". Tell me the name as it appears in Zarvia, or part of it.` };
-}
 
 async function findAccount(req, mode, hint) {
   const opts = await PaymentModeService.options(req);
@@ -289,6 +305,28 @@ async function prepareExpense(input, ctx) {
   });
 }
 
+async function prepareParty(kind, input, ctx) {
+  const room = needRoom(ctx);
+  if (room) return refused(room);
+  const name = String(input.name || "").replace(/\s+/g, " ").trim();
+  if (name.length < 2) return refused(`What is the ${kind}'s name?`);
+  if (name.length > 100) return refused("A name can be at most 100 characters.");
+  const same = await sameName(kind, name);
+  if (same.exact) {
+    return ok({ exists: true, reply: `There is already a ${kind} called ${same.exact}, so I have not prepared another. Ask me about it, or give the new one a different name.` });
+  }
+  const built = rules.partyBody(kind, { name, contactPerson: input.contact_person, phone: input.phone, email: input.email, address: input.address, trn: input.tax_number });
+  const warnings = same.similar.length ? [`Similar names already exist: ${same.similar.join(", ")}. Check this is not a duplicate.`] : [];
+  const proposal = push(ctx, {
+    kind, endpoint: "party", title: kind === "vendor" ? "New vendor" : "New customer", confirm: `Add ${kind} ${name}`,
+    lines: rules.partyLines(kind, built.body), body: built.body, missing: built.missing, warnings, prefill: null,
+  });
+  return ok({
+    prepared: true, proposal: proposal.id, for: name, stillNeeded: built.missing,
+    reply: readyReply(`a new ${kind}, ${name}`, built.missing),
+  });
+}
+
 async function prepareInvoice(input, ctx) {
   const room = needRoom(ctx);
   if (room) return refused(room);
@@ -342,6 +380,8 @@ async function run(name, input, ctx, settings) {
     if (name === "prepare_payment") return await preparePartyVoucher("payment", args, ctx);
     if (name === "prepare_receipt") return await preparePartyVoucher("receipt", args, ctx);
     if (name === "prepare_expense") return await prepareExpense(args, ctx);
+    if (name === "prepare_customer") return await prepareParty("customer", args, ctx);
+    if (name === "prepare_vendor") return await prepareParty("vendor", args, ctx);
     return await prepareInvoice(args, ctx);
   } catch (err) {
     return refused(`That did not work: ${String(err?.message || err).slice(0, 160)}. Nothing was prepared.`);

@@ -419,6 +419,11 @@ const openProvider = {
       throw new ProviderError("The AI service answered with a redirect, which is not followed. Check the address.", { retryable: false, code: "AI_REQUEST_INVALID", status: res.status });
     }
     if (!res.ok) {
+      // Groq (and others) check a tool call against its schema and answer 400 "tool_use_failed" when the model wrote a
+      // malformed one. That is the model's slip, not our request: the same question asked again usually works.
+      if (res.status === 400 && /tool_use_failed/.test(text)) {
+        throw new ProviderError("The model wrote a tool call the AI service could not read.", { retryable: true, code: "PROVIDER_TOOL_FAILED", status: 400, raw: text.slice(0, 300) });
+      }
       const retryAfter = typeof res.headers?.get === "function" ? res.headers.get("retry-after") : undefined;
       const c = classifyAi({ status: res.status, headers: { "retry-after": retryAfter } });
       throw new ProviderError(c.message, { retryable: c.retryable, code: c.code, status: c.status, retryAfterMs: c.retryAfterMs, raw: text.slice(0, 300) });

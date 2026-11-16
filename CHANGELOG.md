@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.3.0.0 — 16 November 2026
+
+Zarvia AI answers from your own books, keeps your chats, and adds customers and vendors. Frontend and backend both at 3.3.0.0.
+
+### Added
+
+- **Look things up in your books.** Unpaid vendors and customers, stock on hand and what is running low, cash and bank
+  balances, sales or purchases for a period, profit or loss, the balance sheet, "how are we doing", and stock alerts (out of
+  stock, below the reorder level, expired or about to expire). The server reads the report as the signed-in person and writes
+  the answer: the figures never go to the AI service. On by default; an administrator can switch it off (`lookupsEnabled`).
+- **Earlier chats are kept**: `GET /api/v1/assistant/conversations`, `GET|DELETE /api/v1/assistant/conversations/:id`
+  (a person's own only).
+- **Prepare a customer or a vendor** (`prepare_customer`, `prepare_vendor`, with "prepare documents" on): a card to check,
+  saved through the normal route by the person's own browser. An existing name is refused.
+
+### Changed
+
+- Answers are cleaned of a pretend button, HTML, Markdown links, "(Topic used: ...)" and tool calls written out as text.
+- A malformed tool call refused by the AI service (Groq `tool_use_failed`) is asked once more.
+- Help pages that called sales discounts an operating expense now say they are taken out of revenue, as the reports do.
+- New help page: the audit trail.
+
 ## 3.2.0.0 — 16 November 2026
 
 Zarvia AI on a free open model, and preparing documents. Frontend and backend both at 3.2.0.0.

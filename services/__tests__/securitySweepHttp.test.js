@@ -69,6 +69,9 @@ const SIGNED_IN_ROUTES = [
   "GET /api/v1/assistant/screen",
   "POST /api/v1/assistant/messages/:id/helpful",
   "POST /api/v1/assistant/escalate",
+  "GET /api/v1/assistant/conversations", // the person's own earlier chats only
+  "GET /api/v1/assistant/conversations/:id", // one of their own; another person's is a 404
+  "DELETE /api/v1/assistant/conversations/:id", // deletes their own chat and its messages
   "POST /api/v1/assistant/messages/:id/proposals/:pid/saved", // remembers the person confirmed a document THEY saved through the normal route; touches only their own message
 ].sort();
 

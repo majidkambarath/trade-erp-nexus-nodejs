@@ -139,9 +139,9 @@ function renderContext({ organisation = "", person = {}, screen = "", screenName
 // does not edit them (their hash is pinned): where the two meet, this block says which one wins.
 const STABLE_ACTIONS = [
   "PREPARING DOCUMENTS (switched on for this organisation)",
-  "- The tools prepare_payment, prepare_receipt, prepare_expense and prepare_invoice PREPARE a payment to a",
-  "  vendor, a receipt from a customer, an expense or a draft sales invoice. Call one when the person asks",
-  "  for that. Do not call one to answer a question about how something works.",
+  "- The prepare_ tools PREPARE a payment to a vendor, a receipt from a customer, an expense, a draft sales",
+  "  invoice, or a new customer or vendor. Call one when the person asks for that. Do not call one to answer",
+  "  a question about how something works.",
   "- They are the one exception to \"answer only from the help topics\": what they return about the",
   "  person's own books is real. You still cannot see anything else in their books.",
   "- You never save, pay, post or approve anything. The person checks a card and presses its button. The",
@@ -154,10 +154,29 @@ const STABLE_ACTIONS = [
   "  use open_screen. Passwords, card numbers and account numbers are still never to be asked for.",
 ].join("\n");
 
-/** `{ stable, context }` - the provider puts the cache breakpoint between them. `actions` adds the block above. */
+// Added AFTER the rules above (and after STABLE_ACTIONS when that is on), only when the person may look things
+// up. Pinned like the others. It is the exception to "you cannot see their data": the server runs the lookup and
+// writes the answer, so the model only has to choose it.
+const STABLE_LOOKUPS = [
+  "LOOKING THINGS UP IN THEIR BOOKS",
+  "- Some tools read the person's own books: who is unpaid, stock and what needs reordering or is about to",
+  "  expire, cash and bank, sales and purchases, profit or loss, the balance sheet, how the business is doing.",
+  "  When they ask for a figure or a list like that, call the matching one, even if the help topics say nothing",
+  "  matches. This replaces \"you cannot see their data\" and \"you still cannot see anything else\" for these",
+  "  questions.",
+  "- The system shows the figures and writes the answer itself. After one of these tools, do not write an",
+  "  answer, and never state a figure, a name or a total yourself.",
+  "- Pass a name only when the person typed one, exactly as typed. Never invent one.",
+  "- In an answer you do write, never print a topic's title, a citation, \"Topic used\" or any HTML or Markdown",
+  "  link: the system shows where an answer came from and draws the buttons.",
+  "- For a question these do not cover (one invoice's detail, VAT), say where in Zarvia it is shown and use",
+  "  open_screen.",
+].join("\n");
+
+/** `{ stable, context }` - the provider puts the cache breakpoint between them. `actions` and `lookups` add the blocks above. */
 const render = (input = {}) => ({
-  stable: input.actions ? `${STABLE}\n\n${STABLE_ACTIONS}` : STABLE,
+  stable: [STABLE, input.actions ? STABLE_ACTIONS : "", input.lookups ? STABLE_LOOKUPS : ""].filter(Boolean).join("\n\n"),
   context: renderContext(input),
 });
 
-module.exports = { STABLE, STABLE_ACTIONS, MAX_QUESTION, render, renderContext, renderTopics, renderRefusal, wrapQuestion, clean };
+module.exports = { STABLE, STABLE_ACTIONS, STABLE_LOOKUPS, MAX_QUESTION, render, renderContext, renderTopics, renderRefusal, wrapQuestion, clean };

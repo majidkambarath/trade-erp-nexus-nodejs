@@ -12,7 +12,7 @@ const codes = require("../assistantCodes");
 
 const STABLE_SHA256 = "bcc6f9c99649ab70865904f6e350ca79293068404061b93fde97cb5b47fb44b8";
 
-const STABLE_ACTIONS_SHA256 = "7d80bd054984114544dd0687c5fcf40ac1e7f40adf9cbfeaa169da8d214c6232";
+const STABLE_ACTIONS_SHA256 = "56dae09d5448cb22469c7bc97b1746dcbb1a0ad4e02e2b11d2fb254d8498c19f";
 
 test("the rules for preparing documents are exactly what was reviewed, and say the assistant never saves", () => {
   const got = crypto.createHash("sha256").update(prompt.STABLE_ACTIONS, "utf8").digest("hex");
@@ -35,6 +35,32 @@ test("the rules block is added only when actions are on, and the cached rules ar
 ${prompt.STABLE_ACTIONS}`);
   assert.ok(on.stable.startsWith(prompt.STABLE), "the cached prefix is identical, so one cached prefix still serves everyone");
   assert.doesNotMatch(prompt.STABLE_ACTIONS, /<context>|\$\{|their name is/i, "nothing that varies per person belongs in the cached block");
+});
+
+const STABLE_LOOKUPS_SHA256 = "63a93cbdecdf24c35aa02a6f6e69f6ae9f7f07996d9b3e17a3801cfe1330024e";
+
+test("the rules for looking things up are exactly what was reviewed, and keep every figure with the system", () => {
+  const got = crypto.createHash("sha256").update(prompt.STABLE_LOOKUPS, "utf8").digest("hex");
+  assert.equal(got, STABLE_LOOKUPS_SHA256, "the look-up rules changed - was that deliberate?");
+  const l = prompt.STABLE_LOOKUPS;
+  assert.match(l, /even if the help topics say nothing\s+matches/i, "a question about their books must reach the lookup, not the 'no answer' line");
+  assert.match(l, /never print a topic's title, a citation/i, "the panel shows where an answer came from: the model must not print it (a live answer ended with '(Topic used: ...)')");
+  assert.match(l, /never state a figure, a name or a total yourself/i, "the system writes the figures, never the model");
+  assert.match(l, /Never invent one/i, "no made-up names");
+  assert.ok(l.length < 1200, "kept short: a free AI plan allows a few thousand tokens a minute");
+  assert.doesNotMatch(l, /<context>|\$\{|their name is/i, "nothing that varies per person belongs in the cached block");
+});
+
+test("lookups are appended after the rules (and after preparing documents), never instead of them", () => {
+  assert.equal(prompt.render({ lookups: true }).stable, `${prompt.STABLE}
+
+${prompt.STABLE_LOOKUPS}`);
+  assert.equal(prompt.render({ actions: true, lookups: true }).stable, `${prompt.STABLE}
+
+${prompt.STABLE_ACTIONS}
+
+${prompt.STABLE_LOOKUPS}`);
+  assert.equal(prompt.render({}).stable, prompt.STABLE);
 });
 
 test("the rules are exactly what was reviewed", () => {
