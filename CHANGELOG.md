@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.1.0.0 — 16 November 2026
+
+Garage guides and videos, backend side. Frontend and backend both at 3.1.0.0. No API change.
+
+### Added
+
+- `scripts/demo/garageRecorder.js`: makes a test sign-in in the Al Manara demo garage for recording the guides and videos.
+
 ## 3.0.0.0 — 16 November 2026
 
 Learning mode, backend side. Frontend and backend both at 3.0.0.0.
