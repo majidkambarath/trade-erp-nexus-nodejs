@@ -64,6 +64,9 @@ const organisationSchema = new mongoose.Schema(
     // trial and active behave alike; suspended and closed block the organisation outright (utils/plans.js).
     status: { type: String, enum: ["trial", "active", "suspended", "closed"], default: "trial" },
     planCode: { type: String, required: true, enum: PLAN_CODES },
+    // A demonstration company for the sales team: nothing it sends leaves the building (messaging settings
+    // load as the record-only provider) and demoReset may wipe it. Absent means a real organisation.
+    demo: { type: Boolean, default: false },
     featureOverrides,
     moduleOverrides,
     limitOverrides,
