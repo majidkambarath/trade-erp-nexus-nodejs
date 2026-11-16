@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.2.0.0 — 16 November 2026
+
+Zarvia AI on a free open model, and preparing documents. Frontend and backend both at 3.2.0.0.
+
+### Added
+
+- **Open models.** Zarvia AI can answer through any OpenAI-compatible service (Groq, OpenRouter, Ollama, vLLM) as well as
+  Claude. The installation can default every organisation to one free model with `ASSISTANT_PROVIDER=openai`,
+  `ASSISTANT_OPEN_BASE_URL`, `ASSISTANT_OPEN_MODEL` and `ASSISTANT_OPEN_API_KEY`. The installation's key is only ever sent
+  to the installation's own address. `POST /api/v1/assistant/settings/test` (`settings.manage`) checks a connection and
+  whether the model can use tools. See `docs/AI_OPEN_MODELS.md`.
+- **Preparing documents** (off until an administrator switches it on): a payment to a vendor, a receipt from a customer,
+  an expense or a draft sales invoice, prepared from plain words. The assistant saves nothing: the person confirms on a
+  card, which posts through the normal route with their own rights, limits and audit ("prepared with Zarvia AI").
+  `POST /api/v1/assistant/messages/:id/proposals/:pid/saved` remembers a confirmed card.
+
+### Changed
+
+- The help search forgives a typo and a request in front of the question ("i need to purcahse").
+- A rate-limited AI service is answered "Zarvia AI is busy for a moment", with one short retry.
+
 ## 3.1.0.0 — 16 November 2026
 
 Garage guides and videos, backend side. Frontend and backend both at 3.1.0.0. No API change.
