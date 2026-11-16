@@ -78,7 +78,7 @@ const corsOptions = {
     );
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "x-secret-key", "Authorization", "Idempotency-Key", "X-Branch"],
+  allowedHeaders: ["Content-Type", "x-secret-key", "Authorization", "Idempotency-Key", "X-Branch", "X-Prepared-By"],
   // The subscription warning headers (grace period, ending soon) are for the app to read.
   exposedHeaders: ["X-Subscription-State", "X-Subscription-Days-Left", "X-Subscription-Ends"],
   credentials: true,

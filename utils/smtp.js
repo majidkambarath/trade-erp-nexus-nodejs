@@ -77,11 +77,17 @@ function checkSmtpTarget(host, port, { production = false, allowPrivate = false 
   const h = String(host || "").trim().toLowerCase();
   if (!h || !(net.isIP(h) || HOSTNAME.test(h))) return { ok: false, reason: "That does not look like a mail server name, for example smtp.yourcompany.ae" };
   if (!SMTP_PORTS.includes(Number(port))) return { ok: false, reason: `The port must be one of ${SMTP_PORTS.join(", ")}. Most servers use 587.` };
-  const local = LOOPBACK.has(h) || h.endsWith(".local") || h.endsWith(".internal") || (net.isIPv4(h) && privateIPv4(h)) || (net.isIPv6(h) && (h === "::1" || /^(fc|fd|fe80)/.test(h)));
-  if (local && production && !allowPrivate) return { ok: false, reason: "A mail server on this machine or the private network cannot be used." };
+  if (isLocalOrPrivateHost(h) && production && !allowPrivate) return { ok: false, reason: "A mail server on this machine or the private network cannot be used." };
   return { ok: true };
+}
+
+// This machine or the private network, judged from the name or address as written. Shared with
+// utils/aiEndpoint.js, so the mail server and the AI address are held to one rule.
+function isLocalOrPrivateHost(host) {
+  const h = String(host || "").trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return LOOPBACK.has(h) || h.endsWith(".local") || h.endsWith(".internal") || (net.isIPv4(h) && privateIPv4(h)) || (net.isIPv6(h) && (h === "::1" || /^(fc|fd|fe80)/.test(h)));
 }
 
 const isLoopbackHost = (host) => LOOPBACK.has(String(host || "").toLowerCase()) || ["127.0.0.1", "::1"].includes(String(host || ""));
 
-module.exports = { SMTP_PORTS, SSL_PORT, SMTP_MESSAGES, classifySmtp, checkSmtpTarget, isLoopbackHost };
+module.exports = { SMTP_PORTS, SSL_PORT, SMTP_MESSAGES, classifySmtp, checkSmtpTarget, isLoopbackHost, isLocalOrPrivateHost };

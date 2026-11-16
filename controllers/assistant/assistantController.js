@@ -23,8 +23,19 @@ exports.screenTip = catchAsync(async (req, res) => {
   const screen = String(req.query.screen || "");
   res.status(200).json({
     success: true,
-    data: { screen, topics: corpus.forScreen(screen), suggestions: corpus.suggestionsFor(screen) },
+    data: {
+      screen,
+      topics: corpus.forScreen(screen),
+      suggestions: corpus.suggestionsFor(screen),
+      // Whether Zarvia AI can prepare payments and invoices for THIS person, so the panel offers examples.
+      actions: await AssistantService.actionsAvailable(req),
+    },
   });
+});
+
+exports.proposalSaved = catchAsync(async (req, res) => {
+  const data = await AssistantService.markProposalSaved(req.params.id, req.params.pid, req.body?.number, req);
+  res.status(200).json({ success: true, data });
 });
 
 exports.getSettings = catchAsync(async (req, res) => {
@@ -34,6 +45,11 @@ exports.getSettings = catchAsync(async (req, res) => {
 
 exports.putSettings = catchAsync(async (req, res) => {
   const data = await AssistantService.saveSettings(req.body || {}, req);
+  res.status(200).json({ success: true, data });
+});
+
+exports.testSettings = catchAsync(async (req, res) => {
+  const data = await AssistantService.testConnection(req.body || {}, req);
   res.status(200).json({ success: true, data });
 });
 
