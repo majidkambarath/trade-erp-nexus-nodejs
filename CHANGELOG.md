@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.0.0 — 16 November 2026
+
+Learning mode, backend side. Frontend and backend both at 3.0.0.0.
+
+### Added
+
+- `GET /api/v1/onboarding/checklist`: whether the organisation has added its first customer, vendor, item, sales order,
+  purchase order and receipt, limited to what the person's role holds. Read-only; needs `lookups.view`.
+- A demo flag on organisations, a guarded demo reset and demo-company scripts (not available to a real organisation).
+
 ## 2.9.2.0 — 14 November 2026
 
 A sales order can be turned into its invoice where delivery notes are not held.
