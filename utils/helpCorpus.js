@@ -165,12 +165,73 @@ const words = (s) =>
 
 const uniq = (xs) => [...new Set(xs)];
 
+// One slip apart: a letter wrong, missing, extra, or two neighbours swapped ("purcahse" for "purchase",
+// "purchases" for "purchase"). Only ever used for words of five letters or more, so a short word cannot
+// wander into another one, and never more than ONE edit, so "production" is not taken for "protection".
+function withinOne(a, b) {
+  if (a === b) return true;
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  let i = 0;
+  while (i < la && i < lb && a[i] === b[i]) i += 1;
+  if (la === lb) {
+    if (a.slice(i + 1) === b.slice(i + 1)) return true;
+    return a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2);
+  }
+  return la > lb ? a.slice(i + 1) === b.slice(i) : b.slice(i + 1) === a.slice(i);
+}
+const FUZZY_MIN = 5;
+
+// The words the documentation itself uses, with how often. A word in a question that is NOT among them
+// and is one slip from one that is (typed "purcahse", meant "purchase") is read as that word, the most
+// common one if there are several. Corrected against THIS vocabulary rather than a dictionary, so a word the
+// product uses is never "fixed" into an ordinary word, and a real word the corpus lacks is left alone.
+const vocabularies = new WeakMap();
+function vocabulary(pool) {
+  let v = vocabularies.get(pool);
+  if (!v) {
+    v = new Map();
+    for (const t of pool) {
+      for (const w of words(`${t.title} ${t.questions.join(" ")} ${t.tags.join(" ")} ${t.body}`)) {
+        if (w.length >= FUZZY_MIN) v.set(w, (v.get(w) || 0) + 1);
+      }
+    }
+    vocabularies.set(pool, v);
+  }
+  return v;
+}
+
+function correct(question, pool) {
+  const v = vocabulary(pool);
+  return String(question || "").replace(/[A-Za-z]+/g, (word) => {
+    const w = word.toLowerCase();
+    if (w.length < FUZZY_MIN || v.has(w)) return word;
+    let best = "";
+    let bestCount = 0;
+    for (const [candidate, count] of v) {
+      // the more common word wins; equal counts go alphabetically, so the answer never depends on disk order
+      if ((count > bestCount || (count === bestCount && candidate < best)) && withinOne(w, candidate)) {
+        best = candidate;
+        bestCount = count;
+      }
+    }
+    return best || word;
+  });
+}
+
+// "I need to purchase" is the question "purchase" with a request in front of it. A short phrase matches a
+// stored phrasing that CONTAINS it, so without this the filler stopped a three-word question from matching
+// what a one-word question matches.
+const OPENERS = /^(?:(?:i\s+)?(?:need|want|wanna|would\s+like)\s+to\s+|(?:how\s+(?:do|can|should|would)\s+i\s+|(?:can|could|should)\s+i\s+|help\s+me\s+(?:to\s+)?|tell\s+me\s+(?:how\s+to\s+)?|please\s+))+/;
+const bareQuestion = (phrase) => phrase.replace(OPENERS, "").trim();
+
 // How a topic earns its place. The weights are blunt on purpose: a phrasing somebody actually asked
 // beats everything, the title beats the body, and a long topic cannot win on length alone (its body
 // contribution is capped), or the account-mapping reference would answer every question.
 const W = { phrase: 60, question: 5, title: 8, tag: 4, body: 1, bodyCap: 10, screen: 20 };
 
-function scoreTopic(topic, { tokens, phrase, screen }) {
+function scoreTopic(topic, { tokens, phrase, bare = "", screen }) {
   let score = 0;
   const why = [];
   for (const q of topic.questions) {
@@ -179,7 +240,8 @@ function scoreTopic(topic, { tokens, phrase, screen }) {
     // invoice" against "how do I raise an invoice"). It needs a minimum length of its own: every
     // string contains the empty string, so without it a blank question scored a full phrase match
     // against every topic that had a long phrasing.
-    const briefer = phrase.length >= 8 && qq.length > 12 && qq.includes(phrase);
+    const shorter = (ph) => ph.length >= 8 && qq.length > 12 && qq.includes(ph);
+    const briefer = shorter(phrase) || (bare && bare !== phrase && shorter(bare));
     if (qq && (phrase.includes(qq) || briefer)) {
       score += W.phrase;
       why.push(`someone asks this as "${q}"`);
@@ -230,12 +292,14 @@ function scoreTopic(topic, { tokens, phrase, screen }) {
  */
 function pick(question, { screen = "", limit = 4, maxChars = 6000, minScore = 20, topics = null } = {}) {
   const pool = topics || all();
-  const phrase = String(question || "").toLowerCase().trim();
-  const tokens = uniq(words(question));
+  const typed = correct(question, pool);
+  const phrase = typed.toLowerCase().trim();
+  const bare = bareQuestion(phrase);
+  const tokens = uniq(words(typed));
   // Nothing to go on at all: no words worth scoring and no screen to fall back on.
   if (!pool.length || (!tokens.length && !screen)) return [];
   const scored = pool
-    .map((t) => ({ topic: t, ...scoreTopic(t, { tokens, phrase, screen }) }))
+    .map((t) => ({ topic: t, ...scoreTopic(t, { tokens, phrase, bare, screen }) }))
     .filter((s) => s.lexical >= minScore || (s.onScreen && s.lexical === 0 && tokens.length <= 2))
     .sort((a, b) => b.score - a.score || a.topic.title.localeCompare(b.topic.title))
     .slice(0, limit);
@@ -296,4 +360,6 @@ function excerpt(body, maxChars) {
 
 const byId = (id, { topics = null } = {}) => (topics || all()).find((t) => t.id === id) || null;
 
-module.exports = { HELP_DIR, parseFrontMatter, read, all, stats, reload, pick, forScreen, suggestionsFor, excerpt, byId, words, scoreTopic, W };
+module.exports = {
+  correct,
+  bareQuestion, HELP_DIR, parseFrontMatter, read, all, stats, reload, pick, forScreen, suggestionsFor, excerpt, byId, words, scoreTopic, W };
