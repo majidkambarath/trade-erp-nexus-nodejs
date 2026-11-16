@@ -213,3 +213,42 @@ test("the questions offered on a screen come from the documentation, and read as
   // and the real corpus answers for a real screen
   assert.ok(corpus.suggestionsFor("/sales-order").length > 0);
 });
+
+// ---- ordinary wording: a typo, and a request in front of the question ---------------------------
+
+test("a typo and a request in front of the question still find the topic, against the real corpus", () => {
+  const titles = (q) => corpus.pick(q).map((t) => t.title);
+  assert.ok(titles("i need to purchase").includes("Procure to pay"), "the opener used to stop the phrase match");
+  assert.ok(titles("i need to purcahse").includes("Procure to pay"), "two letters swapped");
+  assert.equal(titles("how do I raise an invoce")[0], "Order to cash", "a letter missing");
+  // and the floor still holds: correcting spelling must not invent an answer the documentation does not have
+  assert.deepEqual(corpus.pick("how do I set up production"), []);
+});
+
+test("a slip is corrected to the documentation's own word, the more common one when two are near", () => {
+  const pool = [
+    { id: "a", title: "Invoices", questions: [], tags: [], body: "invoice invoice invoice", screens: [], source: "", review: "" },
+    { id: "b", title: "Scripts", questions: [], tags: [], body: "invoke", screens: [], source: "", review: "" },
+  ];
+  assert.equal(corpus.correct("invoce", pool), "invoice", "one slip from both: the more common wins");
+  assert.equal(corpus.correct("Invoices", pool), "Invoices", "a word the corpus has is left as typed");
+  assert.equal(corpus.correct("tractor", pool), "tractor", "a real word the corpus lacks is left alone");
+  assert.equal(corpus.correct("bnak invce", pool), "bnak invce", "under five letters is never corrected, and two slips is not one");
+  // equal counts: the same answer whatever order the topics were loaded in
+  const tie = [
+    { id: "x", title: "", questions: [], tags: [], body: "stocks", screens: [], source: "", review: "" },
+    { id: "y", title: "", questions: [], tags: [], body: "stacks", screens: [], source: "", review: "" },
+  ];
+  assert.equal(corpus.correct("stucks", tie), corpus.correct("stucks", [...tie].reverse()));
+});
+
+test("the openers people put in front of a question are taken off for the phrase match only", () => {
+  assert.equal(corpus.bareQuestion("i need to purchase"), "purchase");
+  assert.equal(corpus.bareQuestion("how do i add a customer"), "add a customer");
+  assert.equal(corpus.bareQuestion("please help me to pay a supplier"), "pay a supplier");
+  assert.equal(corpus.bareQuestion("purchase"), "purchase");
+  const pool = [{ id: "p", title: "Buying", questions: ["how do I enter a purchase invoice"], tags: [], body: "", screens: [], source: "", review: "" }];
+  const hit = corpus.pick("i want to purchase invoice", { topics: pool });
+  assert.equal(hit.length, 1, "a short request matches the stored phrasing that contains it");
+  assert.ok(hit[0].score >= corpus.W.phrase);
+});

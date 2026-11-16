@@ -1,4 +1,5 @@
 const logger = require("../../utils/logger");
+const { preparedNote } = require("../../utils/preparedBy");
 const FinancialService = require("../../services/financial/financialService");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
@@ -36,7 +37,7 @@ exports.createVoucher = catchAsync(async (req, res) => {
     action: "VOUCHER_CREATED",
     entity: "Voucher",
     entityId: voucher._id,
-    summary: `${VoucherAuditService.describe(voucher)} saved${hold ? ` and held for approval: ${{ limit: "over the approval limit of the person who saved it", second: "it needs two approvers at this amount", notes: "credit and debit notes need approval" }[hold.reason] || hold.reason}` : ""}`,
+    summary: `${VoucherAuditService.describe(voucher)} saved${hold ? ` and held for approval: ${{ limit: "over the approval limit of the person who saved it", second: "it needs two approvers at this amount", notes: "credit and debit notes need approval" }[hold.reason] || hold.reason}` : ""}${preparedNote(req)}`,
     after: { ...VoucherAuditService.snapshot(voucher), effects: await VoucherAuditService.effects(voucher._id) },
   });
 

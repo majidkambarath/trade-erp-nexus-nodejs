@@ -12,6 +12,31 @@ const codes = require("../assistantCodes");
 
 const STABLE_SHA256 = "bcc6f9c99649ab70865904f6e350ca79293068404061b93fde97cb5b47fb44b8";
 
+const STABLE_ACTIONS_SHA256 = "7d80bd054984114544dd0687c5fcf40ac1e7f40adf9cbfeaa169da8d214c6232";
+
+test("the rules for preparing documents are exactly what was reviewed, and say the assistant never saves", () => {
+  const got = crypto.createHash("sha256").update(prompt.STABLE_ACTIONS, "utf8").digest("hex");
+  assert.equal(got, STABLE_ACTIONS_SHA256, "the preparing-documents rules changed - was that deliberate?");
+  const a = prompt.STABLE_ACTIONS;
+  assert.match(a, /never save, pay, post or approve/i, "it must say it saves nothing");
+  assert.match(a, /do not write an answer/i, "the system writes the card's words, not the model: a live run wrote the wrong currency");
+  assert.match(a, /Never invent a vendor/i, "no made-up parties, items, accounts or amounts");
+  assert.match(a, /Leave out\s+anything the person did not say/i, "a missing amount is left out so the system asks, never guessed");
+  assert.match(a, /Passwords, card numbers and account numbers are still never to be asked for/i, "the old ban on sensitive details still stands");
+  assert.ok(a.length < 1500, "kept short: a free AI plan allows a few thousand tokens a minute");
+});
+
+test("the rules block is added only when actions are on, and the cached rules are never edited", () => {
+  assert.equal(prompt.render({}).stable, prompt.STABLE);
+  assert.equal(prompt.render({ actions: false }).stable, prompt.STABLE);
+  const on = prompt.render({ actions: true });
+  assert.equal(on.stable, `${prompt.STABLE}
+
+${prompt.STABLE_ACTIONS}`);
+  assert.ok(on.stable.startsWith(prompt.STABLE), "the cached prefix is identical, so one cached prefix still serves everyone");
+  assert.doesNotMatch(prompt.STABLE_ACTIONS, /<context>|\$\{|their name is/i, "nothing that varies per person belongs in the cached block");
+});
+
 test("the rules are exactly what was reviewed", () => {
   const got = crypto.createHash("sha256").update(prompt.STABLE, "utf8").digest("hex");
   assert.equal(got, STABLE_SHA256, "the system prompt changed - was that deliberate?");

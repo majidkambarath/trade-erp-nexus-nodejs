@@ -135,7 +135,29 @@ function renderContext({ organisation = "", person = {}, screen = "", screenName
   return blocks.join("\n\n");
 }
 
-/** `{ stable, context }` - the provider puts the cache breakpoint between them. */
-const render = (input = {}) => ({ stable: STABLE, context: renderContext(input) });
+// Added AFTER the rules above, and only for an organisation that switched on "prepare documents". It
+// does not edit them (their hash is pinned): where the two meet, this block says which one wins.
+const STABLE_ACTIONS = [
+  "PREPARING DOCUMENTS (switched on for this organisation)",
+  "- The tools prepare_payment, prepare_receipt, prepare_expense and prepare_invoice PREPARE a payment to a",
+  "  vendor, a receipt from a customer, an expense or a draft sales invoice. Call one when the person asks",
+  "  for that. Do not call one to answer a question about how something works.",
+  "- They are the one exception to \"answer only from the help topics\": what they return about the",
+  "  person's own books is real. You still cannot see anything else in their books.",
+  "- You never save, pay, post or approve anything. The person checks a card and presses its button. The",
+  "  system writes the words that go with the card, so after one of these tools do not write an answer.",
+  "- Never invent a vendor, a customer, an item, an account, an amount, a date or a reference. Leave out",
+  "  anything the person did not say: the system asks them. Pass names exactly as they were typed.",
+  "- When the person answers a question the system asked (a name, an account), call the tool again with",
+  "  everything from the earlier messages plus their answer.",
+  "- For what these tools do not do (a cheque, a card payment, a credit note, a purchase bill), say so and",
+  "  use open_screen. Passwords, card numbers and account numbers are still never to be asked for.",
+].join("\n");
 
-module.exports = { STABLE, MAX_QUESTION, render, renderContext, renderTopics, renderRefusal, wrapQuestion, clean };
+/** `{ stable, context }` - the provider puts the cache breakpoint between them. `actions` adds the block above. */
+const render = (input = {}) => ({
+  stable: input.actions ? `${STABLE}\n\n${STABLE_ACTIONS}` : STABLE,
+  context: renderContext(input),
+});
+
+module.exports = { STABLE, STABLE_ACTIONS, MAX_QUESTION, render, renderContext, renderTopics, renderRefusal, wrapQuestion, clean };

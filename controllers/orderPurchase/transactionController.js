@@ -1,4 +1,5 @@
 const TransactionService = require("../../services/orderPurchase/transactionService");
+const { preparedNote } = require("../../utils/preparedBy");
 const CreditControlService = require("../../services/financial/creditControlService");
 const AuditService = require("../../services/core/auditService");
 const DocumentAuditService = require("../../services/orderPurchase/documentAuditService");
@@ -62,7 +63,7 @@ exports.createTransaction = catchAsync(async (req, res) => {
     action: "TRANSACTION_CREATED",
     entity: "Transaction",
     entityId: transaction._id,
-    summary: `${DocumentAuditService.describe(transaction)} saved as ${transaction.status}`,
+    summary: `${DocumentAuditService.describe(transaction)} saved as ${transaction.status}${preparedNote(req)}`,
     after: DocumentAuditService.snapshot(transaction),
   });
   res.status(201).json({ status: "success", data: transaction });

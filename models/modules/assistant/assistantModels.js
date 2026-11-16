@@ -6,7 +6,8 @@
 const mongoose = require("mongoose");
 const tenantPlugin = require("../../../utils/tenantPlugin");
 
-const PROVIDERS = ["echo", "anthropic"];
+// `openai` is any OpenAI-compatible service running an open model (Groq, OpenRouter, Ollama, vLLM...).
+const PROVIDERS = ["echo", "anthropic", "openai"];
 const EFFORTS = ["low", "medium", "high"];
 // What a message is. A question and its answer are ONE row: they are read together, they are
 // scored together (the thumbs), and there is no state in which one exists without the other.
@@ -25,6 +26,17 @@ const settingsSchema = new mongoose.Schema(
     // who wants their own account.
     apiKeyEnc: { type: String, select: false },
     model: { type: String, default: "claude-opus-5-5" },
+    // The open-model provider keeps its OWN address, model and key, apart from Claude's. Switching
+    // provider and back loses nothing, and a Claude key is never sent to an address somebody typed.
+    // Empty means "use the installation's" (ASSISTANT_OPEN_* in the environment).
+    openBaseUrl: { type: String, default: "", maxlength: 300 },
+    openModel: { type: String, default: "", maxlength: 200 },
+    openApiKeyEnc: { type: String, select: false },
+    // Off until an administrator switches it on: with it on, the names and amounts of the person's own
+    // vendors, customers and items are sent to the AI service so it can prepare a payment or an invoice.
+    actionsEnabled: { type: Boolean, default: false },
+    // How long one call may take before the question is answered with "something went wrong".
+    timeoutSeconds: { type: Number, default: 60, min: 10, max: 180 },
     effort: { type: String, enum: EFFORTS, default: "medium" },
     maxOutputTokens: { type: Number, default: 1024, min: 256, max: 4096 },
     // The brakes. These are OURS, not the client's plan: the assistant exists to cut our support
@@ -72,6 +84,9 @@ const messageSchema = new mongoose.Schema(
     reason: { type: String, default: "" },
     rounds: { type: Number, default: 0 },
     toolCalls: [{ _id: false, name: String, ok: Boolean }],
+    // The documents this answer PREPARED, as the exact body the normal route takes. `savedAs` is filled
+    // when the person confirms one, so a reopened panel never offers the same payment twice.
+    proposals: { type: [mongoose.Schema.Types.Mixed], default: [] },
     provider: { type: String, default: "" },
     model: { type: String, default: "" },
     usage: {

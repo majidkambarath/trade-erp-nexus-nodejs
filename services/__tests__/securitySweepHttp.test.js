@@ -69,6 +69,7 @@ const SIGNED_IN_ROUTES = [
   "GET /api/v1/assistant/screen",
   "POST /api/v1/assistant/messages/:id/helpful",
   "POST /api/v1/assistant/escalate",
+  "POST /api/v1/assistant/messages/:id/proposals/:pid/saved", // remembers the person confirmed a document THEY saved through the normal route; touches only their own message
 ].sort();
 
 // Mutating routes a VIEWER may reach, and why. Everything else that changes something must refuse a viewer. The first group

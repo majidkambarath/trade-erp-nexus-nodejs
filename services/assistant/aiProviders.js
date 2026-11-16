@@ -1,6 +1,7 @@
 // Who actually answers. Duck-typed registry, the house pattern from services/messaging/providers.js.
 //
-//   complete({ stable, context, messages, tools, model, maxTokens, effort }, { apiKey, timeoutMs })
+//   complete({ stable, context, messages, tools, model, maxTokens, effort }, { key, timeoutMs, baseUrl })
+//   (baseUrl is read by the open-model provider only; see the end of this file)
 //     -> { content[], stopReason, usage: { inputTokens, outputTokens, cacheReadTokens }, raw }
 //     throws ProviderError({ retryable, code, status, retryAfterMs })
 //
@@ -241,3 +242,200 @@ const anthropicProvider = {
 
 PROVIDERS.anthropic = anthropicProvider;
 module.exports.classifyAi = classifyAi;
+
+// ---- open models -------------------------------------------------------------------------------
+//
+// Any service that speaks the OpenAI chat-completions API: Groq, OpenRouter, Together, DeepSeek,
+// Mistral, and a self-hosted Ollama, vLLM or LM Studio. One adapter for all of them, because the API
+// is the same and only the address, the key and the model name differ.
+//
+// The service and its turn loop stay in the Messages shape (content blocks, tool_use, tool_result);
+// this adapter translates both ways and nothing outside it knows the other shape exists. That keeps
+// the grounding check, the round limit and the tool runner exactly as they were proved for Claude.
+//
+// Things that are deliberately different from the Claude provider:
+//   - no `effort` and no cache_control: neither exists in this API, and some hosts refuse unknown
+//     fields with a 400;
+//   - no `strict` on a tool: several hosts refuse it, and a small model given a strict schema it
+//     cannot follow returns nothing at all. A bad argument is caught by toolkit.run instead;
+//   - redirects are refused: the address was typed by a person, and a redirect is how a request to
+//     an allowed address ends up somewhere that would not have been allowed;
+//   - the key is optional: a self-hosted Ollama has none, so `Authorization` is sent only with one.
+
+// Ready-made starting points for the settings screen. Data, not behaviour: choosing one only fills
+// the address and suggests models. Model ids were checked against each host's own list on
+// 16 Nov 2026 and rotate often, so the screen always lets a person type their own.
+const OPEN_PRESETS = [
+  {
+    key: "groq",
+    label: "Groq (free plan)",
+    baseUrl: "https://api.groq.com/openai/v1",
+    models: ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"],
+    needsKey: true,
+    note: "Free key from console.groq.com. The free plan has daily limits (about 1,000 questions a day per model). Very fast.",
+  },
+  {
+    key: "openrouter",
+    label: "OpenRouter (free models)",
+    baseUrl: "https://openrouter.ai/api/v1",
+    models: [],
+    needsKey: true,
+    note: "Free key from openrouter.ai. Choose a model whose name ends in :free and that supports tools; 50 questions a day, 1,000 after a one-time $10 top-up.",
+  },
+  {
+    key: "ollama",
+    label: "Ollama (your own server)",
+    baseUrl: "http://localhost:11434/v1",
+    models: ["qwen3:8b", "qwen3:14b", "gpt-oss:20b"],
+    needsKey: false,
+    note: "Runs on a machine you control, so nothing leaves your network. Needs a GPU for a useful speed. Replace localhost with the server's address.",
+  },
+  {
+    key: "custom",
+    label: "Another OpenAI-compatible service",
+    baseUrl: "",
+    models: [],
+    needsKey: false,
+    note: "Together, DeepSeek, Mistral, vLLM, LM Studio or any service that speaks the OpenAI chat-completions API.",
+  },
+];
+
+const FINISH = { tool_calls: "tool_use", function_call: "tool_use", stop: "end_turn", length: "max_tokens", content_filter: "refusal" };
+
+const textOf = (content) => {
+  if (typeof content === "string") return content;
+  return (content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+};
+
+/** Messages-shaped history -> chat-completions messages. Pure, exported for the tests. */
+function toOpenMessages({ stable = "", context = "", messages = [] } = {}) {
+  const out = [{ role: "system", content: [stable, context].filter(Boolean).join("\n\n") }];
+  for (const m of messages) {
+    if (m.role === "assistant") {
+      const blocks = typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content || [];
+      const calls = blocks.filter((b) => b.type === "tool_use");
+      const msg = { role: "assistant", content: textOf(blocks) || null };
+      if (calls.length) {
+        msg.tool_calls = calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: JSON.stringify(c.input || {}) } }));
+      }
+      out.push(msg);
+      continue;
+    }
+    // A user turn is either the question (text) or the answers to the tools the model asked for.
+    const blocks = typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content || [];
+    for (const r of blocks.filter((b) => b.type === "tool_result")) {
+      out.push({ role: "tool", tool_call_id: r.tool_use_id, content: typeof r.content === "string" ? r.content : JSON.stringify(r.content) });
+    }
+    const said = textOf(blocks);
+    if (said) out.push({ role: "user", content: said });
+  }
+  return out;
+}
+
+/** Tool definitions -> the function-calling shape. `strict` is dropped on purpose (see above). */
+const toOpenTools = (tools = []) =>
+  tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema || { type: "object", properties: {} } } }));
+
+let openCall = 0;
+
+/** A chat-completions reply -> the Messages-shaped result the service reads. Pure, exported for the tests. */
+function fromOpenReply(body = {}) {
+  const choice = (body.choices || [])[0] || {};
+  const msg = choice.message || {};
+  const content = [];
+  const said = typeof msg.content === "string" ? msg.content.trim() : textOf(msg.content).trim();
+  if (said) content.push({ type: "text", text: said });
+  for (const call of msg.tool_calls || []) {
+    if (!call || !call.function || !call.function.name) continue;
+    let input = {};
+    const args = call.function.arguments;
+    if (args && typeof args === "object") input = args;
+    else if (typeof args === "string" && args.trim()) {
+      try {
+        const parsed = JSON.parse(args);
+        input = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+      } catch {
+        // A small model wrote arguments that are not JSON. The tool runs with none and says what it
+        // needed, which the model can act on in the next round; throwing would lose the whole turn.
+        input = {};
+      }
+    }
+    content.push({ type: "tool_use", id: String(call.id || `call_${++openCall}`), name: String(call.function.name), input });
+  }
+  const hasCalls = content.some((b) => b.type === "tool_use");
+  // Some hosts report "stop" even when they returned tool calls; the calls are what matter.
+  const stopReason = hasCalls ? "tool_use" : FINISH[choice.finish_reason] || "end_turn";
+  const u = body.usage || {};
+  return {
+    content,
+    stopReason,
+    usage: {
+      inputTokens: Number(u.prompt_tokens || 0),
+      outputTokens: Number(u.completion_tokens || 0),
+      cacheReadTokens: Number(u.prompt_tokens_details?.cached_tokens || 0),
+    },
+    raw: { id: body.id || "", model: body.model || "", finishReason: choice.finish_reason || "" },
+  };
+}
+
+const openProvider = {
+  name: "openai",
+  needsKey: false,
+  async complete(
+    { stable = "", context = "", messages = [], tools = [], model = "", maxTokens = 1024, effort = "" } = {},
+    { key = "", baseUrl = "", timeoutMs = 60_000, fetchImpl = null } = {}
+  ) {
+    if (!baseUrl) throw new ProviderError("No address is set for the AI service.", { retryable: false, code: "AI_REQUEST_INVALID" });
+    if (!model) throw new ProviderError("No model is chosen for the AI service.", { retryable: false, code: "AI_REQUEST_INVALID" });
+    const doFetch = fetchImpl || globalThis.fetch;
+    const body = { model, max_tokens: maxTokens, messages: toOpenMessages({ stable, context, messages }) };
+    // gpt-oss thinks before it answers and that thinking is counted in max_tokens and in the per-minute allowance, so its effort
+    // is passed on (the same low / medium / high setting Claude uses). Only to a model that takes it: another host may refuse the field.
+    if (/gpt-oss/i.test(model) && ["low", "medium", "high"].includes(effort)) body.reasoning_effort = effort;
+    if (tools.length) {
+      body.tools = toOpenTools(tools);
+      body.tool_choice = "auto";
+    }
+    const headers = { "Content-Type": "application/json", Accept: "application/json" };
+    if (key) headers.Authorization = `Bearer ${key}`;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    let res;
+    let text = "";
+    try {
+      res = await doFetch(`${baseUrl}/chat/completions`, { method: "POST", headers, body: JSON.stringify(body), signal: abort.signal, redirect: "manual" });
+      text = await res.text();
+    } catch (err) {
+      const timedOut = err?.name === "AbortError";
+      throw new ProviderError(timedOut ? "The AI service took too long to answer." : "The AI service could not be reached.", {
+        retryable: true,
+        code: "PROVIDER_UNREACHABLE",
+        raw: String(err?.message || "").slice(0, 300),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res.status >= 300 && res.status < 400) {
+      throw new ProviderError("The AI service answered with a redirect, which is not followed. Check the address.", { retryable: false, code: "AI_REQUEST_INVALID", status: res.status });
+    }
+    if (!res.ok) {
+      const retryAfter = typeof res.headers?.get === "function" ? res.headers.get("retry-after") : undefined;
+      const c = classifyAi({ status: res.status, headers: { "retry-after": retryAfter } });
+      throw new ProviderError(c.message, { retryable: c.retryable, code: c.code, status: c.status, retryAfterMs: c.retryAfterMs, raw: text.slice(0, 300) });
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new ProviderError("The AI service answered with something that is not JSON. Check the address ends in /v1.", { retryable: false, code: "AI_REQUEST_INVALID", status: res.status, raw: text.slice(0, 300) });
+    }
+    if (parsed && parsed.error) {
+      // Some hosts answer 200 with an error body. Treat it as the request being refused.
+      throw new ProviderError("The AI service refused the request.", { retryable: false, code: "AI_REQUEST_INVALID", raw: JSON.stringify(parsed.error).slice(0, 300) });
+    }
+    return fromOpenReply(parsed);
+  },
+};
+
+PROVIDERS.openai = openProvider;
+Object.assign(module.exports, { OPEN_PRESETS, toOpenMessages, toOpenTools, fromOpenReply });
