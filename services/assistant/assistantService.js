@@ -1,8 +1,10 @@
 // Asking Zarvia AI a question. One service method does the whole turn, because the turn is the
 // unit: a question, the topics retrieved for it, the model's rounds, the answer, and what it cost.
 //
-// Nothing here writes a client's business data, and there is no path by which it could: the only
-// tools are in services/assistant/toolkit.js and none of them queries a collection.
+// Nothing here writes a client's business data, and there is no path by which it could. The help tools
+// (toolkit.js) query no collection; the lookups (dataTools.js) and the prepare tools (actionTools.js) READ
+// through the product's own services as the signed-in person, and a lookup's figures are never sent to the
+// AI service: the server writes that answer itself.
 const mongoose = require("mongoose");
 const AppError = require("../../utils/AppError");
 const corpus = require("../../utils/helpCorpus");
@@ -10,6 +12,9 @@ const codes = require("../../utils/assistantCodes");
 const prompt = require("../../utils/assistantPrompt");
 const toolkit = require("./toolkit");
 const actionTools = require("./actionTools");
+const dataTools = require("./dataTools");
+const lookupRules = require("../../utils/assistantData");
+const { cleanAnswer } = require("../../utils/assistantAnswer");
 const proposalRules = require("../../utils/assistantProposals");
 const ai = require("./aiProviders");
 const orgLocale = require("../../utils/orgLocale");
@@ -33,6 +38,8 @@ const WONT = {
 };
 
 const MAX_QUESTION = prompt.MAX_QUESTION;
+// What the model is told an earlier lookup said: that it showed a table, never what was in it.
+const LOOKED_UP = "(I looked this up in their books and showed the figures in a table.)";
 
 class AssistantService {
   /**
@@ -158,11 +165,13 @@ class AssistantService {
    */
   static async recentTurns(conversationId, adminId, { limit = 3 } = {}) {
     if (!conversationId || !mongoose.isValidObjectId(conversationId)) return [];
-    const rows = await AssistantMessage.find({ conversationId, adminId }).sort({ createdAt: -1 }).limit(limit).select("question answer").lean();
+    const rows = await AssistantMessage.find({ conversationId, adminId }).sort({ createdAt: -1 }).limit(limit).select("question answer tables").lean();
     const turns = [];
     for (const r of rows.reverse()) {
       if (!r.question || !r.answer) continue;
-      turns.push({ role: "user", content: prompt.wrapQuestion(r.question) }, { role: "assistant", content: String(r.answer).slice(0, 1500) });
+      // A lookup's answer is figures from the books, and those never go to the AI service - not even as history.
+      const said = r.tables && r.tables.length ? LOOKED_UP : String(r.answer).slice(0, 1500);
+      turns.push({ role: "user", content: prompt.wrapQuestion(r.question) }, { role: "assistant", content: said });
     }
     return turns;
   }
@@ -173,6 +182,14 @@ class AssistantService {
     const settings = await this.settings(companyId);
     if (!settings.enabled || settings.provider === "echo") return false;
     return actionTools.definitionsFor(req, settings).length > 0;
+  }
+
+  /** Which lookups this person may ask for right now, by tool name: what the panel's examples are chosen from. */
+  static async lookupsAvailable(req) {
+    const { companyId } = getTenant(req);
+    const settings = await this.settings(companyId);
+    if (!settings.enabled || settings.provider === "echo") return [];
+    return dataTools.definitionsFor(req, settings).map((d) => d.name);
   }
 
   /**
@@ -218,14 +235,19 @@ class AssistantService {
     const refusal = errorCode ? codes.explain(errorCode, { serverMessage: errorMessage }) : null;
     // Retrieval runs here, not in the tool, so the first turn already carries the topics: it saves
     // a whole round trip on the common case where the question is answerable straight away.
-    const tools = [...toolkit.definitions(), ...actionTools.definitionsFor(req, settings)];
-    const acting = tools.length > toolkit.definitions().length;
-    // A free AI plan allows a few thousand tokens a minute. "Pay Al Noor 5,000" does not need four help topics
-    // sent with it, so an action-looking question carries one.
-    const topics = corpus.pick(asked, { screen, limit: acting && proposalRules.looksLikeAction(asked) ? 1 : 4 });
-    const ctx = { ...toolkit.newContext({ screen }), req, proposals: [] };
+    const actionDefs = actionTools.definitionsFor(req, settings);
+    const dataDefs = dataTools.definitionsFor(req, settings);
+    const tools = [...toolkit.definitions(), ...actionDefs, ...dataDefs];
+    const acting = actionDefs.length > 0;
+    const lookingUp = dataDefs.length > 0;
+    // A free AI plan allows a few thousand tokens a minute. "Pay Al Noor 5,000" or "list unpaid vendors" does not
+    // need four help topics sent with it, so a question that looks like one carries one.
+    const brief = (acting && proposalRules.looksLikeAction(asked)) || (lookingUp && lookupRules.looksLikeLookup(asked));
+    const topics = corpus.pick(asked, { screen, limit: brief ? 1 : 4 });
+    const ctx = { ...toolkit.newContext({ screen }), req, proposals: [], tables: [] };
     const { stable, context } = prompt.render({
       actions: acting,
+      lookups: lookingUp,
       organisation: (req.organisation && (req.organisation.displayName || req.organisation.legalName || req.organisation.code)) || "",
       person: { name: admin.name || "", role: (admin.roleName || admin.roleKey || admin.type || "") },
       screen,
@@ -239,13 +261,14 @@ class AssistantService {
     const conn = this.connection(settings);
     const provider = ai.providerFor(conn.provider);
     const callOptions = { key: conn.key, baseUrl: conn.baseUrl, timeoutMs: conn.timeoutMs };
-    const messages = [...(acting ? await this.recentTurns(conversationId, adminId) : []), { role: "user", content: prompt.wrapQuestion(asked) }];
+    const messages = [...(acting || lookingUp ? await this.recentTurns(conversationId, adminId) : []), { role: "user", content: prompt.wrapQuestion(asked) }];
     const toolCalls = [];
     let grounded = topics.length > 0;
     let text = "";
     let outcome = "answered";
     let reason = "";
     let retriedRateLimit = false;
+    let retriedToolSlip = false;
     let serverComposed = false;
     const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
 
@@ -263,6 +286,12 @@ class AssistantService {
         if (err.code === "PROVIDER_RATE_LIMITED" && !retriedRateLimit && Number(err.retryAfterMs) > 0 && Number(err.retryAfterMs) <= 8000) {
           retriedRateLimit = true;
           await new Promise((r) => setTimeout(r, Number(err.retryAfterMs)));
+          round -= 1;
+          continue;
+        }
+        // The model wrote a malformed tool call and the service refused it: ask once more, which nearly always works.
+        if (err.code === "PROVIDER_TOOL_FAILED" && !retriedToolSlip) {
+          retriedToolSlip = true;
           round -= 1;
           continue;
         }
@@ -301,24 +330,36 @@ class AssistantService {
       const replies = [];
       for (const call of calls) {
         const isAction = actionTools.isActionTool(call.name);
-        const result = isAction ? await actionTools.run(call.name, call.input, ctx, settings) : toolkit.run(call.name, call.input, ctx);
+        const isData = dataTools.isDataTool(call.name);
+        const result = isAction
+          ? await actionTools.run(call.name, call.input, ctx, settings)
+          : isData
+            ? await dataTools.run(call.name, call.input, ctx, settings)
+            : toolkit.run(call.name, call.input, ctx);
         toolCalls.push({ name: call.name, ok: result.ok });
         if (call.name === "search_help" && result.ok && result.data.found > 0) grounded = true;
-        // What an action tool returned is the person's own data, which is as good as a help topic.
-        if (isAction && result.ok) grounded = true;
-        if (isAction) replies.push(result.ok ? result.data.reply : result.error);
-        results.push({ type: "tool_result", tool_use_id: call.id, content: JSON.stringify(result.ok ? result.data : { error: result.error }) });
+        // What an action or a lookup returned is the person's own data, which is as good as a help topic.
+        if ((isAction || isData) && result.ok) grounded = true;
+        if (isAction || isData) replies.push(result.ok ? result.data.reply : result.error);
+        if (isData && result.ok && result.data.table) ctx.tables.push(result.data.table);
+        // A lookup's figures stay on our server: the model is told a table was shown, never what is in it.
+        const forModel = isData ? (result.ok ? { shown_to_person: true } : { error: result.error }) : result.ok ? result.data : { error: result.error };
+        results.push({ type: "tool_result", tool_use_id: call.id, content: JSON.stringify(forModel) });
       }
       // Every call this round prepared (or refused to prepare) a document: the words that go with the card are written
       // here, from the books. No second model call (half the tokens on a free plan), and no chance of the model
       // dressing the amount in the wrong currency - a live run on the real model wrote "£500" for an AED payment.
-      if (acting && calls.every((c) => actionTools.isActionTool(c.name)) && replies.length === calls.length && replies.every(Boolean)) {
+      const ours = (name) => actionTools.isActionTool(name) || dataTools.isDataTool(name);
+      if ((acting || lookingUp) && calls.every((c) => ours(c.name)) && replies.length === calls.length && replies.every(Boolean)) {
         text = replies.join("\n\n");
         serverComposed = true;
         break;
       }
       messages.push({ role: "assistant", content: out.content }, { role: "user", content: results });
     }
+
+    // A pretend <button>, other tags and Markdown links are taken out of what the model wrote (utils/assistantAnswer.js).
+    if (!serverComposed) text = cleanAnswer(text);
 
     // The grounding check, in code rather than in the prompt. If nothing from the documentation
     // ever reached the model and it still produced a substantive answer, that answer came from its
@@ -340,7 +381,7 @@ class AssistantService {
     const citations = topics.map((t) => ({ id: t.id, title: t.title }));
     const saved = await this.record({
       settings, adminId, admin, asked, screen, errorCode, conversationId,
-      outcome, reason, answer: text, citations, links: ctx.links, proposals: ctx.proposals, usage,
+      outcome, reason, answer: text, citations, links: ctx.links, proposals: ctx.proposals, tables: ctx.tables, usage,
       toolCalls, rounds: toolCalls.length, provider: conn.provider, model: conn.model, started,
       escalation: ctx.escalation,
     });
@@ -371,6 +412,7 @@ class AssistantService {
       citations,
       links: ctx.links,
       proposals: ctx.proposals.map((p) => ({ ...p, savedAs: "" })),
+      tables: ctx.tables,
       outcome,
       // True while the stub provider is answering: the panel says so, because a canned answer that
       // looks real is worse than no assistant.
@@ -450,7 +492,7 @@ class AssistantService {
   }
 
   /** Write the turn: its conversation, its message, and what it cost. */
-  static async record({ settings, adminId, admin = {}, asked, screen, errorCode, conversationId, outcome, reason = "", answer, citations = [], links = [], proposals = [], usage = null, toolCalls = [], rounds = 0, provider = "", model = "", started = Date.now(), escalation = null }) {
+  static async record({ settings, adminId, admin = {}, asked, screen, errorCode, conversationId, outcome, reason = "", answer, citations = [], links = [], proposals = [], tables = [], usage = null, toolCalls = [], rounds = 0, provider = "", model = "", started = Date.now(), escalation = null }) {
     const { companyId } = getTenant();
     let conversation = null;
     if (conversationId && mongoose.isValidObjectId(conversationId)) {
@@ -459,12 +501,13 @@ class AssistantService {
     if (!conversation) {
       conversation = await AssistantConversation.create({
         companyId, adminId, personName: admin.name || "", role: admin.roleName || admin.roleKey || admin.type || "", screen,
+        title: String(asked || "").replace(/\s+/g, " ").trim().slice(0, 60),
       });
     }
     const costMicros = usage ? ai.costMicros(model, usage) : 0;
     const message = await AssistantMessage.create({
       companyId, conversationId: conversation._id, adminId,
-      question: asked, answer: answer || "", citations, links, proposals, screen, errorCode,
+      question: asked, answer: answer || "", citations, links, proposals, tables, screen, errorCode,
       outcome, reason: String(reason || "").slice(0, 2000), rounds, toolCalls,
       provider, model, usage: usage || undefined, costMicros, ms: Date.now() - started,
     });
@@ -520,6 +563,7 @@ class AssistantService {
       dailyTokenCap: s.dailyTokenCap, perPersonHourlyCap: s.perPersonHourlyCap, maxRounds: s.maxRounds,
       timeoutSeconds: s.timeoutSeconds,
       actionsEnabled: Boolean(s.actionsEnabled),
+      lookupsEnabled: s.lookupsEnabled !== false,
       hasApiKey: Boolean(s.apiKeyEnc),
       usesOurKey: !s.apiKeyEnc && Boolean(env.ASSISTANT_API_KEY),
       // The open model: what this organisation set, and whether the installation offers one it can
@@ -585,6 +629,7 @@ class AssistantService {
     }
     if (body.enabled !== undefined) s.enabled = Boolean(body.enabled);
     if (body.actionsEnabled !== undefined) s.actionsEnabled = body.actionsEnabled === true;
+    if (body.lookupsEnabled !== undefined) s.lookupsEnabled = body.lookupsEnabled === true;
     if (body.effort !== undefined) s.effort = body.effort;
     for (const [field, [lo, hi]] of Object.entries(numbers)) {
       if (body[field] === undefined) continue;
@@ -689,8 +734,48 @@ class AssistantService {
     const rows = await AssistantMessage.find({ adminId })
       .sort({ createdAt: -1 })
       .limit(Math.min(Number(limit) || 20, 100))
-      .select("question answer citations links proposals outcome screen errorCode helpful createdAt conversationId");
+      .select("question answer citations links proposals tables outcome screen errorCode helpful createdAt conversationId");
     return rows;
+  }
+
+  /** The person's own earlier chats, newest first. Nobody else's: the adminId is the person's own, always. */
+  static async conversations(req, { limit = 30 } = {}) {
+    const admin = req.admin || {};
+    const adminId = String(admin._id || admin.id || "");
+    const rows = await AssistantConversation.find({ adminId }).sort({ lastAskedAt: -1 }).limit(Math.min(Number(limit) || 30, 100)).lean();
+    const untitled = rows.filter((r) => !r.title).map((r) => r._id);
+    const firsts = untitled.length
+      ? await AssistantMessage.aggregate([{ $match: { conversationId: { $in: untitled }, adminId } }, { $sort: { createdAt: 1 } }, { $group: { _id: "$conversationId", q: { $first: "$question" } } }])
+      : [];
+    const first = new Map(firsts.map((f) => [String(f._id), f.q]));
+    return rows.map((r) => ({
+      id: String(r._id),
+      title: r.title || String(first.get(String(r._id)) || "Chat").replace(/\s+/g, " ").trim().slice(0, 60),
+      questions: r.questions || 0,
+      lastAskedAt: r.lastAskedAt,
+    }));
+  }
+
+  /** One of the person's own chats, oldest message first. Someone else's is a plain 404. */
+  static async conversation(req, id) {
+    const admin = req.admin || {};
+    const adminId = String(admin._id || admin.id || "");
+    if (!mongoose.isValidObjectId(id) || !(await AssistantConversation.exists({ _id: id, adminId }))) throw new AppError("Conversation not found", 404, "CONVERSATION_NOT_FOUND");
+    return AssistantMessage.find({ conversationId: id, adminId })
+      .sort({ createdAt: 1 })
+      .select("question answer citations links proposals tables outcome screen errorCode helpful createdAt conversationId")
+      .lean();
+  }
+
+  /** Delete one of the person's own chats and its messages. The day's usage counts stay: they are what was spent. */
+  static async forgetConversation(req, id) {
+    const admin = req.admin || {};
+    const adminId = String(admin._id || admin.id || "");
+    if (!mongoose.isValidObjectId(id)) throw new AppError("Conversation not found", 404, "CONVERSATION_NOT_FOUND");
+    const gone = await AssistantConversation.deleteOne({ _id: id, adminId });
+    if (!gone.deletedCount) throw new AppError("Conversation not found", 404, "CONVERSATION_NOT_FOUND");
+    await AssistantMessage.deleteMany({ conversationId: id, adminId });
+    return { deleted: true };
   }
 
   /** What the assistant has cost and how often it could not answer. */

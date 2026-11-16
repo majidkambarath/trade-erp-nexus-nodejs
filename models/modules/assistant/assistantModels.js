@@ -35,6 +35,9 @@ const settingsSchema = new mongoose.Schema(
     // Off until an administrator switches it on: with it on, the names and amounts of the person's own
     // vendors, customers and items are sent to the AI service so it can prepare a payment or an invoice.
     actionsEnabled: { type: Boolean, default: false },
+    // Looking things up in the organisation's own books (unpaid vendors, stock, cash, sales). On by default:
+    // the figures never go to the AI service, only the question does (services/assistant/dataTools.js).
+    lookupsEnabled: { type: Boolean, default: true },
     // How long one call may take before the question is answered with "something went wrong".
     timeoutSeconds: { type: Number, default: 60, min: 10, max: 180 },
     effort: { type: String, enum: EFFORTS, default: "medium" },
@@ -60,6 +63,8 @@ const conversationSchema = new mongoose.Schema(
     // Where it started. A conversation can wander, but the first screen is what the question was
     // usually about, and it is what the analysis groups by.
     screen: { type: String, default: "" },
+    // The first question, cut short: what the history list shows.
+    title: { type: String, default: "", maxlength: 80 },
     questions: { type: Number, default: 0 },
     escalations: { type: Number, default: 0 },
     lastAskedAt: { type: Date, default: Date.now },
@@ -87,6 +92,9 @@ const messageSchema = new mongoose.Schema(
     // The documents this answer PREPARED, as the exact body the normal route takes. `savedAs` is filled
     // when the person confirms one, so a reopened panel never offers the same payment twice.
     proposals: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    // What a lookup showed: { title, rows: [{ label, sub, value, tone }], total, more, link }. Written by the
+    // server from the books, never by the model, so a reopened panel shows the same figures.
+    tables: { type: [mongoose.Schema.Types.Mixed], default: [] },
     provider: { type: String, default: "" },
     model: { type: String, default: "" },
     usage: {

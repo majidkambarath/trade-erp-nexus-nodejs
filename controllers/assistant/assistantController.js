@@ -18,6 +18,18 @@ exports.mine = catchAsync(async (req, res) => {
   res.status(200).json({ success: true, data });
 });
 
+exports.conversations = catchAsync(async (req, res) => {
+  res.status(200).json({ success: true, data: await AssistantService.conversations(req) });
+});
+
+exports.conversation = catchAsync(async (req, res) => {
+  res.status(200).json({ success: true, data: await AssistantService.conversation(req, req.params.id) });
+});
+
+exports.forgetConversation = catchAsync(async (req, res) => {
+  res.status(200).json({ success: true, data: await AssistantService.forgetConversation(req, req.params.id) });
+});
+
 // What this screen is about, so the panel can open with something useful before anything is asked.
 exports.screenTip = catchAsync(async (req, res) => {
   const screen = String(req.query.screen || "");
@@ -29,6 +41,7 @@ exports.screenTip = catchAsync(async (req, res) => {
       suggestions: corpus.suggestionsFor(screen),
       // Whether Zarvia AI can prepare payments and invoices for THIS person, so the panel offers examples.
       actions: await AssistantService.actionsAvailable(req),
+      lookups: await AssistantService.lookupsAvailable(req),
     },
   });
 });

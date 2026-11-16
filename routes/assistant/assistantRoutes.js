@@ -17,6 +17,10 @@ const reason = "in-app help: every signed-in person may ask, whatever their role
 
 router.post("/ask", signedIn(reason), c.ask);
 router.get("/mine", signedIn(reason), c.mine);
+const own = "the person's own earlier chats only: every read and delete is matched on their own id, and another person's is a plain 404";
+router.get("/conversations", signedIn(own), c.conversations);
+router.get("/conversations/:id", signedIn(own), c.conversation);
+router.delete("/conversations/:id", signedIn(own), c.forgetConversation);
 router.get("/screen", signedIn(reason), c.screenTip);
 router.post("/messages/:id/helpful", signedIn(reason), c.rate);
 router.post("/escalate", signedIn(reason), c.escalate);

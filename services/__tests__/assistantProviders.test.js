@@ -411,6 +411,10 @@ test("an open model's failures are the same error codes as Claude's", async () =
   await assert.rejects(fail(401), (e) => e.code === "PROVIDER_AUTH" && e.retryable === false);
   await assert.rejects(fail(429, { "retry-after": "7" }), (e) => e.code === "PROVIDER_RATE_LIMITED" && e.retryAfterMs === 7000);
   await assert.rejects(fail(404), (e) => e.code === "AI_REQUEST_INVALID");
+  // Groq's 400 when the model wrote a malformed tool call: the model's slip, worth one more try - not our request being wrong
+  const slip = openai.complete({ messages: [{ role: "user", content: "q" }], model: "m" }, { baseUrl: "https://h.example/v1", fetchImpl: fakeFetch({ error: { message: "Failed to call a function.", type: "invalid_request_error", code: "tool_use_failed" } }, { status: 400 }) });
+  await assert.rejects(slip, (e) => e.code === "PROVIDER_TOOL_FAILED" && e.retryable === true);
+  await assert.rejects(fail(400), (e) => e.code === "AI_REQUEST_INVALID" && e.retryable === false, "any other 400 is still our request");
   await assert.rejects(fail(503), (e) => e.code === "PROVIDER_UNREACHABLE" && e.retryable === true);
   await assert.rejects(fail(302), (e) => e.code === "AI_REQUEST_INVALID" && /redirect/.test(e.message));
   // 200 with an error body, and 200 with something that is not JSON (an address missing /v1)

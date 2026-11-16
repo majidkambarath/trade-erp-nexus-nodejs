@@ -17,7 +17,10 @@ before; this is an additional, cheaper path.
 documents**, below, and then the names and amounts of the vendors, customers, items and bills a
 question is about are sent too.)
 
-Zarvia AI answers from the product's own help guides only. It reads no invoices, balances, or other
+**Looking things up in the books** (below) is on by default and sends no figures: the AI service is told
+only which lookup to run, and Zarvia writes the answer from the books itself.
+
+Zarvia AI answers from the product's own help guides. Apart from the lookups below, it reads no invoices, balances or other
 business records (`services/assistant/toolkit.js` has no database query at all - a test asserts it).
 What leaves the building, per question: the question itself, the person's name and role, the
 organisation's name, the screen they are on, and the help-guide text the search found. A free model's
@@ -134,6 +137,47 @@ How it works (`services/assistant/actionTools.js`, `utils/assistantProposals.js`
 - "Change details" opens the normal payment, receipt or expense screen already filled in.
 - Nothing is saved when it is prepared, and a card can be confirmed once (the answer remembers it).
 
+## Looking things up in the books ("list unpaid vendors")
+
+A person asks for a figure or a list from their own books and gets a sentence plus a small table, with a button to the
+full report. Five lookups (`services/assistant/dataTools.js`, pure rules `utils/assistantData.js`):
+
+| Lookup | Answers | Read through | Offered to a person holding any of |
+|---|---|---|---|
+| `unpaid_bills` | unpaid vendors, or one vendor's open bills; overdue only | `AgeingService.openInvoices` (payable) | `purchase.view`, `accounts.view`, `finance.view` |
+| `unpaid_invoices` | the same for customers | `AgeingService.openInvoices` (receivable) | `sales.view`, `accounts.view`, `finance.view` |
+| `stock_levels` | one item's quantity, or what is at or below its reorder level | `StockService.getAllStock` | `inventory.view` |
+| `cash_and_bank` | every cash and bank account's balance | `PaymentModeService.options` | `banking.view`, `finance.view`, `accounts.view` |
+| `trade_totals` | sales or purchases for a period, by customer or vendor | `TradeReportsService.summary` | `reports.view` and `sales.view` / `purchase.view` for that kind |
+
+- **The figures never go to the AI service.** The model chooses the lookup and the words ("vendors", "Al Noor",
+  "this_month"); the server runs it as the signed-in person (their organisation, branch and role, exactly what their
+  screens show) and writes the answer and the table. The model is never sent the rows: a round made only of lookups
+  ends with the server's words, a mixed round tells the model `{shown_to_person: true}`, and the conversation history
+  replaces an earlier lookup's answer with "(I looked this up ... showed the figures in a table.)". The HTTP test
+  scans everything the fake model received for bill numbers and amounts.
+- **On by default** (`AssistantSettings.lookupsEnabled`), because nothing from the books leaves; an administrator can
+  switch it off under Settings -> Zarvia AI -> Answer from your books.
+- A name that fits two parties is CHOICES, never a guess (`services/assistant/partyLookup.js`, shared with preparing
+  documents). At most 15 rows are shown, the total is of all of them, and "and N more" says how many were left out.
+- The table is stored on the message (`AssistantMessage.tables`), so a reopened panel shows the same figures.
+- A period word is the organisation's own calendar (`periodOf`): today, yesterday, this/last week (Monday first),
+  this/last month, this/last quarter, this/last year, never past today.
+
+### Profit, the balance sheet, the whole position and stock alerts
+
+`profit_and_loss` (a period), `balance_sheet` (as at today), `business_snapshot` ("how are we doing") and `stock_alerts`
+(out of stock, below the reorder level, batches that expired or expire within 30 days) follow the same rule: the server
+reads the report and writes the answer and the table, with headline tiles above the lines. The three statements need
+`reports.financial`.
+
+### Earlier chats, and adding a customer or a vendor
+
+Every person's chats are kept and listed (History in the panel); only the person's own can be read or deleted.
+With "Prepare payments and invoices" on, `prepare_customer` and `prepare_vendor` prepare a new customer or vendor on a card
+and the person's own browser saves it through the normal route. A vendor's address, which the route requires, is asked for
+on the card.
+
 ## The free plan's real limit: tokens per minute
 
 Measured live on 16 Nov 2026: Groq's free plan allows **8,000 tokens a minute** for gpt-oss-120b (the header
@@ -153,8 +197,8 @@ the limit: that is what a paid key, or Claude, is for.
   service" covers them with a typed address.
 - A per-provider cost table for open models (`costMicros` reads 0 for any model it does not know,
   which is the right answer for a free model, but a paid open-model host's figures are not priced in).
-- Reading business data to answer questions ("what does Al Noor owe us?"). The only business data it touches is
-  what it needs to prepare a document, and only when an administrator switched that on.
+- Lookups beyond the five above: profit, VAT, one invoice's detail, a statement, an item's movements. The model is told
+  to say where in Zarvia each is shown.
 - Preparing a cheque or card payment, a credit note, a purchase bill or a document in a foreign currency.
 
 ## Tests

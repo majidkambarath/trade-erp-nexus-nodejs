@@ -57,7 +57,7 @@ Prices, VAT and totals come from the server. An approved document cannot be edit
 
 ### Accounting effect
 
-Approving a sales order debits the customer for the total including VAT, credits Sales revenue (gross), Output VAT and Freight recovered, and debits Sales discounts given. It also debits Cost of goods sold and credits Inventory at the weighted average cost. The receipt later debits cash or bank and credits the customer. See the companion document for the exact lines.
+Approving a sales order debits the customer for the total including VAT, credits Sales revenue (gross), Output VAT and Freight recovered, and debits Sales discounts given (the reports show that as a deduction from revenue). It also debits Cost of goods sold and credits Inventory at the weighted average cost. The receipt later debits cash or bank and credits the customer. See the companion document for the exact lines.
 
 ### Exceptions and how to correct
 

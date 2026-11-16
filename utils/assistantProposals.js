@@ -38,6 +38,36 @@ function rankByName(items, query, nameOf = (x) => x.name, idOf = (x) => x._id) {
   return { choices: ordered.slice(0, MAX_CHOICES).map((x) => ({ id: String(idOf(x)), name: String(nameOf(x)) })), more: Math.max(0, best.length - MAX_CHOICES) };
 }
 
+/**
+ * A new customer or vendor: the exact body the normal create route takes. The model needs a contact person, and a
+ * vendor an address; the contact defaults to the name (it is who we deal with until somebody says otherwise), and a
+ * missing vendor address is asked for on the card, never invented.
+ */
+function partyBody(kind, { name, contactPerson, phone, email, address, trn } = {}) {
+  const clean = (v, max = 200) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+  const n = clean(name, 100);
+  const contact = clean(contactPerson, 100) || n;
+  const body = kind === "vendor"
+    ? { vendorName: n, contactPerson: contact, address: clean(address, 500), email: clean(email), phone: clean(phone, 20).replace(/[\s-]/g, ""), trnNO: clean(trn, 30) }
+    : { customerName: n, contactPerson: contact, billingAddress: clean(address, 500), email: clean(email), phone: clean(phone, 20).replace(/[\s-]/g, ""), trnNumber: clean(trn, 30) };
+  for (const k of Object.keys(body)) if (body[k] === "") delete body[k];
+  const missing = kind === "vendor" && !body.address ? ["address"] : [];
+  return { body, missing };
+}
+
+/** The lines a new-party card shows, from the body, leaving out what was not given. */
+function partyLines(kind, body) {
+  const rows = [
+    [kind === "vendor" ? "Vendor" : "Customer", body.vendorName || body.customerName],
+    ["Contact person", body.contactPerson],
+    ["Phone", body.phone],
+    ["Email", body.email],
+    ["Address", body.address || body.billingAddress],
+    ["Tax number", body.trnNO || body.trnNumber],
+  ];
+  return rows.filter(([, v]) => v);
+}
+
 /** A positive money amount with at most two decimals. A figure typed with commas ("5,000.50") is read as 5000.5. */
 function checkAmount(value) {
   const text = typeof value === "string" ? value.replace(/[,\s]/g, "") : value;
@@ -219,7 +249,7 @@ function proposalLines(kind, d, currency = "") {
 
 const METHOD_LABEL = { cash: "Cash", bank: "Bank", transfer: "Bank transfer" };
 
-const ACTION_WORDS = /\b(pay|paid|paying|payment|receive|received|receipt|invoice|invoiced|bill|expense|spent|spend|record|transfer|settle|settled)\b/i;
+const ACTION_WORDS = /\b((add|create|new|register)\s+(a\s+|an\s+|new\s+)?(customer|client|vendor|supplier)|pay|paid|paying|payment|receive|received|receipt|invoice|invoiced|bill|expense|spent|spend|record|transfer|settle|settled)\b/i;
 const HELP_OPENERS = /^(how|what|why|where|when|which|can|could|is|are|does|do|explain)\b/i;
 
 /**
@@ -235,6 +265,6 @@ function looksLikeAction(question) {
 
 module.exports = {
   rankByName, checkAmount, checkDate, allocateOldestFirst, normaliseMode, modeFields,
-  paymentBody, receiptBody, expenseBody, invoiceBody, proposalLines, METHOD_LABEL, looksLikeAction,
+  paymentBody, receiptBody, expenseBody, invoiceBody, proposalLines, partyBody, partyLines, METHOD_LABEL, looksLikeAction,
   CASH_LIKE, REFERENCE_MODES, SUPPORTED_MODES, MAX_CHOICES, round2,
 };

@@ -33,6 +33,9 @@ const SCRIPT = {
   EXPENSE: { name: "prepare_expense", args: { account: "zeta fuel", amount: 150, description: "Fuel for the van" } },
   EXPENSEBARE: { name: "prepare_expense", args: { account: "zeta fuel", amount: 80 } },
   INVOICE: { name: "prepare_invoice", args: { customer: "harbour", lines: [{ item: "milk", qty: 10 }] } },
+  NEWCUST: { name: "prepare_customer", args: { name: "Blue Sea Trading", phone: "050 123 4567", address: "Dubai Marina" } },
+  NEWVEND: { name: "prepare_vendor", args: { name: "Desert Steel", phone: "0509998877" } },
+  NEWDUP: { name: "prepare_customer", args: { name: "harbour cafe" } },
 };
 const fake = http.createServer((req, res) => {
   let raw = "";
@@ -333,6 +336,43 @@ test("a reply in the same conversation sees the earlier turns, so 'the second on
   // someone else's conversation id gives them nothing
   await ask("viewer", "hello", { conversationId: first.body.conversationId });
   assert.ok(!seen.at(-1).body.messages.some((m) => String(m.content || "").includes("PAYAMBIG")), "a conversation is one person's own");
+});
+
+test("a new customer and a new vendor are prepared, nothing is written, and the same body creates them through the normal routes", { skip }, async () => {
+  const Customer = require("../../models/modules/customerModel");
+  const Vendor = require("../../models/modules/vendorModel");
+  const before = await stack.as(ORG, async () => ({ c: await Customer.countDocuments({}), v: await Vendor.countDocuments({}) }));
+
+  const c = await ask("owner", "NEWCUST add a customer called Blue Sea Trading, phone 050 123 4567");
+  assert.equal(c.body.outcome, "answered", JSON.stringify(c.body));
+  assert.ok(toolNames().includes("prepare_customer") && toolNames().includes("prepare_vendor"));
+  const cp = c.body.proposals[0];
+  assert.deepEqual([cp.kind, cp.endpoint, cp.missing], ["customer", "party", []]);
+  assert.deepEqual(cp.body, { customerName: "Blue Sea Trading", contactPerson: "Blue Sea Trading", billingAddress: "Dubai Marina", phone: "0501234567" });
+  assert.match(c.body.answer, /^I have prepared a new customer, Blue Sea Trading\. Check the details below/);
+
+  const v = await ask("owner", "NEWVEND create vendor Desert Steel");
+  const vp = v.body.proposals[0];
+  assert.deepEqual([vp.kind, vp.missing], ["vendor", ["address"]], "a vendor needs an address: asked for on the card, never invented");
+  assert.match(v.body.answer, /Enter the address on the card first/);
+
+  const after = await stack.as(ORG, async () => ({ c: await Customer.countDocuments({}), v: await Vendor.countDocuments({}) }));
+  assert.deepEqual(after, before, "preparing wrote nothing");
+
+  const madeC = await as("owner", "POST", "/customers", cp.body, { "X-Prepared-By": "zarvia-ai" });
+  assert.equal(madeC.status, 201, madeC.text);
+  const madeV = await as("owner", "POST", "/vendors/vendors", { ...vp.body, address: "Industrial Area 3" }, { "X-Prepared-By": "zarvia-ai" });
+  assert.equal(madeV.status, 201, madeV.text);
+  const now = await stack.as(ORG, async () => ({ c: await Customer.countDocuments({}), v: await Vendor.countDocuments({}) }));
+  assert.deepEqual(now, { c: before.c + 1, v: before.v + 1 });
+});
+
+test("a name that already exists is not prepared again, and a Viewer is never offered the tools", { skip }, async () => {
+  const dup = await ask("owner", "NEWDUP add a customer called harbour cafe");
+  assert.equal(dup.body.proposals.length, 0);
+  assert.match(dup.body.answer, /There is already a customer called Harbour Cafe/);
+  await ask("viewer", "NEWCUST add a customer");
+  assert.deepEqual(toolNames().filter((n) => n.startsWith("prepare_")), []);
 });
 
 test("switching it off again takes the tools away", { skip }, async () => {

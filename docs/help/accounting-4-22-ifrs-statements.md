@@ -79,7 +79,7 @@ Table 49. How the accounts that need attention are classified (computed with the
 | Source data | The ledger profit and loss (section 4.2), then the name rules. |
 | Period and filters | from, to, compare. |
 | Calculation | Revenue, cost of sales and other income are those of the ledger profit and loss. Each expense account outside the direct costs is tested in this order: income tax; depreciation and amortisation; finance costs; otherwise operating expenses. • Gross profit = revenue - cost of sales. • **Operating profit** = gross profit + other income - operating expenses - depreciation and amortisation. • **Profit before tax** = operating profit - finance costs. • **Profit for the period** = profit before tax - income tax. • Other comprehensive income is zero (none is recognised); total comprehensive income = profit for the period. |
-| Included and excluded | With the default chart, Bank Charges is a finance cost (it matches 'bank charges'); Card Processing Fees is an operating expense. Sales Discounts Given is an operating expense. |
+| Included and excluded | With the default chart, Bank Charges is a finance cost (it matches 'bank charges'); Card Processing Fees is an operating expense. Sales Discounts Given is taken out of revenue, as in the profit and loss. |
 | Controls and reconciliations | The profit for the period equals the ledger profit and loss net profit for the same days and the legacy statement. |
 | Output columns and exports | API: revenue, costOfSales, grossProfit, otherIncome, operatingExpenses, depreciationAndAmortisation, operatingProfit, financeCosts, profitBeforeTax, incomeTaxExpense, profitForPeriod, otherComprehensiveIncome, totalComprehensiveIncome; each with amount and comparative. |
 
