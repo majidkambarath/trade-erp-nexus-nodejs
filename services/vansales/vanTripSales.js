@@ -279,17 +279,28 @@ class VanTripSales {
     const trip = await loadTrip(tripId);
     if (!isId(customerId)) throw fail("Choose a customer", 400, "CUSTOMER_REQUIRED");
     const stock = await stockOf(trip);
+    const onVan = new Map([...stock.sellable].map(([k, v]) => [String(k), Number(v) || 0]));
+    return { ...(await this.history(customerId, onVan)), position: await this.customerPosition(customerId) };
+  }
+
+  /** The history half of the insight (no money owed): the last order, usual items and what they stopped buying, cut to `onVan` (a Map). */
+  static async history(customerId, onVan) {
     const docs = await Transaction.find({ partyId: customerId, type: "sales_order", status: "APPROVED", isOpening: { $ne: true } })
       .sort({ date: -1, _id: -1 }).limit(12).select("transactionNo date items.itemId items.qty items.itemType").lean();
+    // goods sent back come off the invoice they were returned against: a customer who returned an item did not "buy" it
+    const back = docs.length
+      ? await Transaction.find({ type: "sales_return", status: "APPROVED", "returnOf.transactionId": { $in: docs.map((d) => d._id) } }).select("returnOf.transactionId items.itemId items.qty").lean()
+      : [];
+    const returned = new Map();
+    for (const r of back) for (const l of r.items || []) { const k = `${r.returnOf.transactionId}:${l.itemId}`; returned.set(k, (returned.get(k) || 0) + (Number(l.qty) || 0)); }
     const ids = new Set();
     for (const d of docs) for (const l of d.items || []) if (l.itemId && l.itemType !== "service") ids.add(String(l.itemId));
-    const names = new Map((await Stock.find({ _id: { $in: [...ids] } }).select("itemName").lean()).map((s) => [String(s._id), s.itemName]));
+    const names = new Map((await Stock.find({ _id: { $in: [...ids] } }).select("itemName").lean()).map((x) => [String(x._id), x.itemName]));
     const invoices = docs.map((d) => ({
       number: d.transactionNo, date: d.date,
-      lines: (d.items || []).filter((l) => l.itemType !== "service").map((l) => ({ stockId: String(l.itemId), name: names.get(String(l.itemId)) || "", qty: l.qty })),
+      lines: (d.items || []).filter((l) => l.itemType !== "service").map((l) => ({ stockId: String(l.itemId), name: names.get(String(l.itemId)) || "", qty: Number(l.qty) - (returned.get(`${d._id}:${l.itemId}`) || 0) })).filter((l) => l.qty > 0),
     }));
-    const onVan = new Map([...stock.sellable].map(([k, v]) => [String(k), Number(v) || 0]));
-    return { ...rules.customerInsight({ invoices, onVan }), position: await this.customerPosition(customerId) };
+    return rules.customerInsight({ invoices, onVan });
   }
 
   /**
@@ -312,12 +323,17 @@ class VanTripSales {
       const map = await PriceListService.pricesFor({ customerId: c._id, routeId: trip.routeId, items: items.map((s) => ({ stockId: s._id, qty: 1, itemPrice: Number(s.salesPrice) || 0 })) });
       prices[String(c._id)] = Object.fromEntries([...map].map(([k, p]) => [k, p.price]));
     }
+    // what each of the route's customers usually buys, for the Sell dialog with no signal (as of the time the pack was read)
+    const held = new Map([...stock.sellable].map(([k, v]) => [String(k), Number(v) || 0]));
+    const insight = {};
+    for (const c of customers.slice(0, 60)) insight[String(c._id)] = await this.history(c._id, held);
     const used = new Set((await Transaction.find({ transactionNo: { $in: trip.numberBlock || [] } }).select("transactionNo").lean()).map((t) => t.transactionNo));
     return {
       at: new Date().toISOString(),
       trip: shown,
       customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "" })),
       prices,
+      insight,
       freeNumbers: (trip.numberBlock || []).filter((n) => !used.has(n)),
       // the offers, so a slip printed with no signal shows what the server will give (it applies them again on sync)
       promotions: await PromotionService.live(),

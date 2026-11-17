@@ -533,7 +533,8 @@ function customerInsight({ invoices = [], onVan } = {}) {
 function kpis(a = {}) {
   const n = (v) => Number(v) || 0;
   return {
-    dropSize: n(a.invoices) ? round2(n(a.sales) / n(a.invoices)) : null,
+    // before VAT when the caller has it (the owner compares drops with the profit report, which is net of VAT)
+    dropSize: n(a.invoices) ? round2(n(a.netSales ?? a.sales) / n(a.invoices)) : null,
     linesPerCall: n(a.productive) ? round2(n(a.lines) / n(a.productive)) : null,
     strikeRate: n(a.calls) ? Math.round((n(a.productive) / n(a.calls)) * 1000) / 10 : null,
     costPerDrop: n(a.invoices) ? round2(n(a.expenses) / n(a.invoices)) : null,
