@@ -31,6 +31,9 @@ const FEATURES = {
   // works against us. A per-organisation override is the kill switch for one client, not the way
   // it is sold. Every plan gets it, trial included.
   assistant: { label: "Zarvia AI assistant", paths: ["/assistant"] },
+  // The Attachments panel on a sales or purchase invoice form (customer order, signed delivery note, proof of delivery). On in every
+  // plan that has trade documents; a client that does not file such papers has it switched off by an override.
+  invoiceAttachments: { label: "Files on sales and purchase invoices", paths: [] },
 };
 const FEATURE_KEYS = Object.keys(FEATURES);
 
@@ -92,7 +95,7 @@ const PLANS = {
   trial: {
     name: "Trial",
     trialDays: 14,
-    features: only("quotations", "deliveryNotes", "batches", "assistant"),
+    features: only("quotations", "deliveryNotes", "batches", "assistant", "invoiceAttachments"),
     modules: ALL_MODULES,
     limits: { users: 3, branches: 1, documentsPerMonth: 200, employees: 10 },
   },
@@ -101,7 +104,7 @@ const PLANS = {
   // HR is sold the same way, and for the same reason.
   standard: {
     name: "Standard",
-    features: only("quotations", "deliveryNotes", "batches", "banking", "currencies", "vatReturn", "messaging", "assistant"),
+    features: only("quotations", "deliveryNotes", "batches", "banking", "currencies", "vatReturn", "messaging", "assistant", "invoiceAttachments"),
     modules: modulesExcept(["crm", "hr"]),
     limits: { users: 10, branches: 3, documentsPerMonth: 2000, employees: 25 },
   },
@@ -116,7 +119,7 @@ const PLANS = {
   // read it. Add the modules back one at a time for a customer who grows into them.
   trading: {
     name: "Trade only",
-    features: only("quotations", "deliveryNotes", "batches", "messaging", "assistant"),
+    features: only("quotations", "deliveryNotes", "batches", "messaging", "assistant", "invoiceAttachments"),
     modules: modulesExcept(["finance", "banking", "accounts", "audit", "crm", "hr"], { reports: ["view"] }),
     limits: { users: 10, branches: 2, documentsPerMonth: 2000, employees: 25 },
   },
