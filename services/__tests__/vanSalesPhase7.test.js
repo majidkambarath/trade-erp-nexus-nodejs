@@ -24,6 +24,7 @@ test.before(async () => {
     Sales: require("../vansales/vanTripSales"),
     Settle: require("../vansales/vanTripSettlement"),
     Visits: require("../vansales/vanVisitService"),
+    Promos: require("../vansales/promotionService"),
     Report: require("../vansales/vanSalesReportService"),
     Chart: require("../financial/defaultChartService"),
     Customer: require("../../models/modules/customerModel"),
@@ -72,7 +73,7 @@ test("at the door: the last order, the usual items and what they owe, cut to wha
   assert.deepEqual([blank.usual, blank.notLately], [[], []]);
   const sell = (customer, items) => svc.Sales.sell(trip._id, { customerId: customer._id, items: items.map(([s, qty]) => ({ itemId: s._id, qty, vatPercent: 0 })) }, by());
   await sell(A, [[rice, 5]]);
-  await sell(A, [[rice, 3], [sugar, 2]]);
+  const second = (await sell(A, [[rice, 3], [sugar, 2]])).invoice;
   const r = await svc.Sales.insight(trip._id, A._id);
   assert.deepEqual(r.lastOrder.lines.map((l) => [l.name, l.qty]).sort(), [["Rice 5kg", 3], ["Sugar 10kg", 2]], "the latest invoice, by item name");
   assert.equal(r.lastOrder.lines.find((l) => l.name === "Rice 5kg").onVan, 32, "40 loaded less 8 sold");
@@ -80,6 +81,15 @@ test("at the door: the last order, the usual items and what they owe, cut to wha
   assert.equal(r.position.owed, 5 * 20 + 3 * 20 + 2 * 30, "what they owe comes from the books");
   assert.equal((await svc.Sales.insight(trip._id, B._id)).lastOrder, null, "another customer's history never shows");
   await assert.rejects(() => svc.Sales.insight(trip._id, "nope"), { code: "CUSTOMER_REQUIRED" });
+  // what they sent back is not "bought": the 3 rice returned against the second invoice come off it
+  await svc.Sales.returnGoods(trip._id, { customerId: A._id, returnOfId: second._id, lines: [{ itemId: rice._id, qty: 3, condition: "good" }] }, by());
+  const after = await svc.Sales.insight(trip._id, A._id);
+  assert.deepEqual(after.lastOrder.lines.map((l) => [l.name, l.qty]), [["Sugar 10kg", 2]], "the returned rice is no longer on their last order");
+  assert.deepEqual(after.usual, [], "rice now counts once, and one invoice of two is not usual");
+  // the offline pack carries the same history for the route's customers (no money owed: that is read live)
+  const pack = await svc.Sales.offlinePack(trip._id);
+  assert.deepEqual(pack.insight[String(A._id)].lastOrder.lines.map((l) => l.name), ["Sugar 10kg"]);
+  assert.equal(pack.insight[String(A._id)].position, undefined);
 });
 
 test("the trip carries the van's targets and says how far along it is", { skip }, async () => {
@@ -100,18 +110,21 @@ test("the trip carries the van's targets and says how far along it is", { skip }
   assert.equal((await svc.Van.get(van.id)).dailySalesTarget, 9999);
 });
 
-test("the owner's figures tie to the invoices: drop size, lines per call, cost per drop and sales by day", { skip }, async () => {
-  await svc.Settle.unload(trip._id, { lines: [{ stockId: String(rice._id), countedGood: 22, countedDamaged: 0 }, { stockId: String(sugar._id), countedGood: 8, countedDamaged: 0 }] }, "tester");
+test("the owner's figures tie to the invoices: drop size before VAT, sold lines only, target days and sales by day", { skip }, async () => {
+  // a sale with 5% VAT, and a promotion that gives a free rice with every 5: the free line must not widen the basket
+  await svc.Promos.create({ name: "Free rice with 5", kind: "bxgy", stockIds: [String(rice._id)], buyQty: 5, freeQty: 1 }, "tester");
+  await svc.Sales.sell(trip._id, { customerId: B._id, items: [{ itemId: rice._id, qty: 5, vatPercent: 5 }] }, by());
+  await svc.Settle.unload(trip._id, { lines: [{ stockId: String(rice._id), countedGood: 19, countedDamaged: 0 }, { stockId: String(sugar._id), countedGood: 8, countedDamaged: 0 }] }, "tester");
   const day = new Date().toISOString().slice(0, 10);
   const r = await svc.Report.summary({ from: day, to: day });
-  assert.deepEqual([r.total.invoices, r.total.lines, r.total.sales], [3, 4, 420]);
-  assert.equal(r.total.dropSize, 140, "420 over 3 invoices");
-  assert.equal(r.total.linesPerCall, 2, "4 lines over 2 productive calls");
+  assert.deepEqual([r.total.invoices, r.total.lines, r.total.sales, r.total.netSales], [4, 5, 525, 520], "the free line is not counted, and 105 less its 5 VAT is 100");
+  assert.equal(r.total.dropSize, 130, "520 before VAT over 4 invoices, not 525");
+  assert.equal(r.total.linesPerCall, 2.5, "5 sold lines over 2 productive calls");
   assert.equal(r.total.strikeRate, 100);
   assert.equal(r.total.costPerDrop, 0, "no road expenses were taken");
   assert.equal(r.byDay.length, 1);
-  assert.deepEqual([r.byDay[0].day, r.byDay[0].sales, r.byDay[0].invoices], [day, 420, 3]);
+  assert.deepEqual([r.byDay[0].day, r.byDay[0].sales, r.byDay[0].invoices], [day, 525, 4]);
   const row = r.bySalesman[0];
-  assert.deepEqual([row.invoices, row.lines, row.dropSize], [3, 4, 140]);
-  assert.deepEqual([r.rows[0].salesTarget, r.rows[0].targetHit, row.targetDays, row.targetTrips], [250, true, 1, 1], "the trip's own copy of the target (250, not the 9999 the van has now)");
+  assert.deepEqual([row.invoices, row.lines, row.dropSize], [4, 5, 130]);
+  assert.deepEqual([r.rows[0].salesTarget, r.rows[0].targetHit, row.targetDays, row.daysWithTarget], [250, true, 1, 1], "the trip's own copy of the target (250, not the 9999 the van has now), judged by the day");
 });

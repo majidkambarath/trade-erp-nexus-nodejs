@@ -238,6 +238,7 @@ test("customerInsight: the last order, the usual items and what they stopped buy
 test("kpis: drop size, lines per call, strike rate and cost per drop are null with nothing to divide by", () => {
   assert.deepEqual(v.kpis({ sales: 1000, invoices: 4, lines: 10, calls: 5, productive: 4, expenses: 60 }), { dropSize: 250, linesPerCall: 2.5, strikeRate: 80, costPerDrop: 15 });
   assert.deepEqual(v.kpis({}), { dropSize: null, linesPerCall: null, strikeRate: null, costPerDrop: null });
+  assert.equal(v.kpis({ sales: 1050, netSales: 1000, invoices: 4 }).dropSize, 250, "the average drop is before VAT when the net figure is known");
 });
 
 test("targets: blank is no target, a bad one is refused, progress caps nothing but says what is left", () => {
