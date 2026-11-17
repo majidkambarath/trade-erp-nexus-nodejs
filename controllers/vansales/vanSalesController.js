@@ -138,6 +138,10 @@ exports.recordVisit = catchAsync(async (req, res) => {
   ok(res, { visit: v, trip: await VanTripService.getById(req.params.tripId) }, 201);
 });
 exports.visits = catchAsync(async (req, res) => ok(res, await VanVisitService.forTrip(req.params.tripId)));
+exports.insight = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanTripSales.insight(req.params.tripId, req.params.customerId));
+});
 exports.prices = catchAsync(async (req, res) => ok(res, await VanTripSales.prices(req.params.tripId, req.query.customerId)));
 exports.transfer = catchAsync(async (req, res) => {
   const { from, to } = await VanTripService.transfer(req.params.tripId, req.body || {}, by(req));

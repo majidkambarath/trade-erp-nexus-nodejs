@@ -60,8 +60,14 @@ class VanTripService {
     const sum = (rows) => rules.round2(rows.reduce((t, v) => t + (Number(v.totalAmount) || 0), 0));
     const salesTotal = rules.round2(s.invoices.reduce((t, i) => t + (Number(i.totalAmount) || 0), 0));
     const returnsTotal = rules.round2(s.returns.reduce((t, i) => t + (Number(i.totalAmount) || 0), 0));
-    const van = await Van.findById(trip.vanId).select("cashLimit").lean();
+    const van = await Van.findById(trip.vanId).select("cashLimit dailySalesTarget dailyCallsTarget").lean();
     const cashLimit = van?.cashLimit ?? null;
+    // the day's targets: the ones copied when the trip opened, else (an older trip) the van's current ones
+    const target = plain.target && (plain.target.sales != null || plain.target.calls != null)
+      ? { sales: plain.target.sales ?? null, calls: plain.target.calls ?? null }
+      : van && (van.dailySalesTarget != null || van.dailyCallsTarget != null) ? { sales: van.dailySalesTarget ?? null, calls: van.dailyCallsTarget ?? null } : null;
+    const tripVisits = await require("../../models/modules/vansales/vanVisitModel").find({ tripId: trip._id }).select("customerId").lean();
+    const callCount = rules.calls({ buyers: s.invoices.map((i) => String(i.partyId)), visited: tripVisits.map((v) => String(v.customerId)) });
     const spent = await Voucher.find({ "vanTripRef.tripId": trip._id, voucherType: "expense", status: "approved" }).select("totalAmount").lean();
     const expenses = sum(spent);
     let route = [];
@@ -99,6 +105,10 @@ class VanTripService {
         expenses,
         cashInHand: rules.round2(sum(live.filter((v) => v.paymentMode === "cash")) - expenses),
         km: rules.kmRun(plain.odometer),
+        calls: callCount.calls,
+        productive: callCount.productive,
+        target,
+        progress: rules.targetProgress({ sales: salesTotal, calls: callCount.calls, target }),
       },
     };
   }
@@ -164,6 +174,7 @@ class VanTripService {
     const [trip] = await VanTrip.create(
       [{
         tripNo, vanId: van._id, vanCode: van.code, vanName: van.name, cashAccountId: van.cashAccountId,
+        ...(van.dailySalesTarget != null || van.dailyCallsTarget != null ? { target: { sales: van.dailySalesTarget ?? null, calls: van.dailyCallsTarget ?? null } } : {}),
         routeId: routeId || null, routeName, salesmanId, salesmanName, date: asDay(day),
         notes: String(input.notes || "").slice(0, 500), status: "LOADING", companyId, branchId, createdBy: String(by), updatedBy: String(by),
       }],

@@ -271,6 +271,28 @@ class VanTripSales {
   }
 
   /**
+   * What the salesman should know at this customer's door: the last order, what they usually buy, what they used to
+   * buy and have stopped, and what they owe - all from their own approved invoices, all cut to what is on the van now.
+   * Read-only; nothing is stored. The salesman sees it only for a trip they may work (the controller checks).
+   */
+  static async insight(tripId, customerId) {
+    const trip = await loadTrip(tripId);
+    if (!isId(customerId)) throw fail("Choose a customer", 400, "CUSTOMER_REQUIRED");
+    const stock = await stockOf(trip);
+    const docs = await Transaction.find({ partyId: customerId, type: "sales_order", status: "APPROVED", isOpening: { $ne: true } })
+      .sort({ date: -1, _id: -1 }).limit(12).select("transactionNo date items.itemId items.qty items.itemType").lean();
+    const ids = new Set();
+    for (const d of docs) for (const l of d.items || []) if (l.itemId && l.itemType !== "service") ids.add(String(l.itemId));
+    const names = new Map((await Stock.find({ _id: { $in: [...ids] } }).select("itemName").lean()).map((s) => [String(s._id), s.itemName]));
+    const invoices = docs.map((d) => ({
+      number: d.transactionNo, date: d.date,
+      lines: (d.items || []).filter((l) => l.itemType !== "service").map((l) => ({ stockId: String(l.itemId), name: names.get(String(l.itemId)) || "", qty: l.qty })),
+    }));
+    const onVan = new Map([...stock.sellable].map(([k, v]) => [String(k), Number(v) || 0]));
+    return { ...rules.customerInsight({ invoices, onVan }), position: await this.customerPosition(customerId) };
+  }
+
+  /**
    * Everything the phone keeps for working with no signal, read in one go while it still has some: the trip and what is
    * on the van, the customers it may sell to (the route's, plus any the salesman searched for), each one's prices for
    * what is on the van, and the reserved invoice numbers not used yet. Stamped with the time it was read, which the
