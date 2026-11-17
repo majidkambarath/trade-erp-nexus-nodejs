@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.5.1.0 — 18 November 2026
+
+Van sales figures fixes. Frontend and backend both at 3.5.1.0.
+
+### Fixed
+
+- `dropSize` is before VAT (`netSales`), `lines` excludes price-0 free lines, and `targetDays` / `daysWithTarget` are per day, not per trip.
+- A customer's insight takes returned goods off the invoice they came back against.
+
+### Added
+
+- The offline pack carries `insight[customerId]` (last order, usual items, not lately) for up to 60 route customers.
+
 ## 3.5.0.0 — 17 November 2026
 
 Van sales phase 7. Frontend and backend both at 3.5.0.0.
