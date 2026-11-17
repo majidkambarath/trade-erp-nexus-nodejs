@@ -29,6 +29,8 @@ const JobCardLinks = require("../garage/jobCardLinks");
 const ShareService = require("../messaging/shareService");
 const ItemKindService = require("../stock/itemKindService");
 const Admin = require("../../models/core/adminModel");
+const VatRegistrationService = require("../financial/vatRegistrationService");
+const vatRule = require("../../utils/vatRegistration");
 const kinds = require("../../utils/itemKinds");
 const orgLocale = require("../../utils/orgLocale");
 const { listPeriod, condition: periodCondition } = require("../../utils/listPeriod");
@@ -109,15 +111,23 @@ function calculateItems(items) {
 // Prices a whole document on the server: lines, header charges, header discount, round-off.
 // Returns what to store. A client-supplied total only survives as a small explicit round-off;
 // anything further from the computed total is ignored.
-async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date }, session) {
-  const withTax = await TaxCodeService.applyToItems(items, date, { session });
+// `side` says which way the document faces: "sales" (a sale, its return, an offer, a delivery) or "purchase". It matters only to a UAE
+// organisation, whose VAT registration decides what may be charged (utils/vatRegistration.js):
+//   - not registered, selling: no VAT at all. Every line and charge is out of scope at 0%, whatever the form sent.
+//   - not registered, buying: the supplier's tax code and rate stay (a supplier may still charge 5%), and the document is stamped so its
+//     posting treats that VAT as part of the cost - it cannot be claimed back.
+// The answer comes back as `vatRegistered` for the caller to stamp on the document; it is undefined where the rule does not apply.
+async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date, side }, session) {
+  const vat = side ? await VatRegistrationService.stateOn(date, { session }) : { governs: false, registered: true };
+  const noVat = vat.governs && !vat.registered && side === "sales";
+  const withTax = noVat ? await TaxCodeService.forceNoVat(items, { session }) : await TaxCodeService.applyToItems(items, date, { session });
   // each line learns from the item master whether it is goods or a service (never from the request): a service line
   // is priced and taxed like any other but moves no stock (utils/itemKinds.js)
   const processedItems = await ItemKindService.stamp(calculateItems(withTax), { session });
   const pricedCharges = (charges || [])
     .filter((c) => Number(c.amount) > 0)
     .map((c) => {
-      const p = priceCharge(c);
+      const p = priceCharge(noVat ? { ...c, vatPercent: 0 } : c);
       return { code: c.code, description: c.description, amount: p.net, vatPercent: p.vatPercent, vatAmount: p.vat };
     });
   const pricing = priceDocument(
@@ -127,8 +137,11 @@ async function buildPricing({ items, charges = [], discount = 0, incomingTotal, 
     pricedCharges.map((c) => ({ net: c.amount, vat: c.vatAmount })),
     { headerDiscount: discount, incomingTotal }
   );
-  return { processedItems, charges: pricedCharges, pricing, totalAmount: pricing.grandTotal };
+  return { processedItems, charges: pricedCharges, pricing, totalAmount: pricing.grandTotal, vatRegistered: vat.governs ? vat.registered : undefined };
 }
+
+// Which way a document type faces (see buildPricing)
+const sideOfType = (type) => (String(type || "").startsWith("sales_") ? "sales" : String(type || "").startsWith("purchase_") ? "purchase" : undefined);
 
 // ---------- Service ----------
 class TransactionService {
@@ -228,7 +241,7 @@ class TransactionService {
       const pricedInput = await ReturnService.inheritReverseCharge({ type, returnOf: data.returnOf, items }, { session });
       const built = await buildPricing(
         // a line id sent with a new document belongs to some other document: every line here gets its own
-        { items: pricedInput.map(({ _id, ...line }) => line), charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date() },
+        { items: pricedInput.map(({ _id, ...line }) => line), charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date(), side: sideOfType(type) },
         session
       );
       // Returns: validated against the original (quantities and value), then the line links are kept.
@@ -256,6 +269,7 @@ class TransactionService {
         totalAmount: finalTotalAmount, // computed on the server
         charges: built.charges,
         pricing: built.pricing,
+        vatRegistered: built.vatRegistered, // undefined (not stamped) outside the UAE
         returnOf,
         attachments: data.attachments || [],
         vendorReference,
@@ -341,6 +355,7 @@ class TransactionService {
       delete data.closedShort;
       delete data.lastSend; // written only when a send settles (services/messaging)
       delete data.approvals; // written only by an approval
+      delete data.vatRegistered; // written only when the server prices the document (buildPricing); a body cannot choose it
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
@@ -363,9 +378,11 @@ class TransactionService {
             discount: data.discount ?? transaction.discount,
             incomingTotal: data.totalAmount,
             date: data.date || transaction.date,
+            side: sideOfType(transaction.type),
           },
           session
         );
+        data.vatRegistered = built.vatRegistered;
         const checked = await ReturnService.validate(
           {
             type: transaction.type,
@@ -805,7 +822,7 @@ const logAmount = balanceEffect;
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
         "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
-        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals jobCardRef tradeOrderRef";
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals jobCardRef tradeOrderRef vatRegistered";
       const [docs, total] = await Promise.all([
         Transaction.find(query).select(FIELDS).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
         Transaction.countDocuments(query),
@@ -917,8 +934,10 @@ const logAmount = balanceEffect;
 
       // VAT-exclusive value of the line. lineTotal is VAT-inclusive (calculateItems), so this is
       // correct whichever of price / rate the form filled in.
+      // ...unless the organisation was not registered for VAT when it bought: the VAT it paid cannot be claimed back, so it is part of
+      // what the goods cost (the same document's posting folds it into Inventory too: PostingService.postTransaction).
       const documentedCost = costing.roundValue(
-        (Number(item.lineTotal) || 0) - (Number(item.vatAmount) || 0)
+        (Number(item.lineTotal) || 0) - (vatRule.vatIsCost(transaction) ? 0 : Number(item.vatAmount) || 0)
       );
       // A return linked to its original restores stock at what the goods cost when sold.
       let cogsRate;

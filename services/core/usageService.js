@@ -10,6 +10,7 @@ const Transaction = require("../../models/modules/transactionModel");
 const Staff = require("../../models/modules/staffModel");
 const AppError = require("../../utils/AppError");
 const plans = require("../../utils/plans");
+const VatRegistrationService = require("../financial/vatRegistrationService");
 const { getTenant } = require("../../utils/tenant");
 const { DEFAULT_TENANT, legacyDefaultEnabled, allBranches } = require("../../utils/tenantContext");
 
@@ -120,6 +121,9 @@ class UsageService {
   static async status(org, now = new Date(), who = {}) {
     const usage = await this.current(org, now);
     const limits = plans.effectiveLimits(org);
+    // Whether the organisation is registered for VAT today (UAE organisations only). It decides what the forms offer, whether the
+    // VAT return exists, and whether a document is a tax invoice. A failure to read it must never take the status screen down.
+    const vat = await VatRegistrationService.stateOn(now).catch(() => ({ governs: false, registered: true, from: null }));
     const branches = await Branch.find({ isActive: true }).sort({ isHeadOffice: -1, name: 1 }).select("code name isHeadOffice").lean();
     const here = who.tenant?.branchId || "main";
     const mine = branches.find((b) => b.code === here);
@@ -141,7 +145,10 @@ class UsageService {
       support: { contact: process.env.SUPPORT_CONTACT || process.env.SUPPORT_EMAIL || null },
       organisation: { code: org.code, legalName: org.legalName, country: org.country, baseCurrency: org.baseCurrency, timezone: org.timezone, dateFormat: org.dateFormat || "DD/MM/YYYY", planCode: org.planCode, demo: org.demo === true, planName: plans.PLANS[org.planCode]?.name || org.planCode },
       subscription: plans.subscriptionState(org, now),
-      features: countryFeatures(org), // the plan's, less what does not apply in the organisation's country (utils/countryRules.js)
+      // the plan's, less what does not apply in the organisation's country (utils/countryRules.js), and no VAT return for an
+      // organisation that is not registered for VAT
+      features: { ...countryFeatures(org), ...(vat.governs && !vat.registered ? { vatReturn: false } : {}) },
+      vatRegistration: { governs: vat.governs, registered: vat.registered, from: vat.from },
       // The modules the organisation bought, so a screen can say "not included in your plan" instead of blaming the
       // person's role. What they may do inside them is still me.grants, which is already capped to this.
       modules: plans.effectiveModules(org),

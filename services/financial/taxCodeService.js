@@ -88,6 +88,23 @@ class TaxCodeService {
     return (session ? q.session(session) : q).lean();
   }
 
+  // The code a line carries when VAT does not apply to it at all: the organisation's own active "out of scope" code, else none (the line
+  // is then marked out of scope by kind and carries no code - nothing is created behind the organisation's back).
+  static async noVatCode(companyId, { session } = {}) {
+    const q = TaxCode.findOne({ companyId, kind: "out_of_scope", isActive: true }).sort({ name: 1 }).lean();
+    return (session ? q.session(session) : q);
+  }
+
+  // An organisation that is not registered for VAT charges none: every line is out of scope at 0%, whatever the form sent, so a
+  // stale tab, a script or a form that forgot cannot put VAT on an invoice the company has no right to charge.
+  static async forceNoVat(items, { session, companyId } = {}) {
+    const code = await this.noVatCode(companyId || getTenant().companyId, { session });
+    return items.map((item) => {
+      const { taxCodeId: _was, ...rest } = item;
+      return { ...rest, ...(code ? { taxCodeId: code._id } : {}), vatPercent: 0, taxKind: "out_of_scope" };
+    });
+  }
+
   // Lines that name a tax code get their VAT % from it (as in force on the document date) and
   // keep a snapshot of the kind, so a later change to the code never restates a posted document.
   // Lines without one keep the vatPercent they sent - UNLESS they sent no rate at all (not even an
