@@ -108,11 +108,16 @@ test("the routes that need no permission are few, and each says why", () => {
     "routes/einvoice/einvoiceRoutes.js  POST /inbound/webhook",
     "routes/einvoice/einvoiceRoutes.js  POST /inbound/webhook/:org",
     "routes/messaging/shareRoutes.js  GET /:token",
-    // The customer's estimate: one photograph of their own car, and the one WRITE a stranger can make
+    // The customer's estimate: one photograph of their own car, and a WRITE a stranger can make
     // in this API - approving or declining the work. Both open only for a link whose secret verifies,
     // both refuse anything the snapshot does not name, and the write is rate-limited per link on top.
     "routes/messaging/shareRoutes.js  GET /:token/photo/:attachmentId",
+    "routes/messaging/shareRoutes.js  GET /:token/van",
     "routes/messaging/shareRoutes.js  POST /:token/estimate-decision",
+    // A van invoice's page (van sales phase 6, GET /:token/van above): the customer's own statement and next visit, and the other
+    // write - asking for goods on that visit, which makes only a DRAFT order for the salesman. Both 404 for any link
+    // that is not a van invoice, read only that customer's figures, and the write has the estimate's per-link limit.
+    "routes/messaging/shareRoutes.js  POST /:token/van-request",
     "routes/messaging/shareRoutes.js  POST /:token/viewed",
   ], "the whole list of routes anyone may call without signing in: adding one is a decision, made here");
   // a person's own profile and the status route (8), the five routes of a person's own two-factor (routes/core/authRoutes.js:

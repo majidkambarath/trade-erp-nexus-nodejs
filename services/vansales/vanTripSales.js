@@ -149,7 +149,8 @@ class VanTripSales {
       if (!isId(input.preorderId)) throw fail("That pre-order does not exist", 404, "PREORDER_NOT_FOUND");
       preorder = await TradeOrder.findById(input.preorderId).session(session);
       if (!preorder || preorder.kind !== "sales" || String(preorder.partyId) !== String(customer._id)) throw fail("That pre-order is not this customer's", 404, "PREORDER_NOT_FOUND");
-      if (preorder.status !== "CONFIRMED") throw fail(`${preorder.orderNo} is ${String(preorder.status).toLowerCase()}, so it has nothing left to deliver`, 409, "PREORDER_NOT_OPEN");
+      const asked = preorder.status === "DRAFT" && preorder.source?.kind === "customer_link"; // the customer's own request
+      if (preorder.status !== "CONFIRMED" && !asked) throw fail(`${preorder.orderNo} is ${String(preorder.status).toLowerCase()}, so it has nothing left to deliver`, 409, "PREORDER_NOT_OPEN");
     }
 
     // the friendly message first; vanTripGuard repeats it as the lock when the invoice is approved

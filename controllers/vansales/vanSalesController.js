@@ -10,6 +10,7 @@ const VanSalesReportService = require("../../services/vansales/vanSalesReportSer
 const VanVisitService = require("../../services/vansales/vanVisitService");
 const PriceListService = require("../../services/vansales/priceListService");
 const { loadTrip } = require("../../services/vansales/vanTripStock");
+const VanCrmService = require("../../services/vansales/vanCrmService");
 
 const by = (req) => req.admin?.id || "system";
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
@@ -97,6 +98,8 @@ exports.sell = catchAsync(async (req, res) => {
   assertMayAcknowledge(req);
   const { invoice, receipt } = await VanTripSales.sell(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
   await AuditService.log({ req, action: "VAN_SALE", entity: "VanTrip", entityId: req.params.tripId, summary: `${invoice.transactionNo} sold on the van${receipt ? `, ${receipt.voucherNo} received` : ""}`, after: { invoice: invoice.transactionNo } });
+  // after the sale committed, never able to fail it: the call on the customer's CRM timeline
+  await VanCrmService.record("sale", { tripId: req.params.tripId, customerId: invoice.partyId, refId: invoice._id, ref: invoice.transactionNo, total: invoice.totalAmount, by: by(req) });
   ok(res, { invoice, receipt, trip: await VanTripService.getById(req.params.tripId) }, 201);
 });
 exports.collect = catchAsync(async (req, res) => {
@@ -131,6 +134,7 @@ exports.settle = catchAsync(async (req, res) => {
 exports.recordVisit = catchAsync(async (req, res) => {
   await assertMayWork(req);
   const v = await VanVisitService.record(req.params.tripId, req.body || {}, by(req), req.admin?.name);
+  await VanCrmService.record("visit", { tripId: req.params.tripId, customerId: v.customerId, refId: v._id, reason: v.reason, note: v.note, by: by(req) });
   ok(res, { visit: v, trip: await VanTripService.getById(req.params.tripId) }, 201);
 });
 exports.visits = catchAsync(async (req, res) => ok(res, await VanVisitService.forTrip(req.params.tripId)));
@@ -182,6 +186,13 @@ exports.sync = catchAsync(async (req, res) => {
   if (acknowledging) assertMayAcknowledge({ ...req, body: { acknowledged: true } });
   const VanSyncService = require("../../services/vansales/vanSyncService");
   const out = await VanSyncService.sync(req.params.tripId, req.body?.ops, by(req), { req, mayUnderprice: holds(req, "vansales.manage"), byName: req.admin?.name });
+  // what the phone did offline lands on the CRM timeline too, once (a repeat was written the first time it came in)
+  const byClient = new Map((req.body?.ops || []).map((o) => [String(o?.clientId || ""), o]));
+  for (const r of out.results.filter((x) => x.ok && !x.repeat)) {
+    const op = byClient.get(r.clientId);
+    if (op?.kind === "sell") await VanCrmService.record("sale", { tripId: req.params.tripId, customerId: op.body?.customerId, refId: r.result?.invoiceId, ref: r.result?.invoiceNo, total: r.result?.total, by: by(req) });
+    if (op?.kind === "visit") await VanCrmService.record("visit", { tripId: req.params.tripId, customerId: op.body?.customerId, refId: r.result?.visitId, reason: op.body?.reason, note: op.body?.note, by: by(req) });
+  }
   if (out.applied) await AuditService.log({ req, action: "VAN_SYNCED", entity: "VanTrip", entityId: req.params.tripId, summary: `${out.applied} done with no signal sent from the van${out.refused ? `, ${out.refused} refused` : ""}` });
   ok(res, { ...out, trip: await VanTripService.getById(req.params.tripId) });
 });

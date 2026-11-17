@@ -22,6 +22,7 @@ const PaymentModeService = require("../banking/paymentModeService");
 const ChartOfAccountsService = require("../financial/chartOfAccountsService");
 const TaxCodeService = require("../financial/taxCodeService");
 const { getTenant } = require("../../utils/tenant");
+const van = require("./vanTools");
 
 const MAX_PROPOSALS_PER_TURN = 3;
 const MAX_INVOICE_LINES = 20;
@@ -170,10 +171,10 @@ const mayUse = (def, req) => roles.can(grantsOf(req), def.needs[0]) && (!def.nee
 /** The tools to OFFER this person right now: none unless the organisation switched actions on, and only those they hold the keys for. */
 function definitionsFor(req, settings) {
   if (!settings?.actionsEnabled) return [];
-  return DEFINITIONS.filter((d) => mayUse(d, req)).map(({ needs, needsAny, ...def }) => def);
+  return [...DEFINITIONS.filter((d) => mayUse(d, req)).map(({ needs, needsAny, ...def }) => def), ...van.prepareDefinitions(req)];
 }
 
-const names = () => DEFINITIONS.map((d) => d.name);
+const names = () => [...DEFINITIONS.map((d) => d.name), ...van.PREPARE.map((d) => d.name)];
 const isActionTool = (name) => names().includes(name);
 
 // ---- lookups, all through the product's own services --------------------------------------------
@@ -372,6 +373,16 @@ async function prepareInvoice(input, ctx) {
 /** Run one action tool for this person. Always resolves to { ok, data } or { ok: false, error }: a refusal is a result, not a throw. */
 async function run(name, input, ctx, settings) {
   if (!settings?.actionsEnabled) return refused("Preparing documents is switched off for this organisation.");
+  if (van.isPrepare(name)) {
+    if (!roles.canAny(grantsOf(ctx.req), ["vansales.sell"])) return refused("Your role cannot do that. Ask an administrator.");
+    const room = needRoom(ctx);
+    if (room) return refused(room);
+    try {
+      return await van.prepareSale(input && typeof input === "object" ? input : {}, ctx, push);
+    } catch (err) {
+      return refused(`That did not work: ${String(err?.message || err).slice(0, 160)}. Nothing was prepared.`);
+    }
+  }
   const def = DEFINITIONS.find((d) => d.name === name);
   if (!def) return refused(`There is no tool called ${name}.`);
   if (!mayUse(def, ctx.req)) return refused("Your role cannot do that. Ask an administrator.");

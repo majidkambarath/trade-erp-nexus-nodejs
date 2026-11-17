@@ -71,7 +71,8 @@ class VanPlanningService {
   /** Open pre-orders for a route (every branch's van may deliver one), oldest first. */
   static async preordersForRoute(routeId, { customerId } = {}) {
     if (!isId(routeId)) return [];
-    const q = { "source.routeId": routeId, status: "CONFIRMED", kind: "sales" };
+    // confirmed orders the salesman took, and DRAFT requests the customer sent through their own link
+    const q = { "source.routeId": routeId, kind: "sales", $or: [{ status: "CONFIRMED" }, { status: "DRAFT", "source.kind": "customer_link" }] };
     if (isId(customerId)) q.partyId = customerId;
     const rows = await TradeOrder.find(q).sort({ expectedDate: 1, createdAt: 1 }).limit(300).lean();
     const names = new Map((await Customer.find({ _id: { $in: rows.map((r) => r.partyId) } }).select("customerName").lean()).map((c) => [String(c._id), c.customerName]));

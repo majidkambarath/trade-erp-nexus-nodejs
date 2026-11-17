@@ -110,9 +110,14 @@ class VanTripSettlement {
     const expenses = round2(spent.filter((v) => v.status === "approved").reduce((t, v) => t + Number(v.totalAmount || 0), 0));
     const pendingExpenses = spent.filter((v) => v.status === "pending");
     const expected = round2(live.filter((v) => v.paymentMode === "cash").reduce((t, v) => t + Number(v.totalAmount || 0), 0) - expenses);
-    const cheques = live
-      .filter((v) => v.paymentMode === "cheque")
-      .map((v) => ({ chequeNo: v.paymentDetails?.chequeDetails?.chequeNumber || v.voucherNo, amount: round2(v.totalAmount) }));
+    // the cheques, with what a bank deposit slip needs (drawn on, from whom, dated): the register keeps those
+    const { Cheque } = require("../../models/modules/banking/bankingModels");
+    const chequeVouchers = live.filter((v) => v.paymentMode === "cheque");
+    const register = new Map((await Cheque.find({ voucherId: { $in: chequeVouchers.map((v) => v._id) } }).select("voucherId chequeNo drawnOnBankName partyName chequeDate").session(session || null).lean()).map((c) => [String(c.voucherId), c]));
+    const cheques = chequeVouchers.map((v) => {
+      const c = register.get(String(v._id));
+      return { chequeNo: c?.chequeNo || v.paymentDetails?.chequeDetails?.chequeNumber || v.voucherNo, amount: round2(v.totalAmount), bank: c?.drawnOnBankName || "", from: c?.partyName || "", date: c?.chequeDate || null, voucherNo: v.voucherNo };
+    });
 
     const handed = input.cashHanded === undefined || input.cashHanded === "" ? expected : Number(input.cashHanded);
     if (!Number.isFinite(handed)) throw fail("Enter the cash handed in", 400, "CASH_REQUIRED");
