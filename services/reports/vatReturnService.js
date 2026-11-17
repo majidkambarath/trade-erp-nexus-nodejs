@@ -92,11 +92,13 @@ class VatReturnService {
     const lines = [];
 
     const docs = await Transaction.find({ status: "APPROVED", isOpening: { $ne: true }, date: { $gte: start, $lte: end } })
-      .select("transactionNo type date partyId partyType items charges")
+      .select("transactionNo type date partyId partyType items charges vatRegistered")
       .lean();
     const OUT = { sales_order: 1, sales_return: -1 };
     const IN = { purchase_order: 1, purchase_return: -1 };
     for (const d of docs) {
+      // made while the organisation was not registered for VAT: no VAT was charged and none can be claimed, so it is not in the return
+      if (d.vatRegistered === false) continue;
       const direction = d.type in OUT ? "output" : d.type in IN ? "input" : null;
       if (!direction) continue;
       const sign = (OUT[d.type] ?? IN[d.type]);
