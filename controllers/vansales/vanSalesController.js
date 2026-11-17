@@ -7,6 +7,8 @@ const VanTripService = require("../../services/vansales/vanTripService");
 const VanTripSales = require("../../services/vansales/vanTripSales");
 const VanTripSettlement = require("../../services/vansales/vanTripSettlement");
 const VanSalesReportService = require("../../services/vansales/vanSalesReportService");
+const VanVisitService = require("../../services/vansales/vanVisitService");
+const PriceListService = require("../../services/vansales/priceListService");
 const { loadTrip } = require("../../services/vansales/vanTripStock");
 
 const by = (req) => req.admin?.id || "system";
@@ -93,7 +95,7 @@ exports.cancel = catchAsync(async (req, res) => {
 exports.sell = catchAsync(async (req, res) => {
   await assertMayWork(req);
   assertMayAcknowledge(req);
-  const { invoice, receipt } = await VanTripSales.sell(req.params.tripId, req.body || {}, by(req), { req });
+  const { invoice, receipt } = await VanTripSales.sell(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
   await AuditService.log({ req, action: "VAN_SALE", entity: "VanTrip", entityId: req.params.tripId, summary: `${invoice.transactionNo} sold on the van${receipt ? `, ${receipt.voucherNo} received` : ""}`, after: { invoice: invoice.transactionNo } });
   ok(res, { invoice, receipt, trip: await VanTripService.getById(req.params.tripId) }, 201);
 });
@@ -123,6 +125,49 @@ exports.settle = catchAsync(async (req, res) => {
   const { trip, plan } = await VanTripSettlement.settle(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req), { req });
   await log(req, "VAN_SETTLED", trip, `Van trip ${trip.tripNo} settled: cash ${plan.cash.handed.toFixed(2)} of ${plan.cash.expected.toFixed(2)}`, { cashVariance: plan.cash.variance, stockVarianceValue: plan.stockVarianceValue });
   ok(res, { trip: await VanTripService.getById(trip._id), plan });
+});
+
+// ---- visits, prices, transfers, price lists (phase 2) -----------------------------------------------------------
+exports.recordVisit = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const v = await VanVisitService.record(req.params.tripId, req.body || {}, by(req), req.admin?.name);
+  ok(res, { visit: v, trip: await VanTripService.getById(req.params.tripId) }, 201);
+});
+exports.visits = catchAsync(async (req, res) => ok(res, await VanVisitService.forTrip(req.params.tripId)));
+exports.prices = catchAsync(async (req, res) => ok(res, await VanTripSales.prices(req.params.tripId, req.query.customerId)));
+exports.transfer = catchAsync(async (req, res) => {
+  const { from, to } = await VanTripService.transfer(req.params.tripId, req.body || {}, by(req));
+  const units = (req.body?.lines || []).reduce((n, l) => n + (Number(l.qty) || 0), 0);
+  await log(req, "VAN_TRANSFER", from, `${units} units handed from ${from.vanCode} (${from.tripNo}) to ${to.vanCode} (${to.tripNo})`, { to: to.tripNo });
+  ok(res, { from: await VanTripService.getById(from._id), to: await VanTripService.getById(to._id) });
+});
+exports.listPriceLists = catchAsync(async (req, res) => ok(res, await PriceListService.list({ includeInactive: req.query.all === "1" })));
+exports.getPriceList = catchAsync(async (req, res) => ok(res, await PriceListService.get(req.params.listId)));
+exports.createPriceList = catchAsync(async (req, res) => {
+  const l = await PriceListService.create(req.body || {}, by(req));
+  await AuditService.log({ req, action: "PRICE_LIST_CREATED", entity: "PriceList", entityId: l.id, summary: `Price list ${l.name} added (${l.lines.length} prices)` });
+  ok(res, l, 201);
+});
+exports.updatePriceList = catchAsync(async (req, res) => {
+  const l = await PriceListService.update(req.params.listId, req.body || {}, by(req));
+  await AuditService.log({ req, action: "PRICE_LIST_UPDATED", entity: "PriceList", entityId: l.id, summary: `Price list ${l.name} changed` });
+  ok(res, l);
+});
+
+// Send the invoice to the customer on WhatsApp at the door. The messaging route asks for sales.send, which a van
+// salesman need not hold; this narrow door lets them send THEIR OWN trip's invoices and nothing else, through the very
+// same MessagingService.handoff (share link, history, the organisation's sending settings).
+exports.whatsappInvoice = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const Transaction = require("../../models/modules/transactionModel");
+  const MessagingService = require("../../services/messaging/messagingService");
+  const inv = await Transaction.findById(req.params.invoiceId).select("type status vanTripRef transactionNo").lean().catch(() => null);
+  if (!inv || inv.type !== "sales_order" || String(inv.vanTripRef?.tripId || "") !== String(req.params.tripId)) {
+    throw new AppError("That invoice was not raised on this trip", 404, "INVOICE_NOT_ON_TRIP");
+  }
+  const r = await MessagingService.handoff({ docType: "tax_invoice", sourceId: String(inv._id), phone: req.body?.phone, note: req.body?.note }, req);
+  await AuditService.log({ req, action: "VAN_INVOICE_SENT", entity: "VanTrip", entityId: req.params.tripId, summary: `${inv.transactionNo} handed to the customer on WhatsApp from the van` });
+  ok(res, r);
 });
 
 exports.summary = catchAsync(async (req, res) => ok(res, await VanSalesReportService.summary(req.query)));

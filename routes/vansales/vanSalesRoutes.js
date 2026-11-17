@@ -4,6 +4,12 @@ const { requirePermission } = require("../../middleware/permissionGate");
 const { branchOfDocument } = require("../../middleware/branchOfDocument");
 const VanTrip = require("../../models/modules/vansales/vanTripModel");
 const c = require("../../controllers/vansales/vanSalesController");
+const { requireFeature } = require("../../middleware/featureGate");
+const { rateLimit } = require("../../middleware/rateLimit");
+const { getTenant } = require("../../utils/tenant");
+
+// the same courtesy limit the messaging routes keep, in a bucket of its own
+const sendLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 120, key: (req) => getTenant(req).companyId, code: "SEND_LIMIT_REACHED", message: "A lot of documents have been sent in the last hour. Try again in a little while." });
 
 // The van sales module, mounted at /api/v1/van-sales. Every route is gated on a vansales.* permission: van sales is an
 // opt-in MODULE (utils/plans.js OPT_IN_MODULES), sold per organisation like garage, so the plan ceiling answers
@@ -24,6 +30,10 @@ router.get("/routes/:routeId", requirePermission("vansales.view"), c.getRoute);
 router.post("/routes", requirePermission("vansales.manage"), c.createRoute);
 router.put("/routes/:routeId", requirePermission("vansales.manage"), c.updateRoute);
 router.get("/assignees", requirePermission("vansales.view"), c.assignees);
+router.get("/price-lists", requirePermission("vansales.view"), c.listPriceLists);
+router.get("/price-lists/:listId", requirePermission("vansales.view"), c.getPriceList);
+router.post("/price-lists", requirePermission("vansales.manage"), c.createPriceList);
+router.put("/price-lists/:listId", requirePermission("vansales.manage"), c.updatePriceList);
 router.get("/customers", requirePermission("vansales.view"), c.customers);
 router.get("/payment-choices", requirePermission(["vansales.view", "vansales.sell"]), c.paymentChoices);
 
@@ -44,6 +54,11 @@ router.post("/trips/:tripId/load", requirePermission("vansales.load"), c.load);
 router.post("/trips/:tripId/depart", requirePermission("vansales.load"), c.depart);
 router.post("/trips/:tripId/cancel", requirePermission("vansales.load"), c.cancel);
 router.post("/trips/:tripId/sell", requirePermission("vansales.sell"), c.sell);
+router.get("/trips/:tripId/prices", requirePermission("vansales.sell"), c.prices);
+router.get("/trips/:tripId/visits", requirePermission("vansales.view"), c.visits);
+router.post("/trips/:tripId/visits", requirePermission("vansales.sell"), c.recordVisit);
+router.post("/trips/:tripId/transfer", requirePermission("vansales.load"), c.transfer);
+router.post("/trips/:tripId/invoices/:invoiceId/whatsapp", requirePermission("vansales.sell"), requireFeature("messaging"), sendLimit, c.whatsappInvoice);
 router.post("/trips/:tripId/collect", requirePermission("vansales.sell"), c.collect);
 router.post("/trips/:tripId/return", requirePermission("vansales.sell"), c.returnGoods);
 router.post("/trips/:tripId/unload", requirePermission(["vansales.load", "vansales.sell"]), c.unload);

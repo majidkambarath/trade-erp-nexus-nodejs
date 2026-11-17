@@ -77,7 +77,7 @@ class VanService {
     const base = wrap(() => rules.validateVan({ ...input, code: van.code }));
     const sales = input.salesmanId !== undefined ? await this.#salesman(input.salesmanId) : {};
     const defaultRouteId = input.defaultRouteId !== undefined ? await this.#route(input.defaultRouteId) : van.defaultRouteId;
-    van.set({ name: base.name, plate: base.plate, ...sales, defaultRouteId, updatedBy });
+    van.set({ name: base.name, plate: base.plate, ...sales, defaultRouteId, updatedBy, ...(input.cashLimit !== undefined ? { cashLimit: base.cashLimit } : {}) });
     if (typeof input.active === "boolean" && input.active !== van.active) {
       if (!input.active && (await VanTrip.exists({ vanId: van._id, status: { $in: ["LOADING", "ON_ROUTE", "UNLOADED"] } }))) {
         throw fail("This van has a trip that is not settled yet", 409, "VAN_HAS_OPEN_TRIP");
@@ -108,6 +108,10 @@ class VanService {
     if (ids.some((i) => !isId(i))) throw fail("A customer on the route is not valid", 400, "CUSTOMER_INVALID");
     const found = await Customer.find({ _id: { $in: ids } }).select("customerName").lean();
     const names = new Map(found.map((c) => [String(c._id), c.customerName]));
+    if (base.priceListId) {
+      const PriceList = require("../../models/modules/vansales/priceListModel");
+      if (!isId(base.priceListId) || !(await PriceList.exists({ _id: base.priceListId }))) throw fail("That price list does not exist", 400, "PRICE_LIST_NOT_FOUND");
+    }
     for (const c of base.customers) {
       if (!names.has(c.customerId)) throw fail("A customer on the route does not exist", 400, "CUSTOMER_NOT_FOUND");
       c.name = names.get(c.customerId); // the name as it is now, not as the form had it
@@ -151,10 +155,10 @@ class VanService {
     }
     if (String(query.status || "") !== "all") q.status = { $ne: "Inactive" };
     const limit = Math.min(500, Math.max(1, Math.round(Number(query.limit)) || 200));
-    const rows = await Customer.find(q).select("customerName customerId phone status paymentTerms").sort({ customerName: 1, _id: 1 }).limit(limit).lean();
+    const rows = await Customer.find(q).select("customerName customerId phone status paymentTerms trnNumber trnNO vat.trn").sort({ customerName: 1, _id: 1 }).limit(limit).lean();
     return rows.map((r) => ({
       id: String(r._id), name: r.customerName || "", code: r.customerId || "", phone: r.phone || "",
-      terms: r.paymentTerms || "", active: r.status !== "Inactive",
+      terms: r.paymentTerms || "", active: r.status !== "Inactive", trn: r.vat?.trn || r.trnNumber || r.trnNO || "",
     }));
   }
 

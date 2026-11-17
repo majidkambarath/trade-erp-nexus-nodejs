@@ -24,4 +24,24 @@ async function assertTripAllows(transaction, { session } = {}) {
   }
 }
 
-module.exports = { assertTripAllows };
+/**
+ * Taking back something done on a van trip (deleting or cancelling an approved invoice or return, deleting a receipt)
+ * is refused once the van has been counted back in. The count and the settlement were made against those documents:
+ * an invoice taken back now would return goods to the books that no van holds, and a receipt taken back would empty a
+ * van cash account that has already been handed in. While the van is still out it is allowed, and the goods simply
+ * count as on the van again. The correction after counting in is a new document (a sales return, a new receipt).
+ */
+async function assertNotCountedIn(doc, { session } = {}) {
+  const ref = doc?.vanTripRef;
+  if (!ref?.tripId) return;
+  const q = VanTrip.findById(ref.tripId).select("tripNo status");
+  const trip = await (session ? q.session(session) : q);
+  if (trip && ["UNLOADED", "SETTLED"].includes(trip.status)) {
+    throw new AppError(
+      `This was done on van trip ${trip.tripNo}, which has been counted back in. Correct it with a new document (a return or a receipt) instead.`,
+      409, "VAN_TRIP_SETTLED", { tripNo: trip.tripNo, status: trip.status }
+    );
+  }
+}
+
+module.exports = { assertTripAllows, assertNotCountedIn };

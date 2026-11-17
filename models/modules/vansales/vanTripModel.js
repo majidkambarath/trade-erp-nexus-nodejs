@@ -12,7 +12,7 @@ const loadLine = new mongoose.Schema(
   {
     stockId: { type: mongoose.Schema.Types.ObjectId, ref: "Stock", required: true },
     itemName: { type: String, trim: true, default: "" },
-    qty: { type: Number, required: true, min: 0 },
+    qty: { type: Number, required: true }, // negative only on a transfer out to another van
   },
   { _id: false }
 );
@@ -20,6 +20,8 @@ const loadLine = new mongoose.Schema(
 const loadSchema = new mongoose.Schema(
   {
     no: { type: Number, required: true }, // 1 = the first load, 2.. = top-ups
+    kind: { type: String, enum: ["load", "transfer_in", "transfer_out"], default: "load" },
+    peerTripNo: String, // the other van's trip, on a transfer
     at: { type: Date, default: Date.now },
     by: String,
     byName: String,

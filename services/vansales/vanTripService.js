@@ -59,12 +59,17 @@ class VanTripService {
     const sum = (rows) => rules.round2(rows.reduce((t, v) => t + (Number(v.totalAmount) || 0), 0));
     const salesTotal = rules.round2(s.invoices.reduce((t, i) => t + (Number(i.totalAmount) || 0), 0));
     const returnsTotal = rules.round2(s.returns.reduce((t, i) => t + (Number(i.totalAmount) || 0), 0));
+    const van = await Van.findById(trip.vanId).select("cashLimit").lean();
+    const cashLimit = van?.cashLimit ?? null;
     let route = [];
     if (trip.routeId) {
       const r = await VanRoute.findById(trip.routeId).lean();
+      const VanVisit = require("../../models/modules/vansales/vanVisitModel");
+      const visits = await VanVisit.find({ tripId: trip._id }).sort({ at: 1 }).select("customerId outcome reason at").lean();
       route = rules.routeToday(r, null, {
         sold: new Set(s.invoices.map((i) => String(i.partyId))),
         collected: new Set(live.map((v) => String(v.partyId))),
+        visited: new Map(visits.map((x) => [String(x.customerId), { outcome: x.outcome, reason: x.reason, at: x.at }])),
       });
     }
     return {
@@ -84,6 +89,8 @@ class VanTripService {
         cheques: sum(live.filter((v) => v.paymentMode === "cheque")),
         receipts: live.length,
         pendingReceipts: vouchers.filter((v) => v.status === "pending").length,
+        cashLimit,
+        cashOverLimit: rules.overCashLimit(sum(live.filter((v) => v.paymentMode === "cash")), cashLimit),
       },
     };
   }
@@ -213,6 +220,39 @@ class VanTripService {
     trip.updatedBy = String(by);
     await trip.save({ session });
     return trip;
+  });
+
+  /**
+   * Hand goods from one van to another on the road (one ran short, the other has spare). Moves nothing in the books: it
+   * is a load of minus the quantity on this trip and plus it on the other, so what is on each van follows. Only what this
+   * van can still sell can go, and only to a van that is loading or out.
+   */
+  static transfer = withTransactionSession(async (id, input, by, ...rest) => {
+    const session = rest[rest.length - 1];
+    const from = await loadTrip(id, session);
+    if (from.status !== "ON_ROUTE") throw fail("Only a van that is out can hand goods over", 409, "TRIP_NOT_ON_ROUTE");
+    if (!isId(input?.toTripId) || String(input.toTripId) === String(from._id)) throw fail("Choose the other van's trip", 400, "TRANSFER_TARGET_REQUIRED");
+    const to = await loadTrip(input.toTripId, session);
+    if (!["LOADING", "ON_ROUTE"].includes(to.status)) throw fail(`${to.vanCode} is not out, so it cannot take goods`, 409, "TRANSFER_TARGET_CLOSED");
+    let lines;
+    try {
+      lines = rules.validateLoadLines(input?.lines);
+    } catch (err) {
+      if (err instanceof rules.VanError) throw fail(err.message, 400, err.code, err.details);
+      throw err;
+    }
+    const stock = await stockOf(from, { session });
+    const short = rules.shortages(lines.map((l) => ({ itemId: l.stockId, qty: l.qty })), stock.sellable);
+    if (short.length) throw fail(`${from.vanCode} does not have that much to hand over`, 409, "VAN_STOCK_SHORT", { short });
+    const names = await this.#names(from);
+    const at = new Date();
+    from.loads.push({ no: from.loads.length + 1, kind: "transfer_out", peerTripNo: to.tripNo, at, by: String(by), lines: lines.map((l) => ({ stockId: l.stockId, itemName: names.get(l.stockId) || l.itemName, qty: -l.qty })) });
+    to.loads.push({ no: to.loads.length + 1, kind: "transfer_in", peerTripNo: from.tripNo, at, by: String(by), lines: lines.map((l) => ({ stockId: l.stockId, itemName: names.get(l.stockId) || l.itemName, qty: l.qty })) });
+    from.updatedBy = String(by);
+    to.updatedBy = String(by);
+    await from.save({ session });
+    await to.save({ session });
+    return { from, to };
   });
 
   /** Call a trip off: only while nothing has been sold, returned or collected on it. Its load simply stops counting. */

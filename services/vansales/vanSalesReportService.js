@@ -1,6 +1,7 @@
 const VanTrip = require("../../models/modules/vansales/vanTripModel");
 const Transaction = require("../../models/modules/transactionModel");
 const { Voucher } = require("../../models/modules/financial/financialModels");
+const VanVisit = require("../../models/modules/vansales/vanVisitModel");
 const AppError = require("../../utils/AppError");
 const rules = require("../../utils/vanSales");
 const { todayInOrg, addDays } = require("../../utils/documentExpiry");
@@ -19,6 +20,26 @@ class VanSalesReportService {
 
     const trips = await VanTrip.find({ date: { $gte: asDay(start), $lte: asDay(end) }, status: { $ne: "CANCELLED" } }).sort({ date: -1, _id: -1 }).lean();
     const ids = trips.map((t) => t._id);
+    const [buyerRows, visitRows] = ids.length
+      ? await Promise.all([
+          Transaction.aggregate([
+            { $match: { "vanTripRef.tripId": { $in: ids }, status: "APPROVED", type: "sales_order" } },
+            { $group: { _id: { trip: "$vanTripRef.tripId", party: "$partyId" } } },
+          ]),
+          VanVisit.aggregate([{ $match: { tripId: { $in: ids } } }, { $group: { _id: { trip: "$tripId", party: "$customerId" } } }]),
+        ])
+      : [[], []];
+    const group = (rows) => {
+      const m = new Map();
+      for (const r of rows) {
+        const k = String(r._id.trip);
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(String(r._id.party));
+      }
+      return m;
+    };
+    const buyersByTrip = group(buyerRows);
+    const visitedByTrip = group(visitRows);
     const [docs, receipts] = ids.length
       ? await Promise.all([
           Transaction.aggregate([
@@ -48,12 +69,15 @@ class VanSalesReportService {
         cheques: round2(money.get(`${k}:cheque`) || 0),
         cashVariance: t.settlement?.cashVariance ?? null,
         stockVarianceValue: t.settlement?.stockVarianceValue ?? null,
+        ...rules.calls({ buyers: buyersByTrip.get(k) || [], visited: visitedByTrip.get(k) || [] }),
       };
     });
     const roll = (key, label) => {
       const m = new Map();
       for (const r of rows) {
-        const cur = m.get(r[key]) || { id: r[key], name: r[label], trips: 0, invoices: 0, sales: 0, returned: 0, cash: 0, cheques: 0, cashVariance: 0 };
+        const cur = m.get(r[key]) || { id: r[key], name: r[label], trips: 0, invoices: 0, sales: 0, returned: 0, cash: 0, cheques: 0, cashVariance: 0, calls: 0, productive: 0 };
+        cur.calls += r.calls;
+        cur.productive += r.productive;
         cur.trips += 1;
         cur.invoices += r.invoices;
         cur.sales = round2(cur.sales + r.sales);
@@ -63,7 +87,7 @@ class VanSalesReportService {
         cur.cashVariance = round2(cur.cashVariance + (r.cashVariance || 0));
         m.set(r[key], cur);
       }
-      return [...m.values()].sort((a, b) => b.sales - a.sales);
+      return [...m.values()].map((x) => ({ ...x, strikeRate: x.calls ? Math.round((x.productive / x.calls) * 1000) / 10 : null })).sort((a, b) => b.sales - a.sales);
     };
     const total = rows.reduce(
       (t, r) => ({ trips: t.trips + 1, invoices: t.invoices + r.invoices, sales: round2(t.sales + r.sales), returned: round2(t.returned + r.returned), cash: round2(t.cash + r.cash), cheques: round2(t.cheques + r.cheques), cashVariance: round2(t.cashVariance + (r.cashVariance || 0)) }),

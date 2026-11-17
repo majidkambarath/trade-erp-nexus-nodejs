@@ -12,6 +12,7 @@ const TransactionService = require("../orderPurchase/transactionService");
 const ReturnService = require("../orderPurchase/returnService");
 const FinancialService = require("../financial/financialService");
 const AgeingService = require("../financial/ageingService");
+const PriceListService = require("./priceListService");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { todayInOrg } = require("../../utils/documentExpiry");
 const { loadTrip, stockOf } = require("./vanTripStock");
@@ -96,15 +97,27 @@ class VanTripSales {
     if (ids.some((i) => !isId(i))) throw fail("An item on the invoice is not valid", 400, "ITEM_INVALID");
     const stocks = await Stock.find({ _id: { $in: ids } }).select("itemId itemName itemType salesPrice").session(session).lean();
     const byId = new Map(stocks.map((s) => [String(s._id), s]));
+    const listed = await PriceListService.pricesFor({
+      customerId: customer._id, routeId: trip.routeId, date: input.date, session,
+      items: lines.map((l) => ({ stockId: l.itemId, qty: Number(l.qty) || 1, itemPrice: Number(byId.get(String(l.itemId))?.salesPrice) || 0 })),
+    });
     const items = lines.map((l, i) => {
       const s = byId.get(String(l.itemId));
       if (!s) throw fail(`Line ${i + 1}: that item does not exist`, 404, "ITEM_NOT_FOUND");
       if (kinds.isService(s)) throw fail(`${s.itemName} is a service. Only stocked goods are sold from a van.`, 400, "VAN_GOODS_ONLY");
       const qty = Number(l.qty);
       if (!(qty > 0)) throw fail(`Line ${i + 1}: enter a quantity above zero`, 400, "QTY_INVALID");
+      const list = listed.get(String(s._id));
+      const typed = l.price !== undefined && l.price !== "" && l.price !== null;
+      const price = typed ? Number(l.price) : list.price;
+      if (!(price >= 0)) throw fail(`Line ${i + 1}: enter a price of zero or more`, 400, "PRICE_INVALID");
+      // selling under the customer's list is a discount the business has not agreed: only someone who manages the vans may
+      if (typed && price + 0.005 < list.price && !opts.mayUnderprice) {
+        throw fail(`${s.itemName} is ${list.price.toFixed(2)} for this customer${list.listName ? ` (${list.listName})` : ""}. Selling it for less needs a supervisor.`, 403, "PRICE_BELOW_LIST", { stockId: String(s._id), listPrice: list.price });
+      }
       return {
         itemId: s._id, itemCode: s.itemId, description: s.itemName, qty,
-        price: l.price !== undefined && l.price !== "" ? Number(l.price) : Number(s.salesPrice) || 0,
+        price,
         discountPercent: Number(l.discountPercent) || 0,
         taxCodeId: l.taxCodeId || undefined,
         vatPercent: l.vatPercent,
@@ -201,6 +214,17 @@ class VanTripSales {
     await trip.save({ session });
     return { creditNote: approved };
   });
+
+  /** What each item on the van costs THIS customer (their price list, else the route's, else the item's own price). */
+  static async prices(tripId, customerId) {
+    const trip = await loadTrip(tripId);
+    if (!isId(customerId)) throw fail("Choose a customer", 400, "CUSTOMER_REQUIRED");
+    const stock = await stockOf(trip);
+    const ids = [...stock.sellable.keys()];
+    const items = await Stock.find({ _id: { $in: ids } }).select("salesPrice").lean();
+    const map = await PriceListService.pricesFor({ customerId, routeId: trip.routeId, items: items.map((s) => ({ stockId: s._id, qty: 1, itemPrice: Number(s.salesPrice) || 0 })) });
+    return [...map].map(([stockId, p]) => ({ stockId, ...p }));
+  }
 
   /** What a customer still owes and which of their invoices can be returned against: the salesman's lookup on the road. */
   static async customerPosition(customerId) {

@@ -15,6 +15,8 @@ const routeSchema = new mongoose.Schema(
         _id: false,
       },
     ],
+    // the price list every customer on the route is sold at, unless the customer has a list of their own
+    priceListId: { type: mongoose.Schema.Types.ObjectId, ref: "PriceList", default: null },
     active: { type: Boolean, default: true },
 
     createdBy: String,

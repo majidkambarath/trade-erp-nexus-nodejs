@@ -117,6 +117,13 @@ test("a route lists its customers in visit order, only on its days, with what wa
   assert.equal(v.routeToday({ days: [], customers: [{ customerId: "c", seq: 0 }] }, 5).length, 1, "no days listed means any day");
 });
 
+test("a van over its cash limit is flagged; no limit means never over", () => {
+  assert.equal(v.overCashLimit(5000.01, 5000), true);
+  assert.equal(v.overCashLimit(5000, 5000), false);
+  assert.equal(v.overCashLimit(1e9, null), false);
+  assert.equal(v.overCashLimit(1, 0), true, "a limit of zero means hand everything in");
+});
+
 test("the trip's life only moves forward", () => {
   assert.equal(v.canMove("LOADING", "ON_ROUTE"), true);
   assert.equal(v.canMove("ON_ROUTE", "UNLOADED"), true);
@@ -127,7 +134,9 @@ test("the trip's life only moves forward", () => {
 });
 
 test("a van and a route are validated and tidied", () => {
-  assert.deepEqual(v.validateVan({ code: " van-1 ", name: "Van One", plate: "dxb 123" }), { code: "VAN-1", name: "Van One", plate: "DXB 123" });
+  assert.deepEqual(v.validateVan({ code: " van-1 ", name: "Van One", plate: "dxb 123" }), { code: "VAN-1", name: "Van One", plate: "DXB 123", cashLimit: null });
+  assert.equal(v.validateVan({ code: "V", name: "x", cashLimit: "5000" }).cashLimit, 5000);
+  assert.throws(() => v.validateVan({ code: "V", name: "x", cashLimit: -1 }), (e) => e.code === "VAN_CASH_LIMIT_INVALID");
   assert.throws(() => v.validateVan({ name: "x" }), (e) => e.code === "VAN_CODE_REQUIRED");
   assert.throws(() => v.validateVan({ code: "a b", name: "x" }), (e) => e.code === "VAN_CODE_INVALID");
   const r = v.validateRoute({ name: "North", days: [3, 1, 3, 9], customers: [{ customerId: "a" }, { customerId: "a" }, { customerId: "b" }] });

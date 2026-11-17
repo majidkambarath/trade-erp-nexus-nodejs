@@ -1923,6 +1923,8 @@ class FinancialService {
 
         // Period lock: nothing may change inside a closed fiscal year.
         await FiscalYearService.assertPostingAllowed(voucher.date, { session });
+        // a receipt (or the settlement journal) of a van trip already counted in stays: correct it with a new voucher
+        if (voucher.status === "approved") await require("../vansales/vanTripGuard").assertNotCountedIn(voucher, { session });
 
         // What the audit log keeps of the voucher, read before it is cancelled.
         const removed = {

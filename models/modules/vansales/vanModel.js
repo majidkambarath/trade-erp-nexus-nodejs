@@ -15,6 +15,8 @@ const vanSchema = new mongoose.Schema(
     salesmanName: { type: String, default: "" },
     defaultRouteId: { type: mongoose.Schema.Types.ObjectId, ref: "VanRoute", default: null },
     cashAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "LedgerAccount", default: null },
+    // the most cash the van should carry before it hands some in (null = no limit): a warning, never a refusal
+    cashLimit: { type: Number, min: 0, default: null },
     active: { type: Boolean, default: true },
 
     createdBy: String,

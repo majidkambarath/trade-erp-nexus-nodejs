@@ -216,8 +216,23 @@ function routeToday(route, weekday, done = {}) {
       customerId: idOf(c.customerId), name: c.name || "", seq: c.seq ?? 0,
       sold: Boolean(done.sold?.has?.(idOf(c.customerId))),
       collected: Boolean(done.collected?.has?.(idOf(c.customerId))),
+      visit: done.visited?.get?.(idOf(c.customerId)) || null,
     }));
 }
+
+/**
+ * The strike rate: of the customers a van called on, how many bought. A call is a customer invoiced on the trip or a
+ * visit recorded without a sale; one customer is one call however many times they were seen. Null when nobody was
+ * called on (nothing to measure is not 0%).
+ */
+function calls({ buyers = [], visited = [] }) {
+  const b = new Set(buyers.map(idOf));
+  const all = new Set([...b, ...visited.map(idOf)]);
+  return { productive: b.size, calls: all.size, strikeRate: all.size ? Math.round((b.size / all.size) * 1000) / 10 : null };
+}
+
+/** Is the cash a van carries past its limit? A limit of null or absent is no limit. */
+const overCashLimit = (cash, limit) => limit !== null && limit !== undefined && Number(limit) >= 0 && round2(cash) > round2(limit);
 
 /** May `status` move to `next`? The one place the trip's lifecycle is written down. */
 const MOVES = {
@@ -236,7 +251,13 @@ function validateVan(input = {}) {
   if (!code) throw new VanError("Give the van a short code", "VAN_CODE_REQUIRED");
   if (!/^[A-Z0-9-]{1,20}$/.test(code)) throw new VanError("The van code uses letters, digits and dashes only", "VAN_CODE_INVALID");
   if (!name) throw new VanError("Give the van a name", "VAN_NAME_REQUIRED");
-  return { code, name, plate: text(input.plate, 20).toUpperCase() };
+  let cashLimit = null;
+  if (input.cashLimit !== undefined && input.cashLimit !== null && input.cashLimit !== "") {
+    cashLimit = Number(input.cashLimit);
+    if (!Number.isFinite(cashLimit) || cashLimit < 0) throw new VanError("The cash limit is an amount of zero or more", "VAN_CASH_LIMIT_INVALID");
+    cashLimit = round2(cashLimit);
+  }
+  return { code, name, plate: text(input.plate, 20).toUpperCase(), cashLimit };
 }
 
 /** Normalise a route: a name, the weekdays it runs (0 = Sunday), and its customers in visit order. */
@@ -252,7 +273,8 @@ function validateRoute(input = {}) {
     seen.add(id);
     customers.push({ customerId: id, name: text(c.name, 150), seq: customers.length });
   }
-  return { name, days, customers };
+  const priceListId = idOf(input.priceListId) || null;
+  return { name, days, customers, priceListId };
 }
 
 module.exports = {
@@ -260,5 +282,5 @@ module.exports = {
   round2, round3, idOf,
   loadedOf, soldOf, returnedOf, onVan, onVansAll, freeDepot,
   validateLoadLines, shortages, unloadVariance, stockMoves, cashSettlement, missingCheques, routeToday,
-  canMove, validateVan, validateRoute,
+  canMove, validateVan, validateRoute, overCashLimit, calls,
 };

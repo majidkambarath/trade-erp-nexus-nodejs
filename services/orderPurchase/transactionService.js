@@ -470,6 +470,7 @@ class TransactionService {
       }
 
       const wasApproved = transaction.status === "APPROVED";
+      if (wasApproved) await require("../vansales/vanTripGuard").assertNotCountedIn(transaction, { session });
 
       // An invoice that has gone out as an e-invoice is a legal record: it is corrected with a
       // credit note, never deleted. (A failed attempt never left the building, so it does not count.)
@@ -606,6 +607,7 @@ class TransactionService {
 
       if (action === "cancel") {
         if (wasApproved) {
+          await require("../vansales/vanTripGuard").assertNotCountedIn(transaction, { session });
           await PostingService.reverseTransaction(transaction, { session });
           await this.reverseTransactionStock(
             id,
