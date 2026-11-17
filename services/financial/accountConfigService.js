@@ -244,6 +244,11 @@ class AccountConfigService {
         set[`profile.${k}`] = String(v).trim();
       }
       if (data.profile.vatRegistered !== undefined) set["profile.vatRegistered"] = Boolean(data.profile.vatRegistered);
+      if (data.profile.vatRegisteredFrom !== undefined) {
+        const from = String(data.profile.vatRegisteredFrom ?? "").trim();
+        if (from && !require("../../utils/fx").isCalendarDay(from)) throw new AppError("The registration date must be a real day (YYYY-MM-DD)", 400, "INVALID_DATE");
+        set["profile.vatRegisteredFrom"] = from;
+      }
       // the company's own tax number follows its country: a UAE TRN, an Indian GSTIN, ... (utils/partyMaster.js)
       if (set["profile.trn"]) {
         const { normalizeTrn, isValidTrn, taxIdRule } = require("../../utils/partyMaster");

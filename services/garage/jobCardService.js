@@ -360,7 +360,7 @@ class JobCardService {
       itemId: l.itemId, description: l.description, qty: l.qty, price: l.price,
       discountPercent: l.discountPercent, discountAmount: l.discountAmount, taxCodeId: l.taxCodeId,
     }));
-    const priced = await S.priceDocument({ items: pricingInput, charges: [], discount: 0, date }, { session });
+    const priced = await S.priceSalesDocument({ items: pricingInput, charges: [], discount: 0, date }, { session });
 
     const kindMap = await ItemKindService.load(priced.lines, { session });
     const vendorIds = [...new Set(items.filter((l) => l.kind === "sublet" && l.vendorId).map((l) => idOf(l.vendorId)))].filter(isId);

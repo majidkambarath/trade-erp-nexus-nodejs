@@ -3,6 +3,7 @@ const { LedgerAccount } = require("../../models/modules/financial/financialModel
 const TaxCode = require("../../models/modules/financial/taxCodeModel");
 const Transaction = require("../../models/modules/transactionModel");
 const TaxCodeService = require("./taxCodeService");
+const VatRegistrationService = require("./vatRegistrationService");
 const AccountConfigService = require("./accountConfigService");
 const { ensurePartyAccount } = require("./partyAccounts");
 const AppError = require("../../utils/AppError");
@@ -149,14 +150,17 @@ class LedgerVoucherService {
       vatAmount = vatGiven;
     }
     const total = round2(net + vatAmount);
+    // An organisation that is not registered for VAT cannot claim back what it paid: the VAT is part of the expense, not Input VAT.
+    const vatState = await VatRegistrationService.stateOn(date, { session });
+    const vatIsCost = vatState.governs && !vatState.registered && !vatOnly;
 
     const money = await PaymentModeService.resolve({
       direction: "payment", mode: paymentMode, details: data.paymentDetails || {}, amount: total, date,
       description: `Expense - ${description.trim()}`, session, req,
     });
 
-    const entries = vatOnly ? [] : [entryFor(expense, { debit: net, description: description.trim() })];
-    if (vatAmount > 0) {
+    const entries = vatOnly ? [] : [entryFor(expense, { debit: vatIsCost ? total : net, description: description.trim() })];
+    if (vatAmount > 0 && !vatIsCost) {
       const vatId = await AccountConfigService.resolveAccount("vat-purchase", { session });
       const vat = await LedgerAccount.findById(vatId).select("accountCode accountName").session(session || null);
       entries.push(entryFor(vat, { debit: vatAmount, description: `Input VAT - ${description.trim()}` }));
@@ -191,6 +195,10 @@ class LedgerVoucherService {
     if (!rawLines.length) throw new AppError("Add at least one line", 400, "LINES_REQUIRED");
     const accounts = await postableAccounts(rawLines.map((l) => l.accountId), { session });
 
+    const vatState = await VatRegistrationService.stateOn(date, { session });
+    const notRegistered = vatState.governs && !vatState.registered;
+    const supplierVatIsCost = notRegistered && partyType === "Vendor"; // a supplier's VAT cannot be claimed back: it is part of the line
+
     const noteLines = [];
     for (const [i, l] of rawLines.entries()) {
       const n = i + 1;
@@ -198,7 +206,8 @@ class LedgerVoucherService {
       const amount = num(l.amount);
       if (!(amount > 0)) throw new AppError(`Line ${n}: enter an amount`, 400, "AMOUNT_REQUIRED");
       const acc = accounts.get(String(l.accountId));
-      const v = await vatFor(l.taxCodeId, amount, date, { session, req });
+      // not registered: a note to a customer carries no VAT (nothing was charged); one from a supplier carries what it charged, as cost
+      const v = notRegistered && partyType === "Customer" ? { taxCodeId: undefined, vatPercent: 0, vatAmount: 0 } : await vatFor(l.taxCodeId, amount, date, { session, req });
       noteLines.push({
         accountId: acc._id, accountName: acc.accountName, accountCode: acc.accountCode,
         description: String(l.description || "").trim(), amount, taxCodeId: v.taxCodeId, vatPercent: v.vatPercent, vatAmount: v.vatAmount,
@@ -214,11 +223,11 @@ class LedgerVoucherService {
     for (const l of noteLines) {
       entries.push({
         accountId: l.accountId, accountName: l.accountName, accountCode: l.accountCode,
-        debitAmount: isDebit ? 0 : l.amount, creditAmount: isDebit ? l.amount : 0,
+        debitAmount: isDebit ? 0 : round2(l.amount + (supplierVatIsCost ? l.vatAmount : 0)), creditAmount: isDebit ? round2(l.amount + (supplierVatIsCost ? l.vatAmount : 0)) : 0,
         description: l.description || `${label} - ${partyName}`,
       });
     }
-    if (vatTotal > 0) {
+    if (vatTotal > 0 && !supplierVatIsCost) {
       const vatId = await AccountConfigService.resolveAccount(partyType === "Vendor" ? "vat-purchase" : "vat-sales", { session });
       const vat = await LedgerAccount.findById(vatId).select("accountCode accountName").session(session || null);
       entries.push(entryFor(vat, { [isDebit ? "credit" : "debit"]: vatTotal, description: `${partyType === "Vendor" ? "Input" : "Output"} VAT - ${label.toLowerCase()}` }));

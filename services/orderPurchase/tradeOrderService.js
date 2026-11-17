@@ -290,7 +290,7 @@ class TradeOrderService {
     const date = S.dayToDate(data.date) || new Date(todayInOrg());
     const expectedDate = data.expectedDate ? S.dayToDate(data.expectedDate) : null;
     if (data.expectedDate && !expectedDate) throw fail("Enter a valid date", 400, "INVALID_DATE");
-    const priced = await S.priceDocument({ items: data.items, charges: data.charges, discount: data.discount, date }, { session });
+    const priced = await S.priceDocument({ items: data.items, charges: data.charges, discount: data.discount, date, side: kind === "sales" ? "sales" : undefined }, { session });
     const orderNo = await NumberSeriesService.numberFor(k.series, { typed: data.manualNumber, date, session, docType: "TradeOrder" });
     const [doc] = await TradeOrder.create(
       [{
@@ -326,7 +326,7 @@ class TradeOrderService {
         ? data.items
         : order.items.map((l) => ({ ...S.toPricingInput(l.toObject()) }));
       const priced = await S.priceDocument(
-        { items, charges: data.charges ?? order.charges.map((c) => c.toObject()), discount: data.discount ?? order.discount, date },
+        { items, charges: data.charges ?? order.charges.map((c) => c.toObject()), discount: data.discount ?? order.discount, date, side: order.kind === "sales" ? "sales" : undefined },
         { session }
       );
       order.items = priced.lines;

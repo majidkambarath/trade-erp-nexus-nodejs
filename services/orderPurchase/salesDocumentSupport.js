@@ -92,10 +92,10 @@ async function prepareLines(items, { session, allowEmpty = false } = {}) {
 // Prices a document exactly as an invoice is priced (transactionService.buildPricing: tax codes at
 // the document date, per-line rounding, header charges, header discount) and returns it in the shape
 // the models store. No client total is accepted, so there is no round-off.
-async function priceDocument({ items, charges, discount, date }, { session } = {}) {
+async function priceDocument({ items, charges, discount, date, side }, { session } = {}) {
   const prepared = await prepareLines(items, { session });
   const built = await TransactionService.buildPricing(
-    { items: prepared, charges: charges || [], discount: num(discount) || 0, incomingTotal: undefined, date: date || new Date() },
+    { items: prepared, charges: charges || [], discount: num(discount) || 0, incomingTotal: undefined, date: date || new Date(), side },
     session
   );
   return {
@@ -186,7 +186,10 @@ function pageOf(filters, { defaultLimit = 20 } = {}) {
   return { page, limit, skip: (page - 1) * limit };
 }
 
+// An offer, a delivery note or an estimate is a SALE: priced the way the invoice it becomes will be (including no VAT while not registered).
+const priceSalesDocument = (args, opts) => priceDocument({ ...args, side: "sales" }, opts);
+
 module.exports = {
-  CUSTOMER_FIELDS, loadCustomer, dayToDate, dayFilter, prepareLines, priceDocument, storedLine, toPricingInput,
+  CUSTOMER_FIELDS, loadCustomer, dayToDate, dayFilter, prepareLines, priceDocument, priceSalesDocument, storedLine, toPricingInput,
   attachStockDetails, escapeRegex, pageOf, isId,
 };
