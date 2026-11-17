@@ -89,7 +89,7 @@ const STANDARD_TERMS = {
   customer: ["Cash", "Net 30", "Net 45", "Net 60", "Cash on Delivery", "Prepaid"],
   vendor: ["Cash", "30 days", "Net 30", "45 days", "Net 60", "60 days", "COD"],
 };
-const DEFAULT_TERMS = { customer: "Net 30", vendor: "30 days" };
+const DEFAULT_TERMS = { customer: "Cash", vendor: "Cash" };
 const MAX_CREDIT_DAYS = 365;
 
 const termsToDays = (terms) => {

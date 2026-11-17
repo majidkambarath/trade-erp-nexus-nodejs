@@ -48,6 +48,8 @@ function toApi(profile = {}, baseCurrency = orgLocale.baseCurrency()) {
     // deregistering must not go on making one. Absent on the stored profile reads as registered, which
     // is the model's own default.
     vatRegistered: p.vatRegistered !== false,
+    // the day registration began; documents dated before it are not tax invoices
+    vatRegisteredFrom: clean(p.vatRegisteredFrom),
     companyLogo: p.logo?.url ? { url: p.logo.url } : null,
     bankDetails: {
       bankName: clean(bank.bankName), accountName: clean(bank.accountName), accountNumber: clean(bank.accountNumber),

@@ -58,6 +58,8 @@ const companySettingsSchema = new mongoose.Schema(
       legalName: { type: String, trim: true },
       trn: { type: String, trim: true },
       vatRegistered: { type: Boolean, default: true },
+      // The day registration began ("YYYY-MM-DD"). Documents dated before it stay as they were issued; absent = registered from the start.
+      vatRegisteredFrom: { type: String, trim: true },
       addressLine1: { type: String, trim: true },
       city: { type: String, trim: true },
       emirate: { type: String, trim: true },

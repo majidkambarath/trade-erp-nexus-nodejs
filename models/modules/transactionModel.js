@@ -214,6 +214,10 @@ const transactionSchema = new mongoose.Schema({
     orderNo: { type: String, trim: true },
   },
   creditNoteIssued: { type: Boolean, default: false },
+  // Whether the organisation was registered for VAT on this document's date (UAE organisations only; services/financial/vatRegistrationService.js).
+  // Stamped when it is priced and never defaulted: ABSENT means the document predates the rule and reads as it always did. A purchase
+  // stamped false carries no recoverable VAT - it is part of the cost (utils/vatRegistration.js).
+  vatRegistered: { type: Boolean },
   // A sales order the customer will not take the rest of (utils/closeShort.js).
   closedShort: { type: closedShortSchema, default: undefined },
   lastSend: { type: lastSendSchema, default: undefined },
