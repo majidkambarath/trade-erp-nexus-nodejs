@@ -28,6 +28,7 @@ const CrmHooks = require("../crm/crmHooks");
 const JobCardLinks = require("../garage/jobCardLinks");
 const ShareService = require("../messaging/shareService");
 const ItemKindService = require("../stock/itemKindService");
+const Admin = require("../../models/core/adminModel");
 const kinds = require("../../utils/itemKinds");
 const orgLocale = require("../../utils/orgLocale");
 const { listPeriod, condition: periodCondition } = require("../../utils/listPeriod");
@@ -144,7 +145,17 @@ class TransactionService {
     if (!mongoose.isValidObjectId(id)) throw new AppError("Invalid transaction id", 400);
     const transaction = await Transaction.findById(id).lean();
     if (!transaction) throw new AppError("Transaction not found", 404);
-    return transaction;
+    const names = await TransactionService.creatorNames([transaction]);
+    return { ...transaction, createdByName: names.get(String(transaction.createdBy)) || null };
+  }
+
+  // "Prepared by" on a printed document: createdBy holds an account id (or a word such as "system"), and the sheet needs
+  // a name. One read for a whole page, never one per row; an account since removed has no name and prints blank.
+  static async creatorNames(docs) {
+    const ids = [...new Set(docs.map((d) => String(d.createdBy || "")).filter((v) => /^[0-9a-f]{24}$/i.test(v)))];
+    if (!ids.length) return new Map();
+    const admins = await Admin.find({ _id: { $in: ids.map((id) => new mongoose.Types.ObjectId(id)) } }).select("name email").lean();
+    return new Map(admins.map((a) => [String(a._id), a.name || a.email || null]));
   }
 
   // Create Transaction
@@ -830,6 +841,7 @@ const logAmount = balanceEffect;
         stocks.map((st) => [String(st._id), { ...st, unitOfMeasureDetails: unitBy.get(String(st.unitOfMeasure)) || undefined }])
       );
 
+      const creators = await TransactionService.creatorNames(docs);
       const result = docs.map((d) => {
         const isCustomer = d.partyType === "Customer";
         const party = (isCustomer ? customerBy : vendorBy).get(String(d.partyId)) || null;
@@ -839,6 +851,7 @@ const logAmount = balanceEffect;
         return {
           ...d,
           ...(d.closedShort ? { closedShort } : {}),
+          createdByName: creators.get(String(d.createdBy)) || null,
           party,
           partyName: name || "Unknown Party",
           // a document with no lines (an opening balance invoice) has nothing to show as a line
