@@ -25,7 +25,7 @@ const S = require("./salesDocumentSupport");
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
 const r3 = (n) => Math.round((Number(n) + Number.EPSILON) * 1000) / 1000;
 
-const VENDOR_FIELDS = "vendorId vendorName contactPerson email phone address trnNO vat paymentTerms status";
+const VENDOR_FIELDS = "vendorId vendorName contactPerson email phone address country emirate trnNO vat paymentTerms status";
 
 function present(gr) {
   const invoiced = gr.invoiceStatus && gr.invoiceStatus !== INVOICE_STATE.NONE;

@@ -16,7 +16,7 @@ const num = (v) => Number(v);
 const isId = (v) => mongoose.isValidObjectId(v);
 
 const CUSTOMER_FIELDS =
-  "customerId customerName contactPerson email phone billingAddress shippingAddress trnNumber vat paymentTerms minShelfLifeDays status";
+  "customerId customerName contactPerson email phone billingAddress shippingAddress country emirate trnNumber vat paymentTerms minShelfLifeDays status";
 
 async function loadCustomer(partyId, { session } = {}) {
   if (!isId(partyId)) throw new AppError("Choose a customer", 400, "CUSTOMER_REQUIRED");

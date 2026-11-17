@@ -825,3 +825,32 @@ test("routes: document types and expiry answer a signed-in user; changes need an
   assert.equal(saved.body.party.phone, "+971502223333");
   assert.equal((await call("POST", "/accounting/accounts/party", { body: { groupId: String((await groupByName("Bank"))._id), party: customer("Nope") } })).json.errorCode, "PARTY_GROUP_REQUIRED");
 });
+
+// The billing address's country and emirate are fields of their own: saved, validated, and left alone on a record that never had them.
+test("country and emirate: saved on a customer and a vendor, the e-invoice follows, and an old record is untouched", { skip }, async () => {
+  const c = await svc.Customers.createCustomer(customer("Address Co", { country: "ae", emirate: "sharjah" }));
+  assert.equal(c.country, "AE");
+  assert.equal(c.emirate, "Sharjah");
+  assert.equal(c.eInvoice.countryCode, "AE");
+  assert.equal(c.eInvoice.city, "Sharjah", "the buyer's city for an e-invoice falls back to the emirate");
+
+  await rejectsWith(svc.Customers.createCustomer(customer("No Emirate Co", { country: "AE" })), "INVALID_EMIRATE");
+
+  const abroad = await svc.Customers.createCustomer(customer("Abroad Co", { country: "IN", emirate: "Dubai" }));
+  assert.equal(abroad.country, "IN");
+  assert.ok(!abroad.emirate, "an emirate belongs to the UAE only");
+  assert.equal(abroad.eInvoice.countryCode, "IN");
+
+  const v = await svc.Vendors.createVendor(vendor("Address Vendor", { country: "AE", emirate: "Ras al Khaimah" }));
+  assert.equal(v.emirate, "Ras Al Khaimah");
+
+  // a party made without them (every older record, and any caller that never heard of them) has none, and an unrelated edit adds none
+  const plain = await svc.Customers.createCustomer(customer("Plain Co"));
+  assert.ok(!plain.country && !plain.emirate);
+  const edited = await svc.Customers.updateCustomer(plain._id, { phone: "+971501112299" });
+  assert.ok(!edited.country && !edited.emirate);
+  // and choosing one later is an ordinary edit
+  const later = await svc.Customers.updateCustomer(plain._id, { country: "AE", emirate: "Dubai" });
+  assert.equal(later.emirate, "Dubai");
+  assert.equal(later.eInvoice.countryCode, "AE");
+});

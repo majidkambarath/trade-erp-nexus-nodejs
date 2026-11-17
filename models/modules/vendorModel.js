@@ -20,6 +20,10 @@ const vendorSchema = new mongoose.Schema({
   phone: { type: String, sparse: true, trim: true },
   website: { type: String, trim: true, maxlength: 200, default: "" },
   address: { type: String, required: true, trim: true },
+  // The address's country (ISO 3166 alpha-2) and, for the UAE, its emirate. Absent on a record saved before they existed, which stays valid:
+  // nothing is stamped on it until somebody edits the address (utils/partyAddress.js).
+  country: { type: String, trim: true, uppercase: true, default: undefined },
+  emirate: { type: String, trim: true, default: undefined },
   // "30 days", "Net 30", "45 days", "Net 60", "60 days", "COD", or "Net <days>" for any other credit period.
   paymentTerms: {
     type: String,
