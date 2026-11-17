@@ -198,6 +198,21 @@ test("an expense and a supplier's debit note: the VAT is cost when not registere
   assert.equal(toCustomer.vatTotal, 0, "a credit note to a customer carries no VAT");
 });
 
+test("a purchase made before registration is not in the return, and the books and the return still agree", { skip }, async () => {
+  await profile();
+  const early = await buy([L(10, 100, { taxCodeId: std._id })]);
+  await approve(early);
+  await profile(REGISTERED); // registers afterwards
+  const Vat = require("../reports/vatReturnService");
+  const r = await Vat.compute({ from: dayPlus(-1), to: dayPlus(1) });
+  const input = r.boxes.find((b) => b.box === "9");
+  // the two purchases made while registered (1,000 + 50 and 200 + 10) are in; the early 1,000 + 50 is not
+  assert.equal(r2(input.amount), 1200, JSON.stringify(input));
+  assert.equal(r2(input.vat), 60, "no input VAT is claimed on what was bought before registering");
+  // and the return agrees with the books: the early purchase put no VAT in the Input VAT account either
+  for (const row of r.reconciliation.rows) assert.ok(row.agrees || row.explained, JSON.stringify(row));
+});
+
 test("the VAT return exists only for a registered organisation", { skip }, async () => {
   const run = async () => {
     let result = "passed";
