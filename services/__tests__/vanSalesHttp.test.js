@@ -140,6 +140,14 @@ test("a salesman may sell, collect and count in on his own trip, and sees only w
   assert.equal(order.status, 400, JSON.stringify(order.data));
   assert.equal(order.code, "ROUTE_REQUIRED", "this trip has no route, so there is no next visit to order for (past the permission check)");
 
+  // fuel from the van's cash is his to enter on his own trip; a pin needs the customer on the trip's route
+  const fuel = await call("ali", "POST", `/van-sales/trips/${tripId}/expenses`, { kind: "fuel", amount: 20 });
+  assert.equal(fuel.status, 201, JSON.stringify(fuel.data));
+  assert.equal(fuel.body.trip.totals.expenses, 20);
+  const pin = await call("ali", "POST", `/van-sales/trips/${tripId}/customers/${cust._id}/location`, { location: { lat: 25.2, lng: 55.3 } });
+  assert.equal(pin.status, 403);
+  assert.equal(pin.code, "CUSTOMER_NOT_ON_ROUTE");
+
   const refused = await call("ali", "POST", `/van-sales/trips/${tripId}/sell`, { customerId: String(cust._id), items: [{ itemId: rice._id, qty: 31, price: 20 }] });
   assert.equal(refused.status, 409);
   assert.equal(refused.code, "VAN_STOCK_SHORT");
@@ -167,6 +175,7 @@ test("a salesman cannot open or load a trip, settle one, or change the vans and 
     ["POST", "/van-sales/promotions", { name: "P", kind: "slab", minQty: 1, percent: 5 }],
     ["GET", `/van-sales/trips/${tripId}/suggested-load`, undefined],
     ["POST", `/van-sales/trips/${tripId}/load-check`, { lines: [] }],
+    ["GET", "/van-sales/board", undefined],
   ];
   for (const [m, u, b] of doors) {
     const r = await call("ali", m, u, b);

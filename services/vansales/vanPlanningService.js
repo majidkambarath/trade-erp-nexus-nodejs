@@ -63,6 +63,7 @@ class VanPlanningService {
       by, session
     );
     await TradeOrderService.confirm(order._id, {}, by, session);
+    await require("./vanFleetService").ping(trip, { kind: "preorder", customerId: input.customerId, ref: order.orderNo, location: input.location }, { session });
     await TradeOrder.updateOne({ _id: order._id }, { $set: { source: { kind: input.fromLink ? "customer_link" : "van", tripId: trip._id, tripNo: trip.tripNo, routeId: trip.routeId } } }, { session });
     return TradeOrder.findById(order._id).session(session).lean();
   });

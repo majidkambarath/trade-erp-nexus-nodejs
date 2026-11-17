@@ -82,7 +82,7 @@ exports.load = catchAsync(async (req, res) => {
   ok(res, await VanTripService.getById(trip._id));
 });
 exports.depart = catchAsync(async (req, res) => {
-  const trip = await VanTripService.depart(req.params.tripId, by(req));
+  const trip = await VanTripService.depart(req.params.tripId, by(req), { odometer: req.body?.odometer });
   await log(req, "VAN_DEPARTED", trip, `Van ${trip.vanCode} sent out on ${trip.tripNo}`);
   ok(res, await VanTripService.getById(trip._id));
 });
@@ -215,3 +215,22 @@ exports.tripPreorders = catchAsync(async (req, res) => ok(res, await VanPlanning
 exports.routePreorders = catchAsync(async (req, res) => ok(res, await VanPlanningService.preordersForRoute(req.params.routeId, { customerId: req.query.customerId })));
 exports.suggestedLoad = catchAsync(async (req, res) => ok(res, await VanPlanningService.suggestedLoad(req.params.tripId)));
 exports.loadCheck = catchAsync(async (req, res) => ok(res, await VanPlanningService.loadCheck(req.params.tripId, req.body || {})));
+
+// ---- running the fleet (phase 5): the board, road expenses, pins, route profitability --------------------------
+const VanFleetService = require("../../services/vansales/vanFleetService");
+
+exports.board = catchAsync(async (req, res) => ok(res, await VanFleetService.board()));
+exports.tripExpenses = catchAsync(async (req, res) => ok(res, await VanFleetService.tripExpenses(req.params.tripId)));
+exports.expense = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const v = await VanFleetService.expense(req.params.tripId, req.body || {}, by(req), { req });
+  await AuditService.log({ req, action: "VAN_EXPENSE", entity: "VanTrip", entityId: req.params.tripId, summary: `${v.voucherNo} paid from the van's cash (${req.body?.kind || "expense"}, ${Number(v.totalAmount).toFixed(2)})`, after: { voucher: v.voucherNo } });
+  ok(res, { voucher: v, trip: await VanTripService.getById(req.params.tripId) }, 201);
+});
+exports.pinCustomer = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const r = await VanFleetService.pinCustomer(req.params.tripId, req.params.customerId, req.body?.location, by(req), { mayRepin: holds(req, "vansales.manage") });
+  await AuditService.log({ req, action: "VAN_CUSTOMER_PINNED", entity: "Customer", entityId: r.customerId, summary: `${r.customerName} pinned on the map from the van` });
+  ok(res, r);
+});
+exports.routeProfit = catchAsync(async (req, res) => ok(res, await VanSalesReportService.routeProfit(req.query)));

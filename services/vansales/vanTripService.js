@@ -4,6 +4,7 @@ const VanTrip = require("../../models/modules/vansales/vanTripModel");
 const Van = require("../../models/modules/vansales/vanModel");
 const VanRoute = require("../../models/modules/vansales/vanRouteModel");
 const Stock = require("../../models/modules/stockModel");
+const Customer = require("../../models/modules/customerModel");
 const { Voucher } = require("../../models/modules/financial/financialModels");
 const rules = require("../../utils/vanSales");
 const kinds = require("../../utils/itemKinds");
@@ -61,6 +62,8 @@ class VanTripService {
     const returnsTotal = rules.round2(s.returns.reduce((t, i) => t + (Number(i.totalAmount) || 0), 0));
     const van = await Van.findById(trip.vanId).select("cashLimit").lean();
     const cashLimit = van?.cashLimit ?? null;
+    const spent = await Voucher.find({ "vanTripRef.tripId": trip._id, voucherType: "expense", status: "approved" }).select("totalAmount").lean();
+    const expenses = sum(spent);
     let route = [];
     if (trip.routeId) {
       const r = await VanRoute.findById(trip.routeId).lean();
@@ -71,6 +74,8 @@ class VanTripService {
         collected: new Set(live.map((v) => String(v.partyId))),
         visited: new Map(visits.map((x) => [String(x.customerId), { outcome: x.outcome, reason: x.reason, at: x.at }])),
       });
+      const pinned = new Set((await Customer.find({ _id: { $in: route.map((s) => s.customerId) }, "location.lat": { $exists: true } }).select("_id").lean()).map((c) => String(c._id)));
+      route = route.map((s) => ({ ...s, pinned: pinned.has(String(s.customerId)) }));
     }
     return {
       ...plain,
@@ -90,7 +95,10 @@ class VanTripService {
         receipts: live.length,
         pendingReceipts: vouchers.filter((v) => v.status === "pending").length,
         cashLimit,
-        cashOverLimit: rules.overCashLimit(sum(live.filter((v) => v.paymentMode === "cash")), cashLimit),
+        cashOverLimit: rules.overCashLimit(sum(live.filter((v) => v.paymentMode === "cash")) - expenses, cashLimit),
+        expenses,
+        cashInHand: rules.round2(sum(live.filter((v) => v.paymentMode === "cash")) - expenses),
+        km: rules.kmRun(plain.odometer),
       },
     };
   }
@@ -213,6 +221,7 @@ class VanTripService {
   /** Send the van out: from now the salesman can sell, collect and take returns. Needs at least one load. */
   static depart = withTransactionSession(async (id, by, ...rest) => {
     const session = rest[rest.length - 1];
+    const input = rest.length > 1 ? rest[0] || {} : {};
     const trip = await loadTrip(id, session);
     if (!rules.canMove(trip.status, "ON_ROUTE")) throw fail("This trip is not waiting to go out", 409, "TRIP_NOT_LOADING");
     if (!trip.loads.length) throw fail("Load the van before it goes out", 409, "NOTHING_LOADED");
@@ -223,6 +232,8 @@ class VanTripService {
     if (size > 0 && !trip.numberBlock?.length) {
       trip.numberBlock = await NumberSeriesService.allocateMany("SO", size, trip.date, { session, docType: "Transaction" });
     }
+    require("./vanFleetService").applyOdometer(trip, "out", input.odometer);
+    trip.departedAt = new Date();
     trip.status = "ON_ROUTE";
     trip.updatedBy = String(by);
     await trip.save({ session });

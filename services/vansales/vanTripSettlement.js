@@ -75,6 +75,7 @@ class VanTripSettlement {
     }
     const names = new Map();
     for (const load of trip.loads) for (const l of load.lines) names.set(String(l.stockId), l.itemName);
+    require("./vanFleetService").applyOdometer(trip, "in", input?.odometer);
     trip.unload = {
       at: new Date(), by: String(by), byName: input?.byName || "",
       lines: rows.map((r) => ({ ...r, itemName: names.get(r.stockId) || "" })),
@@ -104,7 +105,11 @@ class VanTripSettlement {
       .select("voucherNo status paymentMode totalAmount paymentDetails.chequeDetails").session(session || null).lean();
     const live = vouchers.filter((v) => v.status === "approved");
     const pending = vouchers.filter((v) => v.status === "pending");
-    const expected = round2(live.filter((v) => v.paymentMode === "cash").reduce((t, v) => t + Number(v.totalAmount || 0), 0));
+    // the van's cash: what it took, less what it paid out on the road (fuel, tolls) from the same account
+    const spent = await Voucher.find({ "vanTripRef.tripId": trip._id, voucherType: "expense" }).select("voucherNo status totalAmount").session(session || null).lean();
+    const expenses = round2(spent.filter((v) => v.status === "approved").reduce((t, v) => t + Number(v.totalAmount || 0), 0));
+    const pendingExpenses = spent.filter((v) => v.status === "pending");
+    const expected = round2(live.filter((v) => v.paymentMode === "cash").reduce((t, v) => t + Number(v.totalAmount || 0), 0) - expenses);
     const cheques = live
       .filter((v) => v.paymentMode === "cheque")
       .map((v) => ({ chequeNo: v.paymentDetails?.chequeDetails?.chequeNumber || v.voucherNo, amount: round2(v.totalAmount) }));
@@ -140,6 +145,7 @@ class VanTripSettlement {
     });
 
     const blockers = [];
+    if (pendingExpenses.length) blockers.push({ code: "PENDING_EXPENSES", message: `${pendingExpenses.length} road expense${pendingExpenses.length === 1 ? " is" : "s are"} waiting for approval. Approve or reject ${pendingExpenses.length === 1 ? "it" : "them"} first.` });
     if (pending.length) blockers.push({ code: "PENDING_RECEIPTS", message: `${pending.length} receipt${pending.length === 1 ? " is" : "s are"} waiting for approval. Approve or reject ${pending.length === 1 ? "it" : "them"} first.` });
     const warnings = [];
     if (cash.short > 0) warnings.push({ code: "CASH_SHORT", message: `${cash.short.toFixed(2)} less cash was handed in than the van took. It is charged to the salesman's shortage account.` });
@@ -150,7 +156,7 @@ class VanTripSettlement {
 
     return {
       trip: { id: String(trip._id), tripNo: trip.tripNo, vanCode: trip.vanCode },
-      cash, cheques, missingCheques: missing, rows,
+      cash, expenses, cheques, missingCheques: missing, rows,
       stockVarianceValue: round2(varianceValue), damagedValue: round2(damagedValue),
       blockers, warnings,
     };
@@ -214,7 +220,7 @@ class VanTripSettlement {
 
     trip.settlement = {
       at: new Date(), by: String(by), byName: input.byName || "",
-      cashExpected: cash.expected, cashHanded: cash.handed, cashVariance: cash.variance,
+      cashExpected: cash.expected, cashHanded: cash.handed, cashVariance: cash.variance, expenses: plan.expenses,
       cheques: plan.cheques.map((c) => ({ ...c, handed: !plan.missingCheques.some((m) => m.chequeNo === c.chequeNo) })),
       stockVarianceValue: plan.stockVarianceValue, damagedValue: plan.damagedValue,
       acknowledged: [...given].filter((c) => WARNING_CODES.includes(c)), voucherIds,

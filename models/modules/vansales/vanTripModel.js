@@ -78,6 +78,7 @@ const settlementSchema = new mongoose.Schema(
     cashExpected: Number,
     cashHanded: Number,
     cashVariance: Number,
+    expenses: Number, // paid from the van's cash on the road (fuel, tolls), taken off the cash expected
     cheques: [{ chequeNo: String, amount: Number, handed: Boolean, _id: false }],
     stockVarianceValue: Number, // units short (negative) or over (positive), at average cost
     damagedValue: Number, // what the damaged goods were worth, written off
@@ -107,6 +108,25 @@ const vanTripSchema = new mongoose.Schema(
     // derived from the invoices; the rest are retired with a reason when the van is counted in.
     numberBlock: [{ type: String, trim: true }],
     numbersRetiredAt: Date,
+    departedAt: Date,
+    // km on the clock going out and coming back (phase 5); route profitability reads the difference
+    odometer: { type: new mongoose.Schema({ out: Number, in: Number }, { _id: false }), default: undefined },
+    // where the phone was at each sale / payment / visit it reported a location for, against the customer's pinned
+    // place. A flag for the supervisor's board, never a refusal: a phone's location can be poor.
+    pings: [
+      {
+        at: { type: Date, default: Date.now },
+        kind: { type: String, enum: ["sale", "collect", "visit", "preorder"] },
+        customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer" },
+        ref: String,
+        lat: Number,
+        lng: Number,
+        accuracy: Number,
+        distanceM: Number,
+        far: Boolean,
+        _id: false,
+      },
+    ],
     returns: [returnRecord],
     unload: { type: unloadSchema, default: undefined },
     settlement: { type: settlementSchema, default: undefined },

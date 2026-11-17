@@ -176,3 +176,47 @@ test("the next run of a route is its next weekday after today, else tomorrow", (
   assert.equal(v.nextRunDay([2], "2026-11-17"), "2026-11-24");
   assert.equal(v.nextRunDay([], "2026-11-17"), "2026-11-18");
 });
+
+test("distance: haversine in metres, a flag widened by the phone's own accuracy, never a refusal", () => {
+  const shop = { lat: 25.2048, lng: 55.2708 };
+  assert.equal(v.distanceM(shop, shop), 0);
+  const d = v.distanceM(shop, { lat: 25.2048, lng: 55.2758 }); // ~0.005 deg of longitude at 25 N
+  assert.ok(d > 480 && d < 520, `${d}`);
+  assert.deepEqual(v.farFrom(shop, { lat: 25.2048, lng: 55.2758 }), { distanceM: d, far: true });
+  assert.equal(v.farFrom(shop, { lat: 25.2048, lng: 55.2758, accuracy: 250 }).far, false, "a poor reading is not called far");
+  assert.equal(v.farFrom(null, shop), null, "a customer never pinned: nothing to compare");
+  assert.equal(v.distanceM(shop, { lat: "x", lng: 1 }), null);
+});
+
+test("odometer readings and the km a trip ran", () => {
+  assert.equal(v.odometerOf(""), null);
+  assert.equal(v.odometerOf("123456.7"), 123456.7);
+  assert.throws(() => v.odometerOf(-1), { code: "ODOMETER_INVALID" });
+  assert.equal(v.kmRun({ out: 1000, in: 1086.5 }), 86.5);
+  assert.equal(v.kmRun({ out: 1000 }), null);
+});
+
+test("the board: stops served, the next one, and a van quiet for two hours on the road", () => {
+  const stops = [{ customerId: "a", name: "A", sold: true }, { customerId: "b", name: "B", visit: { reason: "closed" } }, { customerId: "c", name: "C" }];
+  const now = new Date("2026-11-17T12:00:00Z");
+  const r = v.boardRow({ status: "ON_ROUTE", stops, lastAt: "2026-11-17T09:30:00Z", now });
+  assert.deepEqual([r.done, r.total, r.next.name, r.quietMinutes, r.quiet], [2, 3, "C", 150, true]);
+  assert.equal(v.boardRow({ status: "ON_ROUTE", stops, lastAt: "2026-11-17T11:00:00Z", now }).quiet, false);
+  assert.equal(v.boardRow({ status: "LOADING", stops, lastAt: null, now }).quiet, false, "not out yet");
+  assert.equal(v.boardRow({ status: "ON_ROUTE", stops: stops.slice(0, 2), lastAt: "2026-11-17T06:00:00Z", now }).quiet, false, "every stop served: done for the day");
+  assert.equal(v.boardRow({ status: "ON_ROUTE", stops, departedAt: "2026-11-17T08:00:00Z", now }).quietMinutes, 240, "nothing done since it went out");
+});
+
+test("route profit: sales less returns, cost of goods, damage, road expenses and the cash short, per route", () => {
+  const rows = v.routeProfit([
+    { key: "r1", name: "North", sales: 1000, cost: 600, returns: 100, returnsCost: 60, damaged: 20, expenses: 50, cashVariance: -10, km: 80 },
+    { key: "r1", name: "North", sales: 500, cost: 300, returns: 0, returnsCost: 0, damaged: 0, expenses: 30, cashVariance: 0, km: null },
+    { key: "r2", name: "South", sales: 200, cost: 190, returns: 0, returnsCost: 0, damaged: 0, expenses: 40, cashVariance: 0 },
+  ]);
+  const n = rows[0];
+  assert.equal(n.key, "r1");
+  assert.deepEqual([n.trips, n.netSales, n.grossMargin, n.contribution, n.km, n.kmTrips], [2, 1400, 560, 450, 80, 1]);
+  assert.equal(n.marginPct, 32.14);
+  assert.equal(n.perKm, 5.63);
+  assert.deepEqual([rows[1].contribution, rows[1].perKm], [-30, null], "a route that lost money, never driven on record");
+});

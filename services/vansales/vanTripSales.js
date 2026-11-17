@@ -191,6 +191,7 @@ class VanTripSales {
       if (amount > round2(approved.totalAmount) + 0.005) throw fail("The money taken is more than the invoice. Take the rest as a separate receipt.", 400, "PAYMENT_EXCEEDS_INVOICE");
       receipt = await takeMoney(trip, { customerId: customer._id, amount, mode: pay.mode || "cash", details: pay.details, invoiceIds: [String(approved._id)], date: day }, by, { req: opts.req, session });
     }
+    await require("./vanFleetService").ping(trip, { kind: "sale", customerId: customer._id, ref: approved.transactionNo, location: input.location }, { session });
     if (preorder) {
       preorder.status = "CLOSED";
       preorder.closedAt = new Date();
@@ -207,6 +208,7 @@ class VanTripSales {
     const trip = await loadTrip(id, session);
     assertSelling(trip);
     const voucher = await takeMoney(trip, input || {}, by, { req: opts.req, session });
+    await require("./vanFleetService").ping(trip, { kind: "collect", customerId: input?.customerId, ref: voucher.voucherNo, location: input?.location }, { session });
     return { receipt: voucher };
   });
 

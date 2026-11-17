@@ -37,6 +37,7 @@ class VanVisitService {
       tripId: trip._id, tripNo: trip.tripNo, customerId: c._id, customerName: c.customerName, outcome, reason,
       note: String(input.note || "").slice(0, 300), at: input.at ? new Date(input.at) : new Date(), location: cleanLocation(input.location), by: String(by), byName: byName || "",
     }], session ? { session } : undefined);
+    await require("./vanFleetService").ping(trip, { kind: "visit", customerId: c._id, ref: reason, location: input.location }, { session });
     return visit;
   }
 

@@ -44,6 +44,9 @@ router.get("/payment-choices", requirePermission(["vansales.view", "vansales.sel
 
 // Reports: fixed paths before the :tripId ones, as every router here orders them.
 router.get("/reports/summary", requirePermission("vansales.view"), c.summary);
+router.get("/reports/route-profit", requirePermission("vansales.view"), c.routeProfit);
+// the supervisor's live board: who may settle or manage the vans
+router.get("/board", requirePermission(["vansales.settle", "vansales.manage"]), c.board);
 
 // Selling lookups (a salesman holds sell, not necessarily anything else).
 router.get("/customers/:customerId/position", requirePermission("vansales.sell"), c.customerPosition);
@@ -71,6 +74,9 @@ router.get("/trips/:tripId/offline", requirePermission("vansales.sell"), c.offli
 router.post("/trips/:tripId/sync", requirePermission("vansales.sell"), c.sync);
 router.post("/trips/:tripId/invoices/:invoiceId/whatsapp", requirePermission("vansales.sell"), requireFeature("messaging"), sendLimit, c.whatsappInvoice);
 router.post("/trips/:tripId/collect", requirePermission("vansales.sell"), c.collect);
+router.get("/trips/:tripId/expenses", requirePermission("vansales.view"), c.tripExpenses);
+router.post("/trips/:tripId/expenses", requirePermission("vansales.sell"), c.expense);
+router.post("/trips/:tripId/customers/:customerId/location", requirePermission("vansales.sell"), c.pinCustomer);
 router.post("/trips/:tripId/return", requirePermission("vansales.sell"), c.returnGoods);
 router.post("/trips/:tripId/unload", requirePermission(["vansales.load", "vansales.sell"]), c.unload);
 router.get("/trips/:tripId/settlement", requirePermission("vansales.settle"), c.settlementPreview);

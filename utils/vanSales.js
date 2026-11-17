@@ -344,6 +344,91 @@ function addDays(dayText, n) {
   return d.toISOString().slice(0, 10);
 }
 
+// ---- phase 5: the fleet ---------------------------------------------------------------------------------------
+
+const FAR_METRES = 300; // a sale or visit further than this from the customer's pinned place is flagged
+const QUIET_HOURS = 2; // a van out with nothing done for this long is flagged on the board
+
+/** Metres between two points (haversine). Null when either is missing. */
+function distanceM(a, b) {
+  if (!a || !b || ![a.lat, a.lng, b.lat, b.lng].every((v) => Number.isFinite(Number(v)))) return null;
+  const R = 6371000;
+  const rad = (d) => (Number(d) * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.min(1, Math.sqrt(h))));
+}
+
+/**
+ * Where the phone was against where the customer is. A flag, never a refusal: the phone's location can be poor, and
+ * the accuracy it reports widens the allowance (a reading good to 200 m is not "far" at 350 m).
+ * -> { distanceM, far } or null when either place is unknown.
+ */
+function farFrom(customerLoc, here, limit = FAR_METRES) {
+  const d = distanceM(customerLoc, here);
+  if (d === null) return null;
+  const slack = Math.max(0, Number(here?.accuracy) || 0);
+  return { distanceM: d, far: d > limit + slack };
+}
+
+/** Normalise an odometer reading: a whole or decimal number of km, 0 to 9,999,999. Null when none was given. */
+function odometerOf(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > 9999999) throw new VanError("Enter the odometer reading in km", "ODOMETER_INVALID");
+  return round2(n);
+}
+
+/** The km a trip ran, or null. A reading back below the one going out is refused where it is entered. */
+const kmRun = (odo) => (odo && Number.isFinite(odo.out) && Number.isFinite(odo.in) ? round2(odo.in - odo.out) : null);
+
+/**
+ * One van on the supervisor's board. stops: the route as routeToday gives it; lastAt: the last thing done (a sale,
+ * a payment, a visit); now: a Date. -> { done, total, next, lastAt, quietMinutes, quiet }
+ */
+function boardRow({ status, stops = [], lastAt = null, departedAt = null, now = new Date(), quietHours = QUIET_HOURS }) {
+  const served = (s) => s.sold || s.collected || Boolean(s.visit);
+  const done = stops.filter(served).length;
+  const next = stops.find((s) => !served(s)) || null;
+  const since = lastAt || departedAt;
+  const quietMinutes = since ? Math.max(0, Math.round((now.getTime() - new Date(since).getTime()) / 60000)) : null;
+  return {
+    done, total: stops.length, next: next ? { customerId: next.customerId, name: next.name } : null,
+    lastAt: lastAt || null, quietMinutes,
+    quiet: status === "ON_ROUTE" && quietMinutes !== null && quietMinutes >= quietHours * 60 && done < stops.length,
+  };
+}
+
+/**
+ * What a route (or salesman, or van) made over its settled trips. Each trip row:
+ *   { key, name, sales, cost, returns, returnsCost, damaged, expenses, cashVariance, km }
+ * where sales / returns are net of VAT and cost / returnsCost are cost of goods. Gross margin = (sales - returns) -
+ * (cost - returnsCost); contribution = gross margin - damaged - expenses + cashVariance (a shortage is negative).
+ * -> [{ key, name, trips, sales, ..., grossMargin, contribution, marginPct, perKm }] largest contribution first.
+ */
+function routeProfit(rows = []) {
+  const by = new Map();
+  for (const r of rows) {
+    const k = String(r.key || "none");
+    const a = by.get(k) || { key: k, name: r.name || "No route", trips: 0, sales: 0, cost: 0, returns: 0, returnsCost: 0, damaged: 0, expenses: 0, cashVariance: 0, km: 0, kmTrips: 0 };
+    a.trips += 1;
+    for (const f of ["sales", "cost", "returns", "returnsCost", "damaged", "expenses", "cashVariance"]) a[f] = round2(a[f] + (Number(r[f]) || 0));
+    if (Number.isFinite(r.km) && r.km !== null) { a.km = round2(a.km + r.km); a.kmTrips += 1; }
+    by.set(k, a);
+  }
+  return [...by.values()].map((a) => {
+    const netSales = round2(a.sales - a.returns);
+    const grossMargin = round2(netSales - (a.cost - a.returnsCost));
+    const contribution = round2(grossMargin - a.damaged - a.expenses + a.cashVariance);
+    return {
+      ...a, netSales, grossMargin, contribution,
+      marginPct: netSales > 0 ? round2((contribution / netSales) * 100) : null,
+      perKm: a.km > 0 ? round2(contribution / a.km) : null,
+    };
+  }).sort((x, y) => y.contribution - x.contribution);
+}
+
 module.exports = {
   STATUSES, HOLDING, SELLING, MOVES, VanError,
   round2, round3, idOf,
@@ -351,4 +436,5 @@ module.exports = {
   validateLoadLines, shortages, unloadVariance, stockMoves, cashSettlement, missingCheques, routeToday,
   canMove, validateVan, validateRoute, overCashLimit, calls,
   suggestLoad, expiringOnLoad, addDays, nextRunDay,
+  FAR_METRES, QUIET_HOURS, distanceM, farFrom, odometerOf, kmRun, boardRow, routeProfit,
 };

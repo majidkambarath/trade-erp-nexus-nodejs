@@ -95,6 +95,52 @@ class VanSalesReportService {
     );
     return { from: start, to: end, rows, byVan: roll("vanId", "vanCode"), bySalesman: roll("salesmanId", "salesmanName"), total };
   }
+
+  /**
+   * What each route (or salesman, or van) made over the SETTLED trips of a period: sales and returns net of VAT, their
+   * cost of goods from the stock movements the invoices made, the damaged goods and count differences written off at
+   * settlement, the road expenses, the cash short or over, and the km run. A trip not yet settled is left out: its
+   * figures can still change. `by`: route (default) | salesman | van.
+   */
+  static async routeProfit({ from, to, by = "route" } = {}) {
+    const end = validDay(to) ? String(to).slice(0, 10) : todayInOrg();
+    const start = validDay(from) ? String(from).slice(0, 10) : addDays(end, -29);
+    if (start > end) throw new AppError("The period starts after it ends", 400, "INVALID_RANGE");
+    const InventoryMovement = require("../../models/modules/inventoryMovementModel");
+    const trips = await VanTrip.find({ date: { $gte: asDay(start), $lte: asDay(end) }, status: "SETTLED" }).lean();
+    const ids = trips.map((t) => t._id);
+    const docs = ids.length ? await Transaction.find({ "vanTripRef.tripId": { $in: ids }, status: "APPROVED", type: { $in: ["sales_order", "sales_return"] } }).select("type totalAmount pricing vanTripRef").lean() : [];
+    const moves = docs.length ? await InventoryMovement.find({ referenceId: { $in: docs.map((d) => d._id) } }).select("referenceId cogsAmount totalValue quantity").lean() : [];
+    const costOf = new Map();
+    for (const m of moves) {
+      const k = String(m.referenceId);
+      // a sale's cost is its cost of goods; a return's is the cost it put back (stored positive both ways)
+      const c = m.cogsAmount !== null && m.cogsAmount !== undefined ? Number(m.cogsAmount) : Math.abs(Number(m.totalValue) || 0);
+      costOf.set(k, round2((costOf.get(k) || 0) + Math.abs(c)));
+    }
+    const perTrip = new Map(trips.map((t) => [String(t._id), { sales: 0, cost: 0, returns: 0, returnsCost: 0 }]));
+    for (const d of docs) {
+      const row = perTrip.get(String(d.vanTripRef.tripId));
+      if (!row) continue;
+      const net = round2(Number(d.totalAmount || 0) - Number(d.pricing?.lineVat || 0) - Number(d.pricing?.chargesVat || 0));
+      if (d.type === "sales_order") { row.sales = round2(row.sales + net); row.cost = round2(row.cost + (costOf.get(String(d._id)) || 0)); }
+      else { row.returns = round2(row.returns + net); row.returnsCost = round2(row.returnsCost + (costOf.get(String(d._id)) || 0)); }
+    }
+    const keyOf = (t) => (by === "salesman" ? [t.salesmanId, t.salesmanName] : by === "van" ? [String(t.vanId), `${t.vanCode} ${t.vanName || ""}`.trim()] : [t.routeId ? String(t.routeId) : "none", t.routeName || "No route"]);
+    const rows = trips.map((t) => {
+      const [key, name] = keyOf(t);
+      const s = t.settlement || {};
+      return {
+        key, name, ...perTrip.get(String(t._id)),
+        // goods written off: the damaged ones, plus units short at the count (a surplus counts back)
+        damaged: round2(Number(s.damagedValue || 0) - Number(s.stockVarianceValue || 0)),
+        expenses: round2(s.expenses || 0),
+        cashVariance: round2(s.cashVariance || 0),
+        km: rules.kmRun(t.odometer),
+      };
+    });
+    return { from: start, to: end, by, rows: rules.routeProfit(rows), trips: trips.length };
+  }
 }
 
 module.exports = VanSalesReportService;

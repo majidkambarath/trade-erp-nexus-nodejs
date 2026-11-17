@@ -82,6 +82,7 @@ const ACCOUNTS = [
   ["Production Costs Moved to Stock", "Operating Expenses", "production-absorbed"],
   ["Salesman Shortages", "Current Assets", "salesman-shortages"],
   ["Cash Over and Short", "Other Income", "cash-over-short"],
+  ["Van Running Expenses", "Operating Expenses", "van-expenses"],
 ];
 
 // Which default group backs each group-kind posting key.
