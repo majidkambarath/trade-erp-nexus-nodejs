@@ -127,6 +127,8 @@ exports.createVendor = async (data, { groupId } = {}) => {
           phone: trimmedPhone,
           website: master.website,
           address,
+          country: master.country,
+          emirate: master.emirate,
           status,
           participantId: participantId ? String(participantId).trim() : undefined, // Peppol id (the model has always had it)
           vat: master.vat,

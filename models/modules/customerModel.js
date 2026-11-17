@@ -30,6 +30,10 @@ const customerSchema = new mongoose.Schema({
   // one (garage module, services/garage/insuranceClaimService.js). False for every existing customer.
   isInsurer: { type: Boolean, default: false },
   billingAddress: { type: String, default: null, trim: true },
+  // The address's country (ISO 3166 alpha-2) and, for the UAE, its emirate. Absent on a record saved before they existed, which stays valid:
+  // nothing is stamped on it until somebody edits the address (utils/partyAddress.js).
+  country: { type: String, trim: true, uppercase: true, default: undefined },
+  emirate: { type: String, trim: true, default: undefined },
   shippingAddress: { type: String, default: null, trim: true },
   creditLimit: { type: Number, default: 0, min: 0 },
   // Goods dispatched to this customer must have at least this many days of shelf life left.

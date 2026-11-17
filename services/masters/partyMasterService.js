@@ -8,6 +8,7 @@ const AttachmentService = require("../core/attachmentService");
 const DocumentTypeService = require("./documentTypeService");
 const { resolveVat, resolveTerms, cleanWebsite, normalizeContacts, normalizeBankAccounts, normalizeDocuments } = require("../../utils/partyMaster");
 const { orgTaxTerms } = require("../../utils/countryRules");
+const { resolveAddress } = require("../../utils/partyAddress");
 
 // The customer / vendor master data: VAT configuration, credit terms, contacts, bank accounts and
 // KYC documents. customerService and vendorService call `prepare` before they write and `finish`
@@ -73,6 +74,10 @@ class PartyMasterService {
     }
 
     if (data.website !== undefined) patch.website = cleanWebsite(data.website);
+
+    // the address's country and emirate: only when the request names one, so a record that never had them is not given any
+    const address = resolveAddress({ country: data.country, emirate: data.emirate }, existing);
+    if (address) Object.assign(patch, address);
 
     if (data.contacts !== undefined) {
       patch.contacts = normalizeContacts(data.contacts);

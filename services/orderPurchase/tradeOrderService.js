@@ -30,7 +30,7 @@ const kindOf = (kind) => {
 
 const PARTY_SELECT = {
   sales: S.CUSTOMER_FIELDS,
-  purchase: "vendorId vendorName contactPerson email phone address trnNO vat paymentTerms status",
+  purchase: "vendorId vendorName contactPerson email phone address country emirate trnNO vat paymentTerms status",
 };
 
 async function loadParty(kind, id, { session } = {}) {
