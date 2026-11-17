@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.5.0.0 — 17 November 2026
+
+Van sales phase 7. Frontend and backend both at 3.5.0.0.
+
+### Added
+
+- `GET /van-sales/trips/:tripId/customers/:customerId/insight` (own trip only): a customer's last order, usual items, items they stopped buying and what they owe, cut to what is on the van.
+- `Van.dailySalesTarget` / `dailyCallsTarget`, copied onto each trip as it opens (`VanTrip.target`); the trip's totals carry `calls`, `productive`, `target` and `progress`.
+- The summary report adds invoice lines, road expenses, average drop, lines per call, cost per drop, target days hit and sales by day.
+- An index on a customer's latest approved invoices.
+
 ## 3.4.3.0 — 17 November 2026
 
 No backend change: the version follows the frontend (Settlement and Reports redesign).
