@@ -12,7 +12,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "..", "..", ".env") });
 const mongoose = require("mongoose");
 
 const skip = !process.env.MONGO_URI && "MONGO_URI not set";
-const DB = `erp_test_garageflow_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+const DB = `erp_test_gflow_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 const PORT = 3940 + Math.floor(Math.random() * 180);
 const BASE = `http://127.0.0.1:${PORT}/api/v1`;
 const ROOT = path.resolve(__dirname, "..", "..");
@@ -91,7 +91,7 @@ test("the whole garage flow, over real HTTP: vehicle, job card, estimate, approv
 
   const buy = await call("POST", "/transactions/transactions", { type: "purchase_order", partyId: vendor.body._id, partyType: "Vendor", partyTypeRef: "Vendor", items: [{ itemId: partId, description: "x", qty: 10, price: 80, rate: 80, vatPercent: 0 }] });
   assert.equal(buy.status, 201, JSON.stringify(buy.data));
-  const approveBuy = await call("POST", `/transactions/transactions/${buy.body._id}/process`, { action: "approve" });
+  const approveBuy = await call("PATCH", `/transactions/transactions/${buy.body._id}/process`, { action: "approve" });
   assert.equal(approveBuy.status, 200, JSON.stringify(approveBuy.data));
 
   // Setup: a bay and a standard job (the service menu), before the job card that will use them.
@@ -155,13 +155,18 @@ test("the whole garage flow, over real HTTP: vehicle, job card, estimate, approv
   assert.equal(invoice.status, 201, JSON.stringify(invoice.data));
   assert.ok(invoice.body.invoice.totalAmount >= 250, `priced for real by buildPricing (150 + 100, plus VAT if any): ${invoice.body.invoice.totalAmount}`);
 
-  const approveInvoice = await call("POST", `/transactions/transactions/${invoice.body.invoice._id}/process`, { action: "approve" });
+  const approveInvoice = await call("PATCH", `/transactions/transactions/${invoice.body.invoice._id}/process`, { action: "approve" });
   assert.equal(approveInvoice.status, 200, JSON.stringify(approveInvoice.data));
 
   const afterInvoice = await call("GET", `/garage/job-cards/${jobCardId}`);
   assert.equal(afterInvoice.body.invoiceStatus, "INVOICED", "jobCardLinks picked up the approval");
 
-  const release = await call("POST", `/garage/job-cards/${jobCardId}/release`, { odometerOut: 100, handedTo: "Flow Check Customer", warrantyMonths: 3 });
+  // Money is still owed on the invoice, so the car is not released for nothing (mayRelease, 30 Oct 2026) ...
+  const held = await call("POST", `/garage/job-cards/${jobCardId}/release`, { odometerOut: 100, handedTo: "Flow Check Customer", warrantyMonths: 3 });
+  assert.equal(held.status, 409, JSON.stringify(held.data));
+  assert.equal(held.code, "PAYMENT_DUE");
+  // ... until someone who manages the garage releases it on account.
+  const release = await call("POST", `/garage/job-cards/${jobCardId}/release`, { odometerOut: 100, handedTo: "Flow Check Customer", warrantyMonths: 3, override: true });
   assert.equal(release.status, 200, JSON.stringify(release.data));
   assert.equal(release.body.status, "CLOSED", "invoiced and handed back: the job is fully closed");
   assert.ok(release.body.delivery.gatePassAt, "the gate pass carries a real timestamp");
