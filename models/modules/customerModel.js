@@ -36,6 +36,12 @@ const customerSchema = new mongoose.Schema({
   emirate: { type: String, trim: true, default: undefined },
   shippingAddress: { type: String, default: null, trim: true },
   creditLimit: { type: Number, default: 0, min: 0 },
+  // Where the shop is, pinned from a van on a first visit (phase 5). Absent until somebody pins it; a van sale or visit
+  // far from it is flagged on the supervisor's board, never refused.
+  location: {
+    type: new mongoose.Schema({ lat: Number, lng: Number, setAt: Date, setBy: String }, { _id: false }),
+    default: undefined,
+  },
   // Goods dispatched to this customer must have at least this many days of shelf life left.
   minShelfLifeDays: { type: Number, default: 0, min: 0 },
   // "Net 30", "Net 45", "Net 60", "Cash on Delivery", "Prepaid", or "Net <days>" for any other credit period.

@@ -174,6 +174,20 @@ const MODULES = {
       manage: "Change the service menu, bays and garage settings",
     },
   },
+  // The second industry VERTICAL: a distributor's vans. A salesman loads stock onto a van, sells and collects on the
+  // road, unloads and settles. Like garage it may be held without sales/purchase/inventory; raising the invoice and
+  // taking the money are done THROUGH the van trip, which re-checks the trip is open and the stock is on the van.
+  vansales: {
+    label: "Van sales",
+    hint: "Vans, routes, loading, selling and collecting on the road, and the end-of-day settlement",
+    actions: {
+      view: "See vans, routes and trips",
+      sell: "Sell, collect and take returns on a trip the person owns",
+      load: "Load a van, top it up and count it back in",
+      settle: "Settle a trip: cash handed in, shortages and stock differences",
+      manage: "Change vans and routes, and override a customer's credit stop",
+    },
+  },
   audit: {
     label: "Activity trail",
     hint: "Who did what",

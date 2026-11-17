@@ -226,7 +226,13 @@ class TransactionService {
         const existing = await Transaction.findOne({ transactionNo: typed.toUpperCase() }).session(session);
         if (existing) throw new AppError(`Transaction number ${typed} already exists`, 400, "NUMBER_ALREADY_USED");
       }
-      const finalTransactionNo = await NumberSeriesService.numberFor(series, { typed, date: date || new Date(), session, docType: "Transaction" });
+      // A van trip reserves a block of invoice numbers when it goes out, so a sale made with no signal can carry its
+      // final number on the slip (VanTripSales). That number was already issued by the counter and is in the register;
+      // only the van service can pass it (data.reservedNumber is stripped from every request body), and the unique index
+      // on transactionNo still refuses it a second time.
+      const finalTransactionNo = data.reservedNumber
+        ? String(data.reservedNumber).trim().toUpperCase()
+        : await NumberSeriesService.numberFor(series, { typed, date: date || new Date(), session, docType: "Transaction" });
 
       // Stock availability check disabled for order capture
       // Previously validated for sales_order and purchase_return; now we only fetch to ensure item exists
@@ -296,6 +302,8 @@ class TransactionService {
         // Set only by jobCardService.createInvoice; a request body can never reach it (stripped in
         // transactionController.js, like quoteRef/linkedRef).
         jobCardRef: data.jobCardRef || undefined,
+        // Set only by VanTripService (an invoice or return raised on a van trip); stripped from a request body.
+        vanTripRef: data.vanTripRef || undefined,
         // Set only by TradeOrderService.createInvoice (an order converted straight to its invoice); stripped
         // from a request body like jobCardRef.
         tradeOrderRef: type === "sales_order" ? data.tradeOrderRef || undefined : undefined,
@@ -359,7 +367,7 @@ class TransactionService {
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
-      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef"]) delete data[key];
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "reservedNumber"]) delete data[key];
       // changing a document takes back an approval it was given: what was approved is no longer what is there
       if (transaction.approvals?.length) transaction.approvals = [];
 
@@ -468,6 +476,7 @@ class TransactionService {
       }
 
       const wasApproved = transaction.status === "APPROVED";
+      if (wasApproved) await require("../vansales/vanTripGuard").assertNotCountedIn(transaction, { session });
 
       // An invoice that has gone out as an e-invoice is a legal record: it is corrected with a
       // credit note, never deleted. (A failed attempt never left the building, so it does not count.)
@@ -565,6 +574,9 @@ class TransactionService {
         // the 3-way match, once more at the moment it counts
         await ReceiptLinks.assertWithinReceipts(transaction, transaction.items, { session });
         await ReceiptLinks.assertWithinDeliveries(transaction, transaction.items, { session });
+        // A document raised on a van trip may only be approved while that trip is still out, and an invoice only while the
+        // stock it sells is still on the van - whoever presses Approve and from whichever screen.
+        await require("../vansales/vanTripGuard").assertTripAllows(transaction, { session });
         const stockUpdates = await this.processTransactionStock(id, transaction, createdBy, session);
         // Accounting entries (receivable/payable, revenue or inventory, VAT, cost of goods sold).
         // A no-op until the company has mapped its accounts and switched ledger posting on.
@@ -601,6 +613,7 @@ class TransactionService {
 
       if (action === "cancel") {
         if (wasApproved) {
+          await require("../vansales/vanTripGuard").assertNotCountedIn(transaction, { session });
           await PostingService.reverseTransaction(transaction, { session });
           await this.reverseTransactionStock(
             id,
@@ -822,7 +835,7 @@ const logAmount = balanceEffect;
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
         "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
-        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals jobCardRef tradeOrderRef vatRegistered";
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals jobCardRef tradeOrderRef vanTripRef vatRegistered";
       const [docs, total] = await Promise.all([
         Transaction.find(query).select(FIELDS).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
         Transaction.countDocuments(query),

@@ -20,10 +20,14 @@ exports.getAllStock = catchAsync(async (req, res) => {
   let stocks = await StockService.getAllStock(req.query);
   // what is out with job workers (a coater): still on hand in the books, shown beside the level (utils/jobWork.js)
   const away = await require("../../services/stock/jobWorkService").withJobWorker();
-  if (away.size) {
+  // and what is sitting in vans (utils/vanSales.js): the same idea, derived from the van trips that are still out
+  const onVans = await require("../../services/vansales/vanTripService").withOnVans();
+  if (away.size || onVans.size) {
     stocks = stocks.map((s) => {
-      const qty = away.get(String(s._id));
-      return qty ? { ...(s.toObject ? s.toObject() : s), withJobWorker: qty } : s;
+      const id = String(s._id);
+      const jw = away.get(id);
+      const vn = onVans.get(id);
+      return jw || vn ? { ...(s.toObject ? s.toObject() : s), ...(jw ? { withJobWorker: jw } : {}), ...(vn ? { onVan: vn } : {}) } : s;
     });
   }
 

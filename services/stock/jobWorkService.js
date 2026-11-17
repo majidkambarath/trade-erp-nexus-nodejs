@@ -173,6 +173,9 @@ class JobWorkService {
     const o = await this.load(id, session);
     if (o.status !== "DRAFT") throw fail(`${o.jobWorkNo || "This job work"} has already been sent`, 409, "JOB_WORK_NOT_DRAFT");
     const away = await this.withJobWorker({ session });
+    // stock sitting in vans is no more free to send to a job worker than stock already with one
+    const onVans = await require("../vansales/vanTripService").withOnVans({ session });
+    for (const [sid, q] of onVans) away.set(sid, round3((away.get(sid) || 0) + q));
     const wanted = new Map();
     for (const l of o.lines) wanted.set(String(l.rawStockId), round3((wanted.get(String(l.rawStockId)) || 0) + l.qtySent));
     const stocks = await Stock.find({ _id: { $in: [...wanted.keys()] } }).select("itemName currentStock purchasePrice").session(session).lean();
@@ -182,7 +185,7 @@ class JobWorkService {
       const free = round3((Number(s?.currentStock) || 0) - (away.get(sid) || 0));
       if (!s || free + 1e-9 < qty) {
         throw fail(
-          `Only ${Math.max(0, free)} of ${s?.itemName || "this item"} is free to send (${s?.currentStock ?? 0} on hand, ${away.get(sid) || 0} already with job workers); this job sends ${qty}`,
+          `Only ${Math.max(0, free)} of ${s?.itemName || "this item"} is free to send (${s?.currentStock ?? 0} on hand, ${away.get(sid) || 0} already with job workers or on vans); this job sends ${qty}`,
           409, "INSUFFICIENT_STOCK", { stockId: sid, free, needed: qty }
         );
       }

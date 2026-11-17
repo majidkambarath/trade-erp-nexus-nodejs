@@ -67,4 +67,18 @@ router.get("/:token/photo/:attachmentId", publicRoute("an inspection photo on th
   stream.pipe(res);
 }));
 
+// A van invoice's page (van sales, phase 6): what the customer owes, when the van comes next, what they ordered for it,
+// and a short form asking for goods on that visit. The read answers 404 for any link that is not a van invoice; the
+// request is a DRAFT order for the salesman (services/vansales/vanCustomerLinkService.js), as tightly limited as the
+// estimate decision above.
+const VanCustomerLinkService = require("../../services/vansales/vanCustomerLinkService");
+router.get("/:token/van", publicRoute("the customer's page for a van invoice reads their statement and next visit; the secret in the link is the credential"), byAddress, byLink, catchAsync(async (req, res) => {
+  const link = await ShareService.resolve(req.params.token);
+  res.status(200).json({ success: true, data: await VanCustomerLinkService.view(link) });
+}));
+router.post("/:token/van-request", publicRoute("the customer asks the van for goods on its next visit; the secret in the link is the credential"), byAddress, decideByLink, catchAsync(async (req, res) => {
+  const link = await ShareService.resolve(req.params.token);
+  res.status(201).json({ success: true, data: await VanCustomerLinkService.request(link, req.body) });
+}));
+
 module.exports = router;

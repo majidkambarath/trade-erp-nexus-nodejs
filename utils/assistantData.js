@@ -382,7 +382,7 @@ function stockAlertsTable(reorder, expiry, { days = 30 } = {}) {
 
 // ---- telling a lookup from a how-to --------------------------------------------------------------
 
-const LOOKUP_WORDS = /\b(profit|loss|balance sheet|financial position|position|how are we doing|how is the business|expire|expiry|expiring|expired|alerts?|out of stock|reorder|unpaid|outstanding|owe|owes|owed|owing|overdue|due|balance|balances|pending|stock|on hand|in stock|low|sales|sold|purchases|bought|cash|bank|list|show|total|how much|how many)\b/i;
+const LOOKUP_WORDS = /\b(van|route|visited|profit|loss|balance sheet|financial position|position|how are we doing|how is the business|expire|expiry|expiring|expired|alerts?|out of stock|reorder|unpaid|outstanding|owe|owes|owed|owing|overdue|due|balance|balances|pending|stock|on hand|in stock|low|sales|sold|purchases|bought|cash|bank|list|show|total|how much|how many)\b/i;
 const HOW_TO = /^\s*(how (do|can|should) i|how to|where (do|can) i|what is a|what does|explain|why)\b/i;
 
 /** "list unpaid vendors", "how much do we owe Al Noor", "stock of rice": a question about the person's own figures. */

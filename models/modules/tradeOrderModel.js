@@ -32,6 +32,13 @@ const tradeOrderSchema = new mongoose.Schema(
     // conversion sets it after the order is made (quotationService.convertToTradeOrder).
     quoteRef: { type: String, trim: true, default: "" },
     status: { type: String, required: true, default: "DRAFT" },
+    // Where the order came from when it was not typed at a desk: a van salesman taking tomorrow's order (`van`), or
+    // the customer asking through their own document link (`customer_link`). Absent on every other order. Written only
+    // by services/vansales/vanPlanningService.js, never from a request body.
+    source: {
+      type: new mongoose.Schema({ kind: { type: String, enum: ["van", "customer_link"] }, tripId: mongoose.Schema.Types.ObjectId, tripNo: String, routeId: mongoose.Schema.Types.ObjectId }, { _id: false }),
+      default: undefined,
+    },
 
     items: { type: [orderLine], default: [] },
     charges: { type: [chargeSchema], default: [] },
@@ -58,6 +65,7 @@ tradeOrderSchema.index({ companyId: 1, branchId: 1, kind: 1, orderNo: 1 }, { uni
 tradeOrderSchema.index({ companyId: 1, kind: 1, status: 1, date: -1 });
 tradeOrderSchema.index({ companyId: 1, partyId: 1, date: -1 });
 tradeOrderSchema.index({ companyId: 1, createdAt: -1 });
+tradeOrderSchema.index({ companyId: 1, "source.routeId": 1, status: 1 }, { partialFilterExpression: { "source.routeId": { $exists: true } } });
 
 // Scope every query and write to the organisation in scope; an order belongs to a branch (utils/tenantPlugin.js).
 tradeOrderSchema.plugin(tenantPlugin, { branchScoped: true });

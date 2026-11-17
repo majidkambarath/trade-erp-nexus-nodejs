@@ -31,6 +31,7 @@ const GROUPS = [
 const MODULE_INFO = {
   crm: { group: "crm", sections: ["Dashboard", "Leads", "Contacts", "Pipeline", "Communications", "Follow-ups", "Calendar", "Reports", "Setup"] },
   garage: { group: "vertical", sections: ["Board", "Vehicles", "Job cards", "Claims", "Reports", "Setup"] },
+  vansales: { group: "vertical", sections: ["My van", "Trips", "Settlement", "Vans and routes", "Reports"] },
   sales: { group: "trade", sections: [{ feature: "quotations" }, "Orders", { feature: "deliveryNotes" }, "Invoices", "Returns", "Customers", { feature: "messaging" }, { feature: "invoiceAttachments" }] },
   purchase: { group: "trade", sections: ["Orders", "Goods received", "Invoices", "Returns", "Vendors"] },
   inventory: { group: "trade", sections: ["Stock items", "Movements", "Categories", "Units", { feature: "batches" }, { feature: "production" }] },

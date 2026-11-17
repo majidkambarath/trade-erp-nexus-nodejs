@@ -1197,20 +1197,17 @@ class FinancialService {
   const partyField = isPayment ? "vendorId" : "customerId";
   const logType = isPayment ? "payment_received" : "payment_made";
 
-  // POPULATE invoiceId to get transactionNo
-  const populatedInvoices = await Voucher.populate(voucher, {
-    path: "linkedInvoices.invoiceId",
-    select: "transactionNo totalAmount",
-    model: "Transaction",
-  });
+  // The invoice numbers, read INSIDE the caller's transaction: a populate runs outside the session, so it cannot see an
+  // invoice made in the same transaction (a van sale makes the invoice and takes the money in one) and would find none.
+  const invoices = await Transaction.find({ _id: { $in: linkedInvoices.map((l) => l.invoiceId) } }).select("transactionNo").session(session || null).lean();
+  const numberOf = new Map(invoices.map((i) => [String(i._id), i.transactionNo]));
 
   const logs = [];
 
-  for (const link of populatedInvoices.linkedInvoices) {
+  for (const link of linkedInvoices) {
     const { invoiceId, allocatedAmount, previousBalance, newBalance } = link;
 
-    // Now invoiceId is populated → we can safely access transactionNo
-    const invNo = invoiceId?.transactionNo || invoiceId.toString();
+    const invNo = numberOf.get(String(invoiceId)) || String(invoiceId);
 
     logs.push({
       [partyField]: partyId,
@@ -1500,7 +1497,7 @@ class FinancialService {
   // { status: "approved" } or { createdBy: <someone else> } and skip every approval rule.
   static withoutSystemFields(data) {
     const out = { ...data };
-    for (const key of ["_id", "voucherNo", "voucherType", "companyId", "branchId", "status", "approvalStatus", "approvals", "approvedBy", "approvedAt", "createdBy", "createdAt", "heldCheque", "ledgerBased"]) delete out[key];
+    for (const key of ["_id", "voucherNo", "voucherType", "companyId", "branchId", "status", "approvalStatus", "approvals", "approvedBy", "approvedAt", "createdBy", "createdAt", "heldCheque", "ledgerBased", "vanTripRef"]) delete out[key];
     return out;
   }
 
@@ -1926,6 +1923,8 @@ class FinancialService {
 
         // Period lock: nothing may change inside a closed fiscal year.
         await FiscalYearService.assertPostingAllowed(voucher.date, { session });
+        // a receipt (or the settlement journal) of a van trip already counted in stays: correct it with a new voucher
+        if (voucher.status === "approved") await require("../vansales/vanTripGuard").assertNotCountedIn(voucher, { session });
 
         // What the audit log keeps of the voucher, read before it is cancelled.
         const removed = {

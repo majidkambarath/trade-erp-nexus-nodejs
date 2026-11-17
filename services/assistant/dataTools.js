@@ -22,6 +22,7 @@ const StockReportsService = require("../reports/stockReportsService");
 const FinancialService = require("../financial/financialService");
 const DefaultChartService = require("../financial/defaultChartService");
 const { findParty, choiceReply } = require("./partyLookup");
+const van = require("./vanTools");
 
 const ok = (d) => ({ ok: true, data: d });
 const refused = (error) => ({ ok: false, error });
@@ -147,10 +148,10 @@ const mayUse = (def, req) => (!def.needs || roles.can(grantsOf(req), def.needs))
 /** The tools to OFFER this person: none when the organisation switched lookups off, and only those they hold the keys for. */
 function definitionsFor(req, settings) {
   if (settings && settings.lookupsEnabled === false) return [];
-  return DEFINITIONS.filter((d) => mayUse(d, req)).map(({ needs, needsAny, ...def }) => def);
+  return [...DEFINITIONS.filter((d) => mayUse(d, req)).map(({ needs, needsAny, ...def }) => def), ...van.lookupDefinitions(req)];
 }
 
-const names = () => DEFINITIONS.map((d) => d.name);
+const names = () => [...DEFINITIONS.map((d) => d.name), ...van.LOOKUPS.map((d) => d.name)];
 const isDataTool = (name) => names().includes(name);
 
 const currencyOf = () => orgLocale.baseCurrency();
@@ -251,6 +252,13 @@ async function alerts(input) {
 /** Run one lookup for this person. Always resolves to { ok, data } or { ok: false, error }: a refusal is a result, not a throw. */
 async function run(name, input, ctx, settings) {
   if (settings && settings.lookupsEnabled === false) return refused("Looking things up in your books is switched off for this organisation.");
+  if (van.isLookup(name)) {
+    try {
+      return await van.runLookup(name, input && typeof input === "object" ? input : {}, ctx);
+    } catch (err) {
+      return refused(`I could not look that up just now: ${String(err?.message || err).slice(0, 160)}.`);
+    }
+  }
   const def = DEFINITIONS.find((d) => d.name === name);
   if (!def) return refused(`There is no tool called ${name}.`);
   if (!mayUse(def, ctx.req)) return refused("Your role cannot see that. Ask an administrator.");

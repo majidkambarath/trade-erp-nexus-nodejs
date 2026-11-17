@@ -171,7 +171,9 @@ class YearEndService {
         Promise.all([
           sessionOf(Transaction.countDocuments({ status: "DRAFT", isOpening: { $ne: true }, date: within }), session),
           sessionOf(require("../../models/modules/productionOrderModel").countDocuments({ status: "DRAFT", date: within }), session),
-        ]).then(([trade, production]) => trade + production),
+          // a van trip not yet settled is unfinished business in the period: its sales could not be completed once it is locked
+          sessionOf(require("../../models/modules/vansales/vanTripModel").countDocuments({ status: { $in: ["LOADING", "ON_ROUTE", "UNLOADED"] }, date: within }), session),
+        ]).then(([trade, production, vanTrips]) => trade + production + vanTrips),
         sessionOf(Voucher.countDocuments({ status: { $in: ["draft", "pending"] }, date: within }), session),
         this.balances(fy, { session }),
         AccountConfigService.isPostingEnabled({ session }),

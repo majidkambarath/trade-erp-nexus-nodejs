@@ -52,9 +52,15 @@ class ChequeService {
     return row;
   }
 
-  static async list(req, { status, direction, q, from, to, page = 1, limit = 50 } = {}) {
+  static async list(req, { status, direction, q, from, to, vanTripId, page = 1, limit = 50 } = {}) {
     const { companyId } = getTenant(req);
     const filter = { companyId };
+    // the cheques taken on one van trip (van sales): the receipts that trip raised name it
+    if (vanTripId) {
+      const { Voucher } = require("../../models/modules/financial/financialModels");
+      const ids = require("mongoose").isValidObjectId(vanTripId) ? (await Voucher.find({ "vanTripRef.tripId": vanTripId }).select("_id").lean()).map((v) => v._id) : [];
+      filter.voucherId = { $in: ids };
+    }
     if (status) filter.status = status;
     if (direction) filter.direction = direction;
     if (from || to) filter.chequeDate = { ...(from ? { $gte: new Date(from) } : {}), ...(to ? { $lte: new Date(to) } : {}) };

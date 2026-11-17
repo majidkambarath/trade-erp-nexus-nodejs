@@ -63,7 +63,7 @@ const ALWAYS_ON = ["lookups.view", "settings.view", "reports.view"];
 // A VERTICAL: a module that belongs to one industry, not to the product everybody buys. Like an opt-in FEATURE
 // above, it is in NO plan - not even Premium or Internal - and an organisation only ever gets it by a module
 // override from the developer console. The next vertical goes here.
-const OPT_IN_MODULES = ["garage"];
+const OPT_IN_MODULES = ["garage", "vansales"];
 const ALL_MODULES = Object.fromEntries(MODULE_KEYS.map((m) => [m, !OPT_IN_MODULES.includes(m)]));
 /** Every module but the ones named, which are off; `detail` sells one in part ({ reports: ["view"] }). */
 const modulesExcept = (off = [], detail = {}) => ({
