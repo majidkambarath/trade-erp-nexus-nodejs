@@ -226,7 +226,13 @@ class TransactionService {
         const existing = await Transaction.findOne({ transactionNo: typed.toUpperCase() }).session(session);
         if (existing) throw new AppError(`Transaction number ${typed} already exists`, 400, "NUMBER_ALREADY_USED");
       }
-      const finalTransactionNo = await NumberSeriesService.numberFor(series, { typed, date: date || new Date(), session, docType: "Transaction" });
+      // A van trip reserves a block of invoice numbers when it goes out, so a sale made with no signal can carry its
+      // final number on the slip (VanTripSales). That number was already issued by the counter and is in the register;
+      // only the van service can pass it (data.reservedNumber is stripped from every request body), and the unique index
+      // on transactionNo still refuses it a second time.
+      const finalTransactionNo = data.reservedNumber
+        ? String(data.reservedNumber).trim().toUpperCase()
+        : await NumberSeriesService.numberFor(series, { typed, date: date || new Date(), session, docType: "Transaction" });
 
       // Stock availability check disabled for order capture
       // Previously validated for sales_order and purchase_return; now we only fetch to ensure item exists
@@ -361,7 +367,7 @@ class TransactionService {
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
-      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef"]) delete data[key];
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "reservedNumber"]) delete data[key];
       // changing a document takes back an approval it was given: what was approved is no longer what is there
       if (transaction.approvals?.length) transaction.approvals = [];
 

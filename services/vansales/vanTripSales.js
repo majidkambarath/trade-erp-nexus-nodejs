@@ -134,8 +134,15 @@ class VanTripSales {
     }
 
     const day = orgDay(input.date);
+    let reservedNumber;
+    if (input.number) {
+      reservedNumber = String(input.number).trim().toUpperCase();
+      if (!(trip.numberBlock || []).includes(reservedNumber)) throw fail(`${reservedNumber} is not one of this trip's reserved numbers`, 400, "NUMBER_NOT_RESERVED");
+      if (await Transaction.exists({ transactionNo: reservedNumber }).session(session)) throw fail(`${reservedNumber} has already been used`, 409, "NUMBER_ALREADY_USED");
+    }
     const invoice = await TransactionService.createTransaction(
       {
+        reservedNumber,
         type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", date: day, items,
         notes: input.notes ? String(input.notes).slice(0, 500) : `Van ${trip.vanCode} ${trip.tripNo}`,
         status: "DRAFT", vanTripRef: refOf(trip),
@@ -224,6 +231,36 @@ class VanTripSales {
     const items = await Stock.find({ _id: { $in: ids } }).select("salesPrice").lean();
     const map = await PriceListService.pricesFor({ customerId, routeId: trip.routeId, items: items.map((s) => ({ stockId: s._id, qty: 1, itemPrice: Number(s.salesPrice) || 0 })) });
     return [...map].map(([stockId, p]) => ({ stockId, ...p }));
+  }
+
+  /**
+   * Everything the phone keeps for working with no signal, read in one go while it still has some: the trip and what is
+   * on the van, the customers it may sell to (the route's, plus any the salesman searched for), each one's prices for
+   * what is on the van, and the reserved invoice numbers not used yet. Stamped with the time it was read, which the
+   * screen shows: a figure from this pack is "as of" that time, never passed off as live.
+   */
+  static async offlinePack(tripId, { extraCustomerIds = [] } = {}) {
+    const VanTripService = require("./vanTripService");
+    const trip = await loadTrip(tripId);
+    const shown = await VanTripService.present(trip);
+    const route = trip.routeId ? await require("../../models/modules/vansales/vanRouteModel").findById(trip.routeId).lean() : null;
+    const ids = [...new Set([...(route?.customers || []).map((c) => String(c.customerId)), ...extraCustomerIds.map(String)])].filter(isId).slice(0, 300);
+    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status").lean();
+    const stock = await stockOf(trip);
+    const items = await Stock.find({ _id: { $in: [...stock.sellable.keys()] } }).select("salesPrice").lean();
+    const prices = {};
+    for (const c of customers) {
+      const map = await PriceListService.pricesFor({ customerId: c._id, routeId: trip.routeId, items: items.map((s) => ({ stockId: s._id, qty: 1, itemPrice: Number(s.salesPrice) || 0 })) });
+      prices[String(c._id)] = Object.fromEntries([...map].map(([k, p]) => [k, p.price]));
+    }
+    const used = new Set((await Transaction.find({ transactionNo: { $in: trip.numberBlock || [] } }).select("transactionNo").lean()).map((t) => t.transactionNo));
+    return {
+      at: new Date().toISOString(),
+      trip: shown,
+      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "" })),
+      prices,
+      freeNumbers: (trip.numberBlock || []).filter((n) => !used.has(n)),
+    };
   }
 
   /** What a customer still owes and which of their invoices can be returned against: the salesman's lookup on the road. */

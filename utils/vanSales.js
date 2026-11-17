@@ -257,7 +257,12 @@ function validateVan(input = {}) {
     if (!Number.isFinite(cashLimit) || cashLimit < 0) throw new VanError("The cash limit is an amount of zero or more", "VAN_CASH_LIMIT_INVALID");
     cashLimit = round2(cashLimit);
   }
-  return { code, name, plate: text(input.plate, 20).toUpperCase(), cashLimit };
+  let offlineBlock = 0;
+  if (input.offlineBlock !== undefined && input.offlineBlock !== null && input.offlineBlock !== "") {
+    offlineBlock = Number(input.offlineBlock);
+    if (!Number.isInteger(offlineBlock) || offlineBlock < 0 || offlineBlock > 200) throw new VanError("Reserve between 0 and 200 invoice numbers for offline sales", "VAN_OFFLINE_BLOCK_INVALID");
+  }
+  return { code, name, plate: text(input.plate, 20).toUpperCase(), cashLimit, offlineBlock };
 }
 
 /** Normalise a route: a name, the weekdays it runs (0 = Sunday), and its customers in visit order. */

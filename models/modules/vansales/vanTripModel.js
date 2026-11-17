@@ -103,6 +103,10 @@ const vanTripSchema = new mongoose.Schema(
     status: { type: String, enum: ["LOADING", "ON_ROUTE", "UNLOADED", "SETTLED", "CANCELLED"], default: "LOADING" },
 
     loads: [loadSchema],
+    // invoice numbers reserved when the van went out, for sales made with no signal (phase 3). Which are used is
+    // derived from the invoices; the rest are retired with a reason when the van is counted in.
+    numberBlock: [{ type: String, trim: true }],
+    numbersRetiredAt: Date,
     returns: [returnRecord],
     unload: { type: unloadSchema, default: undefined },
     settlement: { type: settlementSchema, default: undefined },

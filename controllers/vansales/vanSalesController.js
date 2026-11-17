@@ -170,4 +170,20 @@ exports.whatsappInvoice = catchAsync(async (req, res) => {
   ok(res, r);
 });
 
+// ---- working with no signal (phase 3) -----------------------------------------------------------------------
+exports.offlinePack = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const extra = String(req.query.customers || "").split(",").filter(Boolean).slice(0, 100);
+  ok(res, await VanTripSales.offlinePack(req.params.tripId, { extraCustomerIds: extra }));
+});
+exports.sync = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const acknowledging = (req.body?.ops || []).some((o) => o?.body?.acknowledged);
+  if (acknowledging) assertMayAcknowledge({ ...req, body: { acknowledged: true } });
+  const VanSyncService = require("../../services/vansales/vanSyncService");
+  const out = await VanSyncService.sync(req.params.tripId, req.body?.ops, by(req), { req, mayUnderprice: holds(req, "vansales.manage"), byName: req.admin?.name });
+  if (out.applied) await AuditService.log({ req, action: "VAN_SYNCED", entity: "VanTrip", entityId: req.params.tripId, summary: `${out.applied} done with no signal sent from the van${out.refused ? `, ${out.refused} refused` : ""}` });
+  ok(res, { ...out, trip: await VanTripService.getById(req.params.tripId) });
+});
+
 exports.summary = catchAsync(async (req, res) => ok(res, await VanSalesReportService.summary(req.query)));

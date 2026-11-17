@@ -134,7 +134,7 @@ test("the trip's life only moves forward", () => {
 });
 
 test("a van and a route are validated and tidied", () => {
-  assert.deepEqual(v.validateVan({ code: " van-1 ", name: "Van One", plate: "dxb 123" }), { code: "VAN-1", name: "Van One", plate: "DXB 123", cashLimit: null });
+  assert.deepEqual(v.validateVan({ code: " van-1 ", name: "Van One", plate: "dxb 123" }), { code: "VAN-1", name: "Van One", plate: "DXB 123", cashLimit: null, offlineBlock: 0 });
   assert.equal(v.validateVan({ code: "V", name: "x", cashLimit: "5000" }).cashLimit, 5000);
   assert.throws(() => v.validateVan({ code: "V", name: "x", cashLimit: -1 }), (e) => e.code === "VAN_CASH_LIMIT_INVALID");
   assert.throws(() => v.validateVan({ name: "x" }), (e) => e.code === "VAN_CODE_REQUIRED");

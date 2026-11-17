@@ -216,6 +216,13 @@ class VanTripService {
     const trip = await loadTrip(id, session);
     if (!rules.canMove(trip.status, "ON_ROUTE")) throw fail("This trip is not waiting to go out", 409, "TRIP_NOT_LOADING");
     if (!trip.loads.length) throw fail("Load the van before it goes out", 409, "NOTHING_LOADED");
+    // a van that may sell with no signal takes a block of invoice numbers with it, so a slip printed offline carries
+    // the number the invoice will have. Issued by the counter now, so nobody else can be given them.
+    const van = await Van.findById(trip.vanId).select("offlineBlock").session(session).lean();
+    const size = Number(van?.offlineBlock) || 0;
+    if (size > 0 && !trip.numberBlock?.length) {
+      trip.numberBlock = await NumberSeriesService.allocateMany("SO", size, trip.date, { session, docType: "Transaction" });
+    }
     trip.status = "ON_ROUTE";
     trip.updatedBy = String(by);
     await trip.save({ session });

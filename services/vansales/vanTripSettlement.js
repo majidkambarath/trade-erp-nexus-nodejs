@@ -81,6 +81,15 @@ class VanTripSettlement {
     };
     trip.status = "UNLOADED";
     trip.updatedBy = String(by);
+    if (trip.numberBlock?.length && !trip.numbersRetiredAt) {
+      const Transaction = require("../../models/modules/transactionModel");
+      const NumberSeriesService = require("../core/numberSeriesService");
+      const used = new Set((await Transaction.find({ transactionNo: { $in: trip.numberBlock } }).select("transactionNo").session(session).lean()).map((t) => t.transactionNo));
+      for (const number of trip.numberBlock.filter((n) => !used.has(n))) {
+        await NumberSeriesService.release({ number, series: "SO", retire: true, reason: `Reserved for van trip ${trip.tripNo}, not used`, session, by });
+      }
+      trip.numbersRetiredAt = new Date();
+    }
     await trip.save({ session });
     return trip;
   });

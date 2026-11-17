@@ -58,6 +58,8 @@ router.get("/trips/:tripId/prices", requirePermission("vansales.sell"), c.prices
 router.get("/trips/:tripId/visits", requirePermission("vansales.view"), c.visits);
 router.post("/trips/:tripId/visits", requirePermission("vansales.sell"), c.recordVisit);
 router.post("/trips/:tripId/transfer", requirePermission("vansales.load"), c.transfer);
+router.get("/trips/:tripId/offline", requirePermission("vansales.sell"), c.offlinePack);
+router.post("/trips/:tripId/sync", requirePermission("vansales.sell"), c.sync);
 router.post("/trips/:tripId/invoices/:invoiceId/whatsapp", requirePermission("vansales.sell"), requireFeature("messaging"), sendLimit, c.whatsappInvoice);
 router.post("/trips/:tripId/collect", requirePermission("vansales.sell"), c.collect);
 router.post("/trips/:tripId/return", requirePermission("vansales.sell"), c.returnGoods);

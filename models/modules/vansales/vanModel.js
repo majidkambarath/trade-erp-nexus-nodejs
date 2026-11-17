@@ -17,6 +17,8 @@ const vanSchema = new mongoose.Schema(
     cashAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "LedgerAccount", default: null },
     // the most cash the van should carry before it hands some in (null = no limit): a warning, never a refusal
     cashLimit: { type: Number, min: 0, default: null },
+    // invoice numbers reserved each trip for sales made with no signal (0 = this van always works online)
+    offlineBlock: { type: Number, min: 0, max: 200, default: 0 },
     active: { type: Boolean, default: true },
 
     createdBy: String,

@@ -24,19 +24,19 @@ function cleanLocation(loc) {
 class VanVisitService {
   static REASONS = REASONS;
 
-  static async record(tripId, input = {}, by, byName) {
-    const trip = await loadTrip(tripId);
+  static async record(tripId, input = {}, by, byName, session) {
+    const trip = await loadTrip(tripId, session);
     if (!rules.SELLING.has(trip.status)) throw fail("Visits are recorded while the van is out", 409, "TRIP_NOT_SELLING");
     if (!isId(input.customerId)) throw fail("Choose the customer", 400, "CUSTOMER_REQUIRED");
-    const c = await Customer.findById(input.customerId).select("customerName").lean();
+    const c = await Customer.findById(input.customerId).select("customerName").session(session || null).lean();
     if (!c) throw fail("That customer does not exist", 404, "CUSTOMER_NOT_FOUND");
     const outcome = input.outcome === "skipped" ? "skipped" : "no_sale";
     const reason = REASONS.includes(input.reason) ? input.reason : null;
     if (!reason) throw fail("Say why there was no sale", 400, "VISIT_REASON_REQUIRED");
     const [visit] = await VanVisit.create([{
       tripId: trip._id, tripNo: trip.tripNo, customerId: c._id, customerName: c.customerName, outcome, reason,
-      note: String(input.note || "").slice(0, 300), at: new Date(), location: cleanLocation(input.location), by: String(by), byName: byName || "",
-    }]);
+      note: String(input.note || "").slice(0, 300), at: input.at ? new Date(input.at) : new Date(), location: cleanLocation(input.location), by: String(by), byName: byName || "",
+    }], session ? { session } : undefined);
     return visit;
   }
 
