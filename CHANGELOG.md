@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.4.0.0 — 17 November 2026
+
+Van sales module (`/api/v1/van-sales/*`, opt-in module `vansales`). Frontend and backend both at 3.4.0.0.
+
+### Added
+
+- Vans, routes, trips (`VTR`), load / depart / sell / collect / return / count-in / settle. Stock on a van is derived, never
+  stored; goods leave the books only when the trip's invoice is approved (`vanTripGuard` on approval).
+- Price lists, promotions (applied on the server), pre-orders as `TradeOrder` with `source`, suggested load, expiry check.
+- Offline: reserved invoice numbers per van (opt-in), `POST /trips/:tripId/sync` idempotent on the phone's operation id.
+- Settlement journal with posting keys `salesman-shortages`, `cash-over-short`; road expenses on `van-expenses`.
+- GPS flags, odometer, `GET /van-sales/board`, `GET /van-sales/reports/route-profit`.
+- Zarvia AI lookups `van_stock`, `route_owing`, `route_not_visited`, `van_suggested_load` and `prepare_van_sale`.
+- Van calls on the CRM timeline; cheque register `vanTripId` filter; public `GET /share/:token/van` and
+  `POST /share/:token/van-request`.
+
+### Fixed
+
+- A receipt made in the same transaction as its invoice crashed (`createPaymentLogEntries` read outside the session).
+- `garageFullFlowHttp.test.js` had never run (database name over Atlas's 38-byte limit).
+
 ## 3.3.0.0 — 16 November 2026
 
 Zarvia AI answers from your own books, keeps your chats, and adds customers and vendors. Frontend and backend both at 3.3.0.0.
