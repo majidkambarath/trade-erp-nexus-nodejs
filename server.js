@@ -164,6 +164,7 @@ app.use("/api/v1/productions", require("./routes/stock/productionRoutes")); // p
 app.use("/api/v1/job-work", require("./routes/stock/jobWorkRoutes")); // job work (subcontracting): before adminRouter, like every new top-level GET
 app.use("/api/v1/process-orders", require("./routes/stock/processOrderRoutes")); // process orders and the board: before adminRouter, like every new top-level GET
 app.use("/api/v1/process-routes", require("./routes/stock/processRouteRoutes")); // saved routes per product: before adminRouter, like every new top-level GET
+app.use("/api/v1/van-sales", require("./routes/vansales/vanSalesRoutes")); // the van sales module: vans, routes, trips; before adminRouter, like every new top-level GET
 app.use("/api/v1/garage", require("./routes/garage/garageRoutes")); // the garage module: vehicles and job cards; before adminRouter, like every new top-level GET
 app.use("/api/v1/hr", require("./routes/hr/hrRoutes")); // the HR module: employees and their contracts/cost rates; before adminRouter, like every new top-level GET
 app.use("/api/v1/employee", require("./routes/hr/employeePortalRoutes")); // D15: the employee's own self-service door, a SEPARATE identity from /api/v1/hr

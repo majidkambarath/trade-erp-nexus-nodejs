@@ -213,6 +213,14 @@ const transactionSchema = new mongoose.Schema({
     tradeOrderId: { type: mongoose.Schema.Types.ObjectId, ref: "TradeOrder" },
     orderNo: { type: String, trim: true },
   },
+  // The van trip this invoice (or sales return) was raised on (services/vansales/vanTripService.js). Set only by that
+  // service; stripped from a request body like jobCardRef. Approving a document that carries it re-checks the trip is
+  // still out and the stock is on the van. Absent on every other document.
+  vanTripRef: {
+    tripId: { type: mongoose.Schema.Types.ObjectId, ref: "VanTrip" },
+    tripNo: { type: String, trim: true },
+    vanCode: { type: String, trim: true },
+  },
   creditNoteIssued: { type: Boolean, default: false },
   // Whether the organisation was registered for VAT on this document's date (UAE organisations only; services/financial/vatRegistrationService.js).
   // Stamped when it is priced and never defaulted: ABSENT means the document predates the rule and reads as it always did. A purchase

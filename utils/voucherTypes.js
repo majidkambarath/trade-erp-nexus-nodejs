@@ -10,7 +10,7 @@
 const HEAD_OFFICE = "main";
 
 // How the Numbering screen groups the list, and what a group is allowed to do.
-const KINDS = ["voucher", "trade", "inventory", "crm", "garage", "system"];
+const KINDS = ["voucher", "trade", "inventory", "crm", "garage", "vansales", "system"];
 const RESET_POLICIES = ["yearly", "never"];
 
 // The label a continuous series counts under. A counter is identified by the label it PRINTS (see labelOf),
@@ -60,6 +60,8 @@ const SEED = [
   // its own SO number), and the insurance claim is a record, not a posting document either.
   { key: "JC",   name: "Job card",               kind: "garage",    postsAs: null,               prefix: "JC",   statutory: false },
   { key: "CLM",  name: "Insurance claim",        kind: "garage",    postsAs: null,               prefix: "CLM",  statutory: false },
+  // Van sales: a trip is a record (one van, one day), not a posting document. The invoices it raises keep SO.
+  { key: "VTR",  name: "Van trip",               kind: "vansales",  postsAs: null,               prefix: "VTR",  statutory: false },
   // HR. An employee code is not a document number, but it is a number that must never be handed out twice,
   // and this is the only engine in the product allowed to hand one out (one atomic $inc per series, with the
   // IssuedNumber register behind it). It replaced `STF${year}-${Math.random() * 1000}`, which against a unique

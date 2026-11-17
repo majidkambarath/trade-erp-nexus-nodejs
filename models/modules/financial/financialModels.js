@@ -120,6 +120,13 @@ const voucherSchema = new mongoose.Schema({
   // True for vouchers posted straight to the chart of accounts (ledger accounts). Older journal,
   // contra and expense vouchers were posted to "transactor" accounts and keep working as they were.
   ledgerBased: { type: Boolean, default: false },
+  // The van trip a receipt (or the settlement journal) belongs to. Written only by VanTripService after the voucher
+  // is created; absent on every other voucher, and never read from a request body (a voucher body cannot reach it:
+  // createVoucher builds the stored document from what the type's processor returns).
+  vanTripRef: {
+    tripId: { type: mongoose.Schema.Types.ObjectId },
+    tripNo: { type: String, trim: true },
+  },
   description: { type: String, trim: true },
   // expense vouchers on the chart: which expense account, the VAT, who was paid
   expenseAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "LedgerAccount" },

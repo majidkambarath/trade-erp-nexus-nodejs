@@ -40,6 +40,9 @@ const SEED = [
   k("stock-adjustment", "Stock adjustment", "EXPENSE", "account"),
   // production: expenses put into a product's cost are credited here, so each expense account keeps what was spent on it
   k("production-absorbed", "Production costs moved to stock", "EXPENSE", "account"),
+  // van sales: what a salesman handed in short (owed by them until written off or recovered) and what came in over
+  k("salesman-shortages", "Salesman shortages (cash a salesman owes after a van settlement)", "ASSET", "account"),
+  k("cash-over-short", "Cash over and short (van settlement)", "INCOME", "account"),
   // What labour costs, and where it is debited before any of it is moved into the cost of what it made.
   // Payroll (a later wave) debits this too, so the two meet in one account by design: the labour in a
   // product is the same expense, moved - which is why absorbing it credits the "moved to stock" contra in
