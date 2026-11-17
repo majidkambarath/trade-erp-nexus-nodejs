@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.4.1.0 — 17 November 2026
+
+No backend change: the version follows the frontend (My van redesign).
+
 ## 3.4.0.0 — 17 November 2026
 
 Van sales module (`/api/v1/van-sales/*`, opt-in module `vansales`). Frontend and backend both at 3.4.0.0.
