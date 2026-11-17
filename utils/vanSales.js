@@ -262,7 +262,47 @@ function validateVan(input = {}) {
     offlineBlock = Number(input.offlineBlock);
     if (!Number.isInteger(offlineBlock) || offlineBlock < 0 || offlineBlock > 200) throw new VanError("Reserve between 0 and 200 invoice numbers for offline sales", "VAN_OFFLINE_BLOCK_INVALID");
   }
-  return { code, name, plate: text(input.plate, 20).toUpperCase(), cashLimit, offlineBlock };
+  return { code, name, plate: text(input.plate, 20).toUpperCase(), cashLimit, offlineBlock, ...targetsOf(input) };
+}
+
+/**
+ * A van's daily targets: what it should sell (an amount) and how many customers it should call on in a day. Both
+ * optional; blank means no target, never zero. Kept on the van and copied onto each trip as it opens, so changing a
+ * target later never rewrites how an earlier day is judged.
+ */
+function targetsOf(input = {}) {
+  const out = {};
+  const blank = (v) => v === undefined || v === null || v === "";
+  if ("dailySalesTarget" in input) {
+    if (blank(input.dailySalesTarget)) out.dailySalesTarget = null;
+    else {
+      const v = Number(input.dailySalesTarget);
+      if (!Number.isFinite(v) || v < 0 || v > 1e9) throw new VanError("The daily sales target is an amount of zero or more", "VAN_TARGET_INVALID");
+      out.dailySalesTarget = round2(v);
+    }
+  }
+  if ("dailyCallsTarget" in input) {
+    if (blank(input.dailyCallsTarget)) out.dailyCallsTarget = null;
+    else {
+      const v = Number(input.dailyCallsTarget);
+      if (!Number.isInteger(v) || v < 0 || v > 500) throw new VanError("The daily calls target is a whole number from 0 to 500", "VAN_TARGET_INVALID");
+      out.dailyCallsTarget = v;
+    }
+  }
+  return out;
+}
+
+/** How far a trip is toward its targets: done, the target, the share (capped at 100 for the bar, never for the figure) and what is left. */
+function targetProgress({ sales = 0, calls = 0, target } = {}) {
+  if (!target || (target.sales == null && target.calls == null)) return null;
+  const one = (done, goal, money) => (goal == null || !(Number(goal) > 0) ? null : {
+    target: money ? round2(goal) : Number(goal),
+    done: money ? round2(done) : Number(done),
+    pct: Math.round((Number(done) / Number(goal)) * 100),
+    toGo: money ? round2(Math.max(0, goal - done)) : Math.max(0, Number(goal) - Number(done)),
+    hit: Number(done) >= Number(goal),
+  });
+  return { sales: one(Number(sales) || 0, target.sales, true), calls: one(Number(calls) || 0, target.calls, false) };
 }
 
 /** Normalise a route: a name, the weekdays it runs (0 = Sunday), and its customers in visit order. */
@@ -429,6 +469,92 @@ function routeProfit(rows = []) {
   }).sort((x, y) => y.contribution - x.contribution);
 }
 
+/**
+ * What a salesman should know at a customer's door, from that customer's own invoices (newest first, each
+ * `{number, date, lines: [{stockId, name, qty}]}`) and what is on the van now (`onVan`: Map or object stockId -> qty):
+ *  - lastOrder: the latest invoice, its lines merged per item, each marked with how many the van holds now;
+ *  - usual: the items bought most often (in at least two invoices, or the only one there is), with the average
+ *    quantity, best first - only what the van can sell now;
+ *  - notLately: items bought in two or more of the OLDER invoices and in none of the last three - a sale slipping
+ *    away - again only what the van holds.
+ * Pure: nothing stored, nothing guessed beyond the customer's own history.
+ */
+function customerInsight({ invoices = [], onVan } = {}) {
+  const held = onVan instanceof Map ? onVan : new Map(Object.entries(onVan || {}));
+  const qtyOn = (id) => Number(held.get(String(id))) || 0;
+  const merge = (lines = []) => {
+    const m = new Map();
+    for (const l of lines) {
+      const id = String(l.stockId || "");
+      if (!id || !(Number(l.qty) > 0)) continue;
+      const cur = m.get(id) || { stockId: id, name: l.name || "", qty: 0 };
+      cur.qty = round3(cur.qty + Number(l.qty));
+      m.set(id, cur);
+    }
+    return [...m.values()];
+  };
+  const list = invoices.map((i) => ({ number: i.number, date: i.date, lines: merge(i.lines) })).filter((i) => i.lines.length);
+  const last = list[0];
+  const lastOrder = last ? { number: last.number, date: last.date, lines: last.lines.map((l) => ({ ...l, onVan: qtyOn(l.stockId) })) } : null;
+  const seen = new Map();
+  list.forEach((inv, idx) => {
+    for (const l of inv.lines) {
+      const cur = seen.get(l.stockId) || { stockId: l.stockId, name: l.name, count: 0, qty: 0, recent: false, older: 0 };
+      cur.count += 1;
+      cur.qty = round3(cur.qty + l.qty);
+      if (idx < 3) cur.recent = true; else cur.older += 1;
+      if (!cur.name && l.name) cur.name = l.name;
+      seen.set(l.stockId, cur);
+    }
+  });
+  const minCount = list.length <= 1 ? 1 : 2;
+  const average = (x) => Math.max(1, Math.round(x.qty / x.count));
+  const usual = [...seen.values()]
+    .filter((x) => x.count >= minCount && qtyOn(x.stockId) > 0 && (list.length <= 3 || x.recent))
+    .sort((a, b) => b.count - a.count || b.qty - a.qty || String(a.name).localeCompare(String(b.name)))
+    .slice(0, 6)
+    .map((x) => ({ stockId: x.stockId, name: x.name, times: x.count, avgQty: average(x), onVan: qtyOn(x.stockId) }));
+  const notLately = list.length > 3
+    ? [...seen.values()]
+      .filter((x) => !x.recent && x.older >= 2 && qtyOn(x.stockId) > 0)
+      .sort((a, b) => b.older - a.older || b.qty - a.qty)
+      .slice(0, 5)
+      .map((x) => ({ stockId: x.stockId, name: x.name, times: x.older, avgQty: average(x), onVan: qtyOn(x.stockId) }))
+    : [];
+  return { invoices: list.length, lastOrder, usual, notLately };
+}
+
+/**
+ * The figures an owner judges a van, a salesman or a route by, from rolled-up counts (`{sales, invoices, lines, calls,
+ * productive, expenses}`): the average drop (what one invoice is worth), lines per productive call (how wide a
+ * basket is), strike rate (of the customers called on, the share that bought), and cost per drop (road expenses per
+ * invoice). Null, never zero, when there is nothing to divide by.
+ */
+function kpis(a = {}) {
+  const n = (v) => Number(v) || 0;
+  return {
+    dropSize: n(a.invoices) ? round2(n(a.sales) / n(a.invoices)) : null,
+    linesPerCall: n(a.productive) ? round2(n(a.lines) / n(a.productive)) : null,
+    strikeRate: n(a.calls) ? Math.round((n(a.productive) / n(a.calls)) * 1000) / 10 : null,
+    costPerDrop: n(a.invoices) ? round2(n(a.expenses) / n(a.invoices)) : null,
+  };
+}
+
+/** Sales and invoices per calendar day over a period (rows carry `day` "YYYY-MM-DD"); every day of the range is present. */
+function salesByDay(rows = [], from, to) {
+  const m = new Map();
+  if (from && to && from <= to) for (let d = from, i = 0; d <= to && i < 400; d = addDays(d, 1), i += 1) m.set(d, { day: d, sales: 0, invoices: 0 });
+  for (const r of rows) {
+    const d = String(r.day || "").slice(0, 10);
+    if (!d) continue;
+    const cur = m.get(d) || { day: d, sales: 0, invoices: 0 };
+    cur.sales = round2(cur.sales + (Number(r.sales) || 0));
+    cur.invoices += Number(r.invoices) || 0;
+    m.set(d, cur);
+  }
+  return [...m.values()].sort((a, b) => a.day.localeCompare(b.day));
+}
+
 module.exports = {
   STATUSES, HOLDING, SELLING, MOVES, VanError,
   round2, round3, idOf,
@@ -437,4 +563,5 @@ module.exports = {
   canMove, validateVan, validateRoute, overCashLimit, calls,
   suggestLoad, expiringOnLoad, addDays, nextRunDay,
   FAR_METRES, QUIET_HOURS, distanceM, farFrom, odometerOf, kmRun, boardRow, routeProfit,
+  targetsOf, targetProgress, customerInsight, kpis, salesByDay,
 };

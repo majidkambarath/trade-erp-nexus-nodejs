@@ -77,7 +77,7 @@ class VanService {
     const base = wrap(() => rules.validateVan({ ...input, code: van.code }));
     const sales = input.salesmanId !== undefined ? await this.#salesman(input.salesmanId) : {};
     const defaultRouteId = input.defaultRouteId !== undefined ? await this.#route(input.defaultRouteId) : van.defaultRouteId;
-    van.set({ name: base.name, plate: base.plate, ...sales, defaultRouteId, updatedBy, ...(input.cashLimit !== undefined ? { cashLimit: base.cashLimit } : {}), ...(input.offlineBlock !== undefined ? { offlineBlock: base.offlineBlock } : {}) });
+    van.set({ name: base.name, plate: base.plate, ...sales, defaultRouteId, updatedBy, ...(input.cashLimit !== undefined ? { cashLimit: base.cashLimit } : {}), ...(input.offlineBlock !== undefined ? { offlineBlock: base.offlineBlock } : {}), ...("dailySalesTarget" in base ? { dailySalesTarget: base.dailySalesTarget } : {}), ...("dailyCallsTarget" in base ? { dailyCallsTarget: base.dailyCallsTarget } : {}) });
     if (typeof input.active === "boolean" && input.active !== van.active) {
       if (!input.active && (await VanTrip.exists({ vanId: van._id, status: { $in: ["LOADING", "ON_ROUTE", "UNLOADED"] } }))) {
         throw fail("This van has a trip that is not settled yet", 409, "VAN_HAS_OPEN_TRIP");

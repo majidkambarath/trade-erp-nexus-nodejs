@@ -111,6 +111,9 @@ const vanTripSchema = new mongoose.Schema(
     departedAt: Date,
     // km on the clock going out and coming back (phase 5); route profitability reads the difference
     odometer: { type: new mongoose.Schema({ out: Number, in: Number }, { _id: false }), default: undefined },
+    // the van's daily targets as they stood when the trip was opened (absent on trips from before targets, and on a
+    // van with none: the trip view then reads the van's current ones)
+    target: { type: new mongoose.Schema({ sales: Number, calls: Number }, { _id: false }), default: undefined },
     // where the phone was at each sale / payment / visit it reported a location for, against the customer's pinned
     // place. A flag for the supervisor's board, never a refusal: a phone's location can be poor.
     pings: [

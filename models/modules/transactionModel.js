@@ -285,6 +285,8 @@ transactionSchema.index({ type: 1, date: -1 });
 transactionSchema.index({ type: 1, status: 1, date: -1 });
 transactionSchema.index({ date: -1 });
 transactionSchema.index({ isOpening: 1, type: 1, partyId: 1 });
+// a customer's latest approved invoices, newest first (the van salesman's "what do they usually buy" read)
+transactionSchema.index({ partyId: 1, type: 1, status: 1, date: -1 });
 transactionSchema.index({ createdAt: -1, _id: -1 });
 
 transactionSchema.index({ transactionNo: 1 }, { unique: true }); // unique within an organisation - NOT per branch: a tax invoice number must be unique per taxpayer, so branches take their own prefix in the number format

@@ -220,3 +220,38 @@ test("route profit: sales less returns, cost of goods, damage, road expenses and
   assert.equal(n.perKm, 5.63);
   assert.deepEqual([rows[1].contribution, rows[1].perKm], [-30, null], "a route that lost money, never driven on record");
 });
+
+// ---- phase 7: the door, targets and the owner's figures -------------------------------------------------------
+test("customerInsight: the last order, the usual items and what they stopped buying, all cut to the van", () => {
+  const inv = (number, ...lines) => ({ number, date: "2026-11-01", lines: lines.map(([stockId, name, qty]) => ({ stockId, name, qty })) });
+  const invoices = [inv("S5", ["a", "Rice", 6], ["b", "Oil", 2]), inv("S4", ["a", "Rice", 4]), inv("S3", ["a", "Rice", 5]), inv("S2", ["c", "Sugar", 3]), inv("S1", ["c", "Sugar", 5], ["d", "Salt", 1])];
+  const r = v.customerInsight({ invoices, onVan: { a: 20, b: 0, c: 9 } });
+  assert.deepEqual(r.lastOrder.lines.map((l) => [l.name, l.qty, l.onVan]), [["Rice", 6, 20], ["Oil", 2, 0]], "the last order keeps a line the van no longer holds, marked 0");
+  assert.deepEqual(r.usual.map((x) => [x.name, x.times, x.avgQty]), [["Rice", 3, 5]], "usual = bought often AND lately, and only what the van has");
+  assert.deepEqual(r.notLately.map((x) => [x.name, x.times, x.avgQty]), [["Sugar", 2, 4]], "Sugar was bought twice before and not in the last three");
+  assert.equal(v.customerInsight({ invoices: [], onVan: {} }).lastOrder, null);
+  const one = v.customerInsight({ invoices: [inv("S1", ["a", "Rice", 3])], onVan: { a: 5 } });
+  assert.deepEqual(one.usual.map((x) => x.name), ["Rice"], "one invoice is all there is, so it is their usual");
+  assert.deepEqual(one.notLately, []);
+});
+
+test("kpis: drop size, lines per call, strike rate and cost per drop are null with nothing to divide by", () => {
+  assert.deepEqual(v.kpis({ sales: 1000, invoices: 4, lines: 10, calls: 5, productive: 4, expenses: 60 }), { dropSize: 250, linesPerCall: 2.5, strikeRate: 80, costPerDrop: 15 });
+  assert.deepEqual(v.kpis({}), { dropSize: null, linesPerCall: null, strikeRate: null, costPerDrop: null });
+});
+
+test("targets: blank is no target, a bad one is refused, progress caps nothing but says what is left", () => {
+  assert.equal(v.targetsOf({ dailySalesTarget: "" }).dailySalesTarget, null);
+  assert.deepEqual(v.targetsOf({ dailySalesTarget: "1500.456", dailyCallsTarget: 12 }), { dailySalesTarget: 1500.46, dailyCallsTarget: 12 });
+  assert.deepEqual(v.targetsOf({}), {}, "an update that names no target leaves them alone");
+  assert.throws(() => v.targetsOf({ dailySalesTarget: -1 }), { code: "VAN_TARGET_INVALID" });
+  assert.throws(() => v.targetsOf({ dailyCallsTarget: 2.5 }), { code: "VAN_TARGET_INVALID" });
+  assert.equal(v.targetProgress({ sales: 5, target: null }), null);
+  const p = v.targetProgress({ sales: 700, calls: 12, target: { sales: 1000, calls: 10 } });
+  assert.deepEqual([p.sales.pct, p.sales.toGo, p.sales.hit, p.calls.pct, p.calls.toGo, p.calls.hit], [70, 300, false, 120, 0, true]);
+});
+
+test("salesByDay: every day of the period is there, quiet days as zero", () => {
+  const d = v.salesByDay([{ day: "2026-11-02", sales: 5, invoices: 1 }, { day: "2026-11-02", sales: 7.5, invoices: 2 }], "2026-11-01", "2026-11-03");
+  assert.deepEqual(d.map((x) => [x.day, x.sales, x.invoices]), [["2026-11-01", 0, 0], ["2026-11-02", 12.5, 3], ["2026-11-03", 0, 0]]);
+});

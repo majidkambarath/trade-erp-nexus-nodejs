@@ -40,18 +40,23 @@ class VanSalesReportService {
     };
     const buyersByTrip = group(buyerRows);
     const visitedByTrip = group(visitRows);
-    const [docs, receipts] = ids.length
+    const [docs, receipts, spent] = ids.length
       ? await Promise.all([
           Transaction.aggregate([
             { $match: { "vanTripRef.tripId": { $in: ids }, status: "APPROVED", type: { $in: ["sales_order", "sales_return"] } } },
-            { $group: { _id: { trip: "$vanTripRef.tripId", type: "$type" }, total: { $sum: "$totalAmount" }, count: { $sum: 1 } } },
+            { $group: { _id: { trip: "$vanTripRef.tripId", type: "$type" }, total: { $sum: "$totalAmount" }, count: { $sum: 1 }, lines: { $sum: { $size: { $ifNull: ["$items", []] } } } } },
           ]),
           Voucher.aggregate([
             { $match: { "vanTripRef.tripId": { $in: ids }, voucherType: "receipt", status: "approved" } },
             { $group: { _id: { trip: "$vanTripRef.tripId", mode: "$paymentMode" }, total: { $sum: "$totalAmount" } } },
           ]),
+          Voucher.aggregate([
+            { $match: { "vanTripRef.tripId": { $in: ids }, voucherType: "expense", status: "approved" } },
+            { $group: { _id: "$vanTripRef.tripId", total: { $sum: "$totalAmount" } } },
+          ]),
         ])
-      : [[], []];
+      : [[], [], []];
+    const expenseOf = new Map(spent.map((r) => [String(r._id), r.total]));
     const sales = new Map();
     for (const d of docs) sales.set(`${d._id.trip}:${d._id.type}`, d);
     const money = new Map();
@@ -59,11 +64,17 @@ class VanSalesReportService {
 
     const rows = trips.map((t) => {
       const k = String(t._id);
+      const tripSales = round2(sales.get(`${k}:sales_order`)?.total || 0);
+      const goal = t.target && t.target.sales != null && Number(t.target.sales) > 0 ? Number(t.target.sales) : null;
       return {
         id: k, tripNo: t.tripNo, date: t.date, status: t.status, vanId: String(t.vanId), vanCode: t.vanCode, vanName: t.vanName,
         salesmanId: t.salesmanId, salesmanName: t.salesmanName, routeName: t.routeName,
         invoices: sales.get(`${k}:sales_order`)?.count || 0,
-        sales: round2(sales.get(`${k}:sales_order`)?.total || 0),
+        lines: sales.get(`${k}:sales_order`)?.lines || 0,
+        expenses: round2(expenseOf.get(k) || 0),
+        sales: tripSales,
+        salesTarget: goal,
+        targetHit: goal == null ? null : tripSales >= goal,
         returned: round2(sales.get(`${k}:sales_return`)?.total || 0),
         cash: round2(money.get(`${k}:cash`) || 0),
         cheques: round2(money.get(`${k}:cheque`) || 0),
@@ -75,11 +86,14 @@ class VanSalesReportService {
     const roll = (key, label) => {
       const m = new Map();
       for (const r of rows) {
-        const cur = m.get(r[key]) || { id: r[key], name: r[label], trips: 0, invoices: 0, sales: 0, returned: 0, cash: 0, cheques: 0, cashVariance: 0, calls: 0, productive: 0 };
+        const cur = m.get(r[key]) || { id: r[key], name: r[label], trips: 0, invoices: 0, lines: 0, expenses: 0, sales: 0, returned: 0, cash: 0, cheques: 0, cashVariance: 0, calls: 0, productive: 0, targetTrips: 0, targetDays: 0 };
         cur.calls += r.calls;
         cur.productive += r.productive;
         cur.trips += 1;
         cur.invoices += r.invoices;
+        cur.lines += r.lines;
+        cur.expenses = round2(cur.expenses + r.expenses);
+        if (r.targetHit !== null) { cur.targetTrips += 1; if (r.targetHit) cur.targetDays += 1; }
         cur.sales = round2(cur.sales + r.sales);
         cur.returned = round2(cur.returned + r.returned);
         cur.cash = round2(cur.cash + r.cash);
@@ -87,13 +101,15 @@ class VanSalesReportService {
         cur.cashVariance = round2(cur.cashVariance + (r.cashVariance || 0));
         m.set(r[key], cur);
       }
-      return [...m.values()].map((x) => ({ ...x, strikeRate: x.calls ? Math.round((x.productive / x.calls) * 1000) / 10 : null })).sort((a, b) => b.sales - a.sales);
+      return [...m.values()].map((x) => ({ ...x, ...rules.kpis(x) })).sort((a, b) => b.sales - a.sales);
     };
-    const total = rows.reduce(
-      (t, r) => ({ trips: t.trips + 1, invoices: t.invoices + r.invoices, sales: round2(t.sales + r.sales), returned: round2(t.returned + r.returned), cash: round2(t.cash + r.cash), cheques: round2(t.cheques + r.cheques), cashVariance: round2(t.cashVariance + (r.cashVariance || 0)) }),
-      { trips: 0, invoices: 0, sales: 0, returned: 0, cash: 0, cheques: 0, cashVariance: 0 }
+    const total0 = rows.reduce(
+      (t, r) => ({ trips: t.trips + 1, invoices: t.invoices + r.invoices, lines: t.lines + r.lines, expenses: round2(t.expenses + r.expenses), calls: t.calls + r.calls, productive: t.productive + r.productive, sales: round2(t.sales + r.sales), returned: round2(t.returned + r.returned), cash: round2(t.cash + r.cash), cheques: round2(t.cheques + r.cheques), cashVariance: round2(t.cashVariance + (r.cashVariance || 0)) }),
+      { trips: 0, invoices: 0, lines: 0, expenses: 0, calls: 0, productive: 0, sales: 0, returned: 0, cash: 0, cheques: 0, cashVariance: 0 }
     );
-    return { from: start, to: end, rows, byVan: roll("vanId", "vanCode"), bySalesman: roll("salesmanId", "salesmanName"), total };
+    const total = { ...total0, ...rules.kpis(total0) };
+    const byDay = rules.salesByDay(rows.map((r) => ({ day: new Date(r.date).toISOString().slice(0, 10), sales: r.sales, invoices: r.invoices })), start, end);
+    return { from: start, to: end, rows, byVan: roll("vanId", "vanCode"), bySalesman: roll("salesmanId", "salesmanName"), total, byDay };
   }
 
   /**

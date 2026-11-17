@@ -19,6 +19,10 @@ const vanSchema = new mongoose.Schema(
     cashLimit: { type: Number, min: 0, default: null },
     // invoice numbers reserved each trip for sales made with no signal (0 = this van always works online)
     offlineBlock: { type: Number, min: 0, max: 200, default: 0 },
+    // what the van should sell and how many customers it should call on in a day; absent or null = no target.
+    // Copied onto each trip as it opens (VanTrip.target), so a later change never re-judges an earlier day.
+    dailySalesTarget: { type: Number, min: 0 },
+    dailyCallsTarget: { type: Number, min: 0, max: 500 },
     active: { type: Boolean, default: true },
 
     createdBy: String,

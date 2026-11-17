@@ -148,12 +148,22 @@ test("a salesman may sell, collect and count in on his own trip, and sees only w
   assert.equal(pin.status, 403);
   assert.equal(pin.code, "CUSTOMER_NOT_ON_ROUTE");
 
+  // what a customer usually buys is the salesman's to read on his own trip: the invoice he just made is their last order
+  const insight = await call("ali", "GET", `/van-sales/trips/${tripId}/customers/${cust._id}/insight`);
+  assert.equal(insight.status, 200, JSON.stringify(insight.data));
+  assert.equal(insight.body.lastOrder.lines[0].qty, 10);
+  assert.equal(insight.body.lastOrder.lines[0].onVan, 30);
+
   const refused = await call("ali", "POST", `/van-sales/trips/${tripId}/sell`, { customerId: String(cust._id), items: [{ itemId: rice._id, qty: 31, price: 20 }] });
   assert.equal(refused.status, 409);
   assert.equal(refused.code, "VAN_STOCK_SHORT");
 });
 
 test("another salesman cannot work this trip, whatever he holds", { skip }, async () => {
+  // nor read a customer's buying history through it
+  const peek = await call("bob", "GET", `/van-sales/trips/${tripId}/customers/${cust._id}/insight`);
+  assert.equal(peek.status, 403);
+  assert.equal(peek.code, "PERMISSION_DENIED");
   for (const [u, body] of [[`/van-sales/trips/${tripId}/sell`, { customerId: String(cust._id), items: [{ itemId: rice._id, qty: 1 }] }], [`/van-sales/trips/${tripId}/collect`, { customerId: String(cust._id), amount: 5 }], [`/van-sales/trips/${tripId}/unload`, { counts: [] }]]) {
     const r = await call("bob", "POST", u, body);
     assert.equal(r.status, 403, u);

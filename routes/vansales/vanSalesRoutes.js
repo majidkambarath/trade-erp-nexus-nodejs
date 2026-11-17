@@ -67,6 +67,7 @@ router.post("/trips/:tripId/preorders", requirePermission("vansales.sell"), c.cr
 router.post("/trips/:tripId/cancel", requirePermission("vansales.load"), c.cancel);
 router.post("/trips/:tripId/sell", requirePermission("vansales.sell"), c.sell);
 router.get("/trips/:tripId/prices", requirePermission("vansales.sell"), c.prices);
+router.get("/trips/:tripId/customers/:customerId/insight", requirePermission("vansales.sell"), c.insight);
 router.get("/trips/:tripId/visits", requirePermission("vansales.view"), c.visits);
 router.post("/trips/:tripId/visits", requirePermission("vansales.sell"), c.recordVisit);
 router.post("/trips/:tripId/transfer", requirePermission("vansales.load"), c.transfer);
