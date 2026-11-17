@@ -31,7 +31,7 @@ const GROUPS = [
 const MODULE_INFO = {
   crm: { group: "crm", sections: ["Dashboard", "Leads", "Contacts", "Pipeline", "Communications", "Follow-ups", "Calendar", "Reports", "Setup"] },
   garage: { group: "vertical", sections: ["Board", "Vehicles", "Job cards", "Claims", "Reports", "Setup"] },
-  sales: { group: "trade", sections: [{ feature: "quotations" }, "Orders", { feature: "deliveryNotes" }, "Invoices", "Returns", "Customers", { feature: "messaging" }] },
+  sales: { group: "trade", sections: [{ feature: "quotations" }, "Orders", { feature: "deliveryNotes" }, "Invoices", "Returns", "Customers", { feature: "messaging" }, { feature: "invoiceAttachments" }] },
   purchase: { group: "trade", sections: ["Orders", "Goods received", "Invoices", "Returns", "Vendors"] },
   inventory: { group: "trade", sections: ["Stock items", "Movements", "Categories", "Units", { feature: "batches" }, { feature: "production" }] },
   finance: { group: "money", sections: ["Receipts", "Payments", "Journal", "Contra", "Expenses", "Debit and credit notes", "Ledger"] },
@@ -62,6 +62,7 @@ const FEATURE_INFO = {
   ifrsStatements: { hint: "Statement of financial position, profit or loss, cash flows and notes" },
   einvoicing: { hint: "Electronic tax invoices sent to the tax authority" },
   messaging: { hint: "Email or WhatsApp an invoice to the customer with a secure link" },
+  invoiceAttachments: { label: "Invoice files", hint: "The Attachments section on sales and purchase invoices: customer order, signed delivery note, proof of delivery" },
   assistant: { label: "Zarvia AI", hint: "An in-app assistant that answers the client's questions about Zarvia from our own documentation, and sends us what it cannot answer" },
   multiBranch: { hint: "More than one branch, each with its own documents and numbering" },
   production: { label: "Production", hint: "Materials and expenses moved into a product's cost, job work and process orders. Off for everyone unless switched on here" },

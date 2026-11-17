@@ -385,3 +385,13 @@ test("the developer can add a module to a CRM-only organisation, and its plan do
   assert.equal(p.moduleAllows(withSales, "sales.approve"), false, "only the actions that were sold");
   assert.equal(p.moduleAllows({ planCode: "crm" }, "sales.create"), false, "and another organisation on the plan is untouched");
 });
+
+test("invoice attachments: on wherever there are trade documents, and one organisation can switch them off", () => {
+  for (const code of ["trial", "standard", "premium", "trading", "internal"]) {
+    assert.equal(p.effectiveFeatures({ planCode: code }).invoiceAttachments, true, code);
+  }
+  assert.equal(p.effectiveFeatures({ planCode: "crm" }).invoiceAttachments, false, "a CRM-only organisation has no invoices");
+  const off = p.effectiveFeatures({ planCode: "standard", featureOverrides: { invoiceAttachments: false } });
+  assert.equal(off.invoiceAttachments, false);
+  assert.equal(p.effectiveFeatures({ planCode: "standard" }).invoiceAttachments, true, "and another organisation on the plan is untouched");
+});
