@@ -7,7 +7,7 @@ const customerSchema = new mongoose.Schema({
   companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
   customerId: { type: String, required: true, trim: true },
   customerName: { type: String, required: true, trim: true },
-  contactPerson: { type: String, required: true, trim: true },
+  contactPerson: { type: String, trim: true, default: null }, // optional: a business may be dealt with by name only
   email: { type: String, match: /\S+@\S+\.\S+/, sparse: true, trim: true },
   phone: { type: String, sparse: true, trim: true },
   website: { type: String, trim: true, maxlength: 200, default: "" },
@@ -30,6 +30,10 @@ const customerSchema = new mongoose.Schema({
   // one (garage module, services/garage/insuranceClaimService.js). False for every existing customer.
   isInsurer: { type: Boolean, default: false },
   billingAddress: { type: String, default: null, trim: true },
+  // The address's country (ISO 3166 alpha-2) and, for the UAE, its emirate. Absent on a record saved before they existed, which stays valid:
+  // nothing is stamped on it until somebody edits the address (utils/partyAddress.js).
+  country: { type: String, trim: true, uppercase: true, default: undefined },
+  emirate: { type: String, trim: true, default: undefined },
   shippingAddress: { type: String, default: null, trim: true },
   creditLimit: { type: Number, default: 0, min: 0 },
   // Goods dispatched to this customer must have at least this many days of shelf life left.
@@ -38,7 +42,7 @@ const customerSchema = new mongoose.Schema({
   paymentTerms: {
     type: String,
     validate: { validator: (v) => isValidTerms("customer", v), message: "Invalid paymentTerms" },
-    default: "Net 30",
+    default: "Cash",
   },
   status: {
     type: String,

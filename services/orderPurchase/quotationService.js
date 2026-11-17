@@ -141,7 +141,7 @@ class QuotationService {
     const date = S.dayToDate(data.date) || new Date(todayInOrg());
     const validUntil = S.dayToDate(data.validUntil) || new Date(defaultValidUntil(todayInOrg(date)));
     if (validUntil < date) throw fail("The quotation cannot be valid for a period that ends before its date", 400, "INVALID_VALIDITY");
-    const priced = await S.priceDocument({ items: data.items, charges: data.charges, discount: data.discount, date }, { session });
+    const priced = await S.priceSalesDocument({ items: data.items, charges: data.charges, discount: data.discount, date }, { session });
 
     const { companyId, branchId } = getTenant();
     const quotationNo = await NumberSeriesService.numberFor("QT", { typed: data.manualNumber, date, session, docType: "Quotation" });
@@ -181,7 +181,7 @@ class QuotationService {
 
     const repriceable = data.items || data.charges !== undefined || data.discount !== undefined || data.date;
     if (repriceable) {
-      const priced = await S.priceDocument(
+      const priced = await S.priceSalesDocument(
         {
           items: data.items || doc.items.map((l) => S.toPricingInput(l.toObject())),
           charges: data.charges ?? doc.charges.map((c) => c.toObject()),
@@ -267,7 +267,7 @@ class QuotationService {
     }
     const today = todayInOrg();
     const date = new Date(today);
-    const priced = await S.priceDocument(
+    const priced = await S.priceSalesDocument(
       {
         items: old.items.map((l) => S.toPricingInput(l.toObject())),
         charges: old.charges.map((c) => c.toObject()),

@@ -434,7 +434,7 @@ class DeliveryNoteService {
     const lines = tradeOrder
       ? await DeliveryNoteService.#buildTradeOrderLines(data, tradeOrder, { session })
       : await DeliveryNoteService.#buildLines(data, order, { session });
-    const priced = await S.priceDocument(
+    const priced = await S.priceSalesDocument(
       { items: lines, charges: bound ? [] : data.charges, discount: bound ? 0 : data.discount, date },
       { session }
     );
@@ -522,7 +522,7 @@ class DeliveryNoteService {
           ? await DeliveryNoteService.#buildTradeOrderLines(data, tradeOrder, { session, excludeId: dn._id })
           : await DeliveryNoteService.#buildLines(data, order, { session, excludeId: dn._id })
         : await S.prepareLines(dn.items.map((l) => ({ ...S.toPricingInput(l.toObject()), sourceLineId: l.sourceLineId || undefined })), { session });
-      const priced = await S.priceDocument(
+      const priced = await S.priceSalesDocument(
         { items: lines, charges: bound ? [] : data.charges ?? dn.charges.map((c) => c.toObject()), discount: bound ? 0 : data.discount ?? dn.discount, date },
         { session }
       );
@@ -588,7 +588,7 @@ class DeliveryNoteService {
     const accepted = dn.items
       .map((l, i) => ({ line: l, delivered: settled.lines[i].deliveredQty }))
       .filter((x) => x.delivered > 0);
-    const priced = await S.priceDocument(
+    const priced = await S.priceSalesDocument(
       {
         items: accepted.map((x) => ({ ...S.toPricingInput(x.line.toObject(), x.delivered), sourceLineId: x.line.sourceLineId || undefined })),
         charges: dn.charges.map((c) => c.toObject()), discount: dn.discount, date: dn.date,

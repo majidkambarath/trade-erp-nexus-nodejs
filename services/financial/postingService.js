@@ -8,6 +8,7 @@ const AppError = require("../../utils/AppError");
 const { TEMPLATES, figuresFor, buildEntries, round2 } = require("../../utils/postingTemplates");
 const ItemKindService = require("../stock/itemKindService");
 const kinds = require("../../utils/itemKinds");
+const vatRule = require("../../utils/vatRegistration");
 
 // Ledger entries need an Admin ObjectId; order documents carry the creator as a free string.
 const SYSTEM_USER = new mongoose.Types.ObjectId("000000000000000000000000");
@@ -90,7 +91,11 @@ class PostingService {
     const cogs = ["sales_order", "sales_return"].includes(transaction.type)
       ? stockUpdates.reduce((t, u) => t + (Number(u.cost) || 0), 0)
       : 0;
-    const figures = figuresFor(transaction, cogs);
+    let figures = figuresFor(transaction, cogs);
+    // Bought while the organisation was not registered for VAT: what the supplier charged cannot be claimed back, so it is part of
+    // the cost. It goes into the goods and the charges and no Input VAT leg is posted; what the supplier is owed does not change.
+    const vatIsCost = vatRule.vatIsCost(transaction);
+    if (vatIsCost) figures = vatRule.foldVat(figures, transaction);
 
     // Resolve every account up front so a missing mapping fails before anything is written.
     const partyId = await this.partyAccount(transaction, session);
@@ -106,7 +111,7 @@ class PostingService {
       );
     }
     const entries = await this.routeServiceLines(
-      transaction,
+      vatIsCost ? { type: transaction.type, items: vatRule.itemsWithVat(transaction.items) } : transaction,
       buildEntries(transaction.type, figures, (a) => (a.party ? partyId : cache.get(a.key))),
       session
     );

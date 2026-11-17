@@ -8,12 +8,12 @@ exports.customerValidationRules = [
     .withMessage("Customer name must be between 2 and 100 characters")
     .trim(),
 
+  // optional: a blank contact person is allowed; a typed one is still length-checked
   body("contactPerson")
-    .notEmpty()
-    .withMessage("Contact person is required")
+    .optional({ values: "falsy" })
+    .trim()
     .isLength({ min: 2, max: 100 })
-    .withMessage("Contact person must be between 2 and 100 characters")
-    .trim(),
+    .withMessage("Contact person must be between 2 and 100 characters"),
 
   body("email")
     .optional()

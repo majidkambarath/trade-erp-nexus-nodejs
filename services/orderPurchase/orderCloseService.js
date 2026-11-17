@@ -76,7 +76,7 @@ async function trimmed(order, result, { session }) {
   const plain = order.toObject();
   const items = trimmedLines(plain, result, repriceLine);
   const built = await TransactionService.buildPricing(
-    { items, charges: plain.charges, discount: plain.discount, date: plain.date },
+    { items, charges: plain.charges, discount: plain.discount, date: plain.date, side: "sales" },
     session
   );
   // `rate` is the line's net value, the way the order form stores it
