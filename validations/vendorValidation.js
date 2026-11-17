@@ -2,7 +2,8 @@ const { body } = require("express-validator");
 
 exports.vendorValidationRules = [
   body("vendorName").trim().notEmpty().withMessage("Vendor name is required"),
-  body("contactPerson").trim().notEmpty().withMessage("Contact person is required"),
+  // optional: a blank contact person is allowed; a typed one is still length-checked
+  body("contactPerson").optional({ values: "falsy" }).trim().isLength({ min: 2, max: 100 }).withMessage("Contact person must be between 2 and 100 characters"),
   body("address").trim().notEmpty().withMessage("Address is required"),
   body("email").optional().isEmail().withMessage("Invalid email format"),
   body("phone")

@@ -7,7 +7,7 @@ const customerSchema = new mongoose.Schema({
   companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
   customerId: { type: String, required: true, trim: true },
   customerName: { type: String, required: true, trim: true },
-  contactPerson: { type: String, required: true, trim: true },
+  contactPerson: { type: String, trim: true, default: null }, // optional: a business may be dealt with by name only
   email: { type: String, match: /\S+@\S+\.\S+/, sparse: true, trim: true },
   phone: { type: String, sparse: true, trim: true },
   website: { type: String, trim: true, maxlength: 200, default: "" },
@@ -38,7 +38,7 @@ const customerSchema = new mongoose.Schema({
   paymentTerms: {
     type: String,
     validate: { validator: (v) => isValidTerms("customer", v), message: "Invalid paymentTerms" },
-    default: "Net 30",
+    default: "Cash",
   },
   status: {
     type: String,

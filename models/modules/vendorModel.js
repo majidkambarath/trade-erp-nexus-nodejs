@@ -15,7 +15,7 @@ const vendorSchema = new mongoose.Schema({
   bankAccounts: [bankAccountSchema],
   documents: [documentSchema],
   participantId: { type: String, trim: true, default: null }, // Peppol id, matches inbound e-invoices
-  contactPerson: { type: String, required: true, trim: true },
+  contactPerson: { type: String, trim: true, default: null }, // optional: a business may be dealt with by name only
   email: { type: String, match: /\S+@\S+\.\S+/, sparse: true, trim: true },
   phone: { type: String, sparse: true, trim: true },
   website: { type: String, trim: true, maxlength: 200, default: "" },
@@ -24,7 +24,7 @@ const vendorSchema = new mongoose.Schema({
   paymentTerms: {
     type: String,
     validate: { validator: (v) => isValidTerms("vendor", v), message: "Invalid paymentTerms" },
-    default: "30 days",
+    default: "Cash",
   },
   status: {
     type: String,

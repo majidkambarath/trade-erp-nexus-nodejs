@@ -64,6 +64,8 @@ test.before(async () => {
   app.use("/api/v1/document-types", require("../../routes/masters/documentTypeRoutes"));
   app.use("/api/v1/document-expiry", require("../../routes/masters/documentExpiryRoutes"));
   app.use("/api/v1/accounting", require("../../routes/financial/partyAccountRoutes"));
+  app.use("/api/v1/customers", require("../../routes/customer/customerRouter"));
+  app.use("/api/v1/vendors", require("../../routes/vendor/vendorRouter"));
   app.use(require("../../utils/errorHandler"));
   await new Promise((resolve) => { server = app.listen(0, "127.0.0.1", resolve); });
   base = `http://127.0.0.1:${server.address().port}/api/v1`;
@@ -256,8 +258,8 @@ test("vendors follow the same VAT rules, and a TRN may be held by one customer a
 
 test("credit days and payment terms stay in step, and ageing reads the same number of days", { skip }, async () => {
   const dflt = await svc.Customers.createCustomer(customer("Terms Default"));
-  assert.equal(dflt.paymentTerms, "Net 30");
-  assert.equal(dflt.credit.days, 30);
+  assert.equal(dflt.paymentTerms, "Cash"); // a new party is paid on the invoice date until terms are set
+  assert.equal(dflt.credit.days, 0);
 
   const fromTerms = await svc.Customers.createCustomer(customer("Terms Label", { paymentTerms: "Net 45" }));
   assert.equal(fromTerms.credit.days, 45);
@@ -356,6 +358,18 @@ test("names keep their inner spaces (the contact person was being squeezed into 
   const c = await svc.Customers.createCustomer(customer("Spacing Co", { contactPerson: "  Sara   Al Khan ", salesPerson: "Omar  Ali" }));
   assert.equal(c.contactPerson, "Sara Al Khan");
   assert.equal(c.salesPerson, "Omar Ali");
+});
+
+// A business may be dealt with by name only: the contact person is optional for both, over the real routes too.
+test("a customer or vendor can be saved without a contact person", { skip }, async () => {
+  const c = await svc.Customers.createCustomer(customer("No Contact Co", { contactPerson: undefined }));
+  assert.ok(!c.contactPerson);
+  const v = await svc.Vendors.createVendor(vendor("No Contact Vendor", { contactPerson: "" }));
+  assert.ok(!v.contactPerson);
+  const viaRoute = await call("POST", "/customers", { body: { customerName: "Route No Contact", billingAddress: "Deira" } });
+  assert.equal(viaRoute.status, 201, JSON.stringify(viaRoute.json));
+  const vendorRoute = await call("POST", "/vendors/vendors", { body: { vendorName: "Route Vendor No Contact", address: "Jebel Ali" } });
+  assert.equal(vendorRoute.status, 201, JSON.stringify(vendorRoute.json));
 });
 
 test("a website is kept as typed, checked for shape, and can be cleared", { skip }, async () => {
