@@ -60,7 +60,7 @@ async function main() {
 
     let van = await Van.findOne({ code: "VAN-01" }).lean();
     if (!van) {
-      van = await VanService.create({ code: "VAN-01", name: "Toyota Hiace - Deira", salesmanId: by, defaultRouteId: routeId, cashLimit: 20000 }, BY);
+      van = await VanService.create({ code: "VAN-01", name: "Toyota Hiace - Deira", salesmanId: by, defaultRouteId: routeId, cashLimit: 20000, dailySalesTarget: 2500, dailyCallsTarget: 5 }, BY);
       console.log(`Van made: VAN-01 with its cash account`);
     }
     const vanId = String(van._id || van.id);
