@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.4.2.0 — 17 November 2026
+
+No backend change: the version follows the frontend (Trips and Board redesign).
+
 ## 3.4.1.0 — 17 November 2026
 
 No backend change: the version follows the frontend (My van redesign).
