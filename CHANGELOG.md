@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.4.3.0 — 17 November 2026
+
+No backend change: the version follows the frontend (Settlement and Reports redesign).
+
 ## 3.4.2.0 — 17 November 2026
 
 No backend change: the version follows the frontend (Trips and Board redesign).
