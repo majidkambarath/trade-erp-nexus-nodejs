@@ -187,3 +187,31 @@ exports.sync = catchAsync(async (req, res) => {
 });
 
 exports.summary = catchAsync(async (req, res) => ok(res, await VanSalesReportService.summary(req.query)));
+
+// ---- selling more (phase 4): promotions, pre-orders, the suggested load ----------------------------------------
+const PromotionService = require("../../services/vansales/promotionService");
+const VanPlanningService = require("../../services/vansales/vanPlanningService");
+
+exports.listPromotions = catchAsync(async (req, res) => ok(res, await PromotionService.list({ includeInactive: req.query.all === "1" })));
+exports.getPromotion = catchAsync(async (req, res) => ok(res, await PromotionService.get(req.params.promotionId)));
+exports.createPromotion = catchAsync(async (req, res) => {
+  const p = await PromotionService.create(req.body || {}, by(req));
+  await AuditService.log({ req, action: "PROMOTION_CREATED", entity: "Promotion", entityId: p.id, summary: `Promotion ${p.name} added` });
+  ok(res, p, 201);
+});
+exports.updatePromotion = catchAsync(async (req, res) => {
+  const p = await PromotionService.update(req.params.promotionId, req.body || {}, by(req));
+  await AuditService.log({ req, action: "PROMOTION_UPDATED", entity: "Promotion", entityId: p.id, summary: `Promotion ${p.name} changed` });
+  ok(res, p);
+});
+
+exports.createPreorder = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const order = await VanPlanningService.createPreorder(req.params.tripId, { ...(req.body || {}), fromLink: false }, by(req));
+  await AuditService.log({ req, action: "VAN_PREORDER", entity: "VanTrip", entityId: req.params.tripId, summary: `${order.orderNo} taken on the van for the next visit` });
+  ok(res, order, 201);
+});
+exports.tripPreorders = catchAsync(async (req, res) => ok(res, await VanPlanningService.preordersForTrip(req.params.tripId)));
+exports.routePreorders = catchAsync(async (req, res) => ok(res, await VanPlanningService.preordersForRoute(req.params.routeId, { customerId: req.query.customerId })));
+exports.suggestedLoad = catchAsync(async (req, res) => ok(res, await VanPlanningService.suggestedLoad(req.params.tripId)));
+exports.loadCheck = catchAsync(async (req, res) => ok(res, await VanPlanningService.loadCheck(req.params.tripId, req.body || {})));

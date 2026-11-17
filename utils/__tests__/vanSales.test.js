@@ -143,3 +143,36 @@ test("a van and a route are validated and tidied", () => {
   assert.deepEqual(r.days, [1, 3]);
   assert.deepEqual(r.customers.map((c) => [c.customerId, c.seq]), [["a", 0], ["b", 1]]);
 });
+
+test("suggested load: pre-orders in full, the average sold per run rounded up, less what is on the van, capped by the depot", () => {
+  const m = (o) => new Map(Object.entries(o));
+  const r = v.suggestLoad({
+    preorders: m({ rice: 5 }),
+    history: [m({ rice: 10, oil: 3 }), m({ rice: 12, oil: 2 }), m({ rice: 11 })],
+    onVan: m({ rice: 4 }),
+    free: m({ rice: 100, oil: 1 }),
+    names: m({ rice: "Rice", oil: "Oil" }),
+  });
+  assert.deepEqual(r[0], { stockId: "rice", itemName: "Rice", qty: 12, why: { preorder: 5, average: 11, runs: 3, onVan: 4, free: 100, capped: false } });
+  assert.equal(r[1].stockId, "oil");
+  assert.equal(r[1].qty, 1, "oil averages 1.667 -> 2, but only 1 is free");
+  assert.equal(r[1].why.capped, true);
+  assert.deepEqual(v.suggestLoad({ history: [m({ rice: 2 })], onVan: m({ rice: 5 }) }), [], "already enough on the van");
+  assert.deepEqual(v.suggestLoad({}), [], "a route never run and nothing pre-ordered suggests nothing");
+});
+
+test("expiry on loading: the FEFO batches that cover the quantity, named when they die before the shelf life asked", () => {
+  const batches = [{ batchNo: "B1", expiryDate: "2026-11-20", qty: 5 }, { batchNo: "B2", expiryDate: "2026-12-30", qty: 50 }];
+  assert.deepEqual(v.expiringOnLoad(batches, 3, "2026-11-24"), [{ batchNo: "B1", expiryDate: "2026-11-20", qty: 3 }]);
+  assert.deepEqual(v.expiringOnLoad(batches, 20, "2026-11-24"), [{ batchNo: "B1", expiryDate: "2026-11-20", qty: 5 }]);
+  assert.deepEqual(v.expiringOnLoad(batches, 20, "2026-11-19"), []);
+  assert.equal(v.expiringOnLoad([{ batchNo: "D", expiryDate: new Date("2026-11-20T12:00:00Z"), qty: 1 }], 1, "2026-11-24").length, 1, "a real Date from the database");
+  assert.equal(v.addDays("2026-11-28", 7), "2026-12-05");
+});
+
+test("the next run of a route is its next weekday after today, else tomorrow", () => {
+  // 2026-11-17 is a Tuesday (2)
+  assert.equal(v.nextRunDay([2, 4], "2026-11-17"), "2026-11-19", "Tuesday's run is today: the next is Thursday");
+  assert.equal(v.nextRunDay([2], "2026-11-17"), "2026-11-24");
+  assert.equal(v.nextRunDay([], "2026-11-17"), "2026-11-18");
+});

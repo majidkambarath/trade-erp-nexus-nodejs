@@ -282,10 +282,73 @@ function validateRoute(input = {}) {
   return { name, days, customers, priceListId };
 }
 
+/**
+ * What to load for the next run of a route, each figure with the reason behind it:
+ *   want = what pre-orders ask for + the average sold per run over the last runs (history), less what is already on
+ *   the van; never more than the depot has free. A pre-order counts in full; the average is rounded UP to a whole unit.
+ * history: [Map(stockId -> qty sold on that run)]; preorders / onVan / free / names: Map keyed by stockId.
+ * -> [{ stockId, itemName, qty, why: { preorder, average, runs, onVan, free, capped } }], largest first.
+ */
+function suggestLoad({ preorders = new Map(), history = [], onVan: holding = new Map(), free = new Map(), names = new Map() } = {}) {
+  const runs = history.length;
+  const ids = new Set([...preorders.keys(), ...history.flatMap((h) => [...h.keys()])]);
+  const out = [];
+  for (const id of ids) {
+    const pre = round3(preorders.get(id) || 0);
+    const average = runs ? round3(history.reduce((t, h) => t + Number(h.get(id) || 0), 0) / runs) : 0;
+    const have = round3(holding.get(id) || 0);
+    let want = Math.max(0, pre + Math.ceil(average - EPS) - have);
+    const avail = free.has(id) ? Math.max(0, round3(free.get(id))) : Infinity;
+    const capped = want > avail + EPS;
+    if (capped) want = avail;
+    want = round3(want);
+    if (want <= EPS) continue;
+    out.push({ stockId: id, itemName: names.get(id) || "", qty: want, why: { preorder: pre, average, runs, onVan: have, free: avail === Infinity ? null : avail, capped } });
+  }
+  return out.sort((a, b) => b.qty - a.qty);
+}
+
+/**
+ * The batches FEFO would hand the van for `qty` (earliest expiry first) that expire before `mustLastUntil` (the trip
+ * day plus the shelf life the route's customers ask for). A warning only: short-dated stock may be loaded on purpose.
+ * batches: [{ batchNo, expiryDate: "YYYY-MM-DD" | null, qty }] already in FEFO order.
+ */
+function expiringOnLoad(batches = [], qty, mustLastUntil) {
+  const out = [];
+  let left = Number(qty) || 0;
+  for (const b of batches) {
+    if (left <= EPS) break;
+    const take = Math.min(left, Number(b.qty) || 0);
+    left = round3(left - take);
+    // a Date from the database prints as "Sat Nov 21 ...", which does not sort: take its ISO day
+    const exp = !b.expiryDate ? "" : b.expiryDate instanceof Date ? b.expiryDate.toISOString().slice(0, 10) : String(b.expiryDate).slice(0, 10);
+    if (exp && mustLastUntil && exp < mustLastUntil) out.push({ batchNo: b.batchNo || "", expiryDate: exp, qty: round3(take) });
+  }
+  return out;
+}
+
+/** The next day (after `fromDay`) a route runs, by its weekdays (0 = Sunday); no weekdays = tomorrow. */
+function nextRunDay(days = [], fromDay) {
+  const runs = new Set((days || []).map(Number));
+  for (let n = 1; n <= 7; n += 1) {
+    const d = addDays(fromDay, n);
+    if (!runs.size || runs.has(new Date(`${d}T00:00:00Z`).getUTCDay())) return d;
+  }
+  return addDays(fromDay, 1);
+}
+
+/** "YYYY-MM-DD" plus whole days. */
+function addDays(dayText, n) {
+  const d = new Date(`${String(dayText).slice(0, 10)}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + (Number(n) || 0));
+  return d.toISOString().slice(0, 10);
+}
+
 module.exports = {
   STATUSES, HOLDING, SELLING, MOVES, VanError,
   round2, round3, idOf,
   loadedOf, soldOf, returnedOf, onVan, onVansAll, freeDepot,
   validateLoadLines, shortages, unloadVariance, stockMoves, cashSettlement, missingCheques, routeToday,
   canMove, validateVan, validateRoute, overCashLimit, calls,
+  suggestLoad, expiringOnLoad, addDays, nextRunDay,
 };

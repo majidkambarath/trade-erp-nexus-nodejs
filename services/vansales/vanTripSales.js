@@ -13,6 +13,8 @@ const ReturnService = require("../orderPurchase/returnService");
 const FinancialService = require("../financial/financialService");
 const AgeingService = require("../financial/ageingService");
 const PriceListService = require("./priceListService");
+const PromotionService = require("./promotionService");
+const TradeOrder = require("../../models/modules/tradeOrderModel");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { todayInOrg } = require("../../utils/documentExpiry");
 const { loadTrip, stockOf } = require("./vanTripStock");
@@ -124,6 +126,32 @@ class VanTripSales {
       };
     });
 
+    // Promotions, on the server whatever the phone worked out: a line's discount is the offer's (on top of any the
+    // salesman typed), and goods given free are lines of their own at price 0 - they leave the van and the books at
+    // cost like any other, so the stock check below counts them.
+    const promo = await PromotionService.apply(items.map((l) => ({ itemId: String(l.itemId), qty: l.qty, price: l.price, discountPercent: l.discountPercent })), { customerId: customer._id, routeId: trip.routeId, date: input.date, session });
+    promo.lines.forEach((p, i) => { items[i].discountPercent = p.discountPercent; });
+    if (promo.free.length) {
+      const freeStocks = await Stock.find({ _id: { $in: promo.free.map((f) => f.stockId) } }).select("itemId itemName itemType").session(session).lean();
+      const named = new Map(freeStocks.map((s) => [String(s._id), s]));
+      const offer = new Map(promo.applied.map((a) => [a.id, a.name]));
+      for (const f of promo.free) {
+        const s = named.get(String(f.stockId));
+        if (!s || kinds.isService(s)) continue;
+        items.push({ itemId: s._id, itemCode: s.itemId, description: `${s.itemName} (free: ${offer.get(f.promoId) || "offer"})`, qty: f.qty, price: 0, discountPercent: 0 });
+        if (!byId.has(String(s._id))) byId.set(String(s._id), s);
+      }
+    }
+
+    // a pre-order this sale delivers: the customer's own, still open
+    let preorder = null;
+    if (input.preorderId) {
+      if (!isId(input.preorderId)) throw fail("That pre-order does not exist", 404, "PREORDER_NOT_FOUND");
+      preorder = await TradeOrder.findById(input.preorderId).session(session);
+      if (!preorder || preorder.kind !== "sales" || String(preorder.partyId) !== String(customer._id)) throw fail("That pre-order is not this customer's", 404, "PREORDER_NOT_FOUND");
+      if (preorder.status !== "CONFIRMED") throw fail(`${preorder.orderNo} is ${String(preorder.status).toLowerCase()}, so it has nothing left to deliver`, 409, "PREORDER_NOT_OPEN");
+    }
+
     // the friendly message first; vanTripGuard repeats it as the lock when the invoice is approved
     const stock = await stockOf(trip, { session });
     const short = rules.shortages(items, stock.sellable);
@@ -163,7 +191,13 @@ class VanTripSales {
       if (amount > round2(approved.totalAmount) + 0.005) throw fail("The money taken is more than the invoice. Take the rest as a separate receipt.", 400, "PAYMENT_EXCEEDS_INVOICE");
       receipt = await takeMoney(trip, { customerId: customer._id, amount, mode: pay.mode || "cash", details: pay.details, invoiceIds: [String(approved._id)], date: day }, by, { req: opts.req, session });
     }
-    return { invoice: approved, receipt };
+    if (preorder) {
+      preorder.status = "CLOSED";
+      preorder.closedAt = new Date();
+      preorder.closeReason = `Delivered by van ${trip.vanCode} on ${trip.tripNo} (${approved.transactionNo})`;
+      await preorder.save({ session });
+    }
+    return { invoice: approved, receipt, promotions: promo.applied, preorder: preorder ? preorder.orderNo : null };
   });
 
   /** Take money from a customer (cash or a cheque): against named invoices, else the oldest first. */
@@ -247,7 +281,7 @@ class VanTripSales {
     const ids = [...new Set([...(route?.customers || []).map((c) => String(c.customerId)), ...extraCustomerIds.map(String)])].filter(isId).slice(0, 300);
     const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status").lean();
     const stock = await stockOf(trip);
-    const items = await Stock.find({ _id: { $in: [...stock.sellable.keys()] } }).select("salesPrice").lean();
+    const items = await Stock.find({ _id: { $in: [...stock.sellable.keys()] } }).select("salesPrice category").lean();
     const prices = {};
     for (const c of customers) {
       const map = await PriceListService.pricesFor({ customerId: c._id, routeId: trip.routeId, items: items.map((s) => ({ stockId: s._id, qty: 1, itemPrice: Number(s.salesPrice) || 0 })) });
@@ -260,6 +294,9 @@ class VanTripSales {
       customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "" })),
       prices,
       freeNumbers: (trip.numberBlock || []).filter((n) => !used.has(n)),
+      // the offers, so a slip printed with no signal shows what the server will give (it applies them again on sync)
+      promotions: await PromotionService.live(),
+      categories: Object.fromEntries(items.map((s) => [String(s._id), s.category ? String(s.category) : ""])),
     };
   }
 

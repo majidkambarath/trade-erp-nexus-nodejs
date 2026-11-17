@@ -34,6 +34,11 @@ router.get("/price-lists", requirePermission("vansales.view"), c.listPriceLists)
 router.get("/price-lists/:listId", requirePermission("vansales.view"), c.getPriceList);
 router.post("/price-lists", requirePermission("vansales.manage"), c.createPriceList);
 router.put("/price-lists/:listId", requirePermission("vansales.manage"), c.updatePriceList);
+router.get("/promotions", requirePermission(["vansales.view", "vansales.sell"]), c.listPromotions);
+router.get("/promotions/:promotionId", requirePermission("vansales.view"), c.getPromotion);
+router.post("/promotions", requirePermission("vansales.manage"), c.createPromotion);
+router.put("/promotions/:promotionId", requirePermission("vansales.manage"), c.updatePromotion);
+router.get("/routes/:routeId/preorders", requirePermission("vansales.view"), c.routePreorders);
 router.get("/customers", requirePermission("vansales.view"), c.customers);
 router.get("/payment-choices", requirePermission(["vansales.view", "vansales.sell"]), c.paymentChoices);
 
@@ -52,6 +57,10 @@ router.get("/trips/:tripId", requirePermission("vansales.view"), c.getTrip);
 router.get("/trips/:tripId/activity", requirePermission("vansales.view"), c.activity);
 router.post("/trips/:tripId/load", requirePermission("vansales.load"), c.load);
 router.post("/trips/:tripId/depart", requirePermission("vansales.load"), c.depart);
+router.get("/trips/:tripId/suggested-load", requirePermission("vansales.load"), c.suggestedLoad);
+router.post("/trips/:tripId/load-check", requirePermission("vansales.load"), c.loadCheck);
+router.get("/trips/:tripId/preorders", requirePermission("vansales.view"), c.tripPreorders);
+router.post("/trips/:tripId/preorders", requirePermission("vansales.sell"), c.createPreorder);
 router.post("/trips/:tripId/cancel", requirePermission("vansales.load"), c.cancel);
 router.post("/trips/:tripId/sell", requirePermission("vansales.sell"), c.sell);
 router.get("/trips/:tripId/prices", requirePermission("vansales.sell"), c.prices);

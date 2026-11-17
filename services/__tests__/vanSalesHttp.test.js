@@ -133,6 +133,13 @@ test("a salesman may sell, collect and count in on his own trip, and sees only w
   assert.equal(sale.body.trip.sellable[0].qty, 30);
   assert.equal(sale.body.trip.totals.cash, sale.body.invoice.totalAmount, "the cash the van took is the invoice, in full");
 
+  // the offers are read by the salesman (the phone shows them); an order for next time is his to take
+  const offers = await call("ali", "GET", "/van-sales/promotions");
+  assert.equal(offers.status, 200, JSON.stringify(offers.data));
+  const order = await call("ali", "POST", `/van-sales/trips/${tripId}/preorders`, { customerId: String(cust._id), items: [{ itemId: rice._id, qty: 3 }] });
+  assert.equal(order.status, 400, JSON.stringify(order.data));
+  assert.equal(order.code, "ROUTE_REQUIRED", "this trip has no route, so there is no next visit to order for (past the permission check)");
+
   const refused = await call("ali", "POST", `/van-sales/trips/${tripId}/sell`, { customerId: String(cust._id), items: [{ itemId: rice._id, qty: 31, price: 20 }] });
   assert.equal(refused.status, 409);
   assert.equal(refused.code, "VAN_STOCK_SHORT");
@@ -157,6 +164,9 @@ test("a salesman cannot open or load a trip, settle one, or change the vans and 
     ["POST", "/van-sales/vans", { code: "X", name: "x" }],
     ["PUT", `/van-sales/vans/${vanId}`, { name: "renamed" }],
     ["POST", "/van-sales/routes", { name: "R" }],
+    ["POST", "/van-sales/promotions", { name: "P", kind: "slab", minQty: 1, percent: 5 }],
+    ["GET", `/van-sales/trips/${tripId}/suggested-load`, undefined],
+    ["POST", `/van-sales/trips/${tripId}/load-check`, { lines: [] }],
   ];
   for (const [m, u, b] of doors) {
     const r = await call("ali", m, u, b);
