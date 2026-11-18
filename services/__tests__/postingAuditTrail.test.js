@@ -235,3 +235,33 @@ test("an id that nothing was posted under is still not found", { skip }, async (
   await assert.rejects(() => svc.Trail.trail(String(new mongoose.Types.ObjectId())), { statusCode: 404, message: "Voucher not found" });
   await assert.rejects(() => svc.Trail.trail("not-an-id"), { statusCode: 404 });
 });
+
+// A cheque's history stores who moved it by account id; the screen printed that id. The trail now sends the name.
+test("a cheque's history says who moved it by name, and never needs the id to do so", { skip }, async () => {
+  const Admin = require("../../models/core/adminModel");
+  const person = new mongoose.Types.ObjectId();
+  const removed = new mongoose.Types.ObjectId();
+  await Admin.collection.insertOne({ _id: person, companyId: "default", name: "Asha Menon", email: "asha@example.test" });
+  const voucherId = new mongoose.Types.ObjectId();
+  await svc.Voucher.collection.insertOne({
+    _id: voucherId, companyId: "default", branchId: "main", voucherNo: "RV-2088-0900", voucherType: "receipt",
+    status: "approved", totalAmount: 100, date: day("2088-07-01"),
+  });
+  const { Cheque } = require("../../models/modules/banking/bankingModels");
+  await Cheque.collection.insertOne({
+    companyId: "default", branchId: "main", direction: "receipt", voucherId, voucherNo: "RV-2088-0900",
+    voucherDate: day("2088-07-01"), chequeNo: "000123", chequeDate: day("2088-07-01"), amount: 100, status: "cleared",
+    history: [
+      { status: "pending", at: day("2088-07-01"), by: String(person), note: "" },
+      { status: "cleared", at: day("2088-07-02"), by: String(removed), note: "" },
+      { status: "noted", at: day("2088-07-03"), by: null, note: "" },
+    ],
+  });
+
+  const t = await svc.Trail.trail(String(voucherId));
+  assert.deepEqual(t.cheque.history.map((h) => h.byName), ["Asha Menon", null, null], "an account since removed has no name");
+
+  // the invoice lists name their author through the same lookup
+  const names = await require("../orderPurchase/transactionService").creatorNames([{ createdBy: person }, { createdBy: "system" }, { createdBy: removed }]);
+  assert.deepEqual([...names.entries()], [[String(person), "Asha Menon"]]);
+});

@@ -7,6 +7,7 @@ const ActivityLog = require("../../models/modules/financial/activityLogModel");
 const { Cheque } = require("../../models/modules/banking/bankingModels");
 const AccountConfigService = require("./accountConfigService");
 const { round2, splitEntries, isReversalRow } = require("../core/postingTrail");
+const { namesFor } = require("../core/accountNames");
 const { getTenant } = require("../../utils/tenant");
 const AppError = require("../../utils/AppError");
 
@@ -121,6 +122,7 @@ class VoucherAuditService {
     ]);
 
     const byId = new Map(invoices.map((t) => [String(t._id), t]));
+    const chequeBy = cheque ? await namesFor((cheque.history || []).map((h) => h.by)) : new Map();
     const ledger = splitEntries(entries);
 
     return {
@@ -178,7 +180,7 @@ class VoucherAuditService {
             clearedOn: cheque.clearedOn,
             bouncedOn: cheque.bouncedOn,
             reason: cheque.reason || null,
-            history: cheque.history || [],
+            history: (cheque.history || []).map((h) => ({ ...h, byName: chequeBy.get(String(h.by || "")) || null })),
           }
         : null,
       activity: this.activityRows(activity),
