@@ -8,6 +8,7 @@ const pricingFields = {
   price: { type: Number, default: 0, min: 0 }, // unit price, VAT-exclusive
   discountPercent: { type: Number, default: 0, min: 0, max: 100 },
   discountAmount: { type: Number, default: 0, min: 0 }, // what was actually taken off
+  headerDiscountNet: { type: Number, min: 0 }, // of which the document's header discount, shared out over the lines (utils/headerDiscount.js); absent otherwise
   grossAmount: { type: Number, default: 0, min: 0 },
   taxableAmount: { type: Number, default: 0, min: 0 },
   taxCodeId: { type: mongoose.Schema.Types.ObjectId, ref: "TaxCode", default: null },
@@ -43,7 +44,7 @@ const chargeSchema = new mongoose.Schema(
 const pricingSchema = new mongoose.Schema(
   {
     gross: Number, lineDiscount: Number, net: Number, lineVat: Number, rcmVat: Number, chargesNet: Number,
-    chargesVat: Number, headerDiscount: Number, roundOff: Number, grandTotal: Number,
+    chargesVat: Number, headerDiscount: Number, headerDiscountSpread: Number, roundOff: Number, grandTotal: Number,
   },
   { _id: false }
 );

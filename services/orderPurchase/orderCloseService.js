@@ -33,8 +33,8 @@ function cleanReason(value) {
 // The stored line as a pricing input at another quantity; everything else the line carries (batch, brand,
 // origin) and its id stay as they were, and the money columns are worked out again.
 const repriceLine = (line, qty) => {
-  const stored = typeof line.toObject === "function" ? line.toObject() : line;
-  return { ...stored, ...S.toPricingInput(stored, qty, stored.qty) };
+  const { headerDiscountNet: _shared, ...stored } = typeof line.toObject === "function" ? line.toObject() : line; // (toPricingInput takes the shared-out header discount off)
+  return { ...stored, ...S.toPricingInput(line.toObject ? line.toObject() : line, qty, stored.qty) };
 };
 
 async function loadOrder(id, { session, withOriginal = false } = {}) {

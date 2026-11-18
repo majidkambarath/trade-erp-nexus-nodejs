@@ -105,8 +105,9 @@ test("quotation: own number series, priced exactly like the invoice it becomes, 
   assert.equal(q.totalAmount, so.totalAmount, "same lines, same engine, same total");
   assert.equal(q.pricing.net, so.pricing.net);
   assert.equal(q.pricing.lineVat, so.pricing.lineVat);
-  assert.equal(q.items[0].discountAmount, 20);
-  assert.equal(q.items[0].vatAmount, 9);
+  // the 5 off the total is shared out over the lines as extra line discount (utils/headerDiscount.js): the rice line's own 20 is still 20
+  assert.equal(q.items[0].discountAmount - (q.items[0].headerDiscountNet || 0), 20);
+  assert.ok(q.items[0].vatAmount < 9, "and its VAT is a little less than the full 9");
   await svc.Tx.deleteTransaction(so._id, "tester");
 
   // QT numbers are separate from every other series, in particular DN (debit note) is untouched

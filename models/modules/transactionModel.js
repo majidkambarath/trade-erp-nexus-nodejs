@@ -28,6 +28,7 @@ const itemSchema = new mongoose.Schema({
   // Pricing: computed on the server (utils/pricing.js). discountAmount is the amount actually
   // taken off, whether the client sent a percentage or a fixed amount.
   discountPercent: { type: Number, default: 0, min: 0, max: 100 },
+  headerDiscountNet: { type: Number, min: 0 }, // of discountAmount, the part that is the document's header discount shared out over the lines (utils/headerDiscount.js); absent otherwise
   discountAmount: { type: Number, default: 0, min: 0 },
   grossAmount: { type: Number, default: 0, min: 0 },
   taxableAmount: { type: Number, default: 0, min: 0 },
@@ -172,6 +173,9 @@ const transactionSchema = new mongoose.Schema({
     chargesNet: Number,
     chargesVat: Number,
     headerDiscount: Number,
+    // the header discount, when it was shared out over the lines as extra line discount (utils/headerDiscount.js): then headerDiscount is 0 and
+    // the lines already carry it. Absent on an invoice made before, whose discount came off the total after tax.
+    headerDiscountSpread: Number,
     roundOff: Number,
     grandTotal: Number,
     // India GST: the document's tax by component, summed from its lines and charges (cgst + sgst + igst = lineVat + chargesVat);

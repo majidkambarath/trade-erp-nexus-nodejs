@@ -315,7 +315,7 @@ class GoodsReceiptService {
     gr.items.forEach((l, i) => {
       Object.assign(l, settled[i]);
       const p = pricedById.get(String(l._id));
-      for (const k of ["discountAmount", "grossAmount", "taxableAmount", "vatAmount", "lineTotal", "vatPercent", "taxKind"]) l[k] = p ? p[k] : k === "vatPercent" || k === "taxKind" ? l[k] : 0;
+      for (const k of ["discountAmount", "headerDiscountNet", "grossAmount", "taxableAmount", "vatAmount", "lineTotal", "vatPercent", "taxKind"]) l[k] = p ? p[k] : k === "vatPercent" || k === "taxKind" ? l[k] : 0;
       if (p) l.rcmVat = p.rcmVat;
       else if (l.rcmVat != null) l.rcmVat = 0;
     });

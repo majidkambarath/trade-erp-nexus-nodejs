@@ -156,7 +156,8 @@ test("pricing: discount, freight and header discount are computed on the server 
   await svc.Tx.processTransaction(buy._id, "approve", "tester");
 
   // 10 x 100, 10% line discount, 5% VAT, 40 freight (+5% VAT), 15 off the total. The client's
-  // total (0) is wrong and must be ignored.
+  // total (0) is wrong and must be ignored. The 15 is shared out over the line as extra line discount (utils/headerDiscount.js): the
+  // customer still pays 972, but the VAT falls with it - the line is 930 now, of which 44.29 is VAT, not 945 with 45.
   const sale = await svc.Tx.createTransaction(
     { type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer",
       items: [{ itemId: stock._id, description: "Oil", qty: 10, price: 100, rate: 100, vatPercent: 5, discountPercent: 10 }],
@@ -165,18 +166,20 @@ test("pricing: discount, freight and header discount are computed on the server 
     "tester"
   );
   assert.equal(sale.totalAmount, 972);
-  assert.equal(sale.pricing.net, 900);
-  assert.equal(sale.items[0].discountAmount, 100);
-  assert.equal(sale.items[0].lineTotal, 945);
+  assert.equal(sale.pricing.net, 885.71);
+  assert.equal(sale.items[0].discountAmount, 114.29); // 100 of its own and 14.29 of the 15 (the other 0.71 is the VAT it no longer charges)
+  assert.equal(sale.items[0].lineTotal, 930);
+  assert.equal(sale.pricing.headerDiscount, 0);
+  assert.equal(sale.pricing.headerDiscountSpread, 15);
   await svc.Tx.processTransaction(sale._id, "approve", "tester");
 
   const tb = await svc.Financial.getTrialBalance(undefined, "2099-01-01");
   assert.equal(tb.summary.isBalanced, true);
   const bal = (n) => tb.trialBalance.find((r) => r.accountName === n)?.balance;
   assert.equal(bal("Customer - Cust3"), 972);
-  assert.equal(bal("Sales Discounts Given"), 115); // 100 line + 15 header
+  assert.equal(bal("Sales Discounts Given"), 114.29); // 100 line + 14.29 of the header discount, which is a line discount now
   assert.equal(bal("Freight Recovered"), 40);
-  assert.equal(bal("Output VAT"), 47); // 45 on the lines + 2 on the freight
+  assert.equal(bal("Output VAT"), 46.29); // 44.29 on the line + 2 on the freight
 });
 
 const PDF = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF");
@@ -224,7 +227,7 @@ test("attachments can be attached to an order and a voucher too", { skip }, asyn
 test("profit and loss and the balance sheet agree with the trial balance", { skip }, async () => {
   const today = new Date().toISOString().slice(0, 10);
   const pl = await svc.Financial.getProfitAndLoss(undefined, "2099-12-31");
-  // Earlier tests booked: sales revenue 1000 less discounts 115 plus freight 40 recovered ...
+  // Earlier tests booked: sales revenue 1000 less discounts 114.29 plus freight 40 recovered ...
   assert.ok(pl.totalIncome > 0 && pl.income.some((a) => a.accountName === "Sales Revenue"));
   assert.equal(pl.netProfit, Math.round((pl.totalIncome - pl.totalExpenses) * 100) / 100);
 
