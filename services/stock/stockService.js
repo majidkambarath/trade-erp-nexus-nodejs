@@ -11,6 +11,15 @@ const ItemKindService = require("./itemKindService");
 const kinds = require("../../utils/itemKinds");
 const { searchRegex } = require("../../utils/regex");
 const { isTransient, backoff } = require("../../utils/withTransactionSession");
+const { normaliseHsn } = require("../../utils/gst");
+
+// The HSN / SAC code a request names: digits or nothing. undefined = not named; a bad one is refused.
+function requestedHsn(data) {
+  if (data?.hsnCode === undefined) return undefined;
+  const code = normaliseHsn(data.hsnCode);
+  if (code === undefined) throw new AppError("An HSN / SAC code is 4 to 8 digits", 400, "INVALID_HSN");
+  return code;
+}
 
 // The item type a request names, or goods when it names none. Anything else is refused with a code the screen can show.
 function requestedType(value, ...rest) {
@@ -147,6 +156,7 @@ class StockService {
             category: categoryId,
             vendorId,
             itemType,
+            ...(requestedHsn(data) ? { hsnCode: requestedHsn(data) } : {}),
             ...(isService ? { incomeAccountId: incomeAccountId || null, expenseAccountId: expenseAccountId || null } : {}),
             unitOfMeasure,
             // a service has no barcode, reorder level, batch or expiry: the model leaves them at their blanks
@@ -286,6 +296,7 @@ class StockService {
         updateData.currentStock = Number(data.currentStock);
       if (data.expiryDate) updateData.expiryDate = new Date(data.expiryDate);
       if (data.itemType !== undefined) updateData.itemType = nextType;
+      if (data.hsnCode !== undefined) updateData.hsnCode = requestedHsn(data);
       // goods name no accounts of their own; a service that becomes goods (only possible while unused) forgets them
       if (nextType === kinds.GOODS && currentType === kinds.SERVICE) Object.assign(updateData, { incomeAccountId: null, expenseAccountId: null });
 

@@ -24,6 +24,7 @@ const accountingSetupRouter = require("./routes/financial/accountingSetupRoutes"
 const bankingRouter = require("./routes/banking/bankingRoutes");
 const batchRouter = require("./routes/stock/batchRoutes");
 const vatReturnRouter = require("./routes/reports/vatReturnRoutes");
+const gstReturnRouter = require("./routes/reports/gstReturnRoutes");
 const einvoiceRouter = require("./routes/einvoice/einvoiceRoutes");
 dotenv.config();
 
@@ -156,6 +157,7 @@ app.use("/api/v1/banking", bankingRouter); // before adminRouter, whose bare GET
 app.use("/api/v1/einvoice", einvoiceRouter);
 app.use("/api/v1/batches", batchRouter); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/vat-return", vatReturnRouter); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/gst-return", gstReturnRouter); // India's GSTR-1 / GSTR-3B; same reason
 app.use("/api/v1/stock-reports", require("./routes/reports/stockReportRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/trade-reports", require("./routes/reports/tradeReportRoutes")); // before adminRouter, like every new top-level GET
 app.use("/api/v1/trade-orders", require("./routes/orderPurchase/tradeOrderRoutes")); // sales and purchase orders: commitments, no posting

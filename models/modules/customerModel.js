@@ -34,6 +34,9 @@ const customerSchema = new mongoose.Schema({
   // nothing is stamped on it until somebody edits the address (utils/partyAddress.js).
   country: { type: String, trim: true, uppercase: true, default: undefined },
   emirate: { type: String, trim: true, default: undefined },
+  // The GST state code ("27") of an Indian party: where the supply is made or received (utils/gst.js). Absent for any other
+  // country and on a record saved before it existed; taken from the GSTIN's first two digits when not typed.
+  stateCode: { type: String, trim: true, default: undefined },
   shippingAddress: { type: String, default: null, trim: true },
   creditLimit: { type: Number, default: 0, min: 0 },
   // Where the shop is, pinned from a van on a first visit (phase 5). Absent until somebody pins it; a van sale or visit

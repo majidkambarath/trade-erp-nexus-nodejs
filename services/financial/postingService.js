@@ -9,6 +9,7 @@ const { TEMPLATES, figuresFor, buildEntries, round2 } = require("../../utils/pos
 const ItemKindService = require("../stock/itemKindService");
 const kinds = require("../../utils/itemKinds");
 const vatRule = require("../../utils/vatRegistration");
+const gstRule = require("../../utils/gst");
 
 // Ledger entries need an Admin ObjectId; order documents carry the creator as a free string.
 const SYSTEM_USER = new mongoose.Types.ObjectId("000000000000000000000000");
@@ -65,6 +66,18 @@ class PostingService {
     }
   }
 
+  // One of the India GST component accounts (Output CGST, Input IGST ...). A company whose chart was made before India's accounts
+  // existed (or before the organisation's country was set) gets the defaults added once and tries again, like the others above.
+  static async gstAccount(key, { session } = {}) {
+    try {
+      return await AccountConfigService.resolveAccount(key, { session });
+    } catch (err) {
+      if (err.code !== "ACCOUNT_NOT_CONFIGURED") throw err;
+      await require("./defaultChartService").provision(); // commits on its own
+      return AccountConfigService.resolveAccount(key); // outside the session: the top-up is not in its snapshot
+    }
+  }
+
   // Service lines post revenue / expense, VAT and the party balance like any other line, but never an Inventory or cost
   // of goods leg. The templates book revenue to sales-revenue and purchases to inventory-asset; this moves the service
   // lines' share to the item's own account (else, for a sale, nothing: sales-revenue is right; for a purchase, the
@@ -110,11 +123,20 @@ class PostingService {
           : await AccountConfigService.resolveAccount(leg.account.key, { session })
       );
     }
-    const entries = await this.routeServiceLines(
+    let entries = await this.routeServiceLines(
       vatIsCost ? { type: transaction.type, items: vatRule.itemsWithVat(transaction.items) } : transaction,
       buildEntries(transaction.type, figures, (a) => (a.party ? partyId : cache.get(a.key))),
       session
     );
+    // India GST: a document priced with its tax by component posts that tax to the component accounts (Output CGST, Input IGST ...)
+    // instead of the one VAT account. A document without the split (every UAE one, and Indian ones from before it) posts as ever.
+    const gstPricing = transaction.pricing?.toObject ? transaction.pricing.toObject() : transaction.pricing;
+    const gstKeys = gstRule.gstKeysNeeded(transaction.type, gstPricing);
+    if (gstKeys.length) {
+      const ids = new Map();
+      for (const key of gstKeys) ids.set(key, new mongoose.Types.ObjectId(String(await this.gstAccount(key, { session }))));
+      entries = gstRule.routeGstLegs(entries, transaction.type, gstPricing, (key) => ids.get(key), { inputAccountId: cache.get("vat-purchase") });
+    }
 
     const accounts = await LedgerAccount.find({ _id: { $in: entries.map((e) => e.accountId) } })
       .select("accountName accountCode accountType")

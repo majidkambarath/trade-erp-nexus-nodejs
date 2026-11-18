@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.7.0.0 — 18 November 2026
+
+India GST. An Indian organisation's invoices now charge CGST + SGST or IGST by place of supply, carry HSN / SAC codes, and feed GSTR-1 and GSTR-3B. Nothing changes for a UAE organisation. Frontend and backend both at 3.7.0.0.
+
+### Added
+
+- **CGST, SGST and IGST.** A sale to a customer in the company's own state charges half CGST and half SGST; a sale to another state charges IGST. A purchase is judged by the supplier's state. The split is decided when the document is saved and kept on it, and a credit note follows the invoice it returns. Each tax posts to its own account (Output CGST, Output SGST / UTGST, Output IGST and the three Input ones); the document's total tax is the same figure as before.
+- **State on the company, customers and vendors.** Settings > Business rules > Tax identity has a State for an Indian company; the customer and vendor forms (and quick add) ask for the state, or take it from the GSTIN's first two digits. Until the company's own state is set nothing is split.
+- **HSN / SAC codes** on items, printed under the line on the invoice and summarised in the tax table, with the place of supply in the invoice details. The customer's emailed copy carries the same.
+- **GST tax codes** for an Indian organisation: GST 18%, 5%, 40%, zero-rated, nil-rated, exempt, non-GST and reverse charge 18%. An Indian organisation had no tax codes before.
+- **GST returns** (Reports > GST): GSTR-1 (B2B, B2C large and small, credit notes, zero-rated, nil / exempt / non-GST, HSN summary, documents issued) and GSTR-3B (outward supplies, input tax credit, payment of tax with credit used in the order the Act allows), each with CSV, and reconciled to the six GST accounts. Documents made before the split, or without a company state, are listed apart instead of being guessed into a table.
+- A read-only script, `scripts/gst-readiness.cjs`, lists what an organisation still has to enter before its GST is complete.
+
+### Not yet
+
+- Saved and filed GST returns, the portal's upload file, amendments, e-invoice and e-way bill, GST on expense vouchers and notes by component (their tax stays in the single Input / Output GST account and is shown as such in GSTR-3B), exports and SEZ place of supply.
+
+### Fixed
+
+- The security sweep covers the garage and van sales routes and the newer share routes, and treats the employee portal as its own identity.
+- The HR setup screens (shifts, holidays, leave types, departments) answer a badly formed request with a message instead of a server error.
+
 ## 3.6.0.0 — 18 November 2026
 
 Closing gaps found in a review of the whole product. Frontend and backend both at 3.6.0.0.

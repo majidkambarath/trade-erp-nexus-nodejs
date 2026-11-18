@@ -73,6 +73,11 @@ const SEED = [
   k("purchase-group", "Purchase postings", null, "none"),
   k("vat-purchase", "Input VAT", "ASSET", "account", "purchase-group"),
   k("rcm-purchase", "Reverse-charge VAT (purchases)", "LIABILITY", "account", "purchase-group"),
+  // India GST: the tax on an invoice or bill is posted by component, because CGST, SGST and IGST are paid and set off separately.
+  // Provisioned for Indian organisations only (services/financial/defaultChartService.js); a UAE organisation never maps them.
+  k("gst-cgst-input", "Input CGST", "ASSET", "account", "purchase-group"),
+  k("gst-sgst-input", "Input SGST / UTGST", "ASSET", "account", "purchase-group"),
+  k("gst-igst-input", "Input IGST", "ASSET", "account", "purchase-group"),
   k("discount-purchase", "Purchase discounts received", "INCOME", "account", "purchase-group"),
   k("freight-purchase", "Freight & handling on purchases", "EXPENSE", "account", "purchase-group"),
   k("round-off-purchase", "Round-off (purchases)", "EXPENSE", "account", "purchase-group"),
@@ -89,6 +94,9 @@ const SEED = [
   // separately" spirit for the reverse of a sale). A dedicated contra-revenue account.
   k("sales-returns", "Sales returns", "INCOME", "account", "sales-group"),
   k("vat-sales", "Output VAT", "LIABILITY", "account", "sales-group"),
+  k("gst-cgst-output", "Output CGST", "LIABILITY", "account", "sales-group"),
+  k("gst-sgst-output", "Output SGST / UTGST", "LIABILITY", "account", "sales-group"),
+  k("gst-igst-output", "Output IGST", "LIABILITY", "account", "sales-group"),
   k("discount-sales", "Sales discounts given", "EXPENSE", "account", "sales-group"),
   k("freight-sales", "Freight & handling recovered", "INCOME", "account", "sales-group"),
   k("round-off-sales", "Round-off (sales)", "EXPENSE", "account", "sales-group"),

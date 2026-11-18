@@ -8,6 +8,7 @@ const EMIRATES = ["Abu Dhabi", "Dubai", "Sharjah", "Ajman", "Umm Al Quwain", "Ra
 const DEFAULT_COUNTRY = "AE";
 
 const AppError = require("./AppError");
+const { normaliseState } = require("./gstStates");
 
 const bad = (message, code) => new AppError(message, 400, code);
 const blank = (v) => v === undefined || v === null || String(v).trim() === "";
@@ -26,16 +27,28 @@ const emirateOf = (text) => {
  * `existing` is the stored party on an update: a request that sends only the emirate is judged against the stored country, and
  * one that sends only the country keeps the stored emirate when the country is still the UAE.
  */
-function resolveAddress({ country, emirate } = {}, existing) {
-  if (country === undefined && emirate === undefined) return null;
+function resolveAddress({ country, emirate, stateCode } = {}, existing) {
+  if (country === undefined && emirate === undefined && stateCode === undefined) return null;
   const stored = String(existing?.country || "").toUpperCase();
-  const code = blank(country) ? stored || DEFAULT_COUNTRY : String(country).trim().toUpperCase();
+  // a GST state only means something in India, so a request that names one and no country is an Indian address
+  const fallback = stored || (!blank(stateCode) ? "IN" : DEFAULT_COUNTRY);
+  const code = blank(country) ? fallback : String(country).trim().toUpperCase();
   if (!/^[A-Z]{2}$/.test(code)) throw bad("Choose the country from the list", "INVALID_COUNTRY");
-  if (code !== "AE") return { country: code, emirate: null };
+  // India: the GST state (code "27", number or name). Elsewhere there is none, and one that was stored is cleared.
+  const state = () => {
+    if (code === "IN") {
+      const typed = stateCode === undefined ? existing?.stateCode : stateCode;
+      const found = normaliseState(typed);
+      if (found === undefined) throw bad(`"${String(typed).trim()}" is not a GST state or union territory`, "INVALID_STATE");
+      return stateCode === undefined && !existing?.stateCode ? {} : { stateCode: found };
+    }
+    return stateCode !== undefined || existing?.stateCode ? { stateCode: null } : {};
+  };
+  if (code !== "AE") return { country: code, emirate: null, ...state() };
   const typed = emirate === undefined ? existing?.emirate : emirate;
   const found = emirateOf(typed);
   if (!found) throw bad(blank(typed) ? "Choose an emirate" : `"${String(typed).trim()}" is not an emirate of the UAE`, "INVALID_EMIRATE");
-  return { country: "AE", emirate: found };
+  return { country: "AE", emirate: found, ...state() };
 }
 
 module.exports = { EMIRATES, DEFAULT_COUNTRY, emirateOf, resolveAddress };

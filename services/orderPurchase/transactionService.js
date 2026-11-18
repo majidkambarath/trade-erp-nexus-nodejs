@@ -11,6 +11,8 @@ const NumberSeriesService = require("../core/numberSeriesService");
 const FiscalYearService = require("../core/fiscalYearService");
 const costing = require("../../utils/inventoryCosting");
 const { priceLine, priceCharge, priceDocument } = require("../../utils/pricing");
+const { stampGst } = require("../../utils/gst");
+const GstService = require("../financial/gstService");
 const TaxCodeService = require("../financial/taxCodeService");
 const PostingService = require("../financial/postingService");
 const RecostService = require("../stock/recostService");
@@ -73,7 +75,7 @@ function calculateItems(items) {
     // pricing of this line) carried is dropped, so a line that stops being reverse charge cannot keep a stale amount.
     // allocations are the batches a dispatch really took (written at approval, and undone from the document on a reversal): a line
     // in a request does not get to name them.
-    const { rcmVat: _staleRcm, allocations: _forgedAllocations, ...item } = rawItem;
+    const { rcmVat: _staleRcm, allocations: _forgedAllocations, gst: _staleGst, rcmGst: _staleRcmGst, ...item } = rawItem; // the GST split is the server's too (stampGst)
     // Round each money column, then sum (utils/pricing.js): a discount reduces the taxable base.
     const priced = priceLine(item);
 
@@ -119,28 +121,38 @@ function calculateItems(items) {
 // The answer comes back as `vatRegistered` for the caller to stamp on the document; it is undefined where the rule does not apply.
 // `registeredAs` (a return: ReturnService.originalRegistration) replaces the date's answer with the original invoice's,
 // where the rule governs at all.
-async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date, side, registeredAs }, session) {
+// `gst` (India: GstService.context) is the document's place of supply; with it every line and the document carry their tax by
+// component (CGST + SGST or IGST). Without it nothing about the document changes.
+async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date, side, registeredAs, gst }, session) {
   const onDate = side ? await VatRegistrationService.stateOn(date, { session }) : { governs: false, registered: true };
   const vat = onDate.governs && typeof registeredAs === "boolean" ? { ...onDate, registered: registeredAs } : onDate;
   const noVat = vat.governs && !vat.registered && side === "sales";
   const withTax = noVat ? await TaxCodeService.forceNoVat(items, { session }) : await TaxCodeService.applyToItems(items, date, { session });
   // each line learns from the item master whether it is goods or a service (never from the request): a service line
   // is priced and taxed like any other but moves no stock (utils/itemKinds.js)
-  const processedItems = await ItemKindService.stamp(calculateItems(withTax), { session });
-  const pricedCharges = (charges || [])
+  let processedItems = await ItemKindService.stamp(calculateItems(withTax), { session });
+  let pricedCharges = (charges || [])
     .filter((c) => Number(c.amount) > 0)
     .map((c) => {
       const p = priceCharge(noVat ? { ...c, vatPercent: 0 } : c);
       return { code: c.code, description: c.description, amount: p.net, vatPercent: p.vatPercent, vatAmount: p.vat };
     });
-  const pricing = priceDocument(
+  let pricing = priceDocument(
     processedItems.map((i) => ({
       gross: i.grossAmount, discount: i.discountAmount, taxable: i.taxableAmount, vat: i.vatAmount, rcmVat: i.rcmVat,
     })),
     pricedCharges.map((c) => ({ net: c.amount, vat: c.vatAmount })),
     { headerDiscount: discount, incomingTotal }
   );
-  return { processedItems, charges: pricedCharges, pricing, totalAmount: pricing.grandTotal, vatRegistered: vat.governs ? vat.registered : undefined };
+  let gstFields = {};
+  if (gst?.gstType) {
+    const s = stampGst({ lines: processedItems, charges: pricedCharges, gstType: gst.gstType });
+    processedItems = s.lines;
+    pricedCharges = s.charges;
+    pricing = { ...pricing, gst: s.gst, ...(pricing.rcmVat > 0 ? { rcmGst: s.rcmGst } : {}) };
+    gstFields = { gstType: gst.gstType, placeOfSupply: gst.placeOfSupply, supplierState: gst.supplierState };
+  }
+  return { processedItems, charges: pricedCharges, pricing, totalAmount: pricing.grandTotal, vatRegistered: vat.governs ? vat.registered : undefined, ...gstFields };
 }
 
 // Which way a document type faces (see buildPricing)
@@ -250,6 +262,7 @@ class TransactionService {
         {
           items: pricedInput.map(({ _id, ...line }) => line), charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date(), side: sideOfType(type),
           registeredAs: await ReturnService.originalRegistration({ type, returnOf: data.returnOf }, { session }),
+          gst: await GstService.context({ partyType, partyId, side: sideOfType(type), returnOf: data.returnOf, session }),
         },
         session
       );
@@ -279,6 +292,9 @@ class TransactionService {
         charges: built.charges,
         pricing: built.pricing,
         vatRegistered: built.vatRegistered, // undefined (not stamped) outside the UAE
+        // India GST: where the supply is made and whether it is inside the supplier's state; absent outside India and when the
+        // company's own state is not on file
+        ...(built.gstType ? { gstType: built.gstType, placeOfSupply: built.placeOfSupply, supplierState: built.supplierState } : {}),
         returnOf,
         attachments: data.attachments || [],
         vendorReference,
@@ -370,7 +386,7 @@ class TransactionService {
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
-      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "reservedNumber"]) delete data[key];
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "reservedNumber", "gstType", "placeOfSupply", "supplierState"]) delete data[key];
       // changing a document takes back an approval it was given: what was approved is no longer what is there
       if (transaction.approvals?.length) transaction.approvals = [];
 
@@ -394,10 +410,15 @@ class TransactionService {
               { type: transaction.type, returnOf: transaction.returnOf?.transactionId ? transaction.returnOf : data.returnOf },
               { session }
             ),
+            gst: await GstService.context({
+              partyType: transaction.partyType, partyId: data.partyId || transaction.partyId, side: sideOfType(transaction.type),
+              returnOf: transaction.returnOf?.transactionId ? transaction.returnOf : data.returnOf, session,
+            }),
           },
           session
         );
         data.vatRegistered = built.vatRegistered;
+        if (built.gstType) Object.assign(data, { gstType: built.gstType, placeOfSupply: built.placeOfSupply, supplierState: built.supplierState });
         const checked = await ReturnService.validate(
           {
             type: transaction.type,
@@ -842,7 +863,7 @@ const logAmount = balanceEffect;
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
         "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
-        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals jobCardRef tradeOrderRef vanTripRef vatRegistered";
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals jobCardRef tradeOrderRef vanTripRef vatRegistered gstType placeOfSupply supplierState";
       const [docs, total] = await Promise.all([
         Transaction.find(query).select(FIELDS).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
         Transaction.countDocuments(query),

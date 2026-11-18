@@ -22,10 +22,12 @@ const pick = (src, keys) => {
 // ---- the tax invoice ---------------------------------------------------------------------
 // taxKind is there so the page and the PDF can say "reverse charge applies" on a line the customer accounts for the VAT on
 // (UAE VAT Executive Regulation Art. 59(1)(l)): it is a treatment label, not a cost or a margin.
-const LINE_KEYS = ["itemCode", "description", "qty", "rate", "vatPercent", "vatAmount", "taxKind", "lineTotal"];
-const CHARGE_KEYS = ["code", "description", "amount", "vatPercent", "vatAmount"];
+// India GST (hsnCode, gst, placeOfSupply, gstType): what a tax invoice must show the buyer - the item's HSN / SAC code, the tax by
+// component and where the supply is made. The seller's own state code (supplierState) stays behind: it is not printed.
+const LINE_KEYS = ["itemCode", "description", "qty", "rate", "vatPercent", "vatAmount", "taxKind", "lineTotal", "hsnCode", "gst"];
+const CHARGE_KEYS = ["code", "description", "amount", "vatPercent", "vatAmount", "gst"];
 const PRICING_KEYS = ["gross", "lineDiscount", "net", "lineVat", "chargesNet", "chargesVat", "headerDiscount", "roundOff", "grandTotal"];
-const DOCUMENT_KEYS = ["transactionNo", "invoiceNumber", "status", "date", "deliveryDate", "dueDate", "lpono", "docno", "serialNo", "discount", "totalAmount"];
+const DOCUMENT_KEYS = ["transactionNo", "invoiceNumber", "status", "date", "deliveryDate", "dueDate", "lpono", "docno", "serialNo", "discount", "totalAmount", "placeOfSupply", "gstType"];
 // The job card an invoice was raised from, picked down to what the customer's own copy prints: the job
 // number and the vehicle. NEVER jobCardId - that is a database id and has no business on a public page.
 const JOB_CARD_KEYS = ["jobNo", "plateNumber", "chassisNo"];

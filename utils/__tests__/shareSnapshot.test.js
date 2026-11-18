@@ -15,16 +15,18 @@ const transaction = () => ({
   attachments: [{ url: "LEAK-url" }],
   returnOf: { transactionNo: "LEAK-return" },
   serialNo: "GRG-2026-114",
+  // India GST: the buyer sees where the supply is made; the seller's own state code stays behind
+  placeOfSupply: "29", gstType: "inter", supplierState: "LEAK-27",
   // The garage link. The customer's copy may name the car; it may never carry the job card's database id.
   jobCardRef: { jobCardId: "LEAK-jobcard-id", jobNo: "JC-2026-0017", plateNumber: "A 11111", chassisNo: "JTEBU29J100123456" },
   items: [{
     _id: "LEAK-line", itemId: "LEAK-item", itemCode: "RICE5", description: "Basmati Rice 5kg", qty: 10, rate: 200,
-    vatPercent: 5, vatAmount: 10, taxKind: "standard", lineTotal: 210,
+    vatPercent: 5, vatAmount: 10, taxKind: "standard", lineTotal: 210, hsnCode: "7318", gst: { cgst: 0, sgst: 0, igst: 10 },
     price: 20, currentPurchasePrice: "LEAK-buy", purchasePrice: "LEAK-buy2", unitCost: "LEAK-cost", cogsAmount: "LEAK-cogs",
     batchNumber: "LEAK-batch", allocations: [{ batchId: "LEAK" }], taxCodeId: "LEAK-tax", brand: "LEAK-brand", grandTotal: 210,
     discountPercent: 0, grossAmount: 200, taxableAmount: 200,
   }],
-  charges: [{ code: "FRT", description: "Freight", amount: 20, vatPercent: 5, vatAmount: 1, secretField: "LEAK-charge" }],
+  charges: [{ code: "FRT", description: "Freight", amount: 20, vatPercent: 5, vatAmount: 1, gst: { cgst: 0, sgst: 0, igst: 1 }, secretField: "LEAK-charge" }],
   pricing: { gross: 200, lineDiscount: 0, net: 200, lineVat: 10, chargesNet: 0, chargesVat: 0, headerDiscount: 0, roundOff: 0, grandTotal: 210, cogs: "LEAK-pricing" },
 });
 const customer = () => ({

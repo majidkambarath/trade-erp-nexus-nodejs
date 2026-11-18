@@ -34,7 +34,7 @@ test.after(async () => {
 });
 
 const inOrg = (code, fn) => svc.ctx.runWithTenant({ companyId: code, branchId: "main" }, fn);
-const names = (code) => inOrg(code, () => svc.LedgerAccount.find({ accountName: /VAT|GST/ }).select("accountName").lean()).then((r) => r.map((a) => a.accountName).sort());
+const names = (code) => inOrg(code, () => svc.LedgerAccount.find({ accountName: /\b(VAT|GST)\b/ }).select("accountName").lean()).then((r) => r.map((a) => a.accountName).sort());
 
 test("an Indian organisation's tax accounts say GST; a UAE one's say VAT", { skip }, async () => {
   await svc.Org.create({ legalName: "Brivox Test", code: "intest", country: "IN", baseCurrency: "INR", timezone: "Asia/Kolkata", planCode: "premium" }, { by: "dev" });
