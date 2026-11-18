@@ -247,6 +247,9 @@ class LedgerVoucherService {
       if (!invoice || invoice.type !== wantType || String(invoice.partyId) !== String(partyId) || invoice.status !== "APPROVED") {
         throw new AppError(`Choose an approved ${partyType === "Vendor" ? "purchase" : "sales"} invoice of ${partyName}`, 400, "INVALID_INVOICE");
       }
+      if (invoice.fx?.currency) {
+        throw new AppError(`${invoice.transactionNo} is in ${invoice.fx.currency}: settle it with a receipt or payment in ${invoice.fx.currency}, or raise a return against it.`, 400, "NOTE_FOREIGN_INVOICE");
+      }
       if (total > invoice.outstandingAmount + EPS) {
         throw new AppError(`This ${label.toLowerCase()} (${total.toFixed(2)}) is more than the ${round2(invoice.outstandingAmount).toFixed(2)} still open on ${invoice.transactionNo}`, 409, "NOTE_EXCEEDS_INVOICE");
       }

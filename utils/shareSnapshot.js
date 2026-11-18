@@ -52,11 +52,30 @@ const localeBlock = () => ({ dateFormat: orgLocale.dateFormat(), timezone: orgLo
 
 const toPlain = (v) => (v && typeof v.toObject === "function" ? v.toObject() : v);
 
+// An invoice made in a foreign currency is stored in the base currency with the same document in its own beside it (utils/fxDocument.js): the customer
+// is shown the document they were invoiced, in its currency, with the rate and the tax in the base currency (which is what the tax authority is paid in).
+const FOREIGN_KEYS = ["currency", "exchangeRate", "baseVat"];
+function foreignView(tx) {
+  const fx = tx.fx;
+  const lines = (tx.items || []).map((i) => {
+    const l = toPlain(i);
+    return l?.fx ? { ...l, rate: l.fx.taxableAmount ?? l.rate, vatAmount: l.fx.vatAmount ?? l.vatAmount, lineTotal: l.fx.lineTotal ?? l.lineTotal } : l;
+  });
+  const charges = (tx.charges || []).map((x) => {
+    const c = toPlain(x);
+    return c?.fx ? { ...c, amount: c.fx.amount, vatAmount: c.fx.vatAmount } : c;
+  });
+  const baseVat = Math.round((((tx.pricing?.lineVat) || 0) + ((tx.pricing?.chargesVat) || 0) + Number.EPSILON) * 100) / 100;
+  return { ...tx, items: lines, charges, pricing: fx.pricing || tx.pricing, totalAmount: fx.totalAmount ?? tx.totalAmount, currency: fx.currency, exchangeRate: fx.rate, baseVat };
+}
+
 function invoiceSnapshot({ transaction, customer, company, currency = orgLocale.baseCurrency() }) {
-  const tx = toPlain(transaction) || {};
+  const raw = toPlain(transaction) || {};
+  const tx = raw.fx?.currency ? foreignView(raw) : raw;
   const c = toPlain(customer) || {};
   const document = {
     ...pick(tx, DOCUMENT_KEYS),
+    ...(raw.fx?.currency ? pick(tx, FOREIGN_KEYS) : {}),
     items: (tx.items || []).map((i) => pick(toPlain(i), LINE_KEYS)),
     charges: (tx.charges || []).map((x) => pick(toPlain(x), CHARGE_KEYS)),
     pricing: pick(toPlain(tx.pricing), PRICING_KEYS),

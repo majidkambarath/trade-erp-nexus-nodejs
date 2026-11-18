@@ -60,6 +60,13 @@ const voucherSchema = new mongoose.Schema({
       allocatedAmount: { type: Number, min: 0 },
       previousBalance: { type: Number, min: 0 },
       newBalance: { type: Number, min: 0 },
+      // Settling an invoice made in a foreign currency (services/financial/fxSettlement.js): the amounts above are what the ledger carried (base);
+      // these are in the invoice's own currency, and what the money was worth in base. Absent for an invoice in the base currency.
+      allocatedForeign: { type: Number, min: 0 },
+      previousForeign: { type: Number, min: 0 },
+      newForeign: { type: Number, min: 0 },
+      settledBase: { type: Number, min: 0 },
+      exchangeDifference: Number,
     },
   ],
   onAccountAmount: { type: Number, default: 0, min: 0 },

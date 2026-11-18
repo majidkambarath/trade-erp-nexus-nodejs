@@ -32,5 +32,8 @@ exports.rate = catchAsync(async (req, res) => {
 exports.getSettings = catchAsync(async (req, res) => ok(res, await CurrencyService.getSettings(req)));
 exports.updateSettings = catchAsync(async (req, res) => ok(res, await CurrencyService.updateSettings(req.body, req)));
 
+// Open invoices in a foreign currency, valued at the rate on a day against what the books carry for them.
+exports.exposure = catchAsync(async (req, res) => ok(res, await require("../../services/financial/fxExposureService").report({ asOn: req.query.asOn }, req)));
+
 // Foreign-currency receipts and payments in a period.
 exports.register = catchAsync(async (req, res) => ok(res, await FxVoucherService.register(req, req.query)));

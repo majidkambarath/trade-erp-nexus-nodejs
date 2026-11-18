@@ -43,6 +43,7 @@ const SEED = [
   // van sales: what a salesman handed in short (owed by them until written off or recovered) and what came in over
   k("salesman-shortages", "Salesman shortages (cash a salesman owes after a van settlement)", "ASSET", "account"),
   k("cash-over-short", "Cash over and short (van settlement)", "INCOME", "account"),
+  k("fx-gain-loss", "Exchange gain or loss (settling foreign-currency invoices)", "INCOME", "account"),
   k("van-expenses", "Van running expenses (fuel, tolls, parking paid from a van's cash)", "EXPENSE", "account"),
   // What labour costs, and where it is debited before any of it is moved into the cost of what it made.
   // Payroll (a later wave) debits this too, so the two meet in one account by design: the labour in a

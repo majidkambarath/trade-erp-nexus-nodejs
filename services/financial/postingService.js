@@ -66,6 +66,18 @@ class PostingService {
     }
   }
 
+  // The exchange gain or loss account ("fx-gain-loss"): needed only when a foreign-currency invoice is settled. Topped up once for a company
+  // whose map predates the key, as above.
+  static async fxGainLossAccount({ session } = {}) {
+    try {
+      return await AccountConfigService.resolveAccount("fx-gain-loss", { session });
+    } catch (err) {
+      if (err.code !== "ACCOUNT_NOT_CONFIGURED") throw err;
+      await require("./defaultChartService").provision();
+      return AccountConfigService.resolveAccount("fx-gain-loss");
+    }
+  }
+
   // One of the India GST component accounts (Output CGST, Input IGST ...). A company whose chart was made before India's accounts
   // existed (or before the organisation's country was set) gets the defaults added once and tries again, like the others above.
   static async gstAccount(key, { session } = {}) {

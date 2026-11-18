@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.9.0.0 — 18 November 2026
+
+Invoices in a foreign currency. Frontend and backend both at 3.9.0.0.
+
+### Added
+
+- **Sales and purchase invoices can be made in a foreign currency.** Pick the currency on the invoice form (the rate for the day is filled in; a different rate needs a reason). Prices, tax and totals are entered and printed in that currency. The books keep the same invoice in your own currency at that rate, so the ledger, the tax return, ageing and credit control read as before.
+- **Receipts and payments settle a foreign invoice in its own currency.** Choose the invoice's currency on the voucher and allocate foreign amounts. The difference between what the books carried and what the money was worth is posted to a new "Exchange Gain / Loss" account.
+- **A return of a foreign invoice is in the same currency at the same rate.**
+- **Open foreign invoices are valued on any day** on the Currency register: the rate now against what the books carry, per currency. It is a report only; nothing is posted for it.
+- **The customer's copy** of a foreign invoice shows the document in its currency, with the rate and the tax in your own currency.
+
+### Not included yet
+
+- Revaluation entries, foreign opening invoices, foreign invoices made from quotations, orders or delivery notes, currencies with three decimals, foreign-currency expense vouchers and notes, and e-invoices in a foreign currency (those stay in your own currency).
+
 ## 3.8.0.0 — 18 November 2026
 
 Three rules the owner decided: a discount on the whole invoice reduces the tax, a bill that charges tax from an unregistered supplier is asked about, and what an item costs is for the people who may see it. Frontend and backend both at 3.8.0.0.

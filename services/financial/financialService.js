@@ -25,6 +25,7 @@ const mongoose = require("mongoose");
 const { ensurePartyAccount } = require("./partyAccounts");
 const LedgerVoucherService = require("./ledgerVoucherService");
 const FxVoucherService = require("./fxVoucherService");
+const FxSettlement = require("./fxSettlement");
 const ReconciliationGuard = require("../banking/reconciliationGuard");
 const TxRetry = require("../../utils/withTransactionSession"); // isTransient / conflictError / backoff, shared with every other transaction wrapper
 const DebitLog = require("../../models/modules/DebitLog"); // ADD THIS
@@ -89,6 +90,13 @@ class FinancialService {
           409,
           "INVOICE_CHANGED"
         );
+      }
+      if (linked.allocatedForeign > 0 && invoice.fx?.currency) {
+        if (Math.abs(round2(invoice.fx.outstandingAmount) - round2(linked.previousForeign)) > 0.01) {
+          throw new AppError(`${invoice.transactionNo} now has ${round2(invoice.fx.outstandingAmount).toFixed(2)} ${invoice.fx.currency} open (it had ${round2(linked.previousForeign).toFixed(2)} when this was saved). Review the allocation before approving.`, 409, "INVOICE_CHANGED");
+        }
+        invoice.fx.paidAmount = round2((invoice.fx.paidAmount || 0) + linked.allocatedForeign);
+        invoice.fx.outstandingAmount = round2(linked.newForeign);
       }
       invoice.paidAmount = round2((invoice.paidAmount || 0) + linked.allocatedAmount);
       invoice.outstandingAmount = round2(linked.newBalance);
@@ -331,6 +339,7 @@ class FinancialService {
     // check twice (both copies read the same outstanding amount before either applied it).
     let validatedInvoices = [];
     let totalAllocated = 0;
+    const foreignRows = [];
     if (linkedInvoices.length > 0) {
       const seen = new Set();
       for (const linked of linkedInvoices) {
@@ -362,7 +371,7 @@ class FinancialService {
         }
 
         const current = invoice.outstandingAmount;
-        if (Math.abs(current - (allocated + expectedNew)) > 0.01) {
+        if (!invoice.fx?.currency && Math.abs(current - (allocated + expectedNew)) > 0.01) {
           throw new AppError(
             `Invoice balance mismatch for ${invoiceId}. Expected: ${current}, Provided: ${
               allocated + expectedNew
@@ -380,14 +389,21 @@ class FinancialService {
           previousBalance: current,
           newBalance: expectedNew,
         });
+        foreignRows.push({ invoice, linked });
       }
       totalAllocated = validatedInvoices.reduce(
         (sum, inv) => sum + inv.allocatedAmount,
         0
       );
     }
+    // Invoices made in a foreign currency are allocated in that currency (see FxSettlement): the allocation is re-expressed in what the ledger carried
+    const foreignPlan = FxSettlement.plan(foreignRows, fx);
+    if (foreignPlan) {
+      validatedInvoices = foreignPlan.links;
+      totalAllocated = foreignPlan.totalAllocated;
+    }
 
-    const onAccountAmount = remainderAfterAllocation(totalAmount, totalAllocated); // to the fils: a sum of floats is not the typed total
+    const onAccountAmount = foreignPlan ? foreignPlan.onAccountAmount : remainderAfterAllocation(totalAmount, totalAllocated); // to the fils: a sum of floats is not the typed total
     if (onAccountAmount < 0) {
       throw new AppError("Allocated amount cannot exceed total amount", 400);
     }
@@ -429,6 +445,10 @@ class FinancialService {
         description: `Advance received from ${customer.customerName}`,
       });
     }
+
+    // Exchange gain or loss on settling a foreign-currency invoice (more or less base money than the ledger carried for it)
+    const fxLegR = foreignPlan ? await FxSettlement.leg("receipt", foreignPlan.difference, `receipt from ${customer.customerName}`, { session }) : null;
+    if (fxLegR) entries.push(fxLegR);
 
     return {
       date,
@@ -493,6 +513,7 @@ class FinancialService {
     // and a duplicate invoiceId must not pass the balance check against the same stale read twice).
     let validatedInvoices = [];
     let totalAllocated = 0;
+    const foreignRows = [];
     if (linkedInvoices.length > 0) {
       const seen = new Set();
       for (const linked of linkedInvoices) {
@@ -524,7 +545,7 @@ class FinancialService {
         }
 
         const current = invoice.outstandingAmount;
-        if (Math.abs(current - (allocated + expectedNew)) > 0.01) {
+        if (!invoice.fx?.currency && Math.abs(current - (allocated + expectedNew)) > 0.01) {
           throw new AppError(
             `Invoice balance mismatch for ${invoiceId}. Expected: ${current}, Provided: ${
               allocated + expectedNew
@@ -542,14 +563,21 @@ class FinancialService {
           previousBalance: current,
           newBalance: expectedNew,
         });
+        foreignRows.push({ invoice, linked });
       }
       totalAllocated = validatedInvoices.reduce(
         (sum, inv) => sum + inv.allocatedAmount,
         0
       );
     }
+    // Invoices made in a foreign currency are allocated in that currency (see FxSettlement): the allocation is re-expressed in what the ledger carried
+    const foreignPlan = FxSettlement.plan(foreignRows, fx);
+    if (foreignPlan) {
+      validatedInvoices = foreignPlan.links;
+      totalAllocated = foreignPlan.totalAllocated;
+    }
 
-    const onAccountAmount = remainderAfterAllocation(totalAmount, totalAllocated); // to the fils: a sum of floats is not the typed total
+    const onAccountAmount = foreignPlan ? foreignPlan.onAccountAmount : remainderAfterAllocation(totalAmount, totalAllocated); // to the fils: a sum of floats is not the typed total
     if (onAccountAmount < 0) {
       throw new AppError("Allocated amount cannot exceed total amount", 400);
     }
@@ -591,6 +619,9 @@ class FinancialService {
         description: `Advance payment to ${vendor.vendorName}`,
       });
     }
+
+    const fxLegP = foreignPlan ? await FxSettlement.leg("payment", foreignPlan.difference, `payment to ${vendor.vendorName}`, { session }) : null;
+    if (fxLegP) entries.push(fxLegP);
 
     return {
       date,
@@ -2017,6 +2048,10 @@ class FinancialService {
         session
       );
       if (invoice) {
+        if (linked.allocatedForeign > 0 && invoice.fx?.currency) {
+          invoice.fx.paidAmount = Math.max(0, round2((invoice.fx.paidAmount || 0) - linked.allocatedForeign));
+          invoice.fx.outstandingAmount = Math.min(invoice.fx.totalAmount, round2((invoice.fx.outstandingAmount || 0) + linked.allocatedForeign));
+        }
         invoice.paidAmount -= linked.allocatedAmount;
         invoice.outstandingAmount += linked.allocatedAmount;
         if (invoice.paidAmount < 0) invoice.paidAmount = 0;

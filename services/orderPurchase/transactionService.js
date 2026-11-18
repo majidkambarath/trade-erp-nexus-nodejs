@@ -13,6 +13,8 @@ const costing = require("../../utils/inventoryCosting");
 const { priceLine, priceCharge, priceDocument } = require("../../utils/pricing");
 const { stampGst } = require("../../utils/gst");
 const { spreadHeaderDiscount } = require("../../utils/headerDiscount");
+const { convertLinesToBase, convertChargesToBase, foreignView } = require("../../utils/fxDocument");
+const FxDocumentService = require("../financial/fxDocumentService");
 const GstService = require("../financial/gstService");
 const TaxCodeService = require("../financial/taxCodeService");
 const PostingService = require("../financial/postingService");
@@ -77,7 +79,7 @@ function calculateItems(items) {
     // pricing of this line) carried is dropped, so a line that stops being reverse charge cannot keep a stale amount.
     // allocations are the batches a dispatch really took (written at approval, and undone from the document on a reversal): a line
     // in a request does not get to name them.
-    const { rcmVat: _staleRcm, allocations: _forgedAllocations, gst: _staleGst, rcmGst: _staleRcmGst, headerDiscountNet: sharedBefore, ...item } = rawItem; // the GST split is the server's too (stampGst)
+    const { rcmVat: _staleRcm, allocations: _forgedAllocations, gst: _staleGst, rcmGst: _staleRcmGst, fx: _staleFx, headerDiscountNet: sharedBefore, ...item } = rawItem; // the GST split is the server's too (stampGst)
     // a stored line carries the header discount that was shared out over it inside its discountAmount: only the line's OWN discount is priced again
     if (Number(sharedBefore) > 0 && Number(item.discountAmount) > 0) item.discountAmount = Math.max(0, Number(item.discountAmount) - Number(sharedBefore));
     // Round each money column, then sum (utils/pricing.js): a discount reduces the taxable base.
@@ -130,7 +132,9 @@ function calculateItems(items) {
 // The header discount is shared out over the lines as extra line discount, so the taxable amount and the tax both fall and the total is exactly
 // what it was (utils/headerDiscount.js). Every document is priced this way - an offer and the invoice it becomes agree - and `spreadDiscount: false`
 // is only for a caller that must keep the old after-tax behaviour.
-async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date, side, registeredAs, gst, spreadDiscount = true }, session) {
+// `fx` (a foreign-currency invoice: FxDocumentService.resolve) says the prices are in that currency: the document is priced in it, then every figure is
+// converted to the base currency at the document's rate (utils/fxDocument.js) and the foreign figures are kept beside them.
+async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date, side, registeredAs, gst, fx, spreadDiscount = true }, session) {
   const onDate = side ? await VatRegistrationService.stateOn(date, { session }) : { governs: false, registered: true };
   const vat = onDate.governs && typeof registeredAs === "boolean" ? { ...onDate, registered: registeredAs } : onDate;
   const noVat = vat.governs && !vat.registered && side === "sales";
@@ -149,14 +153,23 @@ async function buildPricing({ items, charges = [], discount = 0, incomingTotal, 
       const p = priceCharge(noVat ? { ...c, vatPercent: 0 } : c);
       return { code: c.code, description: c.description, amount: p.net, vatPercent: p.vatPercent, vatAmount: p.vat };
     });
-  let pricing = priceDocument(
-    processedItems.map((i) => ({
-      gross: i.grossAmount, discount: i.discountAmount, taxable: i.taxableAmount, vat: i.vatAmount, rcmVat: i.rcmVat,
-    })),
-    pricedCharges.map((c) => ({ net: c.amount, vat: c.vatAmount })),
-    { headerDiscount: spread.applied > 0 ? 0 : discount, incomingTotal }
-  );
+  const pricingOf = (lines, charged, opts) =>
+    priceDocument(
+      lines.map((i) => ({ gross: i.grossAmount, discount: i.discountAmount, taxable: i.taxableAmount, vat: i.vatAmount, rcmVat: i.rcmVat })),
+      charged.map((c) => ({ net: c.amount, vat: c.vatAmount })),
+      opts
+    );
+  let pricing = pricingOf(processedItems, pricedCharges, { headerDiscount: spread.applied > 0 ? 0 : discount, incomingTotal });
   if (spread.applied > 0) pricing = { ...pricing, headerDiscountSpread: spread.applied }; // what was shared out over the lines
+  let fxBlock;
+  if (fx) {
+    // what the customer sees and owes is the foreign pricing just made; the document itself is stored in base
+    fxBlock = { ...fx.fields, pricing: foreignView(pricing), totalAmount: pricing.grandTotal };
+    processedItems = convertLinesToBase(processedItems, fx.exchangeRate, fx.decimals);
+    pricedCharges = convertChargesToBase(pricedCharges, fx.exchangeRate, fx.decimals);
+    pricing = pricingOf(processedItems, pricedCharges, { headerDiscount: 0 }); // (no client total to round against: the base total is the sum of its parts)
+    if (fxBlock.pricing.headerDiscountSpread > 0) pricing = { ...pricing, headerDiscountSpread: processedItems.reduce((t, i) => t + (Number(i.headerDiscountNet) || 0), 0) };
+  }
   let gstFields = {};
   if (gst?.gstType) {
     const s = stampGst({ lines: processedItems, charges: pricedCharges, gstType: gst.gstType });
@@ -165,7 +178,7 @@ async function buildPricing({ items, charges = [], discount = 0, incomingTotal, 
     pricing = { ...pricing, gst: s.gst, ...(pricing.rcmVat > 0 ? { rcmGst: s.rcmGst } : {}) };
     gstFields = { gstType: gst.gstType, placeOfSupply: gst.placeOfSupply, supplierState: gst.supplierState };
   }
-  return { processedItems, charges: pricedCharges, pricing, totalAmount: pricing.grandTotal, vatRegistered: vat.governs ? vat.registered : undefined, ...gstFields };
+  return { processedItems, charges: pricedCharges, pricing, totalAmount: pricing.grandTotal, vatRegistered: vat.governs ? vat.registered : undefined, ...(fxBlock ? { fx: fxBlock } : {}), ...gstFields };
 }
 
 // Which way a document type faces (see buildPricing)
@@ -276,6 +289,14 @@ class TransactionService {
           items: pricedInput.map(({ _id, ...line }) => line), charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date(), side: sideOfType(type),
           registeredAs: await ReturnService.originalRegistration({ type, returnOf: data.returnOf }, { session }),
           gst: await GstService.context({ partyType, partyId, side: sideOfType(type), returnOf: data.returnOf, session }),
+          fx: await FxDocumentService.resolve(
+            {
+              currency: data.currency, exchangeRate: data.exchangeRate, rateOverrideReason: data.rateOverrideReason, date: date || new Date(), returnOf: data.returnOf,
+              isOpening: Boolean(data.isOpening),
+              linked: Boolean(data.quoteRef || data.linkedRef || data.tradeOrderRef || data.jobCardRef || data.vanTripRef || data.reservedNumber),
+            },
+            { session, req: undefined }
+          ),
         },
         session
       );
@@ -305,6 +326,8 @@ class TransactionService {
         charges: built.charges,
         pricing: built.pricing,
         vatRegistered: built.vatRegistered, // undefined (not stamped) outside the UAE
+        // A foreign-currency invoice: its foreign figures, and what is settled of them so far (nothing yet). Absent on a base-currency document.
+        ...(built.fx ? { fx: { ...built.fx, paidAmount: 0, creditedAmount: 0, outstandingAmount: built.fx.totalAmount } } : {}),
         // India GST: where the supply is made and whether it is inside the supplier's state; absent outside India and when the
         // company's own state is not on file
         ...(built.gstType ? { gstType: built.gstType, placeOfSupply: built.placeOfSupply, supplierState: built.supplierState } : {}),
@@ -399,7 +422,7 @@ class TransactionService {
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
-      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "reservedNumber", "gstType", "placeOfSupply", "supplierState"]) delete data[key];
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx"]) delete data[key];
       // changing a document takes back an approval it was given: what was approved is no longer what is there
       if (transaction.approvals?.length) transaction.approvals = [];
 
@@ -408,6 +431,21 @@ class TransactionService {
       if (transaction.type === "sales_order" && Array.isArray(data.items)) data.items = DocumentLinks.relinkLines(transaction, data.items);
 
       if (data.items || data.charges || data.discount !== undefined) {
+        // A foreign-currency invoice is stored in the base currency, so its stored lines cannot be priced again as if they were in the foreign one: it is
+        // re-priced from the lines the person sends, or not at all. The same goes for changing its currency or rate.
+        const changesCurrency = data.currency !== undefined || data.exchangeRate !== undefined;
+        if ((transaction.fx?.currency || changesCurrency) && !data.items) {
+          throw new AppError("Save an invoice in a foreign currency together with its lines.", 400, "FOREIGN_NEEDS_LINES");
+        }
+        const fxIn = await FxDocumentService.resolve(
+          {
+            currency: data.currency ?? transaction.fx?.currency, exchangeRate: data.exchangeRate, rateOverrideReason: data.rateOverrideReason, date: data.date || transaction.date,
+            returnOf: transaction.returnOf?.transactionId ? transaction.returnOf : data.returnOf, isOpening: Boolean(transaction.isOpening),
+            linked: Boolean(transaction.quoteRef || transaction.linkedRef || transaction.tradeOrderRef?.tradeOrderId || transaction.jobCardRef?.jobCardId || transaction.vanTripRef?.tripId),
+            existing: transaction.fx?.currency ? transaction.fx.toObject() : undefined,
+          },
+          { session }
+        );
         const built = await buildPricing(
           {
             items: await ReturnService.inheritReverseCharge(
@@ -427,10 +465,12 @@ class TransactionService {
               partyType: transaction.partyType, partyId: data.partyId || transaction.partyId, side: sideOfType(transaction.type),
               returnOf: transaction.returnOf?.transactionId ? transaction.returnOf : data.returnOf, session,
             }),
+            fx: fxIn,
           },
           session
         );
         data.vatRegistered = built.vatRegistered;
+        data.fx = built.fx ? { ...built.fx, paidAmount: 0, creditedAmount: 0, outstandingAmount: built.fx.totalAmount } : undefined; // (a draft: nothing is settled yet)
         if (built.gstType) Object.assign(data, { gstType: built.gstType, placeOfSupply: built.placeOfSupply, supplierState: built.supplierState });
         const checked = await ReturnService.validate(
           {
@@ -880,7 +920,7 @@ const logAmount = balanceEffect;
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
         "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
-        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals jobCardRef tradeOrderRef vanTripRef vatRegistered gstType placeOfSupply supplierState";
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals jobCardRef tradeOrderRef vanTripRef vatRegistered gstType placeOfSupply supplierState fx";
       const [docs, total] = await Promise.all([
         Transaction.find(query).select(FIELDS).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
         Transaction.countDocuments(query),

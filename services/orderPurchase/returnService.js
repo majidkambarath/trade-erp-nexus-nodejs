@@ -57,12 +57,14 @@ class ReturnService {
       status: original.status,
       date: original.date,
       partyId: original.partyId,
+      // an invoice made in a foreign currency is returned in that currency, at its rate: the form shows the lines in it
+      ...(original.fx?.currency ? { currency: original.fx.currency, exchangeRate: original.fx.rate } : {}),
       lines: original.items.map((l) => {
         const r = returned.get(String(l._id)) || { qty: 0, value: 0 };
         return {
           lineId: l._id, itemId: l.itemId, itemCode: l.itemCode, description: l.description,
           originalQty: l.qty, returnedQty: r.qty, remainingQty: round2(l.qty - r.qty),
-          price: l.price ?? l.rate, vatPercent: l.vatPercent, discountPercent: l.discountPercent || 0,
+          price: original.fx?.currency ? (l.fx?.price ?? l.price ?? l.rate) : (l.price ?? l.rate), vatPercent: l.vatPercent, discountPercent: l.discountPercent || 0,
           // a reverse-charge line is returned as reverse charge: the form needs to know which tax code to put on the return
           ...(l.taxKind === "reverse_charge" ? { taxCodeId: l.taxCodeId || null, taxKind: l.taxKind } : {}),
         };
@@ -113,12 +115,25 @@ class ReturnService {
   static async applyToOriginal(ret, { session } = {}) {
     const originalId = ret.returnOf?.transactionId;
     if (!originalId || !(ret.type in ORIGINAL_TYPE)) return 0;
-    const q = Transaction.findById(originalId).select("outstandingAmount").lean();
+    const q = Transaction.findById(originalId).select("outstandingAmount fx.currency fx.outstandingAmount").lean();
     const original = await (session ? q.session(session) : q);
     if (!original) return 0;
     const credit = round2(ret.totalAmount);
-    const take = round2(Math.min(Math.max(Number(original.outstandingAmount) || 0, 0), credit));
-    await Transaction.updateOne({ _id: originalId }, { $inc: { creditedAmount: credit, outstandingAmount: -take } }, session ? { session } : {});
+    const baseOpen = Math.max(Number(original.outstandingAmount) || 0, 0);
+    let take = round2(Math.min(baseOpen, credit));
+    const inc = { creditedAmount: credit };
+    if (original.fx?.currency && ret.fx?.currency === original.fx.currency) {
+      // an invoice in a foreign currency: the return is in the same currency, so it takes foreign off the foreign balance as well. Taking all
+      // that is open clears all that the ledger carries, so nothing is stranded by rounding.
+      const fxOpen = Math.max(Number(original.fx.outstandingAmount) || 0, 0);
+      const fxTake = round2(Math.min(fxOpen, Number(ret.fx.totalAmount) || 0));
+      if (fxTake >= fxOpen - 1e-9) take = round2(baseOpen);
+      inc["fx.creditedAmount"] = Number(ret.fx.totalAmount) || 0;
+      inc["fx.outstandingAmount"] = -fxTake;
+      ret.fx.appliedToInvoice = fxTake;
+    }
+    inc.outstandingAmount = -take;
+    await Transaction.updateOne({ _id: originalId }, { $inc: inc }, session ? { session } : {});
     ret.appliedToInvoice = take;
     return take;
   }
@@ -129,7 +144,13 @@ class ReturnService {
     if (!originalId || !(ret.type in ORIGINAL_TYPE)) return 0;
     const credit = round2(ret.totalAmount);
     const give = round2(ret.appliedToInvoice || 0);
-    await Transaction.updateOne({ _id: originalId }, { $inc: { creditedAmount: -credit, outstandingAmount: give } }, session ? { session } : {});
+    const inc = { creditedAmount: -credit, outstandingAmount: give };
+    if (ret.fx?.currency) {
+      inc["fx.creditedAmount"] = -(Number(ret.fx.totalAmount) || 0);
+      inc["fx.outstandingAmount"] = round2(ret.fx.appliedToInvoice || 0);
+      ret.fx.appliedToInvoice = 0;
+    }
+    await Transaction.updateOne({ _id: originalId }, { $inc: inc }, session ? { session } : {});
     ret.appliedToInvoice = 0;
     return give;
   }

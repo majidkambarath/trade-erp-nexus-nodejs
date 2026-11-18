@@ -33,6 +33,9 @@ const itemSchema = new mongoose.Schema({
   grossAmount: { type: Number, default: 0, min: 0 },
   taxableAmount: { type: Number, default: 0, min: 0 },
   taxCodeId: { type: mongoose.Schema.Types.ObjectId, ref: "TaxCode", default: null },
+  // A document in a foreign currency: this line's figures in that currency (everything else on the line is in the BASE currency, so every report reads
+  // it as before). Absent on a base-currency document. See utils/fxDocument.js.
+  fx: { price: Number, grossAmount: Number, discountAmount: Number, taxableAmount: Number, vatAmount: Number, lineTotal: Number, rcmVat: Number },
   hsnCode: { type: String, trim: true }, // India: the item's HSN / SAC code when the line was priced (a snapshot, no default)
   // India GST: the line's tax split into components (utils/gst.js). vatAmount stays the TOTAL tax; cgst + sgst + igst equals it.
   // Absent on a document that was not priced under GST (every UAE document, and Indian ones from before GST detail).
@@ -160,6 +163,7 @@ const transactionSchema = new mongoose.Schema({
       vatPercent: { type: Number, default: 0, min: 0 },
       vatAmount: { type: Number, default: 0, min: 0 },
       gst: { cgst: Number, sgst: Number, igst: Number }, // India: this charge's tax by component (absent otherwise)
+      fx: { amount: Number, vatAmount: Number }, // a foreign-currency document: this charge in that currency (the figures above are base)
       _id: false,
     },
   ],
@@ -185,6 +189,27 @@ const transactionSchema = new mongoose.Schema({
   },
   // India GST: where the supply is made and whether it is within the supplier's state ("intra": CGST + SGST) or between states
   // ("inter": IGST), decided once when the document is priced and kept, so a later change to a party's state never rewrites it.
+  // A document made in a foreign currency (USD, EUR ...). Every money field of the document and its lines is in the BASE currency; this is the same
+  // document as the customer or supplier sees it, and what they owe or are owed: the rate it was made at, its totals, and how much is settled in that
+  // currency. Absent on a base-currency document, which reads exactly as it always did. Written only by the server (utils/fxDocument.js).
+  fx: {
+    currency: { type: String, uppercase: true, trim: true },
+    rate: { type: Number, min: 0 }, // base units per 1 foreign unit
+    decimals: Number,
+    rateDate: Date,
+    rateSource: String,
+    rateOverridden: Boolean,
+    rateOverrideReason: { type: String, maxlength: 250 },
+    totalAmount: { type: Number, min: 0 },
+    paidAmount: { type: Number, default: 0, min: 0 },
+    creditedAmount: { type: Number, default: 0, min: 0 },
+    outstandingAmount: { type: Number, default: 0, min: 0 },
+    appliedToInvoice: { type: Number, min: 0 }, // a return: how much of its invoice's open foreign amount it took off (so deleting it gives exactly that back)
+    pricing: {
+      gross: Number, lineDiscount: Number, net: Number, lineVat: Number, rcmVat: Number, chargesNet: Number, chargesVat: Number,
+      headerDiscount: Number, headerDiscountSpread: Number, roundOff: Number, grandTotal: Number,
+    },
+  },
   placeOfSupply: { type: String, trim: true },
   supplierState: { type: String, trim: true },
   gstType: { type: String, enum: ["intra", "inter"] },
