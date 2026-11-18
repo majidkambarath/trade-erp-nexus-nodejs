@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.5.2.0 — 18 November 2026
+
+Hotfix: people are named, never shown by their account id. Frontend and backend both at 3.5.2.0.
+
+### Fixed
+
+- The sales, purchase and return cards showed the creator's account id (a 24-character code such as `6aca1d9b5caae294d2bad5cf`) under each document. They now show the person's name, or nothing for an account since removed. The tables show the name too, and searching a list by a person's name finds their documents.
+- The cheque history in a voucher's audit trail names who cleared, bounced or cancelled the cheque instead of showing their account id.
+
 ## 3.5.1.0 — 18 November 2026
 
 Van sales figures fixes. Frontend and backend both at 3.5.1.0.
