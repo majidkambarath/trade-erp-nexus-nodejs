@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.6.0.0 — 18 November 2026
+
+Closing gaps found in a review of the whole product. Frontend and backend both at 3.6.0.0.
+
+### Changed
+
+- **One name per customer, one per vendor.** A second customer or vendor with the same name (case and spaces ignored) is refused. Their ledger accounts are found by name, so two of one name shared one account and mixed their balances, statements and ageing.
+- **Reports open on your fiscal year.** Financial statements, ledger reports and IFRS statements start at the beginning of the organisation's fiscal year (1 April for an April-March year) instead of 1 January. "Last year" on the IFRS screen is the previous fiscal year.
+
+### Fixed
+
+- A return is taxed as its invoice was. A return made after VAT registration started (or ended) used the registration on its own day, so it could reverse VAT that was never charged or claimed.
+- Two people adding items to one category at the same moment could be given the same SKU, and one of them was refused. The automatic SKU is now chosen when the item is saved; if the number shown had just been taken, the item gets the next one and the message says so.
+- The HR screens (shifts, holidays, leave types, departments) answered "Internal Server Error" to a request whose name was not text. They now say what is wrong.
+- Expense category budget figures that were never stored are no longer accepted.
+
 ## 3.5.2.0 — 18 November 2026
 
 Hotfix: people are named, never shown by their account id. Frontend and backend both at 3.5.2.0.

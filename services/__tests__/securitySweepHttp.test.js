@@ -37,6 +37,10 @@ const PUBLIC_ROUTES = [
   "POST /api/v1/einvoice/inbound/webhook/:org", // the same, for a named organisation
   "GET /api/v1/share/:token", // a customer's document link: the secret in it is the credential
   "POST /api/v1/share/:token/viewed", // the page reporting that it was opened
+  "POST /api/v1/share/:token/estimate-decision", // the customer approving or declining the garage estimate they were sent
+  "GET /api/v1/share/:token/photo/:attachmentId", // the customer's estimate: one photograph of their own car, through the same link
+  "GET /api/v1/share/:token/van", // a van invoice's page: the customer's own statement and next visit (an invoice with vanTripRef only)
+  "POST /api/v1/share/:token/van-request", // the customer asking the van for goods: a DRAFT order, rate limited per link
 ].sort();
 // Open although they are declared on `app`, not in a router, so the inventory cannot see them.
 const PUBLIC_OUTSIDE_ROUTERS = ["GET /api/v1/health"]; // the load balancer's check
@@ -137,7 +141,10 @@ test.before(async () => {
     // Without the override its routes refuse with FEATURE_NOT_IN_PLAN before the permission gate is
     // reached, and the role sweeps below cannot judge them. The sweep exists to judge permissions, so it
     // holds every feature its routes need.
-    featureOverrides: { production: true } });
+    featureOverrides: { production: true },
+    // and garage / van sales are opt-in MODULES (plans.OPT_IN_MODULES): off in every plan, so without this their
+    // routes refuse with MODULE_NOT_IN_PLAN and the role sweeps cannot judge them either
+    moduleOverrides: { garage: true, vansales: true } });
   assert.equal(made.provisioning.complete, true, "the organisation is fully provisioned");
   for (const [who, key] of ROLES) {
     const legacy = perms.LEGACY_TYPES.includes(key);

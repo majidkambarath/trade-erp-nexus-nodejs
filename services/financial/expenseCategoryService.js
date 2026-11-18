@@ -5,7 +5,7 @@ const AppError = require("../../utils/AppError");
 class ExpenseCategoryService {
   // Create expense category
   static async createCategory(data, createdBy) {
-    const { categoryName, categoryCode, parentCategoryId, description, monthlyBudget, yearlyBudget } = data;
+    const { categoryName, categoryCode, parentCategoryId, description } = data;
 
     // Check if category code already exists
     const existingCategory = await ExpenseCategory.findOne({
@@ -32,8 +32,6 @@ class ExpenseCategoryService {
       parentCategoryId,
       level,
       description,
-      monthlyBudget: monthlyBudget || 0,
-      yearlyBudget: yearlyBudget || 0,
       createdBy
     };
 

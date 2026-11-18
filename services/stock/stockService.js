@@ -10,6 +10,7 @@ const StockAdjustmentService = require("./stockAdjustmentService");
 const ItemKindService = require("./itemKindService");
 const kinds = require("../../utils/itemKinds");
 const { searchRegex } = require("../../utils/regex");
+const { isTransient, backoff } = require("../../utils/withTransactionSession");
 
 // The item type a request names, or goods when it names none. Anything else is refused with a code the screen can show.
 function requestedType(value, ...rest) {
@@ -33,15 +34,51 @@ function assertNoStockFields(data) {
   }
 }
 
+// The automatic SKU: two letters of the category's name, then the next number after the highest SKU with that prefix,
+// four digits (the rule the item form has always shown, lib/quickCreate.js nextSku). Worked out HERE, not in the
+// browser, so two people adding items at once cannot both be handed the same one: whoever loses the race on the unique
+// index is given the next number (createStock retries) instead of an error.
+const skuPrefix = (categoryName) => String(categoryName || "").substring(0, 2).toUpperCase().replace(/[^A-Z]/g, "");
+async function nextSkuFor(categoryName, session) {
+  const prefix = skuPrefix(categoryName);
+  const rx = new RegExp(`^${prefix}\\d+$`);
+  const q = Stock.find({ sku: rx }).select("sku").lean();
+  const rows = await (session ? q.session(session) : q);
+  let max = 0;
+  for (const r of rows) {
+    const n = parseInt(String(r.sku).slice(prefix.length), 10);
+    if (!Number.isNaN(n) && n > max) max = n;
+  }
+  return `${prefix}${String(max + 1).padStart(4, "0")}`;
+}
+const AUTO_SKU_TRIES = 8;
+
 class StockService {
+  static nextSkuFor = nextSkuFor;
+
+  // `autoSku: true` (the item form's automatic SKU, and an item quick-added from an order) lets the server choose the
+  // SKU; anything the request typed in `sku` is then only the preview the form showed.
   static async createStock(data, createdBy) {
+    if (!data?.autoSku) return this.createStockOnce(data, createdBy);
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.createStockOnce(data, createdBy, { autoSku: true });
+      } catch (err) {
+        // a committed twin is a duplicate key; one still in its transaction is a write conflict - either way, count again
+        const skuClash = err?.code === 11000 && (err.keyPattern?.sku || /sku/.test(String(err.message)));
+        if (!(skuClash || isTransient(err)) || attempt >= AUTO_SKU_TRIES) throw err;
+        await backoff(attempt);
+      }
+    }
+  }
+
+  static async createStockOnce(data, createdBy, { autoSku = false } = {}) {
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
       const {
         itemId,
-        sku,
         itemName,
         categoryId,
         vendorId,
@@ -73,6 +110,7 @@ class StockService {
       if (!categoryExists) {
         throw new AppError("Category not found", 404);
       }
+      const sku = autoSku ? await nextSkuFor(categoryExists.name, session) : data.sku;
 
       // Validate vendor exists
       // const vendorExists = await Vendor.findById(vendorId).session(session);

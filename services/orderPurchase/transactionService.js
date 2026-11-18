@@ -117,8 +117,11 @@ function calculateItems(items) {
 //   - not registered, buying: the supplier's tax code and rate stay (a supplier may still charge 5%), and the document is stamped so its
 //     posting treats that VAT as part of the cost - it cannot be claimed back.
 // The answer comes back as `vatRegistered` for the caller to stamp on the document; it is undefined where the rule does not apply.
-async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date, side }, session) {
-  const vat = side ? await VatRegistrationService.stateOn(date, { session }) : { governs: false, registered: true };
+// `registeredAs` (a return: ReturnService.originalRegistration) replaces the date's answer with the original invoice's,
+// where the rule governs at all.
+async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date, side, registeredAs }, session) {
+  const onDate = side ? await VatRegistrationService.stateOn(date, { session }) : { governs: false, registered: true };
+  const vat = onDate.governs && typeof registeredAs === "boolean" ? { ...onDate, registered: registeredAs } : onDate;
   const noVat = vat.governs && !vat.registered && side === "sales";
   const withTax = noVat ? await TaxCodeService.forceNoVat(items, { session }) : await TaxCodeService.applyToItems(items, date, { session });
   // each line learns from the item master whether it is goods or a service (never from the request): a service line
@@ -244,7 +247,10 @@ class TransactionService {
       const pricedInput = await ReturnService.inheritReverseCharge({ type, returnOf: data.returnOf, items }, { session });
       const built = await buildPricing(
         // a line id sent with a new document belongs to some other document: every line here gets its own
-        { items: pricedInput.map(({ _id, ...line }) => line), charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date(), side: sideOfType(type) },
+        {
+          items: pricedInput.map(({ _id, ...line }) => line), charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date(), side: sideOfType(type),
+          registeredAs: await ReturnService.originalRegistration({ type, returnOf: data.returnOf }, { session }),
+        },
         session
       );
       // Returns: validated against the original (quantities and value), then the line links are kept.
@@ -384,6 +390,10 @@ class TransactionService {
             incomingTotal: data.totalAmount,
             date: data.date || transaction.date,
             side: sideOfType(transaction.type),
+            registeredAs: await ReturnService.originalRegistration(
+              { type: transaction.type, returnOf: transaction.returnOf?.transactionId ? transaction.returnOf : data.returnOf },
+              { session }
+            ),
           },
           session
         );
