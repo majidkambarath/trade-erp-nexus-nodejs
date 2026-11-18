@@ -222,7 +222,9 @@ test("a storekeeper looks after stock, and touches no money and raises no sale",
   await can("storekeeper", "PATCH", `/stock/stock/${ID.stock}/quantity`, { quantity: 1 });
   await can("storekeeper", "POST", "/stock", {});
   await can("storekeeper", "GET", "/transactions/transactions?type=sales_order");
-  await can("storekeeper", "GET", "/stock-reports/valuation");
+  await can("storekeeper", "GET", "/stock-reports/reorder");
+  // what stock is worth is cost: a report for inventory.viewCost, which a storekeeper does not hold (utils/costVisibility.js)
+  await cannot("storekeeper", "GET", "/stock-reports/valuation");
   await cannot("storekeeper", "POST", "/transactions/transactions", { type: "sales_order" });
   await cannot("storekeeper", "POST", `/delivery-notes/${FAKE}/dispatch`);
   await cannot("storekeeper", "GET", "/vouchers/vouchers");

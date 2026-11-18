@@ -125,6 +125,7 @@ function storedLine(i) {
     vatAmount: i.vatAmount,
     ...(i.rcmVat != null ? { rcmVat: i.rcmVat } : {}), // a reverse-charge line: the VAT the recipient assesses (absent on every other line)
     lineTotal: i.lineTotal,
+    ...(Number(i.headerDiscountNet) > 0 ? { headerDiscountNet: i.headerDiscountNet } : {}), // the part of discountAmount that is the header discount
     ...(i.sourceLineId ? { sourceLineId: i.sourceLineId } : {}),
   };
 }
@@ -137,7 +138,10 @@ function storedLine(i) {
 function toPricingInput(line, qty = line.qty, basisQty = line.qty) {
   const pct = Number(line.discountPercent) || 0;
   const original = Number(basisQty) || 0;
-  const fixed = pct > 0 || !original ? 0 : roundTo(((Number(line.discountAmount) || 0) * qty) / original);
+  // (a stored line's discountAmount includes the header discount that was shared out over it; only the line's own discount is carried, the
+  // document's discount is shared out again by the pricing)
+  const own = Math.max(0, (Number(line.discountAmount) || 0) - (Number(line.headerDiscountNet) || 0));
+  const fixed = pct > 0 || !original ? 0 : roundTo((own * qty) / original);
   return {
     itemId: line.itemId,
     itemCode: line.itemCode,

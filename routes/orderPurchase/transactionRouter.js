@@ -9,6 +9,7 @@ const { requirePermission, byDocumentType, byDocumentDelete } = require("../../m
 const router = express.Router();
 
 router.use(authenticateToken);
+router.use(require("../../middleware/costVisibility").hideCost({ movements: true })); // a line's cost snapshot and the cost of its stock movements (the audit trail) are for inventory.viewCost only
 router.param("id", branchOfDocument(Transaction)); // a head office working across branches posts to the document's own branch
 
 router.post("/transactions", requirePermission(byDocumentType("create")), TransactionController.createTransaction);

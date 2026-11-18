@@ -57,6 +57,7 @@ const MODULES = {
       edit: "Change an item, category or unit that already exists",
       delete: "Delete an item, category or unit",
       adjust: "Change a quantity on hand, write off a batch, record a stock movement",
+      viewCost: "See what items cost: cost price, stock value, margins and the cost on stock movements",
     },
   },
   finance: {
@@ -206,7 +207,7 @@ const MODULES = {
 const MODULE_KEYS = Object.keys(MODULES);
 
 // Permissions that only LOOK, although they are not called "view": they read more, but change nothing and need no form.
-const READS = new Set(["reports.financial"]);
+const READS = new Set(["reports.financial", "inventory.viewCost"]); // looking, not changing: it brings the module's view but not lookups.view
 const isRead = (k) => k.endsWith(".view") || READS.has(k);
 const KEYS = MODULE_KEYS.flatMap((m) => Object.keys(MODULES[m].actions).map((a) => `${m}.${a}`));
 const KEY_SET = new Set(KEYS);
@@ -310,7 +311,7 @@ const BUILT_IN = {
       ...modules("finance", "banking"),
       "accounts.view", "accounts.manage",
       "reports.view", "reports.financial", "reports.vat",
-      "sales.view", "purchase.view", "inventory.view", "audit.view"
+      "sales.view", "purchase.view", "inventory.view", "inventory.viewCost", "audit.view"
     ),
   },
   operator: {
@@ -332,7 +333,7 @@ const BUILT_IN = {
     name: "Purchase officer",
     rank: 40,
     description: "Raises purchase orders and returns. Cannot approve.",
-    permissions: only("purchase.create", "purchase.edit", "inventory.view", "reports.view"),
+    permissions: only("purchase.create", "purchase.edit", "inventory.view", "inventory.viewCost", "reports.view"),
   },
   storekeeper: {
     key: "storekeeper",
@@ -501,7 +502,7 @@ function legacyPermissions(grants, rank = 0) {
 
 // The name a checkbox carries in the role editor; the full sentence is its hint. An entry here for "module.action" wins.
 const SHORT = {
-  view: "View", create: "Add", edit: "Edit", approve: "Approve", delete: "Delete", deletePosted: "Delete approved", send: "Send to customers", creditOverride: "Override credit limit",
+  view: "View", create: "Add", edit: "Edit", approve: "Approve", delete: "Delete", deletePosted: "Delete approved", send: "Send to customers", creditOverride: "Override credit limit", viewCost: "See item costs",
   adjust: "Adjust stock", manage: "Manage", reconcile: "Reconcile", close: "Close periods", financial: "Financial reports", vat: "File VAT",
   assign: "Assign to someone", "crm.manage": "Stages and automation",
   "settings.manage": "Change settings", "users.manage": "Manage people and roles", "audit.view": "Read the trail", "lookups.view": "Pick lists",

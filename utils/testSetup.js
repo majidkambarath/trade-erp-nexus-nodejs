@@ -11,5 +11,8 @@ if (process.env.TENANT_LEGACY_DEFAULT === undefined) process.env.TENANT_LEGACY_D
 // VAT registration rules (utils/vatRegistration.js) off: the older suites build UAE organisations with no tax number and expect VAT at the
 // standard rate. The suites about the rule switch them on for themselves; a deployment never sets this.
 if (process.env.VAT_REGISTRATION_RULES === undefined) process.env.VAT_REGISTRATION_RULES = "off";
+// The warning on a purchase bill from a supplier who is not registered (services/financial/vendorVatService.js) off, for the same reason: the older
+// suites buy from suppliers with no tax number and approve. The suite about it switches it on for itself.
+if (process.env.VENDOR_VAT_WARNING === undefined) process.env.VENDOR_VAT_WARNING = "off";
 
 if (process.env.ATTACHMENT_STORAGE === undefined) process.env.ATTACHMENT_STORAGE = "disk";

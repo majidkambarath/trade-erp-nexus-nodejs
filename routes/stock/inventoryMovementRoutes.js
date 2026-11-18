@@ -10,6 +10,7 @@ const { requirePermission } = require("../../middleware/permissionGate");
 const router = express.Router();
 
 router.use(authenticateToken);
+router.use(require("../../middleware/costVisibility").hideCost({ movements: true })); // unit cost, value and the average cost rolled forward are for inventory.viewCost only
 
 router.post("/inventory", requirePermission("inventory.adjust"), InventoryMovementController.createMovement);
 router.get("/inventory", requirePermission("inventory.view"), InventoryMovementController.getAllMovements);

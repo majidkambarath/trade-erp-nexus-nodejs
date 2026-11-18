@@ -12,6 +12,7 @@ const FiscalYearService = require("../core/fiscalYearService");
 const costing = require("../../utils/inventoryCosting");
 const { priceLine, priceCharge, priceDocument } = require("../../utils/pricing");
 const { stampGst } = require("../../utils/gst");
+const { spreadHeaderDiscount } = require("../../utils/headerDiscount");
 const GstService = require("../financial/gstService");
 const TaxCodeService = require("../financial/taxCodeService");
 const PostingService = require("../financial/postingService");
@@ -20,6 +21,7 @@ const { EInvoiceSubmission } = require("../../models/modules/einvoiceModels");
 const ReturnService = require("./returnService");
 const BatchService = require("../stock/batchService");
 const CreditControlService = require("../financial/creditControlService");
+const VendorVatService = require("../financial/vendorVatService");
 const ApprovalPolicyService = require("../core/approvalPolicyService");
 const DebitLog = require("../../models/modules/DebitLog");
 const CreditLog = require("../../models/modules/CreditLog");
@@ -75,7 +77,9 @@ function calculateItems(items) {
     // pricing of this line) carried is dropped, so a line that stops being reverse charge cannot keep a stale amount.
     // allocations are the batches a dispatch really took (written at approval, and undone from the document on a reversal): a line
     // in a request does not get to name them.
-    const { rcmVat: _staleRcm, allocations: _forgedAllocations, gst: _staleGst, rcmGst: _staleRcmGst, ...item } = rawItem; // the GST split is the server's too (stampGst)
+    const { rcmVat: _staleRcm, allocations: _forgedAllocations, gst: _staleGst, rcmGst: _staleRcmGst, headerDiscountNet: sharedBefore, ...item } = rawItem; // the GST split is the server's too (stampGst)
+    // a stored line carries the header discount that was shared out over it inside its discountAmount: only the line's OWN discount is priced again
+    if (Number(sharedBefore) > 0 && Number(item.discountAmount) > 0) item.discountAmount = Math.max(0, Number(item.discountAmount) - Number(sharedBefore));
     // Round each money column, then sum (utils/pricing.js): a discount reduces the taxable base.
     const priced = priceLine(item);
 
@@ -123,7 +127,10 @@ function calculateItems(items) {
 // where the rule governs at all.
 // `gst` (India: GstService.context) is the document's place of supply; with it every line and the document carry their tax by
 // component (CGST + SGST or IGST). Without it nothing about the document changes.
-async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date, side, registeredAs, gst }, session) {
+// The header discount is shared out over the lines as extra line discount, so the taxable amount and the tax both fall and the total is exactly
+// what it was (utils/headerDiscount.js). Every document is priced this way - an offer and the invoice it becomes agree - and `spreadDiscount: false`
+// is only for a caller that must keep the old after-tax behaviour.
+async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date, side, registeredAs, gst, spreadDiscount = true }, session) {
   const onDate = side ? await VatRegistrationService.stateOn(date, { session }) : { governs: false, registered: true };
   const vat = onDate.governs && typeof registeredAs === "boolean" ? { ...onDate, registered: registeredAs } : onDate;
   const noVat = vat.governs && !vat.registered && side === "sales";
@@ -131,6 +138,11 @@ async function buildPricing({ items, charges = [], discount = 0, incomingTotal, 
   // each line learns from the item master whether it is goods or a service (never from the request): a service line
   // is priced and taxed like any other but moves no stock (utils/itemKinds.js)
   let processedItems = await ItemKindService.stamp(calculateItems(withTax), { session });
+  let spread = { applied: 0 };
+  if (spreadDiscount && Number(discount) > 0) {
+    spread = spreadHeaderDiscount(processedItems, discount);
+    processedItems = spread.lines;
+  }
   let pricedCharges = (charges || [])
     .filter((c) => Number(c.amount) > 0)
     .map((c) => {
@@ -142,8 +154,9 @@ async function buildPricing({ items, charges = [], discount = 0, incomingTotal, 
       gross: i.grossAmount, discount: i.discountAmount, taxable: i.taxableAmount, vat: i.vatAmount, rcmVat: i.rcmVat,
     })),
     pricedCharges.map((c) => ({ net: c.amount, vat: c.vatAmount })),
-    { headerDiscount: discount, incomingTotal }
+    { headerDiscount: spread.applied > 0 ? 0 : discount, incomingTotal }
   );
+  if (spread.applied > 0) pricing = { ...pricing, headerDiscountSpread: spread.applied }; // what was shared out over the lines
   let gstFields = {};
   if (gst?.gstType) {
     const s = stampGst({ lines: processedItems, charges: pricedCharges, gstType: gst.gstType });
@@ -566,7 +579,7 @@ class TransactionService {
   );
 
   // Process Transaction (approve/reject/cancel)
-  // processTransaction(id, action, createdBy[, options]) - options: { acknowledged, req }.
+  // processTransaction(id, action, createdBy[, options]) - options: { acknowledged, acknowledgedVendorVat, req }.
   // withTransactionSession appends the session as the LAST argument.
   static processTransaction = withTransactionSession(
     async (id, action, createdBy, ...rest) => {
@@ -598,6 +611,10 @@ class TransactionService {
         // Credit limit / overdue check (sales only; off unless the company turns it on).
         await CreditControlService.assertSaleAllowed(transaction, {
           session, acknowledged: options.acknowledged === true, req: options.req,
+        });
+        // A bill that charges tax from a supplier who is not registered for it: asked about, never refused (its own acknowledgement field).
+        await VendorVatService.assertBillAllowed(transaction, {
+          session, acknowledged: options.acknowledgedVendorVat === true, req: options.req,
         });
         // the 3-way match, once more at the moment it counts
         await ReceiptLinks.assertWithinReceipts(transaction, transaction.items, { session });

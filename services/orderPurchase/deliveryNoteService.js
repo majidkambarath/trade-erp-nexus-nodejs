@@ -600,7 +600,7 @@ class DeliveryNoteService {
       l.deliveredQty = settled.lines[i].deliveredQty;
       l.shortReason = settled.lines[i].shortReason;
       const p = pricedById.get(String(l._id));
-      for (const k of ["discountAmount", "grossAmount", "taxableAmount", "vatAmount", "lineTotal", "vatPercent", "taxKind"]) {
+      for (const k of ["discountAmount", "headerDiscountNet", "grossAmount", "taxableAmount", "vatAmount", "lineTotal", "vatPercent", "taxKind"]) {
         l[k] = p ? p[k] : k === "vatPercent" || k === "taxKind" ? l[k] : 0;
       }
       // a reverse-charge line's assessed VAT follows the quantity accepted (nothing accepted: nothing assessed)
