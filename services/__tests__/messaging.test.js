@@ -134,7 +134,7 @@ test("an unsendable document is refused before anything is written", { skip }, a
   const draft = await svc.Tx.createTransaction({ type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", items: [L(rice, 1, 20)] }, "tester");
   await assert.rejects(() => send({ sourceId: draft._id }), (e) => e.code === "DOCUMENT_NOT_SENDABLE" && /not approved/.test(e.message));
   await assert.rejects(() => send({ docType: "carrier_pigeon" }), { code: "UNKNOWN_DOC_TYPE" });
-  await assert.rejects(() => send({ docType: "quotation" }), { code: "UNKNOWN_DOC_TYPE" }, "stage 2");
+  await assert.rejects(() => send({ docType: "purchase_order" }), { code: "UNKNOWN_DOC_TYPE" }, "a document that is not sent");
   await assert.rejects(() => send({ sourceId: new mongoose.Types.ObjectId() }), { code: "DOCUMENT_NOT_FOUND" });
   await assert.rejects(() => send({ sourceId: "nope" }), { code: "DOCUMENT_NOT_FOUND" });
   assert.equal(await svc.M.DocumentSend.countDocuments(), 0);

@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.10.0.0 — 19 November 2026
+
+Send more documents to the customer. Frontend and backend both at 3.10.0.0.
+
+### Added
+
+- **Email a quotation.** A quotation can be sent from its own screen: a draft, a sent or an accepted one. Sending a draft also marks it as sent, the same as pressing Mark as sent, so it can no longer be edited and its deal moves on in the CRM. A lapsed, declined or replaced quotation cannot be sent.
+- **Email a delivery note** once it is dispatched or delivered. The customer's copy has the quantities, the delivery particulars and the proof of receipt, and no prices.
+- **Email a customer their statement of account** for a period, from the customer's account page (both dates must be chosen and every type shown). Supplier statements still print or download only.
+- **All three also go by WhatsApp**, and the customer's link shows the document as a page they can download or print.
+- The quotation and delivery note lists say when each was last sent.
+
+### Fixed
+
+- **The statement's PDF could come out blank.** Its markup began with a style block, which is what the PDF capture drew instead of the page. It is now one page element.
+
 ## 3.9.0.0 — 18 November 2026
 
 Invoices in a foreign currency. Frontend and backend both at 3.9.0.0.

@@ -6,6 +6,8 @@
 // secret verifies can learn it was withdrawn or has run out, and that is exactly who needs to be told.
 const { ShareLink, DocumentSend } = require("../../models/modules/messagingModels");
 const Transaction = require("../../models/modules/transactionModel");
+const Quotation = require("../../models/modules/quotationModel");
+const DeliveryNote = require("../../models/modules/deliveryNoteModel");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 const { runWithTenant, runUnscoped } = require("../../utils/tenantContext");
@@ -15,7 +17,7 @@ const { isAllowedOrigin, normalizeOrigin } = require("../../utils/allowedOrigins
 
 const DAY = 24 * 3600 * 1000;
 const DEFAULT_BASE = "https://zarvia.onrender.com";
-const SOURCE_MODELS = { Transaction }; // grows with the documents that carry a lastSend
+const SOURCE_MODELS = { Transaction, Quotation, DeliveryNote }; // grows with the documents that carry a lastSend
 
 const notFound = () => new AppError("This link does not work. It may have been typed wrongly, or the document has been withdrawn. Ask the sender to send it again.", 404, "SHARE_NOT_FOUND");
 

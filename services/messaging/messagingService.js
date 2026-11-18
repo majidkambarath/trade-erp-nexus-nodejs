@@ -10,6 +10,8 @@
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 const Transaction = require("../../models/modules/transactionModel");
+const Quotation = require("../../models/modules/quotationModel");
+const DeliveryNote = require("../../models/modules/deliveryNoteModel");
 const { DocumentSend, MessagingSettings, ShareLink } = require("../../models/modules/messagingModels");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
@@ -21,9 +23,10 @@ const { toWaNumber, waMeUrl } = require("../../utils/phone");
 const Settings = require("./settingsService");
 const DocumentSource = require("./documentSource");
 const ShareService = require("./shareService");
+const QuotationService = require("../orderPurchase/quotationService");
 const { PROVIDERS } = require("./providers");
 
-const SOURCE_MODELS = { Transaction }; // the documents that carry a lastSend summary
+const SOURCE_MODELS = { Transaction, Quotation, DeliveryNote }; // the documents that carry a lastSend summary
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX = { to: 10, cc: 5, bcc: 5 };
 const DUPLICATE_WINDOW_MS = 60 * 1000;
@@ -85,6 +88,20 @@ async function writeLastSend(row) {
   await Model.updateOne({ _id: row.sourceId }, { $set: { lastSend } }).catch((e) => console.error("[messaging] lastSend not written:", e.message));
 }
 
+// A quotation that goes to the customer is SENT, the same as pressing Mark as sent: its CRM deal moves, its validity starts to count.
+// Only a draft changes (an offer already sent, accepted or lapsed is left as it is), and a refusal here (no lines, validity passed)
+// is logged and never fails or undoes a message that has already gone.
+async function markQuotationSent(row) {
+  if (row.docType !== "quotation" || row.sourceType !== "Quotation") return;
+  try {
+    const q = await Quotation.findById(row.sourceId).select("status").lean();
+    if (q?.status !== "DRAFT") return;
+    await QuotationService.transition(row.sourceId, "send", {}, row.sentBy || "system");
+  } catch (e) {
+    console.error("[messaging] quotation not marked sent:", e.message);
+  }
+}
+
 // A provider answer becomes an HTTP status the screen can act on; only a fault of ours is a 500.
 function toAppError(err, row) {
   const code = err.code || "SEND_FAILED";
@@ -141,7 +158,7 @@ class MessagingService {
     const bad = (await Settings.readiness(req, settings)).checks.filter((c) => c.blocking && !c.ok);
     if (bad.length) throw new AppError(`Sending is not set up yet: ${bad.map((c) => c.label).join("; ")}`, 422, "MESSAGING_NOT_CONFIGURED", { missing: bad.map((c) => c.key) });
     const apiKey = Settings.keyOf(settings);
-    const doc = await DocumentSource.load(input.docType, input.sourceId, req);
+    const doc = await DocumentSource.load(input.docType, input.sourceId, req, { from: input.periodFrom, to: input.periodTo });
 
     const given = parseList(input.to);
     const to = given.length ? given : doc.recipients.slice(0, 1);
@@ -182,7 +199,7 @@ class MessagingService {
     try {
       if (includeLink) share = await ShareService.mint({ doc, days: settings.shareLinkDays, by, req });
       const mail = renderDocumentEmail({
-        docType: doc.docType, documentNo: doc.documentNo, date: doc.date, dueDate: doc.dueDate, total: doc.total, currency: doc.currency,
+        docType: doc.docType, documentNo: doc.documentNo, date: doc.date, dueDate: doc.dueDate, validUntil: doc.validUntil, period: doc.period, total: doc.total, currency: doc.currency,
         partyName: doc.partyName, contactPerson: doc.contactPerson, company: doc.company, shareUrl: share?.url, shareExpiresAt: share?.expiresAt,
         note, signature: settings.signature, hasAttachment: Boolean(attach),
       });
@@ -248,6 +265,7 @@ class MessagingService {
     }
     await row.save();
     await writeLastSend(row);
+    if (row.status === "SENT") await markQuotationSent(row);
     if (row.status === "FAILED" && throwOnFail) throw toAppError({ message: row.lastError, code: row.lastErrorCode, retryable: row.retryable }, row);
     return row;
   }
@@ -278,7 +296,7 @@ class MessagingService {
     const { by, byName } = senderOf(req);
     const settings = await Settings.load(companyId);
     if (!settings.shareEnabled) throw new AppError("WhatsApp carries the document link, and links are switched off in Settings, under Sending.", 422, "SHARE_DISABLED");
-    const doc = await DocumentSource.load(input.docType, input.sourceId, req);
+    const doc = await DocumentSource.load(input.docType, input.sourceId, req, { from: input.periodFrom, to: input.periodTo });
 
     const typed = String(input.phone ?? "").trim();
     const phone = toWaNumber(typed || doc.phone);
@@ -306,6 +324,7 @@ class MessagingService {
       return { send: present(row), waUrl: null, share: null, duplicate: true };
     }
     await writeLastSend(row);
+    await markQuotationSent(row);
     return { send: present(row), waUrl: waMeUrl(phone, text), share: { url: share.url, expiresAt: share.expiresAt }, duplicate: false };
   }
 

@@ -130,7 +130,7 @@ class QuotationService {
     if (!S.isId(id)) throw fail("Invalid quotation id", 400);
     const q = await Quotation.findById(id).lean();
     if (!q) throw fail("Quotation not found", 404, "QUOTATION_NOT_FOUND");
-    const [party, items] = await Promise.all([Customer.findById(q.partyId).select(S.CUSTOMER_FIELDS).lean(), S.attachStockDetails(q.items)]);
+    const [party, items] = await Promise.all([Customer.findById(q.partyId).select(`${S.CUSTOMER_FIELDS} contacts`).lean(), S.attachStockDetails(q.items)]);
     return { ...present({ ...q, items }), party };
   }
 

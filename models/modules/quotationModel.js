@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 const tenantPlugin = require("../../utils/tenantPlugin");
-const { baseLineFields, chargeSchema, pricingSchema, linkSchema } = require("./salesDocumentParts");
+const { baseLineFields, chargeSchema, pricingSchema, linkSchema, lastSendSchema } = require("./salesDocumentParts");
 
 // An offer to a customer. Posts nothing and moves no stock (see utils/salesDocuments.js); when the
 // customer says yes it is converted into a DRAFT sales order, which is the invoice.
@@ -32,6 +32,7 @@ const quotationSchema = new mongoose.Schema(
     notes: { type: String, trim: true, default: "" }, // internal
 
     sentAt: { type: Date, default: null },
+    lastSend: { type: lastSendSchema, default: undefined }, // how it last went to the customer (services/messaging)
     acceptedAt: { type: Date, default: null },
     acceptedBy: { type: String, trim: true, default: "" }, // who at the customer, or their LPO reference
     rejectedAt: { type: Date, default: null },
