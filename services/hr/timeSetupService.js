@@ -8,18 +8,22 @@ const Department = require("../../models/modules/hr/departmentModel");
 const AppError = require("../../utils/AppError");
 const { isCalendarDay } = require("../../utils/documentExpiry");
 
+// A name is text: anything else (an object such as {"$ne": ""}, a number, a list) reads as no name, so it is refused
+// with the ordinary 400 instead of throwing on .trim() - and never reaches a query as an operator.
+const nameOf = (data) => (typeof data?.name === "string" ? data.name.trim() : "");
+
 class ShiftService {
   static list() {
     return Shift.find().sort({ name: 1 }).lean();
   }
   static async create(data, by) {
-    if (!data?.name?.trim()) throw new AppError("Name the shift", 400, "VALIDATION_ERROR");
+    if (!nameOf(data)) throw new AppError("Name the shift", 400, "VALIDATION_ERROR");
     if (!/^\d{2}:\d{2}$/.test(data?.startTime || "") || !/^\d{2}:\d{2}$/.test(data?.endTime || "")) {
       throw new AppError("Give the start and end time as HH:MM", 400, "VALIDATION_ERROR");
     }
     if (!(Number(data?.hours) > 0)) throw new AppError("The shift's own length, in hours", 400, "VALIDATION_ERROR");
     return Shift.create({
-      name: data.name.trim(), startTime: data.startTime, endTime: data.endTime, hours: Number(data.hours),
+      name: nameOf(data), startTime: data.startTime, endTime: data.endTime, hours: Number(data.hours),
       halfDayBelowHours: data.halfDayBelowHours === "" || data.halfDayBelowHours === undefined ? null : Number(data.halfDayBelowHours),
       createdBy: by,
     });
@@ -49,10 +53,10 @@ class HolidayService {
   }
   static async create(data, by) {
     if (!isCalendarDay(data?.day)) throw new AppError("Enter a real day", 400, "INVALID_DAY");
-    if (!data?.name?.trim()) throw new AppError("Name the holiday", 400, "VALIDATION_ERROR");
+    if (!nameOf(data)) throw new AppError("Name the holiday", 400, "VALIDATION_ERROR");
     const clash = await HolidayCalendar.findOne({ day: data.day });
     if (clash) throw new AppError("That day is already a holiday", 409, "HOLIDAY_EXISTS");
-    return HolidayCalendar.create({ day: data.day, name: data.name.trim(), createdBy: by });
+    return HolidayCalendar.create({ day: data.day, name: nameOf(data), createdBy: by });
   }
   static async remove(id) {
     const r = await HolidayCalendar.deleteOne({ _id: id });
@@ -66,10 +70,10 @@ class LeaveTypeService {
     return LeaveType.find().sort({ name: 1 }).lean();
   }
   static async create(data, by) {
-    if (!data?.name?.trim()) throw new AppError("Name the leave type", 400, "VALIDATION_ERROR");
+    if (!nameOf(data)) throw new AppError("Name the leave type", 400, "VALIDATION_ERROR");
     if (!(Number(data?.accrualPerMonth) >= 0)) throw new AppError("Give the accrual rate, days a month", 400, "VALIDATION_ERROR");
     return LeaveType.create({
-      name: data.name.trim(), accrualPerMonth: Number(data.accrualPerMonth),
+      name: nameOf(data), accrualPerMonth: Number(data.accrualPerMonth),
       maxCarryForward: data.maxCarryForward === "" || data.maxCarryForward === undefined ? null : Number(data.maxCarryForward),
       isPaid: data.isPaid !== false, createdBy: by,
     });
@@ -93,10 +97,10 @@ class DepartmentService {
     return Department.find().sort({ name: 1 }).lean();
   }
   static async create(data, by) {
-    if (!data?.name?.trim()) throw new AppError("Name the department", 400, "VALIDATION_ERROR");
-    const clash = await Department.findOne({ name: data.name.trim() });
+    if (!nameOf(data)) throw new AppError("Name the department", 400, "VALIDATION_ERROR");
+    const clash = await Department.findOne({ name: nameOf(data) });
     if (clash) throw new AppError("A department of this name already exists", 409, "DEPARTMENT_EXISTS");
-    return Department.create({ name: data.name.trim(), createdBy: by });
+    return Department.create({ name: nameOf(data), createdBy: by });
   }
   static async update(id, data, by) {
     const set = { updatedBy: by };

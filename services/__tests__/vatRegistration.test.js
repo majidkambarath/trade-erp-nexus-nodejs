@@ -167,6 +167,36 @@ test("a document saved before the rule (no stamp) posts exactly as it did, even 
   assert.equal((await byAccount(t))["Input VAT"], 10);
 });
 
+test("a return follows the registration its invoice was priced under, not the one on its own day", { skip }, async () => {
+  // bought while not registered: the VAT was cost, nothing was claimed
+  await profile();
+  const unregBuy = await buy([L(4, 100, { taxCodeId: std._id })]);
+  assert.equal(unregBuy.vatRegistered, false);
+  await approve(unregBuy);
+  // registered since; returning one: it must not reverse Input VAT that was never posted
+  await profile(REGISTERED);
+  const ret = await svc.Tx.createTransaction({
+    type: "purchase_return", partyId: vendor._id, partyType: "Vendor", partyTypeRef: "Vendor",
+    items: [L(1, 100, { taxCodeId: std._id, returnOfLineId: unregBuy.items[0]._id })], returnOf: { transactionId: unregBuy._id },
+  }, "tester");
+  assert.equal(ret.vatRegistered, false, "stamped as the invoice was");
+  await approve(ret);
+  const posted = await byAccount(ret);
+  assert.ok(!posted["Input VAT"], "no Input VAT reversed: " + JSON.stringify(posted));
+
+  // and the other way: sold while registered, the company has since deregistered; the credit note gives back the VAT charged
+  const regSale = await sell([L(2, 100, { taxCodeId: std._id })]);
+  assert.equal(r2(regSale.pricing.lineVat), 10);
+  await approve(regSale);
+  await profile({ ...REGISTERED, "profile.vatRegistered": false });
+  const credit = await svc.Tx.createTransaction({
+    type: "sales_return", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer",
+    items: [L(1, 100, { taxCodeId: std._id, returnOfLineId: regSale.items[0]._id })], returnOf: { transactionId: regSale._id },
+  }, "tester");
+  assert.equal(r2(credit.pricing.lineVat), 5, "the VAT charged on the invoice is credited back");
+  assert.equal(credit.vatRegistered, true);
+});
+
 test("a body cannot choose the stamp", { skip }, async () => {
   await profile();
   const t = await buy([L(1, 100, { taxCodeId: std._id })]);

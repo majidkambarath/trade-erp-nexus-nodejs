@@ -74,6 +74,19 @@ class ReturnService {
   // and the VAT the recipient assessed is reversed. The return form sends a line with no tax code (it never carried one), which
   // would price it as ordinary VAT-bearing goods; this gives such a line the original line's tax code BEFORE it is priced. Only
   // reverse-charge lines are touched (any other return is priced exactly as before), and a code the form did send is respected.
+  // A return undoes its invoice, so it follows the VAT registration the INVOICE was priced under, not the one in force on
+  // the return's own day: an invoice from before registration charged (or claimed) no VAT, and a return after it must not
+  // reverse VAT that was never there - nor the other way round. false = the invoice was stamped "not registered"; true =
+  // any other original (a stamped-registered one, and one from before the rule, which was priced as registered);
+  // undefined = not a return, or no original found, and the return's own date decides as before.
+  static async originalRegistration({ type, returnOf }, { session } = {}) {
+    if (!(type in ORIGINAL_TYPE) || !returnOf?.transactionId) return undefined;
+    const q = Transaction.findById(returnOf.transactionId).select("vatRegistered");
+    const original = await (session ? q.session(session) : q).lean();
+    if (!original) return undefined;
+    return original.vatRegistered !== false;
+  }
+
   static async inheritReverseCharge({ type, returnOf, items }, { session } = {}) {
     if (!(type in ORIGINAL_TYPE) || !returnOf?.transactionId || !Array.isArray(items)) return items;
     const q = Transaction.findById(returnOf.transactionId).select("items._id items.itemId items.taxCodeId items.taxKind"); // a sub-document's _id is a field like another in a projection

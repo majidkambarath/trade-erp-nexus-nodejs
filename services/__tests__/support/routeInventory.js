@@ -93,7 +93,7 @@ let cached;
 /**
  * Every route, in mount order:
  *   { method, path: "/api/v1/vendors/vendors/:id", params: ["id"], file, gate: "permission"|"signedIn"|"public"|"none",
- *     permission: [..]|"(decided per request)", reason, authenticated, identity: "organisation"|"platform", key: "GET /api/v1/..." }
+ *     permission: [..]|"(decided per request)", reason, authenticated, identity: "organisation"|"platform"|"employee", key: "GET /api/v1/..." }
  */
 function inventory() {
   if (cached) return cached;
@@ -112,7 +112,11 @@ function inventory() {
         permission: d.permission,
         reason: d.reason,
         authenticated: d.authenticated,
-        identity: d.platform || /\/platform(\/|$)/.test(r.path) ? "platform" : "organisation",
+        // the employee self-service portal (routes/hr/employeePortalRoutes.js, middleware/employeeAuth.js) has its own sign-in
+        // and its own self-only rule, as utils/__tests__/routeGuard.test.js OTHER_IDENTITY says: not an organisation route
+        identity: d.platform || /\/platform(\/|$)/.test(r.path)
+          ? "platform"
+          : /employeePortalRoutes(\.js)?$/.test(mount.file) ? "employee" : "organisation",
         key: `${r.method} ${r.path}`,
       });
     }

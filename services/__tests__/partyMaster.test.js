@@ -854,3 +854,21 @@ test("country and emirate: saved on a customer and a vendor, the e-invoice follo
   assert.equal(later.emirate, "Dubai");
   assert.equal(later.eInvoice.countryCode, "AE");
 });
+
+// Party ledger accounts are found by NAME across the statement, credit control, ageing and the reports, so a second
+// customer of one name would share the first one's account and both sets of books would be wrong.
+test("a customer's or vendor's name is unique, whatever its case or spacing, and a rename may not take another's", { skip }, async () => {
+  const first = await svc.Customers.createCustomer(customer("Twin Name Trading"));
+  await rejectsWith(svc.Customers.createCustomer(customer("twin name trading ")), "DUPLICATE_PARTY_NAME");
+  const other = await svc.Customers.createCustomer(customer("Twin Name Trading Sharjah"));
+  await rejectsWith(svc.Customers.updateCustomer(other._id, { customerName: "TWIN NAME TRADING" }), "DUPLICATE_PARTY_NAME");
+  // saving a party under its own name, or changing only the case of it, is not a clash
+  await svc.Customers.updateCustomer(first._id, { customerName: "Twin Name Trading" });
+  await svc.Customers.updateCustomer(first._id, { customerName: "Twin name trading" });
+  // a vendor may carry a customer's name (its accounts are "Vendor - ..."), but not another vendor's
+  await svc.Vendors.createVendor(vendor("Twin Name Trading"));
+  await rejectsWith(svc.Vendors.createVendor(vendor("Twin Name Trading")), "DUPLICATE_PARTY_NAME");
+  // and each customer still has exactly one account of its own
+  const accounts = await svc.LedgerAccount.find({ accountName: /^Customer - Twin Name Trading/i }).lean();
+  assert.equal(accounts.length, 2);
+});

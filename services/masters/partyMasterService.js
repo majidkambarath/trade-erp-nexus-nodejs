@@ -34,6 +34,28 @@ class PartyMasterService {
     if (dup) throw new AppError(`${orgTaxTerms().taxId} already in use by another ${k.noun}`, 400, "DUPLICATE_TRN");
   }
 
+  // A customer's (vendor's) ledger accounts are found by NAME ("Customer - <name>", partyAccounts.js) in the
+  // statement, credit control, ageing, the party balances and the IFRS notes, so two customers with one name would
+  // post to, and be read from, ONE account. The name is therefore unique within a kind: compared without regard to
+  // case or surrounding spaces, since "Al Noor" and "AL NOOR " are the same company to whoever reads the books.
+  static async assertUniqueName(kind, name, excludeId) {
+    const k = kindOf(kind);
+    const text = String(name ?? "").trim();
+    if (!text) return;
+    const Model = mongoose.model(k.model);
+    const exact = new RegExp(`^\\s*${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "i");
+    const dup = await Model.findOne({ [k.nameField]: exact, ...(excludeId ? { _id: { $ne: excludeId } } : {}) })
+      .select("_id")
+      .lean();
+    if (dup) {
+      throw new AppError(
+        `There is already a ${k.noun} called "${text}". Use a name that tells them apart (for example add the branch or the city).`,
+        409,
+        "DUPLICATE_PARTY_NAME"
+      );
+    }
+  }
+
   // Bank rows that name a bank from the bank master get the bank's name from it.
   static async resolveBanks(rows, req) {
     const { companyId } = getTenant(req);
@@ -56,6 +78,14 @@ class PartyMasterService {
   static async prepare(kind, data = {}, { existing, req } = {}) {
     const k = kindOf(kind);
     const patch = {};
+
+    // only when the request names one: a contacts-only update (crm/contactService) says nothing about the name
+    if (data[k.nameField] !== undefined) {
+      const name = String(data[k.nameField] ?? "").trim();
+      if (!existing || name.toLowerCase() !== String(existing[k.nameField] ?? "").trim().toLowerCase()) {
+        await this.assertUniqueName(kind, name, existing?._id);
+      }
+    }
 
     if (!existing || data.vat !== undefined || data[k.legacyTrn] !== undefined) {
       const stored = existing
