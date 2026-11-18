@@ -37,6 +37,7 @@ function toApi(profile = {}, baseCurrency = orgLocale.baseCurrency()) {
     addressLine2: clean(p.addressLine2),
     city: clean(p.city),
     state: clean(p.emirate),
+    stateCode: clean(p.stateCode),
     country: clean(p.country),
     postalCode: clean(p.postalCode),
     phoneNumber: clean(p.phone),
@@ -124,6 +125,11 @@ class CompanyProfileService {
     put("addressLine2", "addressLine2", LIMITS.addressLine2, "Address line 2");
     put("city", "city", LIMITS.city, "City");
     put("state", "emirate", LIMITS.state, "State / emirate");
+    if (patch.stateCode !== undefined) {
+      const found = require("../../utils/gstStates").normaliseState(patch.stateCode);
+      if (found === undefined) throw bad("That is not a GST state or union territory", "INVALID_STATE");
+      $set["profile.stateCode"] = found || "";
+    }
     put("country", "country", LIMITS.country, "Country");
     put("postalCode", "postalCode", LIMITS.postalCode, "Postal code");
     if (patch.phoneNumber !== undefined) {

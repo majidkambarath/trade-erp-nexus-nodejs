@@ -56,6 +56,7 @@ class DefaultChartService {
     const accountByKey = {};
     const missing = []; // [accountName, group, configKey]
     for (const [baseName, groupName, configKey] of ACCOUNTS) {
+      if (configKey && configKey.startsWith("gst-") && country !== "IN") continue; // the GST component accounts are India's only
       const group = groups[groupName];
       const accountName = nameOf(baseName);
       let acc = existing.find((a) => a.accountName === accountName && String(a.groupId) === String(group._id));
@@ -115,10 +116,10 @@ class DefaultChartService {
     }
     await settings.save();
 
-    // The starter tax codes are the UAE's (VAT 5%, zero-rated, exempt, out of scope). An organisation in another
-    // country must not be handed another country's tax: it adds its own in Accounting setup. One with no
-    // registry row (the older single-company set-up) keeps the old behaviour.
-    if (!organisation || organisation.country === "AE") created.taxCodes = await TaxCodeService.ensureStarter(companyId);
+    // The starter tax codes are the UAE's (VAT 5%, zero-rated, exempt, out of scope) or India's (GST 5 / 18 / 40, nil, exempt,
+    // non-GST, reverse charge). An organisation in any other country must not be handed another country's tax: it adds its own
+    // in Accounting setup. One with no registry row (the older single-company set-up) keeps the old behaviour.
+    if (TaxCodeService.starterFor(country)) created.taxCodes = await TaxCodeService.ensureStarter(companyId, country);
     return created;
   }
 
@@ -195,8 +196,9 @@ class DefaultChartService {
     if (await TaxCode.exists({ companyId, kind: "reverse_charge" })) return 0;
     if (!(await TaxCode.exists({ companyId }))) return 0;
     const organisation = await Organisation.findOne({ code: companyId }).select("country").lean();
-    if (organisation && organisation.country !== "AE") return 0;
-    return TaxCodeService.ensureStarter(companyId);
+    const country = organisation?.country || "AE";
+    if (!TaxCodeService.starterFor(country)) return 0;
+    return TaxCodeService.ensureStarter(companyId, country);
   }
 
   // Called when the chart is first opened: a company with no groups at all gets the defaults, so

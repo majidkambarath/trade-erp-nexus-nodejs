@@ -37,8 +37,12 @@ class AccountConfigService {
       .populate("accountConfiguration.targetGroup", "name prefix category")
       .populate("accountConfiguration.targetAccount", "accountName accountCode accountType")
       .lean();
+    // The India GST component keys (gst-*) belong to an Indian organisation's map only. Elsewhere they are neither shown nor required
+    // before ledger posting can be switched on; the seed lists them so an organisation whose country is set later is mapped by the
+    // chart top-up (defaultChartService.provision).
+    const india = require("../../utils/orgLocale").country() === "IN";
     return {
-      accountConfiguration: populated.accountConfiguration,
+      accountConfiguration: india ? populated.accountConfiguration : populated.accountConfiguration.filter((c) => !String(c.configKey).startsWith("gst-")),
       fiscalYearStartMonth: populated.fiscalYearStartMonth,
       ledgerPostingEnabled: Boolean(populated.ledgerPostingEnabled),
     };
@@ -242,6 +246,12 @@ class AccountConfigService {
         // instead of being refused; only a real string/number/boolean belongs in a text field.
         if (v !== null && typeof v === "object") throw new AppError(`profile.${k} must be text`, 400);
         set[`profile.${k}`] = String(v).trim();
+      }
+      // India: the state the company is registered in (GST state code, number or name); blank clears it
+      if (data.profile.stateCode !== undefined) {
+        const found = require("../../utils/gstStates").normaliseState(data.profile.stateCode);
+        if (found === undefined) throw new AppError("That is not a GST state or union territory", 400, "INVALID_STATE");
+        set["profile.stateCode"] = found || "";
       }
       if (data.profile.vatRegistered !== undefined) set["profile.vatRegistered"] = Boolean(data.profile.vatRegistered);
       if (data.profile.vatRegisteredFrom !== undefined) {

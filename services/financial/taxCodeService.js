@@ -24,8 +24,27 @@ const STARTER = [
   { name: "Reverse charge 5%", kind: "reverse_charge", ratePercent: 5 },
 ];
 
+// India (GST 2.0, in force from 22 Sept 2025): 5%, 18% and 40% besides nil. One code is ONE total rate; a document splits it into
+// CGST + SGST or IGST by its place of supply (utils/gst.js), so there is no code per component. An older rate (12%, 28%) is not
+// seeded: a document dated before the change is entered with a code the organisation adds, or with the rate history of one.
+// Nil-rated and Exempt are both kind "exempt" (GSTR-1 table 8 reports them together); Zero-rated is the export / SEZ supply with credit.
+const STARTER_IN = [
+  { name: "GST 18%", kind: "standard", ratePercent: 18, isDefault: true },
+  { name: "GST 5%", kind: "standard", ratePercent: 5 },
+  { name: "GST 40%", kind: "standard", ratePercent: 40 },
+  { name: "Zero-rated (export / SEZ)", kind: "zero_rated", ratePercent: 0 },
+  { name: "Nil rated", kind: "exempt", ratePercent: 0 },
+  { name: "Exempt", kind: "exempt", ratePercent: 0 },
+  { name: "Non-GST supply", kind: "out_of_scope", ratePercent: 0 },
+  { name: "Reverse charge 18%", kind: "reverse_charge", ratePercent: 18 },
+];
+// The starter set a country gets; null = none (that country adds its own in Accounting setup).
+const starterFor = (country) => (country === "IN" ? STARTER_IN : country === "AE" ? STARTER : null);
+
 class TaxCodeService {
   static rateOn = rateOn;
+  static STARTER_IN = STARTER_IN;
+  static starterFor = starterFor;
 
   // F05: a person picking or checking a tax code could not tell which VAT 201 box a line of
   // that kind would land in - the whole report's layout in utils/countryRules.js is UAE-only,
@@ -60,15 +79,17 @@ class TaxCodeService {
   // is given only a starter KIND it has none of (the reverse-charge code arrived after the others, so an older company is
   // topped up with it once). Matched by kind, not name: a company that made its own reverse-charge code does not get a second;
   // and a name already in use is skipped (names are unique within a company). Returns how many were added.
-  static async ensureStarter(companyId) {
+  static async ensureStarter(companyId, country = "AE") {
+    const set = starterFor(country);
+    if (!set) return 0;
     const existing = await TaxCode.find({ companyId }).select("name kind").lean();
     if (!existing.length) {
-      await TaxCode.insertMany(STARTER.map((s) => ({ ...s, companyId })));
-      return STARTER.length;
+      await TaxCode.insertMany(set.map((s) => ({ ...s, companyId })));
+      return set.length;
     }
     const kinds = new Set(existing.map((c) => c.kind));
     const names = new Set(existing.map((c) => c.name));
-    const missing = STARTER.filter((s) => s.kind === "reverse_charge" && !kinds.has(s.kind) && !names.has(s.name));
+    const missing = set.filter((s) => s.kind === "reverse_charge" && !kinds.has(s.kind) && !names.has(s.name));
     if (!missing.length) return 0;
     try {
       await TaxCode.insertMany(missing.map((s) => ({ ...s, companyId })));

@@ -40,11 +40,18 @@ const ACCOUNTS = [
   ["Bank Account", "Bank", null],
   ["Inventory Stock", "Inventory", "inventory-asset"],
   ["Input VAT", "Tax Receivable", "vat-purchase"],
+  // India GST by component (only an Indian organisation is given these: defaultChartService.provision)
+  ["Input CGST", "Tax Receivable", "gst-cgst-input"],
+  ["Input SGST / UTGST", "Tax Receivable", "gst-sgst-input"],
+  ["Input IGST", "Tax Receivable", "gst-igst-input"],
   ["Cheques in Hand", "Post-dated Cheques Received", "pdc-receipt"],
   ["Furniture & Equipment", "Fixed Assets", null],
   ["Vehicles", "Fixed Assets", null],
 
   ["Output VAT", "Tax Payable", "vat-sales"],
+  ["Output CGST", "Tax Payable", "gst-cgst-output"],
+  ["Output SGST / UTGST", "Tax Payable", "gst-sgst-output"],
+  ["Output IGST", "Tax Payable", "gst-igst-output"],
   ["Reverse-charge VAT", "Tax Payable", "rcm-purchase"],
   ["Cheques Issued", "Post-dated Cheques Issued", "pdc-issue"],
   ["Bank Loan", "Long-term Liabilities", null],

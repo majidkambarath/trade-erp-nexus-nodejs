@@ -3,7 +3,7 @@
 // organisation and nobody else's. The rules themselves (what a plan includes, what counts as room) are the pure
 // functions in utils/plans.js.
 const Organisation = require("../../models/core/organisationModel");
-const { countryFeatures, hasCountryFeature, featureAppliesIn, countryOf } = require("../../utils/countryRules");
+const { hasGstReturn, countryFeatures, hasCountryFeature, featureAppliesIn, countryOf } = require("../../utils/countryRules");
 const Admin = require("../../models/core/adminModel");
 const Branch = require("../../models/core/branchModel");
 const Transaction = require("../../models/modules/transactionModel");
@@ -147,7 +147,7 @@ class UsageService {
       subscription: plans.subscriptionState(org, now),
       // the plan's, less what does not apply in the organisation's country (utils/countryRules.js), and no VAT return for an
       // organisation that is not registered for VAT
-      features: { ...countryFeatures(org), ...(vat.governs && !vat.registered ? { vatReturn: false } : {}) },
+      features: { ...countryFeatures(org), ...(vat.governs && !vat.registered ? { vatReturn: false } : {}), gstReturn: hasGstReturn(org) },
       vatRegistration: { governs: vat.governs, registered: vat.registered, from: vat.from },
       // The modules the organisation bought, so a screen can say "not included in your plan" instead of blaming the
       // person's role. What they may do inside them is still me.grants, which is already capped to this.

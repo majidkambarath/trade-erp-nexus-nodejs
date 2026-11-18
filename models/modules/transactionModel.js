@@ -32,6 +32,11 @@ const itemSchema = new mongoose.Schema({
   grossAmount: { type: Number, default: 0, min: 0 },
   taxableAmount: { type: Number, default: 0, min: 0 },
   taxCodeId: { type: mongoose.Schema.Types.ObjectId, ref: "TaxCode", default: null },
+  hsnCode: { type: String, trim: true }, // India: the item's HSN / SAC code when the line was priced (a snapshot, no default)
+  // India GST: the line's tax split into components (utils/gst.js). vatAmount stays the TOTAL tax; cgst + sgst + igst equals it.
+  // Absent on a document that was not priced under GST (every UAE document, and Indian ones from before GST detail).
+  gst: { cgst: Number, sgst: Number, igst: Number },
+  rcmGst: { cgst: Number, sgst: Number, igst: Number },
   taxKind: { type: String, default: null }, // snapshot of the tax code's kind at posting
   // Reverse charge (taxKind "reverse_charge"): the VAT the RECIPIENT assesses on this line. The supplier charged none, so vatAmount is
   // 0 and lineTotal is the net; this is the self-assessed amount (taxable x the code's rate), posted by a purchase and reported in boxes
@@ -153,6 +158,7 @@ const transactionSchema = new mongoose.Schema({
       amount: { type: Number, required: true, min: 0 },
       vatPercent: { type: Number, default: 0, min: 0 },
       vatAmount: { type: Number, default: 0, min: 0 },
+      gst: { cgst: Number, sgst: Number, igst: Number }, // India: this charge's tax by component (absent otherwise)
       _id: false,
     },
   ],
@@ -168,7 +174,16 @@ const transactionSchema = new mongoose.Schema({
     headerDiscount: Number,
     roundOff: Number,
     grandTotal: Number,
+    // India GST: the document's tax by component, summed from its lines and charges (cgst + sgst + igst = lineVat + chargesVat);
+    // rcmGst is the self-assessed reverse-charge tax split the same way. Absent when the document was not priced under GST.
+    gst: { cgst: Number, sgst: Number, igst: Number },
+    rcmGst: { cgst: Number, sgst: Number, igst: Number },
   },
+  // India GST: where the supply is made and whether it is within the supplier's state ("intra": CGST + SGST) or between states
+  // ("inter": IGST), decided once when the document is priced and kept, so a later change to a party's state never rewrites it.
+  placeOfSupply: { type: String, trim: true },
+  supplierState: { type: String, trim: true },
+  gstType: { type: String, enum: ["intra", "inter"] },
   // Returns reference the document they return; quantities are validated against it.
   returnOf: {
     transactionId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction", default: null },

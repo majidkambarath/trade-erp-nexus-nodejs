@@ -1,6 +1,7 @@
 const AccountGroup = require("../../models/modules/financial/accountGroupModel");
 const FiscalYear = require("../../models/modules/financial/fiscalYearModel");
 const LedgerReports = require("./ledgerReportsService");
+const { ALL_GST_KEYS } = require("../../utils/gst");
 const AccountConfigService = require("../financial/accountConfigService");
 const AgeingService = require("../financial/ageingService");
 const AppError = require("../../utils/AppError");
@@ -777,7 +778,24 @@ class IfrsReportsService {
       } catch (err) {
         if (err.code !== "ACCOUNT_NOT_CONFIGURED") throw err;
       }
-      return { output: output ? nat("LIABILITY", output.closingNet) : 0, input: input ? nat("ASSET", input.closingNet) : 0, reverseCharge };
+      // India: an invoice's tax is posted by component (Output CGST ... Input IGST), so those accounts are part of the same two lines
+      let gstOutput = 0;
+      let gstInput = 0;
+      for (const key of ALL_GST_KEYS) {
+        try {
+          const row = byId.get(String(await AccountConfigService.resolveAccount(key)));
+          if (!row) continue;
+          if (key.endsWith("-output")) gstOutput += nat("LIABILITY", row.closingNet);
+          else gstInput += nat("ASSET", row.closingNet);
+        } catch (err) {
+          if (err.code !== "ACCOUNT_NOT_CONFIGURED") throw err;
+        }
+      }
+      return {
+        output: (output ? nat("LIABILITY", output.closingNet) : 0) + gstOutput,
+        input: (input ? nat("ASSET", input.closingNet) : 0) + gstInput,
+        reverseCharge,
+      };
     } catch (err) {
       if (err.code === "ACCOUNT_NOT_CONFIGURED") return null;
       throw err;

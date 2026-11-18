@@ -151,6 +151,7 @@ exports.createCustomer = retryTransientTransaction(async (data, { groupId } = {}
           eInvoice: withAddress(cleanEInvoice(eInvoice), master),
           country: master.country,
           emirate: master.emirate,
+          stateCode: master.stateCode,
           minShelfLifeDays: shelfLife,
           vat: master.vat,
           trnNumber: master.trnNumber,

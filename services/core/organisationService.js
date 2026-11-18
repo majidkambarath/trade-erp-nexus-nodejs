@@ -259,8 +259,8 @@ class OrganisationService {
         await FiscalYearService.ensureDefault(new Date(), org.code);
       });
       await run("taxCodes", async () => {
-        if (org.country !== "AE") return { state: "skipped", reason: `There is no starter tax-code set for ${org.country}; add the tax codes in Accounting setup.` };
-        await TaxCodeService.ensureStarter(org.code);
+        if (!TaxCodeService.starterFor(org.country)) return { state: "skipped", reason: `There is no starter tax-code set for ${org.country}; add the tax codes in Accounting setup.` };
+        await TaxCodeService.ensureStarter(org.code, org.country);
       });
       await run("units", async () => {
         const UOMService = require("../unit/uomService");

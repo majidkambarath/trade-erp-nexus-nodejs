@@ -63,6 +63,8 @@ const companySettingsSchema = new mongoose.Schema(
       addressLine1: { type: String, trim: true },
       city: { type: String, trim: true },
       emirate: { type: String, trim: true },
+      // India: the GST state code ("27") the company is registered in. The supplier's state decides CGST + SGST or IGST (utils/gst.js).
+      stateCode: { type: String, trim: true },
       countryCode: { type: String, trim: true, default: "AE" },
       email: { type: String, trim: true },
       phone: { type: String, trim: true },

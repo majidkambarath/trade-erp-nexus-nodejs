@@ -16,6 +16,10 @@ function countryFeatures(org) {
   return Object.fromEntries(Object.entries(features).map(([k, on]) => [k, Boolean(on) && featureAppliesIn(country, k)]));
 }
 
+// India's GST returns (GSTR-1, GSTR-3B) are the Indian counterpart of the UAE's VAT return and ride on the same plan feature: a
+// plan that sells "the tax return" gives each organisation the one its country files. No plan or override can give them elsewhere.
+const hasGstReturn = (org) => plans.hasFeature(org, "vatReturn") && countryOf(org) === "IN";
+
 const hasCountryFeature = (org, key) => plans.hasFeature(org, key) && featureAppliesIn(countryOf(org), key);
 
 // What the tax and its registration number are called where the organisation is. The UAE (and the other VAT countries)
@@ -56,4 +60,4 @@ const chequeValidityDays = (country) => CHEQUE_VALIDITY_DAYS[String(country || "
 // The terms of the organisation in scope (a service raising a message reads them here).
 const orgTaxTerms = () => taxTerms(require("./orgLocale").country());
 
-module.exports = { UAE_ONLY_FEATURES, countryOf, featureAppliesIn, countryFeatures, hasCountryFeature, taxTerms, orgTaxTerms, localAccountName, CHEQUE_VALIDITY_DAYS, chequeValidityDays };
+module.exports = { hasGstReturn, UAE_ONLY_FEATURES, countryOf, featureAppliesIn, countryFeatures, hasCountryFeature, taxTerms, orgTaxTerms, localAccountName, CHEQUE_VALIDITY_DAYS, chequeValidityDays };

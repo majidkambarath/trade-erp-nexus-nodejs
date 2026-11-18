@@ -20,7 +20,7 @@ class ItemKindService {
   static async load(lines, { session } = {}) {
     const ids = [...new Set((lines || []).map((l) => String(l?.itemId?._id || l?.itemId)).filter(isId))];
     if (!ids.length) return new Map();
-    const rows = await withSession(Stock.find({ _id: { $in: ids } }).select("itemType incomeAccountId expenseAccountId").lean(), session);
+    const rows = await withSession(Stock.find({ _id: { $in: ids } }).select("itemType incomeAccountId expenseAccountId hsnCode").lean(), session);
     return new Map(rows.map((s) => [String(s._id), s]));
   }
 
@@ -38,7 +38,9 @@ class ItemKindService {
     const map = await this.load(lines, { session });
     return (lines || []).map((l) => {
       const s = map.get(String(l?.itemId?._id || l?.itemId));
-      return { ...l, itemType: kinds.itemTypeOf(s) };
+      // the HSN / SAC code is a snapshot of the item master on the line (India GST); a request's own value is overwritten, like the type
+      const { hsnCode: _ignored, ...rest } = l;
+      return { ...rest, itemType: kinds.itemTypeOf(s), ...(s?.hsnCode ? { hsnCode: s.hsnCode } : {}) };
     });
   }
 
