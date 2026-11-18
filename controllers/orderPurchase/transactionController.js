@@ -1,6 +1,7 @@
 const TransactionService = require("../../services/orderPurchase/transactionService");
 const { preparedNote } = require("../../utils/preparedBy");
 const CreditControlService = require("../../services/financial/creditControlService");
+const VendorVatService = require("../../services/financial/vendorVatService");
 const AuditService = require("../../services/core/auditService");
 const DocumentAuditService = require("../../services/orderPurchase/documentAuditService");
 const catchAsync = require("../../utils/catchAsync");
@@ -149,7 +150,7 @@ exports.processTransaction = catchAsync(async (req, res) => {
     action,
     resolveCreatedBy(req),
     // Each risk warning has its own acknowledgement field, so one cannot acknowledge another.
-    { acknowledged, req }
+    { acknowledged, acknowledgedVendorVat: req.body?.[VendorVatService.ACK_FIELD] === true, req }
   );
   // The first of two approvals leaves the document where it was: say so, plainly, to the person and in the trail
   if (action === "approve" && transaction.status !== "APPROVED") {

@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.8.0.0 — 18 November 2026
+
+Three rules the owner decided: a discount on the whole invoice reduces the tax, a bill that charges tax from an unregistered supplier is asked about, and what an item costs is for the people who may see it. Frontend and backend both at 3.8.0.0.
+
+### Changed
+
+- **A discount on the whole invoice reduces the VAT / GST too.** It used to come off the total after the tax was worked out, so the invoice charged tax on a price nobody paid. It is now shared out over the lines, so the taxable amount and the tax both fall. The total you type or see in the form is the same as before to the fils. The order form shows the net and tax as they will be saved. A purchase bill's discount now lowers the cost of the stock instead of being booked as income. An invoice made before this keeps its discount as it was issued until it is saved again.
+- **Item cost is for people who hold the new "See item costs" permission** (Owner, Administrator, Manager, Accountant and Purchase officer have it; Sales executive, Operator, Storekeeper and Viewer do not; a role you made yourself needs it ticked). Without it the item list, item form and detail, the order grid's cost column, stock movements, batches and the document audit trail show no cost, the valuation, movement, item ledger, sales analysis and slow stock reports are not available, and the expiry and reorder reports leave out their cost columns. Saving an item without the permission cannot change its cost.
+
+### Added
+
+- **A warning on a bill from a supplier who is not registered.** Approving a purchase bill that charges VAT / GST from a supplier marked unregistered (or with no tax number) asks you first ("VAT warning", Approve anyway). It never blocks, and your choice is kept in the document's history.
+
 ## 3.7.0.0 — 18 November 2026
 
 India GST. An Indian organisation's invoices now charge CGST + SGST or IGST by place of supply, carry HSN / SAC codes, and feed GSTR-1 and GSTR-3B. Nothing changes for a UAE organisation. Frontend and backend both at 3.7.0.0.

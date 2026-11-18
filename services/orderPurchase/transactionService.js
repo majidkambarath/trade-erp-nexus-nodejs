@@ -21,6 +21,7 @@ const { EInvoiceSubmission } = require("../../models/modules/einvoiceModels");
 const ReturnService = require("./returnService");
 const BatchService = require("../stock/batchService");
 const CreditControlService = require("../financial/creditControlService");
+const VendorVatService = require("../financial/vendorVatService");
 const ApprovalPolicyService = require("../core/approvalPolicyService");
 const DebitLog = require("../../models/modules/DebitLog");
 const CreditLog = require("../../models/modules/CreditLog");
@@ -578,7 +579,7 @@ class TransactionService {
   );
 
   // Process Transaction (approve/reject/cancel)
-  // processTransaction(id, action, createdBy[, options]) - options: { acknowledged, req }.
+  // processTransaction(id, action, createdBy[, options]) - options: { acknowledged, acknowledgedVendorVat, req }.
   // withTransactionSession appends the session as the LAST argument.
   static processTransaction = withTransactionSession(
     async (id, action, createdBy, ...rest) => {
@@ -610,6 +611,10 @@ class TransactionService {
         // Credit limit / overdue check (sales only; off unless the company turns it on).
         await CreditControlService.assertSaleAllowed(transaction, {
           session, acknowledged: options.acknowledged === true, req: options.req,
+        });
+        // A bill that charges tax from a supplier who is not registered for it: asked about, never refused (its own acknowledgement field).
+        await VendorVatService.assertBillAllowed(transaction, {
+          session, acknowledged: options.acknowledgedVendorVat === true, req: options.req,
         });
         // the 3-way match, once more at the moment it counts
         await ReceiptLinks.assertWithinReceipts(transaction, transaction.items, { session });
