@@ -28,7 +28,7 @@ const CrmHooks = require("../crm/crmHooks");
 const JobCardLinks = require("../garage/jobCardLinks");
 const ShareService = require("../messaging/shareService");
 const ItemKindService = require("../stock/itemKindService");
-const Admin = require("../../models/core/adminModel");
+const { namesFor } = require("../core/accountNames");
 const VatRegistrationService = require("../financial/vatRegistrationService");
 const vatRule = require("../../utils/vatRegistration");
 const kinds = require("../../utils/itemKinds");
@@ -165,10 +165,7 @@ class TransactionService {
   // "Prepared by" on a printed document: createdBy holds an account id (or a word such as "system"), and the sheet needs
   // a name. One read for a whole page, never one per row; an account since removed has no name and prints blank.
   static async creatorNames(docs) {
-    const ids = [...new Set(docs.map((d) => String(d.createdBy || "")).filter((v) => /^[0-9a-f]{24}$/i.test(v)))];
-    if (!ids.length) return new Map();
-    const admins = await Admin.find({ _id: { $in: ids.map((id) => new mongoose.Types.ObjectId(id)) } }).select("name email").lean();
-    return new Map(admins.map((a) => [String(a._id), a.name || a.email || null]));
+    return namesFor(docs.map((d) => d.createdBy));
   }
 
   // Create Transaction
