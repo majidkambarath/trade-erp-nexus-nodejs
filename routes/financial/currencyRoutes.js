@@ -17,6 +17,7 @@ router.post("/", requirePermission("accounts.manage"), c.create);
 // One-segment paths first, so they are never read as a currency code
 router.get("/rate", requirePermission(["accounts.view","lookups.view"]), c.rate);
 router.get("/register", requirePermission(["reports.financial","accounts.view"]), c.register);
+router.get("/exposure", requirePermission(["reports.financial", "accounts.view"]), c.exposure);
 router.get("/settings", requirePermission(["accounts.view","lookups.view"]), c.getSettings);
 router.put("/settings", requirePermission("accounts.manage"), c.updateSettings);
 
