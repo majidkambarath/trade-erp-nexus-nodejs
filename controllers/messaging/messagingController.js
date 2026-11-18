@@ -3,6 +3,10 @@ const SettingsService = require("../../services/messaging/settingsService");
 const ShareService = require("../../services/messaging/shareService");
 const AuditService = require("../../services/core/auditService");
 const catchAsync = require("../../utils/catchAsync");
+const { assertPermission } = require("../../middleware/permissionGate");
+
+// A statement of account is the customer's ledger, so sending one needs what reading it needs (the statement route's own key).
+const needsReadOf = (req) => { if (req.body?.docType === "statement") assertPermission(req, "reports.view"); };
 const { DOC_LABEL } = require("../../utils/emailTemplates");
 
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
@@ -15,6 +19,7 @@ const logSend = (req, row, action, summary) =>
   AuditService.log({ req, action, entity: ENTITY[row.sourceType] || row.sourceType, entityId: row.sourceId, summary, after: { sendId: String(row._id), channel: row.channel, status: row.status, to: row.to, phone: row.phone, shareLinkId: row.shareLinkId ? String(row.shareLinkId) : null } });
 
 exports.send = catchAsync(async (req, res) => {
+  needsReadOf(req);
   let r;
   try {
     r = await MessagingService.send(req.body, req.file || null, req);
@@ -31,6 +36,7 @@ exports.send = catchAsync(async (req, res) => {
 });
 
 exports.handoff = catchAsync(async (req, res) => {
+  needsReadOf(req);
   const r = await MessagingService.handoff(req.body, req);
   if (!r.duplicate) await logSend(req, r.send, "DOCUMENT_WHATSAPP_HANDOFF", `${label(r.send)} handed to WhatsApp for +${r.send.phone}`);
   ok(res, r, r.duplicate ? 200 : 201);

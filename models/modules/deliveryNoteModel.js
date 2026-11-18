@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 const tenantPlugin = require("../../utils/tenantPlugin");
-const { baseLineFields, chargeSchema, pricingSchema, linkSchema } = require("./salesDocumentParts");
+const { baseLineFields, chargeSchema, pricingSchema, linkSchema, lastSendSchema } = require("./salesDocumentParts");
 
 // The paper that travels with the goods, signed by whoever receives them. It posts nothing and moves
 // no stock: stock leaves when the sales order it belongs to is approved (utils/salesDocuments.js).
@@ -48,6 +48,7 @@ const deliveryNoteSchema = new mongoose.Schema(
     totalAmount: { type: Number, default: 0, min: 0 }, // the value of what was delivered
 
     notes: { type: String, trim: true, default: "" },
+    lastSend: { type: lastSendSchema, default: undefined }, // how it last went to the customer (services/messaging)
 
     dispatchedAt: { type: Date, default: null },
     deliveredAt: { type: Date, default: null },

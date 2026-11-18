@@ -198,4 +198,110 @@ const ESTIMATE_ALLOWED = {
   company: COMPANY_KEYS,
 };
 
-module.exports = { invoiceSnapshot, INVOICE_ALLOWED, estimateSnapshot, ESTIMATE_ALLOWED, pick };
+// ---- the quotation ---------------------------------------------------------------------------
+// The customer's copy of an offer: the same document the printed sheet draws (components/salesDocs/documents.js
+// buildQuotationDocument), priced by the server. The internal `notes` and who prepared it stay behind; `terms` is printed on the offer.
+const QUOTE_LINE_KEYS = ["itemCode", "description", "qty", "price", "discountPercent", "taxableAmount", "vatPercent", "vatAmount", "taxKind", "lineTotal", "hsnCode", "gst"];
+const QUOTE_DOCUMENT_KEYS = ["quotationNo", "date", "validUntil", "reference", "status", "terms", "discount", "totalAmount", "placeOfSupply", "gstType"];
+
+function quotationSnapshot({ quotation, customer, company, currency = orgLocale.baseCurrency() }) {
+  const q = toPlain(quotation) || {};
+  return {
+    kind: "quotation",
+    document: {
+      ...pick(q, QUOTE_DOCUMENT_KEYS),
+      items: (q.items || []).map((i) => pick(toPlain(i), QUOTE_LINE_KEYS)),
+      charges: (q.charges || []).map((x) => pick(toPlain(x), CHARGE_KEYS)),
+      pricing: pick(toPlain(q.pricing), PRICING_KEYS),
+    },
+    party: partyBlock(customer),
+    company: pick(toPlain(company), COMPANY_KEYS),
+    currency,
+    locale: localeBlock(),
+  };
+}
+
+// ---- the delivery note -----------------------------------------------------------------------
+// The paper that travels with the goods. It prints NO prices (buildDeliveryNoteDocument showPrices is false), so none are sent: a
+// customer's copy of a note carries quantities, the delivery particulars and the proof of receipt.
+const NOTE_LINE_KEYS = ["itemCode", "description", "qty", "deliveredQty", "shortReason"];
+const NOTE_DOCUMENT_KEYS = [
+  "deliveryNoteNo", "date", "status", "reference", "deliveryAddress", "contactPerson", "contactPhone", "vehicleNo", "driverName", "driverPhone",
+  "notes", "deliveredAt", "receivedBy", "proofNote",
+];
+const NOTE_SOURCE_KEYS = ["kind", "no"];
+
+function deliveryNoteSnapshot({ note, customer, company, currency = orgLocale.baseCurrency() }) {
+  const n = toPlain(note) || {};
+  const document = { ...pick(n, NOTE_DOCUMENT_KEYS), items: (n.items || []).map((i) => pick(toPlain(i), NOTE_LINE_KEYS)) };
+  const source = pick(toPlain(n.source), NOTE_SOURCE_KEYS);
+  if (source.no) document.source = source;
+  return {
+    kind: "delivery_note",
+    document,
+    party: { ...partyBlock(customer), ...pick(toPlain(customer) || {}, ["shippingAddress"]) },
+    company: pick(toPlain(company), COMPANY_KEYS),
+    currency,
+    locale: localeBlock(),
+  };
+}
+
+// ---- the statement of account ----------------------------------------------------------------
+// What the customer owes us over a period, row by row. `balance` is signed for the customer (positive = they owe us). A voucher's
+// internal id and the ledger account behind it stay behind: the customer sees the date, our reference, what it was and the amounts.
+const STATEMENT_ROW_KEYS = ["date", "voucherNo", "voucherType", "narration", "debit", "credit", "balance"];
+const STATEMENT_KEYS = ["from", "to", "opening", "closing", "totals"];
+const STATEMENT_TOTAL_KEYS = ["debit", "credit"];
+const MAX_STATEMENT_ROWS = 1000;
+
+function statementSnapshot({ statement, customer, company, currency = orgLocale.baseCurrency() }) {
+  const s = toPlain(statement) || {};
+  return {
+    kind: "statement",
+    statement: {
+      ...pick(s, STATEMENT_KEYS),
+      totals: pick(toPlain(s.totals), STATEMENT_TOTAL_KEYS),
+      rows: (s.rows || []).slice(0, MAX_STATEMENT_ROWS).map((r) => pick(toPlain(r), STATEMENT_ROW_KEYS)),
+      truncated: (s.rows || []).length > MAX_STATEMENT_ROWS,
+    },
+    party: pick(toPlain(customer) || {}, ["customerName", "customerId", "billingAddress", "trnNumber"]),
+    company: pick(toPlain(company), COMPANY_KEYS),
+    currency,
+    locale: localeBlock(),
+  };
+}
+
+// The customer block the printed documents read: name, code, address, how to reach them, tax number and terms (never credit, balance, banks, KYC).
+function partyBlock(customer) {
+  const c = toPlain(customer) || {};
+  const party = { ...pick(c, PARTY_KEYS) };
+  const vat = c.vat || {};
+  const status = typeof vat.status === "string" && vat.status ? vat.status : null;
+  if (vat.trn || status) party.vat = { ...(status ? { status } : {}), ...(vat.trn ? { trn: vat.trn } : {}) };
+  const ei = c.eInvoice || {};
+  if (ei.city || ei.countryCode) party.eInvoice = { ...(ei.city ? { city: ei.city } : {}), ...(ei.countryCode ? { countryCode: ei.countryCode } : {}) };
+  return party;
+}
+
+const QUOTATION_ALLOWED = {
+  top: ["kind", "document", "party", "company", "currency", "locale"],
+  document: [...QUOTE_DOCUMENT_KEYS, "items", "charges", "pricing"],
+  line: QUOTE_LINE_KEYS, charge: CHARGE_KEYS, pricing: PRICING_KEYS,
+  party: [...PARTY_KEYS, "vat", "eInvoice"], eInvoice: ["city", "countryCode"], company: COMPANY_KEYS, locale: LOCALE_KEYS,
+};
+const DELIVERY_NOTE_ALLOWED = {
+  top: ["kind", "document", "party", "company", "currency", "locale"],
+  document: [...NOTE_DOCUMENT_KEYS, "items", "source"],
+  line: NOTE_LINE_KEYS, source: NOTE_SOURCE_KEYS,
+  party: [...PARTY_KEYS, "vat", "eInvoice", "shippingAddress"], eInvoice: ["city", "countryCode"], company: COMPANY_KEYS, locale: LOCALE_KEYS,
+};
+const STATEMENT_ALLOWED = {
+  top: ["kind", "statement", "party", "company", "currency", "locale"],
+  statement: [...STATEMENT_KEYS, "rows", "truncated"], row: STATEMENT_ROW_KEYS, totals: STATEMENT_TOTAL_KEYS,
+  party: ["customerName", "customerId", "billingAddress", "trnNumber"], company: COMPANY_KEYS, locale: LOCALE_KEYS,
+};
+
+module.exports = {
+  invoiceSnapshot, INVOICE_ALLOWED, estimateSnapshot, ESTIMATE_ALLOWED, pick,
+  quotationSnapshot, QUOTATION_ALLOWED, deliveryNoteSnapshot, DELIVERY_NOTE_ALLOWED, statementSnapshot, STATEMENT_ALLOWED,
+};

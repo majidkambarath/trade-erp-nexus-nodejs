@@ -61,4 +61,10 @@ const linkSchema = (kinds) =>
     { _id: false }
   );
 
-module.exports = { pricingFields, baseLineFields, chargeSchema, pricingSchema, linkSchema };
+// How a document last went to the customer (services/messaging): the summary a list reads, the same as Transaction.lastSend.
+const lastSendSchema = new mongoose.Schema(
+  { sendId: mongoose.Schema.Types.ObjectId, channel: String, status: String, provider: String, at: Date, to: String, openedAt: Date, error: String },
+  { _id: false }
+);
+
+module.exports = { pricingFields, baseLineFields, chargeSchema, pricingSchema, linkSchema, lastSendSchema };

@@ -3,8 +3,8 @@
 //   { docType, sourceType, sourceId, documentNo, date, dueDate, total, currency, partyId, partyName,
 //     contactPerson, recipients[], phone, company, snapshot }
 //
-// Stage 1 covers the tax invoice. Each later document is another function here and nothing else in the
-// pipeline changes.
+// The tax invoice, the garage estimate, the quotation, the delivery note and a customer's statement. Each document is one function here
+// and nothing else in the pipeline changes.
 //
 // The company block is read the way the printed invoice reads it: the organisation's own letterhead
 // (services/core/companyProfileService.js), whoever is sending.
@@ -18,7 +18,13 @@ const orgLocale = require("../../utils/orgLocale");
 const CompanySettings = require("../../models/modules/financial/companySettingsModel");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
-const { invoiceSnapshot, estimateSnapshot } = require("../../utils/shareSnapshot");
+const { invoiceSnapshot, estimateSnapshot, quotationSnapshot, deliveryNoteSnapshot, statementSnapshot } = require("../../utils/shareSnapshot");
+const Quotation = require("../../models/modules/quotationModel");
+const DeliveryNote = require("../../models/modules/deliveryNoteModel");
+const StatementService = require("../financial/statementService");
+const { quotationExpiry } = require("../../utils/salesDocuments");
+const { todayInOrg, toExpiryDay } = require("../../utils/documentExpiry");
+const orgDay = (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? v.trim() : toExpiryDay(v));
 const JobCard = require("../../models/modules/garage/jobCardModel");
 const rules = require("../../utils/garage");
 
@@ -141,14 +147,81 @@ async function loadEstimate(sourceId, req) {
   };
 }
 
-const LOADERS = { tax_invoice: loadInvoice, job_estimate: loadEstimate };
+const customerOf = async (id, what) => {
+  const customer = await Customer.findById(id).lean();
+  if (!customer) throw new AppError(`The customer of this ${what} was not found`, 404, "CUSTOMER_NOT_FOUND");
+  return customer;
+};
+const phoneOf = (customer) => customer.phone || (customer.contacts || []).find((c) => c.isPrimary)?.phone || "";
+
+// An offer. Sendable while the customer could still act on it: a draft (sending it marks it Sent, services/messaging/messagingService.js),
+// one already sent or accepted. A lapsed, declined, replaced or converted one is not an offer any more.
+async function loadQuotation(sourceId, req) {
+  if (!mongoose.isValidObjectId(sourceId)) throw new AppError("Quotation not found", 404, "DOCUMENT_NOT_FOUND");
+  const q = await Quotation.findById(sourceId).lean();
+  if (!q) throw new AppError("Quotation not found", 404, "DOCUMENT_NOT_FOUND");
+  if (!["DRAFT", "SENT", "ACCEPTED"].includes(q.status)) {
+    throw notSendable(`A ${String(q.status).toLowerCase()} quotation is not sent. ${q.status === "CONVERTED" ? "It has become an order." : "Revise it to offer it again."}`);
+  }
+  if (!q.items?.length) throw notSendable("A quotation with no items cannot be sent");
+  if (quotationExpiry(q).expired) throw notSendable("Its validity has passed. Change the 'valid until' date first, or revise it.");
+  const customer = await customerOf(q.partyId, "quotation");
+  const { company, currency } = await companyFor(req);
+  return {
+    docType: "quotation", sourceType: "Quotation", sourceId: q._id, documentNo: q.quotationNo, date: q.date, dueDate: null, validUntil: q.validUntil,
+    total: q.pricing?.grandTotal ?? q.totalAmount, currency, partyId: customer._id, partyName: customer.customerName,
+    contactPerson: customer.contactPerson || "", recipients: recipientsOf(customer), phone: phoneOf(customer), company,
+    snapshot: quotationSnapshot({ quotation: q, customer, company, currency }),
+  };
+}
+
+// The paper that travels with the goods: sendable once the goods are on the road or signed for. A draft is not yet a document anyone holds.
+async function loadDeliveryNote(sourceId, req) {
+  if (!mongoose.isValidObjectId(sourceId)) throw new AppError("Delivery note not found", 404, "DOCUMENT_NOT_FOUND");
+  const n = await DeliveryNote.findById(sourceId).lean();
+  if (!n) throw new AppError("Delivery note not found", 404, "DOCUMENT_NOT_FOUND");
+  if (!["DISPATCHED", "DELIVERED"].includes(n.status)) {
+    throw notSendable(n.status === "DRAFT" ? "This delivery note has not been dispatched yet. Dispatch it first." : `A ${String(n.status).toLowerCase()} delivery note is not sent`);
+  }
+  const customer = await customerOf(n.partyId, "delivery note");
+  const { company, currency } = await companyFor(req);
+  return {
+    docType: "delivery_note", sourceType: "DeliveryNote", sourceId: n._id, documentNo: n.deliveryNoteNo, date: n.date, dueDate: null,
+    total: n.pricing?.grandTotal ?? n.totalAmount, currency, partyId: customer._id, partyName: customer.customerName,
+    contactPerson: n.contactPerson || customer.contactPerson || "", recipients: recipientsOf(customer), phone: n.contactPhone || phoneOf(customer), company,
+    snapshot: deliveryNoteSnapshot({ note: n, customer, company, currency }),
+  };
+}
+
+// A customer's statement of account for a period, to chase a balance or agree one. Customers only: a supplier's statement is theirs to send.
+// The source is the CUSTOMER (nothing is stored for a statement); the period comes with the request and defaults to this calendar year to date.
+async function loadStatement(sourceId, req, options = {}) {
+  if (!mongoose.isValidObjectId(sourceId)) throw new AppError("Customer not found", 404, "DOCUMENT_NOT_FOUND");
+  const customer = await Customer.findById(sourceId).lean();
+  if (!customer) throw new AppError("Customer not found", 404, "DOCUMENT_NOT_FOUND");
+  const today = todayInOrg();
+  const from = options.from ? orgDay(options.from) : `${today.slice(0, 4)}-01-01`;
+  const to = options.to ? orgDay(options.to) : today;
+  if (!from || !to) throw new AppError("That period is not valid", 400, "INVALID_DATE");
+  if (from > to) throw new AppError("The period starts after it ends", 400, "INVALID_RANGE");
+  const statement = await StatementService.getStatement({ partyId: customer._id, partyType: "Customer", from, to: `${to}T23:59:59.999Z` }); // the whole last day, whatever time of day a posting was stamped
+  const { company, currency } = await companyFor(req);
+  return {
+    docType: "statement", sourceType: "Customer", sourceId: customer._id, documentNo: `Statement ${from} to ${to}`, date: to, dueDate: null,
+    period: { from, to }, total: statement.closing, currency, partyId: customer._id, partyName: customer.customerName,
+    contactPerson: customer.contactPerson || "", recipients: recipientsOf(customer), phone: phoneOf(customer), company,
+    snapshot: statementSnapshot({ statement: { ...statement, from, to }, customer, company, currency }),
+  };
+}
+
+const LOADERS = { tax_invoice: loadInvoice, job_estimate: loadEstimate, quotation: loadQuotation, delivery_note: loadDeliveryNote, statement: loadStatement };
 const SUPPORTED = Object.keys(LOADERS);
 
 // docType + id -> the document, or a clear refusal.
-async function load(docType, sourceId, req) {
+async function load(docType, sourceId, req, options = {}) {
   const fn = LOADERS[docType];
   if (!fn) throw new AppError(`Sending a ${docType || "document"} is not available`, 400, "UNKNOWN_DOC_TYPE");
-  return fn(sourceId, req);
+  return fn(sourceId, req, options);
 }
 
 module.exports = { load, SUPPORTED, companyFor, recipientsOf };

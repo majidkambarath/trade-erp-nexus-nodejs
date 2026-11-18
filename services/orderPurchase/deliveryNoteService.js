@@ -181,7 +181,7 @@ class DeliveryNoteService {
     if (!S.isId(id)) throw fail("Invalid delivery note id", 400);
     const dn = await DeliveryNote.findById(id).lean();
     if (!dn) throw fail("Delivery note not found", 404, "DELIVERY_NOTE_NOT_FOUND");
-    const [party, items] = await Promise.all([Customer.findById(dn.partyId).select(S.CUSTOMER_FIELDS).lean(), S.attachStockDetails(dn.items)]);
+    const [party, items] = await Promise.all([Customer.findById(dn.partyId).select(`${S.CUSTOMER_FIELDS} contacts`).lean(), S.attachStockDetails(dn.items)]);
 
     // How much of the order this note serves has gone out, across every note against it.
     let order = null;
