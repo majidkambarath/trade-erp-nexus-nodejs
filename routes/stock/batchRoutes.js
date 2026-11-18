@@ -9,6 +9,7 @@ const AuditService = require("../../services/core/auditService");
 
 const router = express.Router();
 router.use(authenticateToken);
+router.use(require("../../middleware/costVisibility").hideCost());
 router.use(requireFeature("batches"));
 
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });

@@ -3,10 +3,19 @@ const StockService = require("../../services/stock/stockService");
 const catchAsync = require("../../utils/catchAsync");
 const AppError = require("../../utils/AppError");
 const { assertPermission } = require("../../middleware/permissionGate");
+const { mayViewCost } = require("../../utils/costVisibility");
+
+// A caller who may not SEE what an item costs may not set it either: their item form came back without the cost, and saving it must not
+// write a blank over the real one (or let them guess a figure in). The cost is ignored, the rest of the request is carried out.
+const withoutCostIfHidden = (req, body) => {
+  if (!body || mayViewCost(req.admin)) return body;
+  const { purchasePrice: _hidden, ...rest } = body;
+  return rest;
+};
 
 exports.createStock = catchAsync(async (req, res) => {
   const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
-  const stock = await StockService.createStock(req.body, createdBy);
+  const stock = await StockService.createStock(withoutCostIfHidden(req, req.body), createdBy);
 
   res.status(201).json({
     status: "success",
@@ -108,7 +117,7 @@ exports.updateStock = catchAsync(async (req, res) => {
     if (Number(req.body.currentStock) !== Number(stored.currentStock)) assertPermission(req, "inventory.adjust");
   }
   const createdBy = req.admin?.id || req.user?.id || req.body.createdBy || "system";
-  const stock = await StockService.updateStock(req.params.id, req.body, createdBy);
+  const stock = await StockService.updateStock(req.params.id, withoutCostIfHidden(req, req.body), createdBy);
 
   res.status(200).json({
     status: "success",
@@ -315,7 +324,7 @@ exports.importStock = catchAsync(async (req, res) => {
 
   for (const data of stockData) {
     try {
-      const stock = await StockService.createStock(data, createdBy);
+      const stock = await StockService.createStock(withoutCostIfHidden(req, data), createdBy);
       results.push({
         success: true,
         stock,
