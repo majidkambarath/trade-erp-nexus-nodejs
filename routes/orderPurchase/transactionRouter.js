@@ -14,6 +14,7 @@ router.param("id", branchOfDocument(Transaction)); // a head office working acro
 
 router.post("/transactions", requirePermission(byDocumentType("create")), TransactionController.createTransaction);
 router.get("/transactions", requirePermission(byDocumentType("view")), TransactionController.getAllTransactions);
+router.get("/transactions/summary", requirePermission(byDocumentType("view")), TransactionController.getTransactionSummary);
 router.get("/transactions/:id", requirePermission(byDocumentType("view")), TransactionController.getTransactionById);
 router.get("/transactions/:id/audit", requirePermission(byDocumentType("view")), TransactionController.getTransactionAudit);
 router.put("/transactions/:id", requirePermission(byDocumentType("edit")), TransactionController.updateTransaction);

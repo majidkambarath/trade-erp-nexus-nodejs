@@ -326,6 +326,7 @@ transactionSchema.index({ status: 1 });
 // "Duplicate schema index" on every boot.)
 transactionSchema.index({ type: 1, createdAt: -1, _id: -1 });
 transactionSchema.index({ type: 1, date: -1 });
+transactionSchema.index({ type: 1, totalAmount: 1 });
 transactionSchema.index({ type: 1, status: 1, date: -1 });
 transactionSchema.index({ date: -1 });
 transactionSchema.index({ isOpening: 1, type: 1, partyId: 1 });

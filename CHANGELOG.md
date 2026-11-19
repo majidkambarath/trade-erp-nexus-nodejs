@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.11.0.0 — 19 November 2026
+
+Server-side lists. Frontend and backend both at 3.11.0.0.
+
+### Added
+
+- **List filters on the server.** `GET /transactions/transactions` takes `sort` (date, amount, party, status, number) with `order`, and `payment` (paid, partial, unpaid, overdue); its search covers references and the preparer's name. `GET /transactions/transactions/summary` answers the cards of a period (counts by status and payment state, open and overdue amounts) with the same filters.
+
+### Changed
+
+- **The invoice and return lists read one page at a time.** Sales invoices, purchase invoices, sales returns and purchase returns used to load every document of the period (up to 2,000) and filter, sort and page them in the browser. The server now filters, sorts and pages, so a company with tens of thousands of documents opens as quickly as one with a hundred, and the old 2,000-document limit is gone.
+- **The cards above each list are counted by the server** over the whole period, not from the page on screen.
+- **Searching by a reference or by who prepared a document works.** The search now also finds the customer's LPO and document numbers, the serial number, the supplier's reference and the name of the person who prepared it.
+- **The returns lists use the period too.** The server's date filter on returns works now, so a returns list reads only its period.
+- Typing in the search box waits a moment after the last key before asking the server.
+
 ## 3.10.0.0 — 19 November 2026
 
 Send more documents to the customer. Frontend and backend both at 3.10.0.0.

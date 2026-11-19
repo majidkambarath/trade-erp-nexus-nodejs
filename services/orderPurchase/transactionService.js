@@ -42,6 +42,8 @@ const orgLocale = require("../../utils/orgLocale");
 const { listPeriod, condition: periodCondition } = require("../../utils/listPeriod");
 const Customer = require("../../models/modules/customerModel");
 const Vendor = require("../../models/modules/vendorModel");
+const Admin = require("../../models/core/adminModel");
+const payState = require("../../utils/paymentState");
 
 // ---------- Helpers ----------
 // Approving, rejecting or cancelling is what moves stock, books the ledger and runs credit control, so
@@ -851,52 +853,125 @@ const logAmount = balanceEffect;
   //   calendar days on the document's date, the last day whole (utils/listPeriod.js).
   // Newest saved first, ties broken by _id so a page boundary never shows a document twice or skips one. pagination.total
   // counts what every filter leaves.
+  // The filters of the list and of its summary, as one Mongo query: so the page and the cards always describe the same documents.
+  //   status, partyId, partyType, search, the period, and `payment` PAID | PARTIAL | UNPAID | OVERDUE (what has been collected, read
+  //   from the amounts like utils/paymentState.js: never a stored status). OVERDUE needs each party's payment terms, so it is
+  //   resolved in two steps (the open documents the other filters leave, then their due dates) and bounded by the period.
+  static async listQuery(filters) {
+    const query = {};
+    const and = [];
+
+    if (filters.type) {
+      query.type = Array.isArray(filters.type) ? { $in: filters.type } : filters.type;
+    }
+    if (filters.status) query.status = filters.status;
+    if (filters.partyId) {
+      if (!mongoose.Types.ObjectId.isValid(filters.partyId))
+        throw new AppError("Invalid partyId", 400, "INVALID_PARTY_ID");
+      query.partyId = new mongoose.Types.ObjectId(filters.partyId);
+    }
+    if (filters.partyType) query.partyType = filters.partyType;
+
+    const needle = filters.search === undefined || filters.search === null ? "" : String(filters.search).trim();
+    if (needle) {
+      // Escape user input: an unescaped "(" throws, and crafted patterns can backtrack badly.
+      const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const r = new RegExp(escaped, "i");
+      // The order screens promise "number, customer / vendor or user". A name is not stored on the document, so the
+      // party (and the person who prepared it) is found by name first and then its documents.
+      const [customers, vendors, admins] = await Promise.all([
+        Customer.find({ $or: [{ customerName: r }, { customerId: r }] }).select("_id").limit(200).lean(),
+        Vendor.find({ $or: [{ vendorName: r }, { vendorId: r }] }).select("_id").limit(200).lean(),
+        Admin.find({ $or: [{ name: r }, { email: r }] }).select("_id").limit(50).lean(),
+      ]);
+      query.$or = [
+        { transactionNo: r },
+        { notes: r },
+        { createdBy: r },
+        { createdBy: { $in: admins.map((a) => String(a._id)) } },
+        { lpono: r },
+        { docno: r },
+        { serialNo: r },
+        { vendorReference: r },
+        { "items.description": r },
+        { partyId: { $in: [...customers, ...vendors].map((p) => p._id) } },
+      ];
+    }
+
+    // On the document's own date for every type (the returns lists used to ask a field nothing writes and matched nothing).
+    const period = listPeriod(filters, { zone: orgLocale.timezone() });
+    if (period.error) throw new AppError(period.error.message, 400, period.error.code);
+    const dateMatch = periodCondition(period);
+    if (dateMatch) query.date = dateMatch;
+
+    const payment = filters.payment === undefined || filters.payment === null || filters.payment === "" ? null : String(filters.payment).toUpperCase();
+    if (payment) {
+      if (!["PAID", "PARTIAL", "UNPAID", "OVERDUE"].includes(payment)) throw new AppError("Unknown payment filter", 400, "INVALID_FILTER");
+      const TOL = payState.TOLERANCE;
+      const paid = { $ifNull: ["$paidAmount", 0] };
+      const credited = { $ifNull: ["$creditedAmount", 0] };
+      const out = { $ifNull: ["$outstandingAmount", { $subtract: ["$totalAmount", paid] }] };
+      const open = { $gt: [out, TOL] };
+      const started = { $or: [{ $gt: [paid, TOL] }, { $gt: [credited, TOL] }] };
+      const cond = {
+        PAID: { $and: [{ $gt: ["$totalAmount", TOL] }, { $lte: [out, TOL] }] },
+        PARTIAL: { $and: [{ $gt: ["$totalAmount", TOL] }, open, started] },
+        UNPAID: { $and: [{ $gt: ["$totalAmount", TOL] }, open, { $not: [started] }] },
+        OVERDUE: { $and: [{ $gt: ["$totalAmount", TOL] }, open] },
+      }[payment];
+      and.push({ status: { $in: [...payState.POSTED] } }, { $expr: cond });
+    }
+    if (and.length) query.$and = and;
+
+    if (payment === "OVERDUE") {
+      const candidates = await Transaction.find(query).select("status totalAmount paidAmount outstandingAmount creditedAmount dueDate date partyId partyType").lean();
+      const terms = await TransactionService.termsOf(candidates);
+      const now = Date.now();
+      const ids = candidates.filter((d) => payState.isPastDue({ ...d, paymentTerms: terms.get(String(d.partyId)) }, now)).map((d) => d._id);
+      and.push({ _id: { $in: ids } });
+    }
+    return { query, period };
+  }
+
+  // The payment terms of the parties of some documents, in one read each for customers and vendors.
+  static async termsOf(docs) {
+    const idsOf = (list) => [...new Set(list.filter(Boolean).map(String))].map((id) => new mongoose.Types.ObjectId(id));
+    const customerIds = idsOf(docs.filter((d) => d.partyType === "Customer").map((d) => d.partyId));
+    const vendorIds = idsOf(docs.filter((d) => d.partyType !== "Customer").map((d) => d.partyId));
+    const [customers, vendors] = await Promise.all([
+      customerIds.length ? Customer.find({ _id: { $in: customerIds } }).select("paymentTerms").lean() : [],
+      vendorIds.length ? Vendor.find({ _id: { $in: vendorIds } }).select("paymentTerms").lean() : [],
+    ]);
+    return new Map([...customers, ...vendors].map((p) => [String(p._id), p.paymentTerms || ""]));
+  }
+
+  // The cards of a list: the figures for every document the filters leave (not just the page shown). Same filters as the list.
+  static async summary(filters) {
+    const { query } = await TransactionService.listQuery(filters);
+    const docs = await Transaction.find(query)
+      .select("status totalAmount paidAmount outstandingAmount creditedAmount dueDate date partyId partyType isOpening")
+      .lean();
+    const terms = await TransactionService.termsOf(docs);
+    return payState.summarise(docs.map((d) => ({ ...d, paymentTerms: terms.get(String(d.partyId)) })));
+  }
+
+  // The list every order screen reads (GET /transactions/transactions).
+  //   type (one, several or comma-separated), status, partyId, partyType, search, payment, page (from 1), limit (1-200, default 20),
+  //   sort date | amount | party | status | number (+ order asc | desc; default newest saved first),
+  //   dateFilter TODAY | WEEK | MONTH | CUSTOM (+ startDate, endDate) and dateFrom / dateTo: a period of the ORGANISATION'S
+  //   calendar days on the document's date, the last day whole (utils/listPeriod.js).
+  // Every order ends on _id so a page boundary never shows a document twice or skips one. pagination.total counts what every
+  // filter leaves.
   static async getAllTransactions(filters) {
     try {
-      const query = {};
+      const { query } = await TransactionService.listQuery(filters);
 
-      // ──────── FILTERS ──────── (unchanged)
-      if (filters.type) {
-        query.type = Array.isArray(filters.type)
-          ? { $in: filters.type }
-          : filters.type;
-      }
-      if (filters.status) query.status = filters.status;
-      if (filters.partyId) {
-        if (!mongoose.Types.ObjectId.isValid(filters.partyId))
-          throw new AppError("Invalid partyId", 400, "INVALID_PARTY_ID");
-        query.partyId = new mongoose.Types.ObjectId(filters.partyId);
-      }
-      if (filters.partyType) query.partyType = filters.partyType;
-
-      const needle = filters.search === undefined || filters.search === null ? "" : String(filters.search).trim();
-      if (needle) {
-        // Escape user input: an unescaped "(" throws, and crafted patterns can backtrack badly.
-        const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const r = new RegExp(escaped, "i");
-        // The order screens promise "number, customer / vendor or user". A name is not stored on the document, so the
-        // party is found by its name or code first and then its documents.
-        const [customers, vendors] = await Promise.all([
-          Customer.find({ $or: [{ customerName: r }, { customerId: r }] }).select("_id").limit(200).lean(),
-          Vendor.find({ $or: [{ vendorName: r }, { vendorId: r }] }).select("_id").limit(200).lean(),
-        ]);
-        query.$or = [
-          { transactionNo: r },
-          { notes: r },
-          { createdBy: r },
-          { "items.description": r },
-          { partyId: { $in: [...customers, ...vendors].map((p) => p._id) } },
-        ];
-      }
-
-      // ──────── DATE FILTER ────────
-      // On the document's own date for every type. This used to read `returnDate` for the two return types, which
-      // createTransaction does not store and no screen sends, so Today / This week / This month on a returns list matched
-      // no document at all (and an "all types" list with a period matched returns only).
-      const period = listPeriod(filters, { zone: orgLocale.timezone() });
-      if (period.error) throw new AppError(period.error.message, 400, period.error.code);
-      const dateMatch = periodCondition(period);
-      if (dateMatch) query.date = dateMatch;
+      const SORT_FIELDS = { date: "date", amount: "totalAmount", status: "status", number: "transactionNo", party: "party" };
+      const sortKey = filters.sort === undefined || filters.sort === null || filters.sort === "" ? null : String(filters.sort);
+      if (sortKey && !SORT_FIELDS[sortKey]) throw new AppError("Unknown sort", 400, "INVALID_FILTER");
+      const orderWord = String(filters.order || (sortKey ? "asc" : "desc")).toLowerCase();
+      if (!["asc", "desc"].includes(orderWord)) throw new AppError("Unknown sort order", 400, "INVALID_FILTER");
+      const dir = orderWord === "asc" ? 1 : -1;
 
       // ──────── PAGINATION ──────── (unchanged)
       const page = Math.max(1, parseInt(filters.page) || 1);
@@ -921,10 +996,34 @@ const logAmount = balanceEffect;
         // left out here is simply missing from the paper while the screen beside it shows it.
         "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
         "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals jobCardRef tradeOrderRef vanTripRef vatRegistered gstType placeOfSupply supplierState fx";
-      const [docs, total] = await Promise.all([
-        Transaction.find(query).select(FIELDS).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
-        Transaction.countDocuments(query),
-      ]);
+      let docs;
+      let total;
+      if (sortKey === "party") {
+        // A party's name is not on the document: find the names of the documents the filters leave (light rows), order those, cut the
+        // page, then read just that page in full.
+        const light = await Transaction.find(query).select("partyId partyType").lean();
+        const names = new Map();
+        const idsFor = (type) => [...new Set(light.filter((d) => (d.partyType === "Customer") === type).map((d) => String(d.partyId)))].map((id) => new mongoose.Types.ObjectId(id));
+        const [cs, vs] = await Promise.all([
+          Customer.find({ _id: { $in: idsFor(true) } }).select("customerName").lean(),
+          Vendor.find({ _id: { $in: idsFor(false) } }).select("vendorName").lean(),
+        ]);
+        cs.forEach((c) => names.set(String(c._id), String(c.customerName || "").toLowerCase()));
+        vs.forEach((v) => names.set(String(v._id), String(v.vendorName || "").toLowerCase()));
+        const nameOf = (d) => names.get(String(d.partyId)) || "";
+        light.sort((a, b) => dir * nameOf(a).localeCompare(nameOf(b)) || dir * String(a._id).localeCompare(String(b._id)));
+        total = light.length;
+        const pageIds = light.slice(skip, skip + limit).map((d) => d._id);
+        const read = await Transaction.find({ _id: { $in: pageIds } }).select(FIELDS).lean();
+        const byIdRead = new Map(read.map((d) => [String(d._id), d]));
+        docs = pageIds.map((id) => byIdRead.get(String(id))).filter(Boolean);
+      } else {
+        const sort = sortKey ? { [SORT_FIELDS[sortKey]]: dir, _id: dir } : { createdAt: -1, _id: -1 };
+        [docs, total] = await Promise.all([
+          Transaction.find(query).select(FIELDS).sort(sort).skip(skip).limit(limit).lean(),
+          Transaction.countDocuments(query),
+        ]);
+      }
 
       const idsOf = (list) => [...new Set(list.filter(Boolean).map(String))].map((id) => new mongoose.Types.ObjectId(id));
       const customerIds = idsOf(docs.filter((d) => d.partyType === "Customer").map((d) => d.partyId));
