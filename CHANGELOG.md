@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.15.0.0 — 19 November 2026
+
+Recurring invoices. Frontend and backend both at 3.15.0.0.
+
+### Added
+
+- **API.** `GET|POST /recurring-invoices`, `GET|PUT|DELETE /recurring-invoices/:id`, `POST /recurring-invoices/:id/pause|resume|run`, `GET /recurring-invoices/preview-dates` (sales.view / create / edit / delete). `GET /transactions/transactions?recurring=1|<id>`. Refusals `INVALID_SCHEDULE`, `NAME_REQUIRED`, `RECURRING_NOT_FOUND`, `RECURRING_STATE`, `RECURRING_ENDED`.
+- **Recurring invoices** (Sales > Recurring): set up an invoice that repeats - rent, a maintenance contract, a subscription - once, with its customer, lines, cost centres and a schedule (weekly, monthly, quarterly or yearly, every 1 to 12 periods, from a first date, optionally until a date or for a number of invoices). On each date a **draft** sales invoice is made, dated that day, for you to review and approve: nothing is approved, posted or sent on its own. Monthly schedules keep the first invoice's day of the month (31 January, 28 February, 31 March). Pause, resume (the paused dates are skipped), make the next one at once, or delete (the invoices already made are kept).
+- A notification says how many recurring drafts are waiting for approval, and another when one could not be made (a closed month, the plan's document limit) and why; it is tried again a few hours later and the notice clears itself once it succeeds.
+- Sales > Invoices marks an invoice made this way "Recurring", and the notification's link shows only those invoices.
+
 ## 3.14.0.0 — 19 November 2026
 
 Budgets. Frontend and backend both at 3.14.0.0.
