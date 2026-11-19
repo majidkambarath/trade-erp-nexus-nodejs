@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.14.0.0 — 19 November 2026
+
+Budgets. Frontend and backend both at 3.14.0.0.
+
+### Added
+
+- **API.** `GET|POST /accounting/budgets`, `GET|PUT|DELETE /accounting/budgets/:id` (read `accounts.view` or `reports.financial`, change `accounts.manage`), `GET /accounting/budgets/:id/report?from=YYYY-MM&to=YYYY-MM` (`reports.financial`), `GET /accounting/budgets/suggest?fiscalYearId&costCentreId` (`accounts.manage`). Refusals `BUDGET_EXISTS`, `INVALID_BUDGET`, `BUDGET_NOT_FOUND`.
+- **Budgets** (Accounting setup > Budgets): what you expect to earn and spend on each income and expense account, month by month, for a fiscal year - for the whole business or for one cost centre. Type a month's amount, or a year's total to spread it evenly over the months. A new budget can start from last year's actual figures.
+- **Ledger reports > Budget vs actual**: for the months of the chosen period inside the budget's year, each account's budget, what was actually posted, the variance (marked better or worse: income above budget and expenses below it are better) and how much of the budget was used, with income, expenses and the net result, and a CSV. A cost centre's budget is compared only with what was posted to that cost centre. Anything posted to an account with no budget line still shows, at a budget of nil.
+
 ## 3.13.0.0 — 19 November 2026
 
 Cost centres. Frontend and backend both at 3.13.0.0.

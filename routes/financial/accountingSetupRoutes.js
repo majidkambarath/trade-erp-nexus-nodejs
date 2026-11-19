@@ -58,6 +58,15 @@ router.post("/cost-centres", requirePermission("accounts.manage"), c.createCostC
 router.put("/cost-centres/:id", requirePermission("accounts.manage"), c.updateCostCentre);
 router.delete("/cost-centres/:id", requirePermission("accounts.manage"), c.removeCostCentre);
 
+// budgets: set by accounts.manage, compared with the ledger by whoever reads the financial reports
+router.get("/budgets", requirePermission(["accounts.view", "reports.financial"]), c.listBudgets);
+router.get("/budgets/suggest", requirePermission("accounts.manage"), c.suggestBudget);
+router.post("/budgets", requirePermission("accounts.manage"), c.createBudget);
+router.get("/budgets/:id/report", requirePermission("reports.financial"), c.budgetReport);
+router.get("/budgets/:id", requirePermission(["accounts.view", "reports.financial"]), c.getBudget);
+router.put("/budgets/:id", requirePermission("accounts.manage"), c.updateBudget);
+router.delete("/budgets/:id", requirePermission("accounts.manage"), c.removeBudget);
+
 // the register: every number given out, the deleted ones with their reason, and the gaps in a sequence
 router.get("/number-register", requirePermission("accounts.view"), c.numberRegister);
 router.get("/number-register/gaps", requirePermission("accounts.view"), c.numberGaps);

@@ -11,6 +11,7 @@ const NumberRegisterService = require("../../services/core/numberRegisterService
 const PostingService = require("../../services/financial/postingService");
 const AuditService = require("../../services/core/auditService");
 const CostCentreService = require("../../services/financial/costCentreService");
+const BudgetService = require("../../services/financial/budgetService");
 
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
 
@@ -120,3 +121,25 @@ exports.removeCostCentre = catchAsync(async (req, res) => {
   await AuditService.log({ req, action: "COST_CENTRE_DELETED", entity: "CostCentre", entityId: null, summary: `${gone.code} ${gone.name}`, before: gone });
   ok(res, gone);
 });
+
+// --- budgets (per account per month of a fiscal year, for the business or one cost centre) ---
+const budgetSummary = (b) => `${b.name}${b.year?.code ? ` (${b.year.code})` : ""}`;
+exports.listBudgets = catchAsync(async (req, res) => ok(res, await BudgetService.list()));
+exports.getBudget = catchAsync(async (req, res) => ok(res, await BudgetService.get(req.params.id)));
+exports.createBudget = catchAsync(async (req, res) => {
+  const made = await BudgetService.create(req.body, req);
+  await AuditService.log({ req, action: "BUDGET_CREATED", entity: "Budget", entityId: made._id, summary: budgetSummary(made) });
+  ok(res, made, 201);
+});
+exports.updateBudget = catchAsync(async (req, res) => {
+  const saved = await BudgetService.update(req.params.id, req.body, req);
+  await AuditService.log({ req, action: "BUDGET_UPDATED", entity: "Budget", entityId: saved._id, summary: budgetSummary(saved) });
+  ok(res, saved);
+});
+exports.removeBudget = catchAsync(async (req, res) => {
+  const gone = await BudgetService.remove(req.params.id);
+  await AuditService.log({ req, action: "BUDGET_DELETED", entity: "Budget", entityId: null, summary: budgetSummary(gone) });
+  ok(res, gone);
+});
+exports.budgetReport = catchAsync(async (req, res) => ok(res, await BudgetService.report(req.params.id, { from: req.query.from, to: req.query.to })));
+exports.suggestBudget = catchAsync(async (req, res) => ok(res, await BudgetService.suggest({ fiscalYearId: req.query.fiscalYearId, costCentreId: req.query.costCentreId })));
