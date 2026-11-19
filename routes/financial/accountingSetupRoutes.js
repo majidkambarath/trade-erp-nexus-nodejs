@@ -52,6 +52,12 @@ router.put("/voucher-types/:key", requirePermission("accounts.manage"), c.update
 router.delete("/voucher-types/:key", requirePermission("accounts.manage"), c.removeVoucherType);
 router.get("/voucher-types/:key/usage", requirePermission("accounts.view"), c.voucherTypeUsage);
 
+// cost centres: read by every form that offers the picker; changed by accounts.manage
+router.get("/cost-centres", requirePermission(["accounts.view", "lookups.view"]), c.listCostCentres);
+router.post("/cost-centres", requirePermission("accounts.manage"), c.createCostCentre);
+router.put("/cost-centres/:id", requirePermission("accounts.manage"), c.updateCostCentre);
+router.delete("/cost-centres/:id", requirePermission("accounts.manage"), c.removeCostCentre);
+
 // the register: every number given out, the deleted ones with their reason, and the gaps in a sequence
 router.get("/number-register", requirePermission("accounts.view"), c.numberRegister);
 router.get("/number-register/gaps", requirePermission("accounts.view"), c.numberGaps);
@@ -79,6 +85,7 @@ router.get("/reports/statement", requirePermission((req) => (req.query.accountId
 // ledger reports (read from the general ledger)
 router.get("/reports/general-ledger", requirePermission("reports.financial"), ledgerReports.generalLedger);
 router.get("/reports/profit-loss", requirePermission("reports.financial"), ledgerReports.profitAndLoss);
+router.get("/reports/cost-centres", requirePermission("reports.financial"), ledgerReports.byCostCentre);
 router.get("/reports/day-book", requirePermission(["reports.financial","finance.view"]), ledgerReports.dayBook);
 router.get("/reports/daily-summary", requirePermission(["reports.financial","finance.view"]), ledgerReports.dailySummary);
 router.get("/reports/voucher/:id", requirePermission(["reports.financial","finance.view"]), ledgerReports.voucherImpact);

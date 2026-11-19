@@ -10,6 +10,7 @@ const VoucherTypeService = require("../../services/core/voucherTypeService");
 const NumberRegisterService = require("../../services/core/numberRegisterService");
 const PostingService = require("../../services/financial/postingService");
 const AuditService = require("../../services/core/auditService");
+const CostCentreService = require("../../services/financial/costCentreService");
 
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
 
@@ -101,3 +102,21 @@ exports.numberRegister = catchAsync(async (req, res) =>
   })
 );
 exports.numberGaps = catchAsync(async (req, res) => ok(res, await NumberRegisterService.gaps(req, req.query)));
+
+// --- cost centres (a master: what a ledger row can be reported by besides its account) ---
+exports.listCostCentres = catchAsync(async (req, res) => ok(res, await CostCentreService.list(req, { active: req.query.active })));
+exports.createCostCentre = catchAsync(async (req, res) => {
+  const made = await CostCentreService.create(req.body, req);
+  await AuditService.log({ req, action: "COST_CENTRE_CREATED", entity: "CostCentre", entityId: made._id, summary: `${made.code} ${made.name}`, after: made });
+  ok(res, made, 201);
+});
+exports.updateCostCentre = catchAsync(async (req, res) => {
+  const saved = await CostCentreService.update(req.params.id, req.body, req);
+  await AuditService.log({ req, action: "COST_CENTRE_UPDATED", entity: "CostCentre", entityId: saved._id, summary: `${saved.code} ${saved.name}`, after: saved });
+  ok(res, saved);
+});
+exports.removeCostCentre = catchAsync(async (req, res) => {
+  const gone = await CostCentreService.remove(req.params.id, req);
+  await AuditService.log({ req, action: "COST_CENTRE_DELETED", entity: "CostCentre", entityId: null, summary: `${gone.code} ${gone.name}`, before: gone });
+  ok(res, gone);
+});

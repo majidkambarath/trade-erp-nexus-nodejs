@@ -3,6 +3,7 @@ const {
   LedgerAccount,
   LedgerEntry,
 } = require("../../models/modules/financial/financialModels");
+const CostCentreService = require("./costCentreService");
 const logger = require("../../utils/logger");
 const Customer = require("../../models/modules/customerModel");
 const ExpenseType = require("../../models/modules/financial/expenseTypeModel");
@@ -158,6 +159,9 @@ class FinancialService {
 
         const postingDate = voucherData.date || new Date();
         await FiscalYearService.assertPostingAllowed(postingDate, { session });
+        // cost centres named on the voucher and its lines must exist and be switched on; a blank one is none
+        if (voucherData.costCentreId === "" || voucherData.costCentreId === null) delete voucherData.costCentreId;
+        await CostCentreService.assertUsable([voucherData.costCentreId, ...(Array.isArray(voucherData.lines) ? voucherData.lines.map((l) => l?.costCentreId) : [])], {}, session);
         const voucherNo = await this.generateVoucherNo(voucherType, postingDate, session);
         logger.debug(
           `[Transaction] Started for voucher ${voucherNo} with session ${session.id}`
@@ -259,6 +263,7 @@ class FinancialService {
           createdBy,
           attachments,
           ...processedData,
+          ...(voucherData.costCentreId ? { costCentreId: voucherData.costCentreId } : {}),
         };
 
         const voucher = await Voucher.create([voucherDoc], { session });
@@ -1195,6 +1200,8 @@ class FinancialService {
       currency: entry.currency,
       exchangeRate: entry.exchangeRate,
       amountForeign: entry.amountForeign,
+      // the line's own cost centre, else the voucher's (absent = none)
+      ...((entry.costCentreId || voucher.costCentreId) ? { costCentreId: entry.costCentreId || voucher.costCentreId } : {}),
       createdBy,
     }));
 

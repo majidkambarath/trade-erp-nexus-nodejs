@@ -20,6 +20,7 @@ const voucherLineSchema = new mongoose.Schema({
   currency: { type: String, trim: true, uppercase: true },
   exchangeRate: { type: Number, min: 0 },
   amountForeign: { type: Number, min: 0 },
+  costCentreId: { type: mongoose.Schema.Types.ObjectId, ref: "CostCentre" }, // cost centre this line is reported under (no default: absent = the header's, or none)
 });
 
 // Voucher Schema
@@ -70,6 +71,7 @@ const voucherSchema = new mongoose.Schema({
     },
   ],
   onAccountAmount: { type: Number, default: 0, min: 0 },
+  costCentreId: { type: mongoose.Schema.Types.ObjectId, ref: "CostCentre" }, // the voucher's cost centre (a line may name its own)
   // cash | bank | transfer | cheque | card. "online" is the old name for transfer and is still
   // accepted on old vouchers. See services/banking/paymentModeService.js.
   paymentMode: {
@@ -152,6 +154,7 @@ const voucherSchema = new mongoose.Schema({
       taxCodeId: { type: mongoose.Schema.Types.ObjectId, ref: "TaxCode" },
       vatPercent: { type: Number, min: 0, default: 0 },
       vatAmount: { type: Number, min: 0, default: 0 },
+      costCentreId: { type: mongoose.Schema.Types.ObjectId, ref: "CostCentre" },
       _id: false,
     },
   ],
@@ -453,6 +456,8 @@ const ledgerEntrySchema = new mongoose.Schema({
     ref: "LedgerAccount",
     required: true,
   },
+  // the cost centre this row is reported under (services/financial/costCentreService.js); absent = none
+  costCentreId: { type: mongoose.Schema.Types.ObjectId, ref: "CostCentre" },
   accountName: {
     type: String,
     required: true,
@@ -527,6 +532,7 @@ ledgerEntrySchema.index({ voucherId: 1, accountId: 1, date: 1 }); // For Financi
 ledgerEntrySchema.index({ accountId: 1, date: 1 }); // For FinancialService.getTrialBalance
 ledgerEntrySchema.index({ partyId: 1, partyType: 1 }); // For FinancialService.getPartyStatement
 ledgerEntrySchema.index({ financialYear: 1, month: 1 }); // For FinancialService.getFinancialReports
+ledgerEntrySchema.index({ costCentreId: 1, date: 1 }, { sparse: true }); // reports by cost centre
 
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
 // documents belong to a branch: a person working in one branch sees only that branch's (utils/tenantPlugin.js)

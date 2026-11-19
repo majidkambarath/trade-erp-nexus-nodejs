@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.13.0.0 — 19 November 2026
+
+Cost centres. Frontend and backend both at 3.13.0.0.
+
+### Added
+
+- **API.** `GET|POST /accounting/cost-centres`, `PUT|DELETE /accounting/cost-centres/:id` (read `accounts.view` or `lookups.view`, change `accounts.manage`); `costCentreId` on `Transaction` (header and lines), `Voucher` (header, `entries`, `noteLines`) and `LedgerEntry`; `?costCentre=<id>|none` on the general ledger and profit and loss; `GET /accounting/reports/cost-centres` (`reports.financial`). Refusals `INVALID_COST_CENTRE`, `COST_CENTRE_EXISTS`, `COST_CENTRE_IN_USE`.
+- **Cost centres** (Accounting setup > Cost centres): the parts of the business whose income and costs you want to see on their own, such as a shop, a project or a department. Each has a code and a name, can sit in one group, and can be switched off. One that has been used cannot be deleted.
+- **Choose a cost centre on an invoice or a return**, for the whole document, and on any line that belongs somewhere else. The revenue, discount, stock and cost of goods of each line are reported under that line's centre; the customer or supplier, the tax and the charges under the document's.
+- **Choose one on a journal** (and per journal line), an expense, a receipt, a payment and a debit or credit note.
+- **Profit and loss for one cost centre**, and the general ledger narrowed to one, from a Cost centre box on each.
+- **Ledger reports > By cost centre**: revenue, cost of sales, gross profit, other income, operating expenses and net profit for each cost centre, plus "Not assigned", adding up to the whole profit and loss. Downloads as CSV.
+- The Cost centre fields appear only once the organisation has a cost centre; nothing changes for anyone else.
+
 ## 3.12.0.0 — 19 November 2026
 
 Amounts are typed with grouping everywhere. Frontend and backend both at 3.12.0.0 (no backend change).
