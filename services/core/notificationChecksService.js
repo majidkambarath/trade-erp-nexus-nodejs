@@ -459,8 +459,57 @@ class NotificationChecksService {
     { key: "chequesMaturing", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesMaturing(now) },
     { key: "chequesUncleared", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesUncleared(now) },
     { key: "chequesExpiring", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesExpiring(now) },
+    { key: "recurringInvoices", module: "sales", run: (now) => NotificationChecksService.checkRecurringInvoices(now) },
     { key: "emiratisationShortfall", module: "hr", run: (now) => NotificationChecksService.checkEmiratisationShortfall(now) },
   ];
+
+  /**
+   * Recurring invoices: make the drafts whose day has come (services/orderPurchase/recurringInvoiceService.js), then say how many
+   * drafts made that way are waiting for someone to approve, and which templates could not make theirs and why. Both notices
+   * resolve themselves: the first once the drafts are approved or deleted, the second once the run succeeds.
+   */
+  static async checkRecurringInvoices(now = new Date()) {
+    const RecurringInvoiceService = require("../orderPurchase/recurringInvoiceService");
+    const RecurringInvoice = require("../../models/modules/recurringInvoiceModel");
+    const Transaction = require("../../models/modules/transactionModel");
+    const run = await RecurringInvoiceService.runDue(now);
+
+    const waiting = await Transaction.countDocuments({ type: "sales_order", status: "DRAFT", "recurringRef.id": { $exists: true } });
+    const drafts = [];
+    if (waiting > 0) {
+      drafts.push("recurring_drafts");
+      await NotificationService.raise({
+        kind: "recurring_drafts",
+        severity: "info",
+        title: waiting === 1 ? "1 recurring invoice is a draft waiting for review" : `${waiting} recurring invoices are drafts waiting for review`,
+        body: "Made on schedule. Check each one and approve it to post it to the books.",
+        link: "/sales-order?recurring=1",
+        dedupeKey: "recurring_drafts",
+        permission: "sales.approve",
+        now,
+      });
+    }
+    await NotificationService.resolveMissing({ kind: "recurring_drafts", activeDedupeKeys: drafts, now });
+
+    const failed = await RecurringInvoice.find({ status: "ACTIVE", "lastError.message": { $exists: true } }).select("name lastError").limit(100).lean();
+    const keys = [];
+    for (const t of failed) {
+      const dedupeKey = `recurring_failed:${t._id}`;
+      keys.push(dedupeKey);
+      await NotificationService.raise({
+        kind: "recurring_failed",
+        severity: "warning",
+        title: `${t.name}: the invoice for ${t.lastError.day} could not be made`,
+        body: t.lastError.message,
+        link: `/recurring-invoices?open=${t._id}`,
+        dedupeKey,
+        permission: "sales.create",
+        now,
+      });
+    }
+    await NotificationService.resolveMissing({ kind: "recurring_failed", activeDedupeKeys: keys, now });
+    return { ...run, waiting, failing: failed.length };
+  }
 
   /**
    * One notice, resolved the moment the organisation stops being short - not a monthly reminder that keeps

@@ -321,7 +321,7 @@ class TransactionService {
             {
               currency: data.currency, exchangeRate: data.exchangeRate, rateOverrideReason: data.rateOverrideReason, date: date || new Date(), returnOf: data.returnOf,
               isOpening: Boolean(data.isOpening),
-              linked: Boolean(data.quoteRef || data.linkedRef || data.tradeOrderRef || data.jobCardRef || data.vanTripRef || data.reservedNumber),
+              linked: Boolean(data.quoteRef || data.linkedRef || data.tradeOrderRef || data.jobCardRef || data.vanTripRef || data.recurringRef || data.reservedNumber),
             },
             { session, req: undefined }
           ),
@@ -388,6 +388,8 @@ class TransactionService {
         jobCardRef: data.jobCardRef || undefined,
         // Set only by VanTripService (an invoice or return raised on a van trip); stripped from a request body.
         vanTripRef: data.vanTripRef || undefined,
+        // Set only by RecurringInvoiceService (a draft made on a schedule); stripped from a request body.
+        recurringRef: data.recurringRef || undefined,
         // Set only by TradeOrderService.createInvoice (an order converted straight to its invoice); stripped
         // from a request body like jobCardRef.
         tradeOrderRef: type === "sales_order" ? data.tradeOrderRef || undefined : undefined,
@@ -451,7 +453,7 @@ class TransactionService {
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
-      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx"]) delete data[key];
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "recurringRef", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx"]) delete data[key];
       await assertCentres(data, session, transaction);
       if (data.costCentreId === null) {
         transaction.set("costCentreId", undefined);
@@ -903,6 +905,13 @@ const logAmount = balanceEffect;
       query.partyId = new mongoose.Types.ObjectId(filters.partyId);
     }
     if (filters.partyType) query.partyType = filters.partyType;
+    // made by a recurring invoice: "1" = any of them, or one template's id
+    if (filters.recurring) {
+      const r = String(filters.recurring);
+      if (r === "1" || r === "true") query["recurringRef.id"] = { $exists: true };
+      else if (mongoose.Types.ObjectId.isValid(r)) query["recurringRef.id"] = new mongoose.Types.ObjectId(r);
+      else throw new AppError("Invalid recurring filter", 400, "INVALID_FILTER");
+    }
 
     const needle = filters.search === undefined || filters.search === null ? "" : String(filters.search).trim();
     if (needle) {
@@ -1027,7 +1036,7 @@ const logAmount = balanceEffect;
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
         "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
-        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend approvals jobCardRef tradeOrderRef vanTripRef vatRegistered gstType placeOfSupply supplierState fx";
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend approvals jobCardRef tradeOrderRef vanTripRef recurringRef vatRegistered gstType placeOfSupply supplierState fx";
       let docs;
       let total;
       if (sortKey === "party") {

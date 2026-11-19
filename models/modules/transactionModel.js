@@ -267,6 +267,12 @@ const transactionSchema = new mongoose.Schema({
     tripNo: { type: String, trim: true },
     vanCode: { type: String, trim: true },
   },
+  // The recurring invoice that made this draft (services/orderPurchase/recurringInvoiceService.js). Set only by that service;
+  // stripped from a request body like vanTripRef. Absent on every other document.
+  recurringRef: {
+    id: { type: mongoose.Schema.Types.ObjectId, ref: "RecurringInvoice" },
+    name: { type: String, trim: true },
+  },
   creditNoteIssued: { type: Boolean, default: false },
   // Whether the organisation was registered for VAT on this document's date (UAE organisations only; services/financial/vatRegistrationService.js).
   // Stamped when it is priced and never defaulted: ABSENT means the document predates the rule and reads as it always did. A purchase
