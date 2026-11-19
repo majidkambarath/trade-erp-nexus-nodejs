@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.12.0.0 — 19 November 2026
+
+Amounts are typed with grouping everywhere. Frontend and backend both at 3.12.0.0 (no backend change).
+
+### Changed
+
+- **Every money and quantity box now groups as you type**, the way the item form already did: 20,000 in Dubai, 1,20,000 in India. This covers the order form's discount and charges, the order line grid, receiving goods, delivery quantities, production, job work, process orders and their costs, batches and stock movements, opening balance on an account, credit limit, the CRM's deal values, supplier invoice amounts and the unit conversion ratio. What is saved is unchanged: the plain number.
+- Boxes for days, lengths, years, stages and percentages stay as they were.
+
 ## 3.11.0.0 — 19 November 2026
 
 Server-side lists. Frontend and backend both at 3.11.0.0.
