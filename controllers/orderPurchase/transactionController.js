@@ -84,6 +84,18 @@ exports.getAllTransactions = catchAsync(async (req, res) => {
   const result = await TransactionService.getAllTransactions({ ...req.query, type: asked.length ? asked : allowed });
   sendPaginated(res, result);
 });
+
+// The cards above a list: the figures for every document the same filters leave (not just one page).
+exports.getTransactionSummary = catchAsync(async (req, res) => {
+  const allowed = roles.viewableTypes(req.admin?.grants);
+  const asked = [].concat(req.query.type || []).flatMap((t) => String(t).split(",")).filter(Boolean);
+  const refused = asked.filter((t) => !allowed.includes(t));
+  if (refused.length) {
+    throw new AppError("Your role does not allow you to see these documents.", 403, "PERMISSION_DENIED", { required: [...new Set(refused.map((t) => `${roles.moduleOfType(t)}.view`))], role: req.admin?.role?.key || null });
+  }
+  const data = await TransactionService.summary({ ...req.query, type: asked.length ? asked : allowed });
+  res.status(200).json({ status: "success", data });
+});
 // Get transaction by ID
 exports.getTransactionById = catchAsync(async (req, res) => {
   const transaction = await TransactionService.getTransactionById(
