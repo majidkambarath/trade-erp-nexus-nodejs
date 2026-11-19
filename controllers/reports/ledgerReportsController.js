@@ -15,9 +15,11 @@ const read = (fn) =>
   });
 
 exports.generalLedger = read((req) =>
-  LedgerReports.generalLedger({ from: req.query.from, to: req.query.to, category: req.query.category, includeZero: flag(req.query.includeZero), includeClosing: flag(req.query.includeClosing) }));
+  LedgerReports.generalLedger({ from: req.query.from, to: req.query.to, category: req.query.category, includeZero: flag(req.query.includeZero), includeClosing: flag(req.query.includeClosing), costCentre: req.query.costCentre }));
 
-exports.profitAndLoss = read((req) => LedgerReports.profitAndLoss({ from: req.query.from, to: req.query.to }));
+exports.profitAndLoss = read((req) => LedgerReports.profitAndLoss({ from: req.query.from, to: req.query.to, costCentre: req.query.costCentre }));
+
+exports.byCostCentre = read((req) => LedgerReports.byCostCentre({ from: req.query.from, to: req.query.to }));
 
 exports.dayBook = read((req) =>
   LedgerReports.dayBook({

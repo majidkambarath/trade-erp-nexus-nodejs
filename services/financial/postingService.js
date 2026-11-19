@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { splitLegsByCentre, lineFacts, centresOf } = require("../../utils/costCentres");
 const { runInBranchOf } = require("../../utils/tenantContext");
 const { LedgerAccount, LedgerEntry } = require("../../models/modules/financial/financialModels");
 const AccountGroup = require("../../models/modules/financial/accountGroupModel");
@@ -150,6 +151,25 @@ class PostingService {
       entries = gstRule.routeGstLegs(entries, transaction.type, gstPricing, (key) => ids.get(key), { inputAccountId: cache.get("vat-purchase") });
     }
 
+    // Cost centres: every row carries the document's, and a leg that sums lines is shared out over the lines' own
+    // (utils/costCentres.js). A document that names none posts exactly as before.
+    if (centresOf(transaction.costCentreId, transaction.items).length) {
+      const header = transaction.costCentreId ? String(transaction.costCentreId) : null;
+      const ownLines = (transaction.items || []).some((l) => l.costCentreId && String(l.costCentreId) !== header);
+      let facts = [];
+      if (ownLines) {
+        const map = await ItemKindService.load(transaction.items, { session });
+        const kindOf = ItemKindService.kindOf(map);
+        const needsDefault = transaction.type.startsWith("purchase") && (transaction.items || []).some((l) => {
+          const k = kindOf(l);
+          return k.service && !k.expenseAccountId;
+        });
+        const defaultExpenseAccountId = needsDefault ? await this.serviceExpenseAccount({ session }) : null;
+        facts = lineFacts(transaction.items, stockUpdates, kindOf, { defaultExpenseAccountId });
+      }
+      entries = splitLegsByCentre(entries, facts, header);
+    }
+
     const accounts = await LedgerAccount.find({ _id: { $in: entries.map((e) => e.accountId) } })
       .select("accountName accountCode accountType")
       .session(session)
@@ -176,6 +196,7 @@ class PostingService {
         referenceId: transaction._id,
         referenceNo: transaction.transactionNo,
         createdBy: adminId,
+        ...(e.costCentreId ? { costCentreId: new mongoose.Types.ObjectId(String(e.costCentreId)) } : {}),
       };
     });
     await LedgerEntry.insertMany(docs, { session });
@@ -212,6 +233,7 @@ class PostingService {
           narration: `Cost adjustment ${transaction.transactionNo}`, partyId: transaction.partyId,
           partyType: transaction.partyType, referenceType: "order", referenceId: transaction._id,
           referenceNo: transaction.transactionNo, createdBy: SYSTEM_USER,
+          ...(transaction.costCentreId ? { costCentreId: transaction.costCentreId } : {}),
         }], { session });
       }
       await FinancialService.updateAccountBalances(

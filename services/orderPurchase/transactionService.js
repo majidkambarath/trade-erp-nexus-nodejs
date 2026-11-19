@@ -42,6 +42,8 @@ const orgLocale = require("../../utils/orgLocale");
 const { listPeriod, condition: periodCondition } = require("../../utils/listPeriod");
 const Customer = require("../../models/modules/customerModel");
 const Vendor = require("../../models/modules/vendorModel");
+const CostCentreService = require("../financial/costCentreService");
+const { centresOf } = require("../../utils/costCentres");
 const Admin = require("../../models/core/adminModel");
 const payState = require("../../utils/paymentState");
 
@@ -184,6 +186,28 @@ async function buildPricing({ items, charges = [], discount = 0, incomingTotal, 
 }
 
 // Which way a document type faces (see buildPricing)
+// Cost centres on a document: a blank one (the form's "None") means none, on the header and on each line; every one named
+// must exist and be switched on (one kept from the stored document may have been switched off since: services/financial/costCentreService.js).
+const blankCentre = (v) => v === undefined || v === null || v === "" || v === "null";
+function cleanCentres(data) {
+  if (data.costCentreId !== undefined && blankCentre(data.costCentreId)) data.costCentreId = null;
+  if (Array.isArray(data.items)) {
+    data.items = data.items.map((l) => {
+      if (!l || l.costCentreId === undefined || !blankCentre(l.costCentreId)) return l;
+      const { costCentreId: _none, ...rest } = l;
+      return rest;
+    });
+  }
+  return data;
+}
+async function assertCentres(data, session, stored = null) {
+  cleanCentres(data);
+  const named = centresOf(data.costCentreId, data.items);
+  if (!named.length) return;
+  const keep = stored ? centresOf(stored.costCentreId, stored.items) : [];
+  await CostCentreService.assertUsable(named, { keep }, session);
+}
+
 const sideOfType = (type) => (String(type || "").startsWith("sales_") ? "sales" : String(type || "").startsWith("purchase_") ? "purchase" : undefined);
 
 // ---------- Service ----------
@@ -214,6 +238,7 @@ class TransactionService {
   // Create Transaction
   static createTransaction = withTransactionSession(
     async (data, createdBy, session) => {
+      cleanCentres(data); // before the lines are read below: a blank centre is none
       const {
         // The number a person typed on the form, and the older internal way to supply one. Both are
         // governed by the document's voucher type: see where finalTransactionNo is worked out below.
@@ -249,6 +274,7 @@ class TransactionService {
 
       await FiscalYearService.assertPostingAllowed(date || new Date(), { session });
       if (!items?.length) throw new AppError("Items are required", 400);
+      await assertCentres(data, session);
 
       // The number: the one a person typed where this document's type allows that, else the next from
       // the counter. It goes through NumberSeriesService.numberFor, as every other document kind does,
@@ -350,6 +376,7 @@ class TransactionService {
         // invoice. Trimmed and capped by the schema; blank is stored as null so the printed sheet's
         // `rowsWithValue` drops the row rather than printing an empty one.
         serialNo: String(serialNo || "").trim() || null,
+        ...(data.costCentreId ? { costCentreId: data.costCentreId } : {}),
         discount: Number(discount ?? 0),
         // Where a sales order came from: the quotation it converted, or the delivery notes it invoices.
         // linkedRef is kept for a sales order only - the sales-return form sends the same key for the
@@ -425,6 +452,11 @@ class TransactionService {
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
       for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx"]) delete data[key];
+      await assertCentres(data, session, transaction);
+      if (data.costCentreId === null) {
+        transaction.set("costCentreId", undefined);
+        delete data.costCentreId;
+      }
       // changing a document takes back an approval it was given: what was approved is no longer what is there
       if (transaction.approvals?.length) transaction.approvals = [];
 
@@ -995,7 +1027,7 @@ const logAmount = balanceEffect;
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
         "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
-        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate closedShort lastSend approvals jobCardRef tradeOrderRef vanTripRef vatRegistered gstType placeOfSupply supplierState fx";
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend approvals jobCardRef tradeOrderRef vanTripRef vatRegistered gstType placeOfSupply supplierState fx";
       let docs;
       let total;
       if (sortKey === "party") {

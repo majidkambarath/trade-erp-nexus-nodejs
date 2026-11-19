@@ -73,6 +73,54 @@ class LedgerReportsService {
   static dayStart = dayStart;
   static dayEnd = dayEnd;
 
+  // A report narrowed to one cost centre: `costCentre` is a centre's id, "none" for rows that carry none, or empty for all.
+  static centreMatch(costCentre) {
+    if (costCentre === undefined || costCentre === null || costCentre === "" || costCentre === "all") return {};
+    if (costCentre === "none") return { costCentreId: null };
+    if (!mongoose.isValidObjectId(costCentre)) throw new AppError("Unknown cost centre", 400, "INVALID_COST_CENTRE");
+    return { costCentreId: new mongoose.Types.ObjectId(String(costCentre)) };
+  }
+
+  // Profit and loss for each cost centre that has a posting in the period, and "Not assigned" for what carries none. Each column
+  // is the P&L itself narrowed to the centre, so the columns add up to the whole P&L.
+  static async byCostCentre({ from, to } = {}) {
+    const start = dayStart(from);
+    const end = dayEnd(to);
+    if (start && end && start > end) throw new AppError("from must not be after to", 400, "INVALID_RANGE");
+    const date = {};
+    if (start) date.$gte = start;
+    if (end) date.$lte = end;
+    const used = await LedgerEntry.distinct("costCentreId", { isReversed: { $ne: true }, ...(start || end ? { date } : {}) });
+    const ids = used.filter(Boolean);
+    const CostCentre = require("../../models/modules/financial/costCentreModel");
+    const centres = ids.length ? await CostCentre.find({ _id: { $in: ids } }).select("code name isActive").lean() : [];
+    const byId = new Map(centres.map((c) => [String(c._id), c]));
+    const columns = [...ids.map((id) => ({ id: String(id), centre: byId.get(String(id)) })), { id: "none", centre: null }];
+    const pick = (pl) => ({
+      revenue: pl.revenue.total, directCosts: pl.directCosts.total, grossProfit: pl.grossProfit,
+      otherIncome: pl.otherIncome.total, operatingExpenses: pl.operatingExpenses.total, netProfit: pl.netProfit,
+    });
+    const rows = [];
+    for (const col of columns) {
+      const pl = await this.profitAndLoss({ from, to, costCentre: col.id });
+      const figures = pick(pl);
+      if (col.id === "none" && Object.values(figures).every((v) => !v)) continue; // nothing unassigned: no column for it
+      rows.push({
+        costCentreId: col.id === "none" ? null : col.id,
+        code: col.centre?.code || (col.id === "none" ? "" : "?"),
+        name: col.centre?.name || (col.id === "none" ? "Not assigned" : "Unknown cost centre"),
+        isActive: col.centre ? col.centre.isActive !== false : true,
+        ...figures,
+      });
+    }
+    rows.sort((a, b) => (a.costCentreId ? 0 : 1) - (b.costCentreId ? 0 : 1) || String(a.code).localeCompare(String(b.code)));
+    const sum = (k) => round2(rows.reduce((t, r) => t + (r[k] || 0), 0));
+    return {
+      from: from || null, to: to || null, rows,
+      totals: { revenue: sum("revenue"), directCosts: sum("directCosts"), grossProfit: sum("grossProfit"), otherIncome: sum("otherIncome"), operatingExpenses: sum("operatingExpenses"), netProfit: sum("netProfit") },
+    };
+  }
+
   // Per account: debits and credits before `from` (opening) and from `from` to `to` (period),
   // with the account's group and category.
   //
@@ -81,11 +129,11 @@ class LedgerReportsService {
   // income and expense start the next year at zero. One dated INSIDE the period is left out of its movement, so the
   // year that was closed still shows the profit it earned. `includeClosing` counts them as the postings they are (the
   // post-closing trial balance).
-  static async accountMovements({ from, to, accountIds, includeClosing = false } = {}) {
+  static async accountMovements({ from, to, accountIds, includeClosing = false, costCentre } = {}) {
     const start = dayStart(from);
     const end = dayEnd(to);
     if (start && end && start > end) throw new AppError("from must not be after to", 400, "INVALID_RANGE");
-    const match = { isReversed: { $ne: true } };
+    const match = { isReversed: { $ne: true }, ...LedgerReportsService.centreMatch(costCentre) };
     if (end) match.date = { $lte: end };
     if (accountIds) match.accountId = { $in: accountIds.map((id) => new mongoose.Types.ObjectId(String(id))) };
     const isOpening = { $in: ["$voucherType", OPENING_TYPES] };
@@ -146,8 +194,8 @@ class LedgerReportsService {
 
   // Every account with its opening balance, the period's debits and credits, and the closing
   // balance, filed by group. Zero accounts are left out.
-  static async generalLedger({ from, to, category, includeZero = false, includeClosing = false } = {}) {
-    const rows = await this.accountMovements({ from, to, includeClosing });
+  static async generalLedger({ from, to, category, includeZero = false, includeClosing = false, costCentre } = {}) {
+    const rows = await this.accountMovements({ from, to, includeClosing, costCentre });
     const groups = new Map();
     for (const r of rows) {
       if (category && r.category !== category) continue;
@@ -175,8 +223,8 @@ class LedgerReportsService {
   // Revenue less direct costs is the gross profit; other income less operating expenses takes it to
   // the net profit. "Direct" is whatever sits under the sales / purchase / direct income and expense
   // groups of the posting configuration.
-  static async profitAndLoss({ from, to } = {}) {
-    const rows = await this.accountMovements({ from, to });
+  static async profitAndLoss({ from, to, costCentre } = {}) {
+    const rows = await this.accountMovements({ from, to, costCentre });
     const [directIncome, directCost] = await Promise.all([
       this.groupSet(["sales-income-group", "direct-income-group"]),
       this.groupSet(["purchase-expense-group", "direct-expense-group"]),

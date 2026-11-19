@@ -39,13 +39,17 @@ async function postableAccounts(ids, { session, label = "account" } = {}) {
   return byId;
 }
 
-const entryFor = (account, { debit = 0, credit = 0, description }) => ({
+// a blank cost centre (the form's "None") is none; otherwise the line's own, kept on the entry (FinancialService.createLedgerEntries
+// falls back to the voucher's header centre for an entry that names none)
+const centreOf = (v) => (v === undefined || v === null || v === "" ? undefined : v);
+const entryFor = (account, { debit = 0, credit = 0, description, costCentreId }) => ({
   accountId: account._id,
   accountName: account.accountName,
   accountCode: account.accountCode,
   debitAmount: round2(debit),
   creditAmount: round2(credit),
   description,
+  ...(centreOf(costCentreId) ? { costCentreId: centreOf(costCentreId) } : {}),
 });
 
 class LedgerVoucherService {
@@ -56,7 +60,7 @@ class LedgerVoucherService {
     const { date = new Date(), narration } = data;
     const raw = Array.isArray(data.lines) ? data.lines : [];
     const lines = raw
-      .map((l, i) => ({ i, accountId: l.accountId, debit: num(l.debit), credit: num(l.credit), narration: String(l.narration || "").trim() }))
+      .map((l, i) => ({ i, accountId: l.accountId, debit: num(l.debit), credit: num(l.credit), narration: String(l.narration || "").trim(), costCentreId: centreOf(l.costCentreId) }))
       .filter((l) => l.accountId || l.debit || l.credit); // a blank spare row is not an error
     if (lines.length < 2) throw new AppError("A journal needs at least two lines", 400, "TOO_FEW_LINES");
 
@@ -75,7 +79,7 @@ class LedgerVoucherService {
     if (!(debit > 0)) throw new AppError("A journal must move an amount", 400, "AMOUNT_REQUIRED");
 
     const accounts = await postableAccounts(lines.map((l) => l.accountId), { session });
-    const entries = lines.map((l) => entryFor(accounts.get(String(l.accountId)), { debit: l.debit, credit: l.credit, description: l.narration || narration || "Journal entry" }));
+    const entries = lines.map((l) => entryFor(accounts.get(String(l.accountId)), { debit: l.debit, credit: l.credit, description: l.narration || narration || "Journal entry", costCentreId: l.costCentreId }));
     return { date, totalAmount: debit, narration, entries, status: "approved", ledgerBased: true };
   }
 
@@ -211,6 +215,7 @@ class LedgerVoucherService {
       noteLines.push({
         accountId: acc._id, accountName: acc.accountName, accountCode: acc.accountCode,
         description: String(l.description || "").trim(), amount, taxCodeId: v.taxCodeId, vatPercent: v.vatPercent, vatAmount: v.vatAmount,
+        ...(centreOf(l.costCentreId) ? { costCentreId: centreOf(l.costCentreId) } : {}),
       });
     }
     const subtotal = round2(noteLines.reduce((t, l) => t + l.amount, 0));
@@ -225,6 +230,7 @@ class LedgerVoucherService {
         accountId: l.accountId, accountName: l.accountName, accountCode: l.accountCode,
         debitAmount: isDebit ? 0 : round2(l.amount + (supplierVatIsCost ? l.vatAmount : 0)), creditAmount: isDebit ? round2(l.amount + (supplierVatIsCost ? l.vatAmount : 0)) : 0,
         description: l.description || `${label} - ${partyName}`,
+        ...(l.costCentreId ? { costCentreId: l.costCentreId } : {}),
       });
     }
     if (vatTotal > 0 && !supplierVatIsCost) {

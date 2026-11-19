@@ -37,6 +37,7 @@ const itemSchema = new mongoose.Schema({
   // it as before). Absent on a base-currency document. See utils/fxDocument.js.
   fx: { price: Number, grossAmount: Number, discountAmount: Number, taxableAmount: Number, vatAmount: Number, lineTotal: Number, rcmVat: Number },
   hsnCode: { type: String, trim: true }, // India: the item's HSN / SAC code when the line was priced (a snapshot, no default)
+  costCentreId: { type: mongoose.Schema.Types.ObjectId, ref: "CostCentre" }, // a line's own cost centre, over the document's (no default)
   // India GST: the line's tax split into components (utils/gst.js). vatAmount stays the TOTAL tax; cgst + sgst + igst equals it.
   // Absent on a document that was not priced under GST (every UAE document, and Indian ones from before GST detail).
   gst: { cgst: Number, sgst: Number, igst: Number },
@@ -105,6 +106,7 @@ const transactionSchema = new mongoose.Schema({
   // It does NOT replace the document number, which is still given by the number series; a person
   // who wants to type THAT uses the voucher type's `auto_override` method and `manualNumber`.
   serialNo: { type: String, default: null, trim: true, maxlength: 50 },
+  costCentreId: { type: mongoose.Schema.Types.ObjectId, ref: "CostCentre" }, // the document's cost centre (a line may override it); no default
   discount: { type: Number, default: 0, min: 0 },
   type: {
     type: String,
