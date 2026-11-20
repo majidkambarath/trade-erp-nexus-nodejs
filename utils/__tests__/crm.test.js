@@ -455,3 +455,17 @@ test("qualifying a lead asks for the Sales key only where Sales was bought", () 
   assert.equal(crm.qualifyPermission(false), "crm.create");
   assert.equal(crm.qualifyPermission(undefined), "crm.create", "not knowing is the narrower question, never the broader");
 });
+
+test("a deal's lines: blank rows dropped, quantities and prices checked, the value is their total", () => {
+  const { validateDealLines, dealValueOf } = require("../crm");
+  const id = "64b000000000000000000001";
+  const ok = validateDealLines([{ itemId: id, qty: "2", price: "12.5" }, { description: "Fitting", qty: 1, price: 40 }, { description: " ", qty: 3 }]);
+  assert.deepEqual(ok.errors, []);
+  assert.equal(ok.lines.length, 2, "a row with no item and no words is blank");
+  assert.equal(dealValueOf(ok.lines), 65);
+  assert.equal(validateDealLines([{ description: "x", qty: 0 }]).errors[0].code, "DEAL_LINE_QTY");
+  assert.equal(validateDealLines([{ description: "x", qty: 1, price: -1 }]).errors[0].code, "DEAL_LINE_PRICE");
+  assert.equal(validateDealLines("nope").errors[0].code, "DEAL_LINES_INVALID");
+  assert.equal(validateDealLines(Array.from({ length: 51 }, () => ({ description: "x", qty: 1 }))).errors[0].code, "DEAL_LINES_TOO_MANY");
+  assert.deepEqual(validateDealLines(undefined), { lines: [], errors: [] });
+});

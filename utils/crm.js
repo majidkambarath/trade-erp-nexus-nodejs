@@ -185,6 +185,34 @@ function validateOpportunity(input = {}, { stages = [], partial = false } = {}) 
   return errors;
 }
 
+/**
+ * What a deal is for, line by line: an item (optional: a deal can name a service nobody stocks yet) or a description, a
+ * quantity and a price before tax. Returns { lines, errors }; a line with no description and no item is dropped as blank.
+ * At most 50 lines. When a deal has lines, its value is their total (dealValueOf) and a typed value is ignored.
+ */
+const MAX_DEAL_LINES = 50;
+function validateDealLines(input) {
+  const errors = [];
+  if (input === undefined || input === null) return { lines: [], errors };
+  if (!Array.isArray(input)) return { lines: [], errors: [{ field: "items", code: "DEAL_LINES_INVALID", message: "The lines must be a list" }] };
+  const lines = [];
+  input.forEach((raw, i) => {
+    const r = raw && typeof raw === "object" ? raw : {};
+    const itemId = isId(r.itemId) ? text(r.itemId, 24) : null;
+    const description = text(r.description, 200);
+    if (!itemId && !description) return; // a blank row
+    const qty = num(r.qty);
+    const price = num(r.price);
+    const field = `items.${i}`;
+    if (!(qty > 0)) errors.push({ field: `${field}.qty`, code: "DEAL_LINE_QTY", message: `Line ${i + 1}: the quantity must be more than nothing` });
+    if (price < 0) errors.push({ field: `${field}.price`, code: "DEAL_LINE_PRICE", message: `Line ${i + 1}: a price cannot be negative` });
+    lines.push({ ...(itemId ? { itemId } : {}), description, qty: round2(qty), price: round2(price) });
+  });
+  if (lines.length > MAX_DEAL_LINES) errors.push({ field: "items", code: "DEAL_LINES_TOO_MANY", message: `A deal can carry at most ${MAX_DEAL_LINES} lines` });
+  return { lines, errors };
+}
+const dealValueOf = (lines = []) => round2(lines.reduce((t, l) => t + (Number(l.qty) || 0) * (Number(l.price) || 0), 0));
+
 /** A follow-up is a kind of contact, about something, due on a day. */
 function validateActivity(input = {}, { partial = false } = {}) {
   const errors = [];
@@ -863,7 +891,7 @@ module.exports = {
   STAGE_TYPES, ASSIGNMENT_MODES, REGARDING_KINDS, EVENTS, SOURCE_LABEL, KIND_LABEL, LOST_LABEL, EVENT_LABEL,
   STARTER_STAGES, DEFAULT_SETTINGS,
   text, num, day, oneOf, isId, isObjectId,
-  validateLead, validateOpportunity, validateActivity, validateContact, validateStages, validateSettings,
+  validateLead, validateOpportunity, validateActivity, validateDealLines, dealValueOf, MAX_DEAL_LINES, validateContact, validateStages, validateSettings,
   normaliseStages, normaliseSettings,
   assignOwner, leadScore,
   moveKey, stageByKey, stageFor, orderOf, planAdvance, planUndo, planFollowUp,

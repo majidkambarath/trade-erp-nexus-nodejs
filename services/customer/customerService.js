@@ -20,7 +20,7 @@ const cleanEInvoice = (v) =>
 // The address's country (and, in the UAE, emirate) is what an e-invoice reads: it sets the buyer's country and fills a missing city.
 const withAddress = (einv, master) =>
   master.country
-    ? { participantId: null, ...(einv || {}), city: einv?.city || master.emirate || null, countryCode: master.country }
+    ? { participantId: null, ...(einv || {}), city: einv?.city || master.city || master.emirate || null, countryCode: master.country }
     : einv;
 const cleanShelfLife = (v) => {
   if (v === undefined || v === null || v === "") return undefined;
@@ -151,6 +151,7 @@ exports.createCustomer = retryTransientTransaction(async (data, { groupId } = {}
           eInvoice: withAddress(cleanEInvoice(eInvoice), master),
           country: master.country,
           emirate: master.emirate,
+          city: master.city || undefined,
           stateCode: master.stateCode,
           minShelfLifeDays: shelfLife,
           vat: master.vat,
@@ -240,7 +241,8 @@ exports.getCustomerByCustomerId = async (customerId) => {
     if (data.eInvoice && typeof data.eInvoice === "object") data.eInvoice = withAddress(cleanEInvoice(data.eInvoice), master);
     else {
       data["eInvoice.countryCode"] = master.country;
-      if (master.emirate && !existing.eInvoice?.city) data["eInvoice.city"] = master.emirate;
+      const city = master.city || master.emirate;
+      if (city && !existing.eInvoice?.city) data["eInvoice.city"] = city;
     }
   }
   // Normalize salesPerson if present in payload

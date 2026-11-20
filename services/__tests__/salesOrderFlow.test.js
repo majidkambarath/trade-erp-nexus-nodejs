@@ -233,3 +233,24 @@ test("a DRAFT order converts straight to its invoice, confirming itself", { skip
   assert.equal(read.status, "CONFIRMED");
   assert.equal(read.actions.invoiceOrder, false);
 });
+
+// The customer's Documents tab: every order document is ONE deal with the notes and invoices raised from it,
+// and none of those invoices or notes appears again as a deal of its own.
+test("the customer's deals: each order document is one deal holding its notes and invoices", { skip }, async () => {
+  const Flow = require("../orderPurchase/documentFlowService");
+  const TradeOrder = require("../../models/modules/tradeOrderModel");
+  const { chains } = await Flow.forCustomer(noor._id);
+  const orders = await TradeOrder.find({ kind: "sales", partyId: noor._id, status: { $ne: "CANCELLED" } }).lean();
+  for (const t of orders) {
+    const deal = chains.filter((c) => c.tradeOrder && String(c.tradeOrder._id) === String(t._id));
+    assert.equal(deal.length, 1, `${t.orderNo} is one deal`);
+  }
+  const invoiceIds = chains.flatMap((c) => (c.invoices || []).map((i) => String(i._id)));
+  const loose = chains.filter((c) => !c.tradeOrder && c.order && invoiceIds.includes(String(c.order._id)));
+  assert.equal(loose.length, 0, "an invoice raised from an order document is never a deal of its own");
+  const noteIds = chains.filter((c) => c.tradeOrder).flatMap((c) => c.notes.map((n) => String(n._id)));
+  assert.equal(chains.filter((c) => !c.tradeOrder && c.notes.some((n) => noteIds.includes(String(n._id)))).length, 0);
+  const first = chains.find((c) => c.tradeOrder && String(c.tradeOrder._id) === String(order._id));
+  assert.ok(first.invoices.length >= 1, "the first order's invoices are in its deal");
+  assert.ok(first.notes.length >= 1, "and its delivery notes");
+});

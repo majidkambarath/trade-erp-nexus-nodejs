@@ -197,3 +197,36 @@ test("goods first has nothing to measure against, and the order lines are not se
   assert.equal(c.order.items, undefined, "only the figures go to the screen");
   assert.equal(c.notes[0].items, undefined);
 });
+
+// An order DOCUMENT (TradeOrder) heads its own deal: quotation -> order -> notes -> invoice is one chain, not three.
+const t = (n, over = {}) => ({ _id: `t${n}`, orderNo: `SORD-2026-000${n}`, status: "CONFIRMED", date: "2026-10-02", totalAmount: 300 * n, items: [{ _id: `t${n}l1`, qty: 10, description: "Rice" }], ...over });
+test("an order document is one deal with its offer, its notes and the invoice raised from them", () => {
+  const r = flow({
+    tradeOrders: [t(1, { quoteRef: "QT-2026-0001" })],
+    quotations: [q(1, { status: "CONVERTED", convertedTo: { kind: "trade_order", id: "t1" } })],
+    notes: [d(1, { source: { kind: "trade_order", id: "t1" }, items: [{ sourceLineId: "t1l1", qty: 10, deliveredQty: 10 }], invoice: { id: "o1" }, invoiceStatus: "INVOICED" })],
+    orders: [o(1, { status: "APPROVED", quoteRef: "QT-2026-0001" })],
+  });
+  const c = only(r);
+  assert.equal(c.key, "t:t1");
+  assert.equal(c.tradeOrder.orderNo, "SORD-2026-0001");
+  assert.equal(c.quotation.quotationNo, "QT-2026-0001");
+  assert.equal(c.order.transactionNo, "SO-2026-0001", "the invoice raised from the note");
+  assert.equal(c.notes.length, 1);
+  assert.equal(c.stage, "invoiced");
+  assert.equal(c.mode, "order_first");
+  assert.equal(c.amount, 300, "the deal is worth its order");
+});
+
+test("an order document's stage before the invoice, and an invoice raised from it directly", () => {
+  assert.equal(only(flow({ tradeOrders: [t(1)] })).stage, "ordered");
+  const part = only(flow({ tradeOrders: [t(1)], notes: [d(1, { source: { kind: "trade_order", id: "t1" }, items: [{ sourceLineId: "t1l1", qty: 4, deliveredQty: 4 }] })] }));
+  assert.equal(part.stage, "delivering", "four of ten delivered");
+  assert.deepEqual(part.delivery.remaining, [{ description: "Rice", qty: 6 }]);
+  // an invoice raised straight from the order carries tradeOrderRef
+  const direct = only(flow({ tradeOrders: [t(2)], orders: [o(5, { tradeOrderRef: { tradeOrderId: "t2" } })] }));
+  assert.equal(direct.order.transactionNo, "SO-2026-0005");
+  assert.equal(direct.invoices.length, 1);
+  // a cancelled order document is no deal; its quotation stands alone
+  assert.equal(only(flow({ tradeOrders: [t(3, { status: "CANCELLED", quoteRef: "QT-2026-0003" })], quotations: [q(3)] })).key, "q:q3");
+});

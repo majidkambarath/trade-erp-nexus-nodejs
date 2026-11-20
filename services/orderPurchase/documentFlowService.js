@@ -4,6 +4,7 @@ const Customer = require("../../models/modules/customerModel");
 const Quotation = require("../../models/modules/quotationModel");
 const DeliveryNote = require("../../models/modules/deliveryNoteModel");
 const Transaction = require("../../models/modules/transactionModel");
+const TradeOrder = require("../../models/modules/tradeOrderModel");
 const OrderCloseService = require("./orderCloseService");
 const { buildFlow } = require("../../utils/documentFlow");
 const { getTenant } = require("../../utils/tenant");
@@ -23,7 +24,7 @@ class DocumentFlowService {
     const partyId = customer._id;
 
     // one extra row of each tells whether the list was cut
-    const [quotations, notes, orders] = await Promise.all([
+    const [quotations, notes, orders, tradeOrders] = await Promise.all([
       Quotation.find({ companyId, partyId })
         .select("quotationNo status date validUntil totalAmount reference revision convertedTo revisionOf supersededBy")
         .sort(newest).limit(LIMIT + 1).lean(),
@@ -31,14 +32,17 @@ class DocumentFlowService {
         .select("deliveryNoteNo status date deliveredAt totalAmount invoiceStatus source invoice reference receivedBy items.sourceLineId items.qty items.deliveredQty")
         .sort(newest).limit(LIMIT + 1).lean(),
       Transaction.find({ partyId, type: "sales_order", isOpening: { $ne: true } })
-        .select("transactionNo status date totalAmount quoteRef linkedRef lpono paidAmount outstandingAmount items._id items.qty items.description items.itemType closedShort.at closedShort.reason closedShort.trimmed closedShort.valueShort closedShort.lines lastSend")
+        .select("transactionNo status date totalAmount quoteRef linkedRef lpono paidAmount outstandingAmount items._id items.qty items.description items.itemType closedShort.at closedShort.reason closedShort.trimmed closedShort.valueShort closedShort.lines lastSend tradeOrderRef")
+        .sort(newest).limit(LIMIT + 1).lean(),
+      TradeOrder.find({ companyId, partyId, kind: "sales", status: { $ne: "CANCELLED" } })
+        .select("orderNo status date totalAmount quoteRef reference items._id items.qty items.description items.itemType")
         .sort(newest).limit(LIMIT + 1).lean(),
     ]);
-    const truncated = [quotations, notes, orders].some((rows) => rows.length > LIMIT);
+    const truncated = [quotations, notes, orders, tradeOrders].some((rows) => rows.length > LIMIT);
     // an approved order closed short was invoiced in full: its sales returns say whether that has been put right
     const closedIds = orders.filter((o) => o.closedShort?.at && o.status === "APPROVED").map((o) => o._id);
     const returns = await OrderCloseService.returnsFor(closedIds);
-    const flow = buildFlow({ quotations: quotations.slice(0, LIMIT), orders: orders.slice(0, LIMIT), notes: notes.slice(0, LIMIT), returns }, now);
+    const flow = buildFlow({ quotations: quotations.slice(0, LIMIT), orders: orders.slice(0, LIMIT), notes: notes.slice(0, LIMIT), returns, tradeOrders: tradeOrders.slice(0, LIMIT) }, now);
     return { customer, ...flow, truncated };
   }
 }

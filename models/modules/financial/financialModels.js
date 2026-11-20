@@ -52,6 +52,12 @@ const voucherSchema = new mongoose.Schema({
     default: null,
   },
   partyName: { type: String, trim: true },
+  // the party's printed particulars as they were when the voucher was made (FinancialService.partySnapshotOf); absent on a voucher
+  // made before this existed, which reads the live party instead
+  partySnapshot: {
+    type: { name: String, address: String, city: String, emirate: String, country: String, trn: String, creditDays: Number, _id: false },
+    default: undefined,
+  },
   linkedInvoices: [
     {
       invoiceId: {

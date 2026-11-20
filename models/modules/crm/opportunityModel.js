@@ -41,6 +41,22 @@ const opportunitySchema = new mongoose.Schema(
     stageSinceDay: { type: String, default: null }, // "YYYY-MM-DD": how long it has stood where it stands
 
     value: { type: Number, default: 0, min: 0 }, // in the organisation's base currency, like every other figure
+    // What the deal is for (utils/crm.js validateDealLines). When there are lines, `value` is their total before tax; a
+    // quotation raised from the deal starts from the lines that name an item.
+    items: {
+      type: [
+        new mongoose.Schema(
+          {
+            itemId: { type: mongoose.Schema.Types.ObjectId, ref: "Stock", default: undefined },
+            description: { type: String, trim: true, maxlength: 200, default: "" },
+            qty: { type: Number, min: 0, default: 1 },
+            price: { type: Number, min: 0, default: 0 },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     expectedCloseDate: { type: String, default: null }, // a day, not an instant (utils/crm.js reads days)
 
     status: { type: String, enum: crm.OPPORTUNITY_STATUS, default: "OPEN" },

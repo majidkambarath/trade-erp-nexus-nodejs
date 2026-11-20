@@ -855,6 +855,18 @@ test("country and emirate: saved on a customer and a vendor, the e-invoice follo
   assert.equal(later.eInvoice.countryCode, "AE");
 });
 
+test("a city of its own: saved on a vendor and a customer, the e-invoice city follows it, and it can be cleared", { skip }, async () => {
+  const v = await svc.Vendors.createVendor(vendor("City Vendor", { country: "AE", emirate: "Dubai", city: " Jebel Ali " }));
+  assert.equal(v.city, "Jebel Ali");
+  const c = await svc.Customers.createCustomer(customer("City Co", { country: "AE", emirate: "Dubai", city: "Al Quoz" }));
+  assert.equal(c.city, "Al Quoz");
+  assert.equal(c.eInvoice.city, "Al Quoz", "the e-invoice city prefers the city over the emirate");
+  const moved = await svc.Vendors.updateVendor(v._id, { city: "Deira" });
+  assert.equal(moved.city, "Deira");
+  const cleared = await svc.Vendors.updateVendor(v._id, { city: "" });
+  assert.ok(!cleared.city);
+});
+
 // Party ledger accounts are found by NAME across the statement, credit control, ageing and the reports, so a second
 // customer of one name would share the first one's account and both sets of books would be wrong.
 test("a customer's or vendor's name is unique, whatever its case or spacing, and a rename may not take another's", { skip }, async () => {
