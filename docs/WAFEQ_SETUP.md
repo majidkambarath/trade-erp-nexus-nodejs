@@ -55,12 +55,28 @@ A developer can also link a business by hand from the developer console (**Organ
 - Wafeq's limits are shared by every client of ours: 60 sends, 120 checks and 120 reads a minute. Statuses arrive by webhook; polling is the
   backstop and runs at most every 10 minutes per invoice.
 
-## 5. Not built yet
+## 5. Received invoices, fix and resend, credit in full
 
-Received supplier invoices (Wafeq's `document.received`, then XML download and parse), voiding a delivered invoice and the correction flow,
-self-billing, foreign-currency e-invoices (sent in AED only), sending automatically on approval, and the Wafeq summary report.
+- **Received invoices.** Supplier e-invoices that arrive at Wafeq for the business are pulled in automatically (a webhook, and a check every
+  ten minutes) or on demand with **e-Invoicing -> Inbound -> Check for new**. Each is read from its UBL XML (kept as received), matched to a
+  vendor by TRN or Peppol id, and listed. **Record as purchase invoice** makes a DRAFT purchase invoice: you choose our item for each line, the
+  tax comes from the supplier's own category and rate, and any difference from the supplier's total is shown. Wafeq has no API to accept or
+  reject a received invoice, so Accept and Reject stay decisions recorded here. A supplier's credit note can only be accepted or rejected.
+  In live, each received document uses a Wafeq document credit; with none, the screen says so.
+- **Fix and resend.** When the **buyer** rejects an invoice for a reason Wafeq codes BV or SV (wrong buyer details), fix the customer, then press
+  **Resend correction** on the rejected row. The invoice is rebuilt from what is saved now and sent with the SAME number, pointing at the rejected
+  document. A rejection by the tax authority, or an FD one, cannot be corrected: issue a credit note and a new invoice. **Wafeq allows corrections
+  in live mode only** (its sandbox answers `sandbox_reporting_disabled`), so this is proved against a fake Wafeq, not in the sandbox.
+- **Credit in full.** Cancelling an e-invoiced invoice is a credit note, never an edit and never Wafeq's own void. **Credit in full** on a sent
+  invoice drafts a sales return for everything not yet credited, at the original prices and tax codes; approve it on Sales -> Returns, then send it
+  from Outbound. A header discount given on the original is not reproduced on the draft: check its total before approving.
 
-## 6. Dates to know
+## 6. Not built yet
+
+Foreign-currency e-invoices (sent in AED only), self-billing (389 / 261), Wafeq's own void, the XML download button, a "reachable on Peppol" check
+per customer, sending automatically on approval, the Wafeq summary report, and recording a supplier's credit note against a purchase.
+
+## 7. Dates to know
 
 PINT-AE **1.0.5 goes live at Wafeq on 3 December 2026**: UAE buyer addresses are then checked for emirate codes (we already send them), exempt
 document discounts and charges need a reason code, and a buyer on `0235:9900000098` or `...99` may omit the legal-registration type.

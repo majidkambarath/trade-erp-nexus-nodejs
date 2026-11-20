@@ -24,6 +24,7 @@ const settingsSchema = new mongoose.Schema(
       connectedAt: Date,
       connectedBy: String,
       lastError: String,
+      inboundPulledAt: Date, // the last time received documents were asked for (services/einvoice/wafeq/inboundPull.js)
     },
     // between "Connect with Wafeq" starting and finishing: the PKCE verifier, encrypted, never returned
     wafeqPending: { type: new mongoose.Schema({ verifierEnc: String, nonce: String, mode: String, at: Date, by: String }, { _id: false }), select: false, default: undefined },
@@ -52,6 +53,10 @@ const submissionSchema = new mongoose.Schema(
     providerResponse: { type: mongoose.Schema.Types.Mixed, default: null },
     deliveryStatus: { type: String, default: null }, // the provider's delivery leg (Wafeq delivery_status), beside taxStatus
     deliveryJobId: { type: String, default: null },
+    deliveryReasonCode: { type: String, default: null }, // why the buyer rejected it: BV, SV or FD
+    deliveryReasonText: { type: String, default: null },
+    rejectedBy: { type: String, enum: ["buyer", "fta", null], default: null },
+    previousEntryIds: [String], // the Wafeq ids a correction replaced, oldest first
     route: { type: String, default: null }, // delivery | reporting_only ...
     providerMode: { type: String, default: null }, // sandbox | live
     providerIssues: [{ code: String, message: String, _id: false }], // what the provider refused, in its words
@@ -93,7 +98,12 @@ const inboundSchema = new mongoose.Schema(
     purchaseOrderId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction", default: null },
     matchNote: { type: String },
     decision: { by: String, at: Date, reason: String },
-    source: { type: String, enum: ["webhook", "manual"], default: "manual" },
+    source: { type: String, enum: ["webhook", "manual", "wafeq"], default: "manual" },
+    // Received through Wafeq: what kind of document, its id there, its due day, and the XML exactly as received.
+    kind: { type: String, enum: ["invoice", "credit_note"], default: "invoice" },
+    wafeqDocumentId: { type: String, default: undefined },
+    dueDate: { type: Date },
+    xml: { type: String, select: false },
   },
   { timestamps: true }
 );

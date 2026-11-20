@@ -9,6 +9,18 @@
 const { ProviderError } = require("../../../utils/providerError");
 const { WafeqClient, classify } = require("./client");
 
+// A correction after a buyer's rejection (same number, corrects_document_id): Wafeq's refusals, in words a person can act on.
+const CORRECTION_RETRY = new Set(["correction_not_ready", "transport_reconciliation_required"]); // wait, then send the same body with the same key
+const CORRECTION_TEXT = {
+  sandbox_reporting_disabled: "Corrections are only possible in live mode (Wafeq's sandbox does not report to the tax authority)",
+  c3_validation_rejection_required: "The buyer's rejection was for a reason that cannot be corrected: issue a credit note and a new invoice instead",
+  correction_number_or_type_mismatch: "A correction must keep the same number and the same document type",
+  correction_not_ready_or_already_replaced: "This invoice was already corrected, or is not ready to be",
+  different_recovery_requires_reconciliation: "Wafeq must reconcile this invoice first: contact Wafeq support",
+  queued_document_not_found: "Wafeq cannot find the original to correct",
+  document_owner_changed: "The original was sent by another business",
+};
+
 const DELIVERED = new Set(["sent", "received_by_ap", "forwarded", "delivered_confirmed"]);
 const modeOf = (settings) => (settings?.environment === "live" ? "live" : "sandbox");
 const taxpayerOf = (settings) => {
@@ -41,6 +53,9 @@ const wafeq = {
 
     const res = await WafeqClient.submit(mode, taxpayerId, path, body, { idempotencyKey: keyFor(submission, idempotencyKey), grantId: settings.wafeq.grantId });
     const b = res.body || {};
+    const detailCode = b?.detail?.code;
+    if (CORRECTION_RETRY.has(detailCode)) throw new ProviderError("Wafeq is still withdrawing the rejected invoice; sending the correction again shortly", { retryable: true, status: res.status, raw: b, code: detailCode });
+    if (CORRECTION_TEXT[detailCode]) throw new ProviderError(CORRECTION_TEXT[detailCode], { retryable: false, status: res.status, raw: b, code: detailCode });
 
     const adopt = async () => {
       const found = await findByNumber(mode, taxpayerId, path, number);
@@ -84,11 +99,14 @@ const wafeq = {
 function statusFrom(d = {}) {
   const tdd = d.tdd_status || d.tax_authority_status || null;
   const delivery = d.delivery_status || null;
-  const extra = { deliveryStatus: delivery, taxStatus: tdd };
+  // why the buyer rejected it (BV / SV can be corrected, FD cannot), from a webhook or from the stored document
+  const reasonCode = d.reason_code || d.delivery_reason_code || null;
+  const reasonText = d.reason_text || d.delivery_reason_text || null;
+  const extra = { deliveryStatus: delivery, taxStatus: tdd, reasonCode, reasonText };
   const tddLow = String(tdd || "").toLowerCase();
   if (tddLow === "reported") return { status: "REPORTED", taxStatus: tdd, note: "Reported to the FTA", extra };
-  if (tddLow === "rejected" || tddLow === "not_compliant") return { status: "REJECTED", taxStatus: tdd, note: "Not compliant with the FTA", extra };
-  if (delivery === "rejected") return { status: "REJECTED", taxStatus: tdd, note: "Rejected by the buyer", extra };
+  if (tddLow === "rejected" || tddLow === "not_compliant") return { status: "REJECTED", taxStatus: tdd, note: "Not compliant with the FTA", extra: { ...extra, rejectedBy: "fta" } };
+  if (delivery === "rejected") return { status: "REJECTED", taxStatus: tdd, note: reasonText ? `Rejected by the buyer: ${reasonText}` : "Rejected by the buyer", extra: { ...extra, rejectedBy: "buyer" } };
   if (DELIVERED.has(delivery) || d.status === "delivered") return { status: "ACKNOWLEDGED", taxStatus: tdd, note: tddLow === "not_reported" ? "Delivered (Wafeq sandbox: not reported to the FTA)" : undefined, extra };
   return { status: null, taxStatus: tdd, extra };
 }

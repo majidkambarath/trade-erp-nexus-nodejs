@@ -6,6 +6,7 @@ const EInvoiceService = require("../../services/einvoice/einvoiceService");
 const InboundService = require("../../services/einvoice/inboundService");
 const WafeqWebhookService = require("../../services/einvoice/wafeq/webhookService");
 const WafeqConnectService = require("../../services/einvoice/wafeq/connectService");
+const WafeqInboundPull = require("../../services/einvoice/wafeq/inboundPull");
 const AuditService = require("../../services/core/auditService");
 const { getTenant } = require("../../utils/tenant");
 const Organisation = require("../../models/core/organisationModel");
@@ -70,6 +71,8 @@ router.post("/submit/:transactionId", requirePermission("sales.approve"), catchA
   ok(res, r, r.alreadySubmitted ? 200 : 201);
 }));
 
+router.post("/submissions/:id/correct", requirePermission("sales.approve"), catchAsync(async (req, res) => ok(res, await EInvoiceService.correct(req.params.id, req))));
+router.post("/documents/:transactionId/credit-in-full", requirePermission("sales.create"), catchAsync(async (req, res) => ok(res, await EInvoiceService.creditInFull(req.params.transactionId, req), 201)));
 router.get("/submissions", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.listSubmissions(req, req.query))));
 router.get("/submissions/:id", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.getSubmission(req.params.id, req))));
 router.post("/submissions/:id/retry", requirePermission("sales.approve"), catchAsync(async (req, res) => ok(res, await EInvoiceService.retry(req.params.id, req))));
@@ -81,6 +84,9 @@ router.post("/inbound", requirePermission("purchase.create"), catchAsync(async (
   const r = await InboundService.ingest(req.body, { source: "manual", req });
   ok(res, { id: r.invoice._id, duplicate: r.duplicate, matchNote: r.invoice.matchNote }, r.duplicate ? 200 : 201);
 }));
+// "Check for new": ask Wafeq for received invoices now (the background pass also does it every ten minutes).
+router.post("/inbound/pull", requirePermission("purchase.view"), catchAsync(async (req, res) => ok(res, await WafeqInboundPull.pull(getTenant(req).companyId, { force: true }))));
+router.post("/inbound/:id/purchase", requirePermission("purchase.create"), catchAsync(async (req, res) => ok(res, await InboundService.recordAsPurchase(req.params.id, req.body || {}, req), 201)));
 router.post("/inbound/:id/accept", requirePermission("purchase.approve"), catchAsync(async (req, res) => ok(res, await InboundService.decide(req.params.id, "ACCEPTED", req.body, req))));
 router.post("/inbound/:id/reject", requirePermission("purchase.approve"), catchAsync(async (req, res) => ok(res, await InboundService.decide(req.params.id, "REJECTED", req.body, req))));
 

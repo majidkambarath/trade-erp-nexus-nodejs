@@ -10,6 +10,7 @@ const { runUnscoped, runWithTenant } = require("../../../utils/tenantContext");
 const { EInvoiceSettings, EInvoiceSubmission, WafeqEvent } = require("../../../models/modules/einvoiceModels");
 const { modeConfig, modeOfWebhook } = require("./config");
 const { statusFrom } = require("./provider");
+const WafeqInboundPull = require("./inboundPull");
 
 class WafeqWebhookService {
   static async handle({ mode: routeMode, rawBody, headers, body }) {
@@ -71,7 +72,8 @@ class WafeqWebhookService {
       if (Object.keys(set).length) await EInvoiceSettings.updateOne({ companyId, "wafeq.taxpayerId": data.taxpayer_id }, { $set: set });
       return "taxpayer_updated";
     }
-    return "ignored"; // document.received and anything newer: stored and acknowledged only
+    if (type === "document.received") return `received:${await WafeqInboundPull.pullOne(companyId, data.document_id)}`;
+    return "ignored"; // anything newer: stored and acknowledged only
   }
 }
 

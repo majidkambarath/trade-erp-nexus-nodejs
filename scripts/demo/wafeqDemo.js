@@ -30,6 +30,8 @@ const CUSTOMERS = [
   { key: "shj", customerName: "Sharjah Bakery Supplies FZE", trn: "100456789000003", emirate: "Sharjah", city: "Sharjah", address: "SAIF Zone, Q3-112", terms: "Net 30" },
   { key: "ajm", customerName: "Ajman Fresh Mart LLC", trn: "100567890100003", emirate: "Ajman", city: "Ajman", address: "Al Jurf Industrial 2", terms: "Cash" },
   { key: "walkin", customerName: "Karama Corner Grocery", identifier: "TL-DED-552190", emirate: "Dubai", city: "Dubai", address: "Shop 4, Karama Market" },
+  // The sandbox taxpayer itself: an invoice sent to this customer is delivered back to the same business as a RECEIVED invoice from the vendor below.
+  { key: "self", customerName: "Sandbox Taxpayer 5504 (self)", trn: "171686550400003", emirate: "Umm Al Quwain", city: "Umm Al Quwain", address: "Sandbox test address", terms: "Net 30" },
   { key: "cafe", customerName: "Corniche Cafeteria", identifier: "TL-RAK-30418", emirate: "Ras Al Khaimah", city: "Ras Al Khaimah", address: "Al Qawasim Corniche, Shop 2" },
 ];
 
@@ -167,6 +169,13 @@ async function masters() {
   }
   note("customers", c1, c2);
 
+  // the same sandbox business as a supplier, so what we send to "self" is matched to it when it comes back
+  if (!(await Vendor.findOne({ vendorName: "Sandbox Supplier (self)" }).lean())) {
+    await VendorService.createVendor({
+      vendorName: "Sandbox Supplier (self)", contactPerson: "Sales", address: "Sandbox test address", country: "AE", emirate: "Umm Al Quwain",
+      trnNO: "171686550400003", participantId: "0235:1716865504", vat: { status: "registered", trn: "171686550400003" },
+    });
+  }
   let vendor = await Vendor.findOne({ vendorName: "Gulf Grain Importers LLC" }).lean();
   if (!vendor) {
     vendor = await VendorService.createVendor({
@@ -222,6 +231,8 @@ async function documents({ customers, vendor, items }, { std, zero, exempt }) {
   await ensure("5", sale("dxb", [line("WQ-LEASE", 1, 4200, exempt)]));                                                          // exempt only: a commercial invoice (480)
   await ensure("6", sale("walkin", [line("WQ-RICE", 2, 95), line("WQ-TEA", 10, 0.1)]));                                        // no TRN: the tax authority only
 
+  await ensure("7", sale("self", [line("WQ-OIL", 3, 38), line("WQ-SUGAR", 2, 29.75)]));                                         // sent to ourselves: comes back as a received invoice
+
   // credit notes against invoices 1 and 2: one line each
   for (const [n, of, sku, qty] of [["CN1", "1", "WQ-OIL", 2], ["CN2", "2", "WQ-RICE", 1]]) {
     const o = made[of];
@@ -241,7 +252,7 @@ async function documents({ customers, vendor, items }, { std, zero, exempt }) {
 async function selfCheck(made) {
   const EI = require("../../services/einvoice/einvoiceService");
   console.log("\n  Checked with Wafeq (validate only: nothing is sent)");
-  const order = ["1", "2", "3", "4", "5", "6", "CN1", "CN2"];
+  const order = ["1", "2", "3", "4", "5", "6", "7", "CN1", "CN2"];
   for (const n of order) {
     const d = made[n];
     const pv = await EI.preview(d._id, {});

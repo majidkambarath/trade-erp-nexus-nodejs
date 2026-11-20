@@ -10,6 +10,7 @@ const Stock = require("../../models/modules/stockModel");
 const { PROVIDERS, ProviderError } = require("./providers");
 const { modeConfig } = require("./wafeq/config");
 const { WafeqClient } = require("./wafeq/client");
+const WafeqInboundPull = require("./wafeq/inboundPull");
 const { toWafeqDocument, validGtin } = require("../../utils/wafeqPayload");
 const { dueDateOf } = require("../../utils/paymentState");
 const ei = require("../../utils/eInvoice");
@@ -336,6 +337,65 @@ class EInvoiceService {
     return sub;
   }
 
+  // ---------- fix and resend ----------
+  // The buyer rejected the invoice (reason BV or SV: wrong buyer details): after the customer is fixed, the SAME number is sent again as a
+  // correction that points at the rejected document. Only through here may a REJECTED invoice become QUEUED again. A rejection by the tax
+  // authority, or an FD one, cannot be corrected: that is a credit note and a new invoice.
+  static async correct(id, req) {
+    const { companyId } = getTenant(req);
+    const sub = await EInvoiceSubmission.findOne({ _id: id, companyId });
+    if (!sub) throw new AppError("Submission not found", 404);
+    const settings = await this.loadSettings(companyId);
+    const no = (message) => new AppError(message, 409, "NOT_CORRECTABLE");
+    if (settings.provider !== "wafeq") throw no("Corrections are made through Wafeq");
+    if (sub.status !== "REJECTED") throw no("Only a rejected invoice can be corrected");
+    if (sub.rejectedBy !== "buyer") throw no("The tax authority rejected this invoice: issue a credit note and a corrected invoice instead");
+    if (!["BV", "SV"].includes(sub.deliveryReasonCode)) throw no("The buyer's reason for rejecting cannot be corrected: issue a credit note and a new invoice instead");
+    if (!sub.providerEntryId) throw no("There is no Wafeq document to correct");
+
+    // rebuilt from today's data, so the corrected customer details are what is sent
+    const { payload, issues } = await this.build(sub.sourceId, req);
+    if (issues.length) throw new AppError(`Still not valid: ${issues.length} problem(s)`, 422, "EINVOICE_VALIDATION", { issues });
+    payload.wafeq.body.corrects_document_id = sub.providerEntryId;
+    sub.previousEntryIds = [...(sub.previousEntryIds || []), sub.providerEntryId];
+    sub.payload = payload;
+    sub.payloadHash = ei.payloadHash(payload);
+    Object.assign(sub, { rejectedBy: null, deliveryStatus: null, taxStatus: null, lastError: null, providerIssues: [], retryable: true });
+    sub.status = "QUEUED";
+    sub.history.push({ status: "QUEUED", at: new Date(), note: `Correction of ${sub.previousEntryIds[sub.previousEntryIds.length - 1]}` });
+    await sub.save();
+    await AuditService.log({ req, action: "EINVOICE_CORRECTED", entity: "EInvoiceSubmission", entityId: sub._id, summary: `${sub.documentNo} corrected after the buyer's rejection` });
+    return this.attempt(sub, settings);
+  }
+
+  // ---------- credit in full ----------
+  // Cancelling an invoice that was e-invoiced is a credit note, never an edit. This makes the DRAFT sales return for everything not yet
+  // credited, at the original prices and tax codes; a person reviews and approves it (Sales > Returns) and sends it like any credit note.
+  static async creditInFull(transactionId, req) {
+    const { companyId } = getTenant(req);
+    if (!mongoose.isValidObjectId(transactionId)) throw new AppError("Invalid document id", 400);
+    const tx = await Transaction.findById(transactionId).lean();
+    if (!tx || tx.type !== "sales_order") throw new AppError("Sales invoice not found", 404);
+    const sub = await EInvoiceSubmission.findOne({ companyId, sourceType: "Transaction", sourceId: tx._id }).select("status").lean();
+    if (!sub || !["SUBMITTED", "ACKNOWLEDGED", "REPORTED"].includes(sub.status)) throw new AppError("Only an invoice that was sent as an e-invoice is credited this way", 409, "NOT_E_INVOICED");
+    const ReturnService = require("../orderPurchase/returnService");
+    const TransactionService = require("../orderPurchase/transactionService");
+    const r = await ReturnService.returnable(tx._id);
+    const lines = r.lines.filter((l) => l.remainingQty > 0);
+    if (!lines.length) throw new AppError("Everything on this invoice is already credited", 409, "NOTHING_LEFT");
+    const by = req?.admin?.id ? String(req.admin.id) : null;
+    const draft = await TransactionService.createTransaction({
+      type: "sales_return", status: "DRAFT", partyId: tx.partyId, partyType: "Customer", partyTypeRef: "Customer",
+      returnOf: { transactionId: tx._id, transactionNo: tx.transactionNo },
+      items: lines.map((l) => ({
+        itemId: l.itemId, description: l.description, qty: l.remainingQty, price: l.price, rate: l.price, discountPercent: l.discountPercent || 0,
+        taxCodeId: tx.items.find((i) => String(i._id) === String(l.lineId))?.taxCodeId, returnOfLineId: l.lineId,
+      })),
+    }, by);
+    await AuditService.log({ req, action: "EINVOICE_CREDIT_IN_FULL", entity: "Transaction", entityId: draft._id, summary: `${draft.transactionNo} drafted to credit ${tx.transactionNo}` });
+    return { _id: draft._id, transactionNo: draft.transactionNo, credits: tx.transactionNo };
+  }
+
   // What a provider tells us beside the step: its delivery leg, the job and the route.
   static applyExtra(sub, extra) {
     if (!extra) return;
@@ -410,6 +470,11 @@ class EInvoiceService {
     const $set = {};
     if (r.taxStatus) $set.taxStatus = r.taxStatus;
     if (r.extra?.deliveryStatus) $set.deliveryStatus = r.extra.deliveryStatus;
+    if (r.status === "REJECTED") {
+      $set.rejectedBy = r.extra?.rejectedBy || null;
+      if (r.extra?.reasonCode) $set.deliveryReasonCode = r.extra.reasonCode;
+      if (r.extra?.reasonText) $set.deliveryReasonText = r.extra.reasonText;
+    }
     if (r.status === "REJECTED") $set.lastError = r.note || "Rejected by the access point";
     if (steps.length) {
       $set.status = at;
@@ -447,6 +512,8 @@ class EInvoiceService {
         // Wafeq's reads are shared by every client of ours (120 a minute): the webhook is the main path, polling only the backstop
         const q = { companyId, status: { $in: ["SUBMITTED", "ACKNOWLEDGED"] } };
         if (settings.provider === "wafeq") q.updatedAt = { $lte: new Date(now.getTime() - 10 * 60 * 1000) };
+        // received supplier invoices: asked for here at most every ten minutes (the webhook is the quick path)
+        if (settings.provider === "wafeq") await WafeqInboundPull.pull(companyId, { now }).catch(() => {});
         const inflight = await EInvoiceSubmission.find(q).limit(50);
         for (const sub of inflight) { await this.refreshOne(sub); p += 1; }
         return { r, p };
@@ -477,7 +544,7 @@ class EInvoiceService {
       return {
         _id: d._id, transactionNo: d.transactionNo, type: d.type, date: d.date, customer: d.partyId?.customerName,
         total: d.totalAmount, invoiceTypeCode: d.type === "sales_return" ? "381" : "380",
-        status: s?.status || "NOT_SENT", taxStatus: s?.taxStatus || null, deliveryStatus: s?.deliveryStatus || null, route: s?.route || null, lastError: s?.lastError || null,
+        status: s?.status || "NOT_SENT", taxStatus: s?.taxStatus || null, deliveryStatus: s?.deliveryStatus || null, route: s?.route || null, rejectedBy: s?.rejectedBy || null, deliveryReasonCode: s?.deliveryReasonCode || null, deliveryReasonText: s?.deliveryReasonText || null, lastError: s?.lastError || null,
         submissionId: s?._id || null, partyReady: party.ready, partyMissing: party.missing, dueDate: due,
         overdue: Boolean(due && !s && due < new Date()),
       };

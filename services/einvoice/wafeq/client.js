@@ -70,7 +70,9 @@ class WafeqClient {
     return WafeqClient.call(mode, taxpayerId, { method: "POST", path, body, kind: "submit", grantId, headers: { "Idempotency-Key": idempotencyKey, Prefer: "respond-async" } });
   }
   static getDocument(mode, taxpayerId, documentId) { return WafeqClient.call(mode, taxpayerId, { path: `/invoices/${encodeURIComponent(documentId)}` }); }
-  static list(mode, taxpayerId, path) { return WafeqClient.call(mode, taxpayerId, { path: `${path}?limit=200` }); }
+  static list(mode, taxpayerId, path, query = "") { return WafeqClient.call(mode, taxpayerId, { path: `${path}?limit=200${query ? `&${query}` : ""}` }); }
+  /** The e-invoice as received or sent (UBL XML). Wafeq answers the XML directly, or a redirect to a 15-minute link which fetch follows. */
+  static xml(mode, taxpayerId, documentId) { return WafeqClient.call(mode, taxpayerId, { path: `/invoices/${encodeURIComponent(documentId)}/xml`, headers: { Accept: "application/xml" } }); }
 
   // ---- OAuth and the organisation's own calls ---------------------------------------------------------------------
   static async form(url, cfg, fields) {
