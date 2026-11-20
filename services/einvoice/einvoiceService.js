@@ -6,7 +6,12 @@ const TaxCode = require("../../models/modules/financial/taxCodeModel");
 const { EInvoiceSettings, EInvoiceSubmission } = require("../../models/modules/einvoiceModels");
 const AccountConfigService = require("../financial/accountConfigService");
 const AuditService = require("../core/auditService");
+const Stock = require("../../models/modules/stockModel");
 const { PROVIDERS, ProviderError } = require("./providers");
+const { modeConfig } = require("./wafeq/config");
+const { WafeqClient } = require("./wafeq/client");
+const { toWafeqDocument, validGtin } = require("../../utils/wafeqPayload");
+const { dueDateOf } = require("../../utils/paymentState");
 const ei = require("../../utils/eInvoice");
 const { encrypt } = require("../../utils/secretBox");
 const AppError = require("../../utils/AppError");
@@ -26,12 +31,18 @@ class EInvoiceService {
   }
 
   static publicSettings(s) {
+    const w = s.wafeq || {};
+    const modes = Object.fromEntries(["sandbox", "live"].map((m) => { const c = modeConfig(m); return [m, { available: c.available, oauth: c.oauth }]; }));
     return {
       enabled: s.enabled, provider: s.provider, environment: s.environment,
-      participantId: s.participantId || "", dueDays: s.dueDays, retryMax: s.retryMax,
-      // Honest about reach: invoices are exchanged with the built-in sandbox only until an
-      // accredited service provider is connected.
-      connected: false,
+      participantId: (s.provider === "wafeq" && w.participantId) || s.participantId || "", dueDays: s.dueDays, retryMax: s.retryMax,
+      // Honest about reach: invoices are exchanged with the built-in sandbox only until the business is linked to an
+      // accredited service provider (Wafeq), and then only in the mode (test or live) that link was made in.
+      connected: s.provider === "wafeq" && w.status === "active",
+      wafeq: {
+        status: w.status || "disconnected", mode: w.mode || null, name: w.name || "", tin: w.tin || "", participantId: w.participantId || "",
+        linkedVia: w.linkedVia || null, connectedAt: w.connectedAt || null, lastError: w.lastError || null, modes,
+      },
       // secrets are write-only: the client learns only whether one is stored
       hasWebhookSecret: Boolean(s.webhookSecretEnc),
     };
@@ -48,11 +59,27 @@ class EInvoiceService {
     const s = (await EInvoiceSettings.findOne({ companyId }).select("+webhookSecretEnc")) || new EInvoiceSettings({ companyId });
 
     if (data.provider !== undefined && !PROVIDERS[data.provider]) {
-      throw new AppError("No access point is connected yet; only the sandbox is available", 422, "PROVIDER_NOT_AVAILABLE");
+      throw new AppError("That access point is not available", 422, "PROVIDER_NOT_AVAILABLE");
     }
-    if (data.environment !== undefined && data.environment !== "sandbox") {
-      throw new AppError("Live e-invoicing needs a connected service provider, which is not available yet", 422, "PROVIDER_NOT_AVAILABLE");
+    const provider = data.provider !== undefined ? data.provider : s.provider;
+    if (data.provider === "wafeq" && s.wafeq?.status !== "active") {
+      throw new AppError("Connect this business to Wafeq first", 422, "WAFEQ_NOT_CONNECTED");
     }
+    if (data.environment !== undefined && !["sandbox", "live"].includes(data.environment)) {
+      throw new AppError("Only the sandbox and live modes exist", 422, "PROVIDER_NOT_AVAILABLE");
+    }
+    if (data.environment !== undefined && data.environment !== "sandbox" && provider !== "wafeq") {
+      throw new AppError("Live e-invoicing needs a connected service provider", 422, "PROVIDER_NOT_AVAILABLE");
+    }
+    if (provider === "wafeq" && data.environment !== undefined && data.environment !== s.wafeq?.mode && s.wafeq?.mode) {
+      throw new AppError("This business is linked to Wafeq in " + s.wafeq.mode + " mode; connect it again to change the mode", 422, "WAFEQ_MODE_MISMATCH");
+    }
+    if (data.environment === "live" && !modeConfig("live").available) {
+      throw new AppError("Live Wafeq access is not installed on this server", 422, "PROVIDER_NOT_AVAILABLE");
+    }
+    if (data.provider !== undefined) s.provider = data.provider;
+    if (data.environment !== undefined) s.environment = data.environment;
+    if (s.provider === "wafeq" && s.wafeq?.mode) s.environment = s.wafeq.mode;
     if (data.participantId !== undefined) {
       const pid = String(data.participantId).trim();
       if (pid && !ei.PARTICIPANT_RE.test(pid)) throw new AppError("Participant ID must look like 0235:100123456700003", 400, "INVALID_PARTICIPANT_ID");
@@ -85,9 +112,12 @@ class EInvoiceService {
       { key: "trn", label: "Company TRN (15 digits)", ok: ei.TRN_RE.test(String(p.trn || "")) },
       { key: "legalName", label: "Company legal name", ok: Boolean(String(p.legalName || "").trim()) },
       { key: "address", label: "Company address and city", ok: Boolean(String(p.addressLine1 || "").trim() && String(p.city || "").trim()) },
-      { key: "participantId", label: "Seller Participant ID", ok: ei.PARTICIPANT_RE.test(String(settings?.participantId || "")) },
+      { key: "participantId", label: "Seller Participant ID", ok: ei.PARTICIPANT_RE.test(String((settings?.provider === "wafeq" && settings.wafeq?.participantId) || settings?.participantId || "")) },
       { key: "taxCodes", label: "At least one active tax code", ok: Boolean(await TaxCode.exists({ companyId, isActive: true })) },
     ];
+    if (settings?.provider === "wafeq") {
+      checks.push({ key: "wafeqConnected", label: "Business connected to Wafeq", ok: settings.wafeq?.status === "active" });
+    }
     return checks;
   }
 
@@ -117,7 +147,7 @@ class EInvoiceService {
     if (data.trnNumber !== undefined) c.trnNumber = String(data.trnNumber).trim() || null;
     if (data.billingAddress !== undefined) c.billingAddress = String(data.billingAddress).trim() || null;
     c.eInvoice = c.eInvoice || {};
-    for (const k of ["city", "countryCode", "participantId"]) {
+    for (const k of ["city", "countryCode", "participantId", "buyerIdentifier"]) {
       if (data[k] !== undefined) c.eInvoice[k] = String(data[k]).trim();
     }
     if (c.eInvoice.countryCode) c.eInvoice.countryCode = c.eInvoice.countryCode.toUpperCase();
@@ -145,16 +175,74 @@ class EInvoiceService {
       CompanySettings.findOne({ companyId }).select("profile").lean(),
       this.loadSettings(companyId),
     ]);
+    const viaWafeq = settings.provider === "wafeq";
     const payload = ei.buildPayload({
-      transaction: tx, customer, seller: cs?.profile || {}, sellerParticipantId: settings.participantId,
+      transaction: tx, customer, seller: cs?.profile || {}, sellerParticipantId: (viaWafeq && settings.wafeq?.participantId) || settings.participantId,
     });
     const issues = ei.validatePayload(payload, { headerDiscount: tx.pricing?.headerDiscount ?? tx.discount ?? 0 });
+    if (viaWafeq) {
+      const w = await this.wafeqDocument({ tx, payload, customer, companyId });
+      payload.wafeq = { path: w.path, body: w.body };
+      issues.push(...w.issues);
+      // Wafeq takes the seller from its own record, and has its own buyer rules: the checks above that it answers for are replaced
+      const own = new Set(["customerParticipantId", "sellerAddressLine1", "sellerCity"]);
+      return { tx, payload, issues: issues.filter((i) => !(i.field && own.has(i.field))), settings };
+    }
     return { tx, payload, issues, settings };
   }
 
+  // The body Wafeq takes for this document, with what only the database knows: the tax codes' reason codes, the buyer's emirate, the
+  // due date and (a credit note) the invoice it credits.
+  static async wafeqDocument({ tx, payload, customer, companyId }) {
+    const codeIds = [...new Set((tx.items || []).map((i) => i.taxCodeId).filter(Boolean).map(String))];
+    const codes = codeIds.length ? await TaxCode.find({ companyId, _id: { $in: codeIds } }).select("exemptionReasonCode reverseChargeGoodsType").lean() : [];
+    const byId = new Map(codes.map((c) => [String(c._id), c]));
+    const itemIds = [...new Set((tx.items || []).map((i) => i.itemId).filter(Boolean).map(String))];
+    const stock = itemIds.length ? await Stock.find({ _id: { $in: itemIds } }).select("barcodeQrCode").lean() : [];
+    const gtins = new Map(stock.map((s) => [String(s._id), s.barcodeQrCode]));
+    const reasons = (tx.items || []).map((i) => byId.get(String(i.taxCodeId))?.exemptionReasonCode || undefined);
+    // the line's goods type and GTIN, for a reverse-charge line only
+    const enriched = { ...payload, lines: payload.lines.map((l, i) => {
+      const item = (tx.items || [])[i];
+      if (!item || l.taxCategory !== "AE") return l;
+      const gtin = gtins.get(String(item.itemId));
+      return { ...l, reverseChargeGoodsType: byId.get(String(item.taxCodeId))?.reverseChargeGoodsType, gtin: validGtin(gtin) ? String(gtin).trim() : undefined };
+    }) };
+    let original;
+    if (tx.type === "sales_return") {
+      const origId = tx.returnOf?.transactionId;
+      const sub = origId ? await EInvoiceSubmission.findOne({ companyId, sourceType: "Transaction", sourceId: origId, providerEntryId: { $ne: null } }).select("providerEntryId").lean() : null;
+      let issueDate;
+      if (origId) { const o = await Transaction.findById(origId).select("date").lean(); if (o) issueDate = ei.dubaiDate(o.date); }
+      original = { wafeqDocumentId: sub?.providerEntryId, number: tx.returnOf?.transactionNo, issueDate };
+    }
+    const due = dueDateOf({ date: tx.date, dueDate: tx.dueDate, paymentTerms: customer?.paymentTerms });
+    return toWafeqDocument(enriched, {
+      sourceId: String(tx._id), dueDate: due ? ei.dubaiDate(due) : undefined, reasons, original,
+      buyer: { emirate: customer?.emirate, street: customer?.billingAddress, identifier: customer?.eInvoice?.buyerIdentifier, legalRegistration: customer?.eInvoice?.legalRegistration },
+    });
+  }
+
   static async preview(transactionId, req) {
-    const { payload, issues } = await this.build(transactionId, req);
-    return { payload, issues, ready: issues.length === 0 };
+    const { payload, issues, settings } = await this.build(transactionId, req);
+    const out = { payload, issues, ready: issues.length === 0 };
+    // Wafeq's own validation (the PINT-AE rules) on top of ours. Never a failure: a Wafeq outage is a note.
+    if (settings.provider === "wafeq" && payload.wafeq?.body && issues.length === 0 && settings.wafeq?.status === "active") {
+      try {
+        const mode = settings.environment === "live" ? "live" : "sandbox";
+        const res = await WafeqClient.validate(mode, settings.wafeq.taxpayerId, payload.wafeq.path, payload.wafeq.body);
+        if (res.status === 200 && res.body) {
+          const b = res.body;
+          out.wafeq = { checked: true, valid: b.valid, route: b.route || null, recipient: b.effective_recipient_id || null, errors: (b.errors || []).map((e) => ({ code: e.code, message: e.message })), warnings: (b.warnings || []).map((e) => ({ code: e.code, message: e.message })) };
+          if (b.valid === false) out.ready = false;
+        } else {
+          out.wafeq = { checked: false, note: "Could not check with Wafeq just now" };
+        }
+      } catch {
+        out.wafeq = { checked: false, note: "Could not check with Wafeq just now" };
+      }
+    }
+    return out;
   }
 
   // ---------- submission ----------
@@ -225,21 +313,41 @@ class EInvoiceService {
     const full = await this.loadSettings(sub.companyId);
     sub.attempts += 1;
     try {
-      const r = await provider.submit(sub.payload, { idempotencyKey: String(sub._id) });
+      const r = await provider.submit(sub.payload, { idempotencyKey: String(sub._id), settings: full, submission: sub });
       sub.providerEntryId = r.entryId;
       sub.providerResponse = r.raw ?? null;
       sub.lastError = null;
       sub.nextRetryAt = null;
+      sub.providerIssues = [];
+      if (settings.provider === "wafeq") sub.providerMode = full.environment;
+      this.applyExtra(sub, r.extra);
       this.transition(sub, "SUBMITTED");
     } catch (err) {
       const retryable = err instanceof ProviderError ? err.retryable : true;
       sub.lastError = err.message;
+      const refused = err.raw?.validation_errors || err.raw?.errors;
+      sub.providerIssues = Array.isArray(refused) ? refused.slice(0, 10).map((e) => ({ code: e.code, message: e.message || String(e) })) : [];
+      await this.noteLostConnection(sub.companyId, err);
       sub.retryable = retryable;
       sub.nextRetryAt = retryable && sub.attempts < (full.retryMax ?? 5) ? new Date(Date.now() + BACKOFF_MS(sub.attempts)) : null;
       this.transition(sub, "FAILED", err.message);
     }
     await sub.save();
     return sub;
+  }
+
+  // What a provider tells us beside the step: its delivery leg, the job and the route.
+  static applyExtra(sub, extra) {
+    if (!extra) return;
+    if (extra.deliveryStatus !== undefined && extra.deliveryStatus !== null) sub.deliveryStatus = extra.deliveryStatus;
+    if (extra.deliveryJobId) sub.deliveryJobId = extra.deliveryJobId;
+    if (extra.route) sub.route = extra.route;
+  }
+
+  // Wafeq says the grant is gone or the business unknown: mark the link so the screen asks for it to be connected again.
+  static async noteLostConnection(companyId, err) {
+    if (!["grant_not_active", "unknown_taxpayer"].includes(err?.code)) return;
+    await EInvoiceSettings.updateOne({ companyId, "wafeq.status": "active" }, { $set: { "wafeq.status": "revoked", "wafeq.lastError": err.message } });
   }
 
   static async retry(id, req) {
@@ -273,13 +381,20 @@ class EInvoiceService {
     let r;
     sub.pollCount += 1; // the provider sees this poll counted; the stored count goes up through the update below
     try {
-      r = await provider.getStatus(sub);
+      r = await provider.getStatus(sub, { settings });
     } catch (err) {
       // a failed poll never changes the invoice's state
+      await this.noteLostConnection(sub.companyId, err);
       await EInvoiceSubmission.updateOne({ _id: sub._id }, { $set: { lastError: err.message }, $inc: { pollCount: 1 } });
       return EInvoiceSubmission.findById(sub._id);
     }
 
+    return this.applyStatus(sub, r, { polled: true });
+  }
+
+  // A status read from the provider (a poll, or a webhook): walk the allowed steps from where the invoice is and apply them in ONE
+  // update that only matches while it is still there.
+  static async applyStatus(sub, r, { polled = false } = {}) {
     // Walk the allowed steps from the status we read, then apply them in ONE update that only matches
     // while the invoice is still in that status. The background poll and a user's Refresh can overlap;
     // the loser matches nothing, so each step is recorded in the history exactly once.
@@ -294,13 +409,15 @@ class EInvoiceService {
     const now = new Date();
     const $set = {};
     if (r.taxStatus) $set.taxStatus = r.taxStatus;
+    if (r.extra?.deliveryStatus) $set.deliveryStatus = r.extra.deliveryStatus;
     if (r.status === "REJECTED") $set.lastError = r.note || "Rejected by the access point";
     if (steps.length) {
       $set.status = at;
       if (steps.includes("ACKNOWLEDGED")) $set.acknowledgedAt = now;
       if (steps.includes("REPORTED")) $set.reportedAt = now;
     }
-    const update = { $set, $inc: { pollCount: 1 } };
+    if (!polled && !steps.length && !Object.keys($set).length) return sub;
+    const update = polled ? { $set, $inc: { pollCount: 1 } } : { $set };
     if (steps.length) update.$push = { history: { $each: steps.map((status) => ({ status, at: now, note: r.note })) } };
     const moved = await EInvoiceSubmission.findOneAndUpdate({ _id: sub._id, status: sub.status }, update, { new: true });
     return moved || EInvoiceSubmission.findById(sub._id); // someone else moved it first: report where it is now
@@ -327,7 +444,10 @@ class EInvoiceService {
           await this.attempt(sub, settings);
           r += 1;
         }
-        const inflight = await EInvoiceSubmission.find({ companyId, status: { $in: ["SUBMITTED", "ACKNOWLEDGED"] } }).limit(50);
+        // Wafeq's reads are shared by every client of ours (120 a minute): the webhook is the main path, polling only the backstop
+        const q = { companyId, status: { $in: ["SUBMITTED", "ACKNOWLEDGED"] } };
+        if (settings.provider === "wafeq") q.updatedAt = { $lte: new Date(now.getTime() - 10 * 60 * 1000) };
+        const inflight = await EInvoiceSubmission.find(q).limit(50);
         for (const sub of inflight) { await this.refreshOne(sub); p += 1; }
         return { r, p };
       });
@@ -357,7 +477,7 @@ class EInvoiceService {
       return {
         _id: d._id, transactionNo: d.transactionNo, type: d.type, date: d.date, customer: d.partyId?.customerName,
         total: d.totalAmount, invoiceTypeCode: d.type === "sales_return" ? "381" : "380",
-        status: s?.status || "NOT_SENT", taxStatus: s?.taxStatus || null, lastError: s?.lastError || null,
+        status: s?.status || "NOT_SENT", taxStatus: s?.taxStatus || null, deliveryStatus: s?.deliveryStatus || null, route: s?.route || null, lastError: s?.lastError || null,
         submissionId: s?._id || null, partyReady: party.ready, partyMissing: party.missing, dueDate: due,
         overdue: Boolean(due && !s && due < new Date()),
       };

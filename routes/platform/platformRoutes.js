@@ -36,6 +36,9 @@ router.post("/organisations/:code/extend", c.extend);
 router.post("/organisations/:code/status", c.status);
 router.post("/organisations/:code/provision", c.provision);
 router.put("/organisations/:code/profile", c.profile);
+router.get("/organisations/:code/einvoice/wafeq", c.wafeqLink);
+router.put("/organisations/:code/einvoice/wafeq", c.linkWafeq);
+router.delete("/organisations/:code/einvoice/wafeq", c.unlinkWafeq);
 
 router.get("/organisations/:code/users", c.orgUsers);
 router.get("/organisations/:code/roles", c.orgRoles);

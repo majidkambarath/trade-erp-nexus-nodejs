@@ -37,5 +37,7 @@ const sandbox = {
   },
 };
 
-const PROVIDERS = { sandbox };
+const { wafeq } = require("./wafeq/provider");
+
+const PROVIDERS = { sandbox, wafeq };
 module.exports = { PROVIDERS, ProviderError };

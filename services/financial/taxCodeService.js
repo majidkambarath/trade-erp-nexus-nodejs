@@ -41,6 +41,14 @@ const STARTER_IN = [
 // The starter set a country gets; null = none (that country adds its own in Accounting setup).
 const starterFor = (country) => (country === "IN" ? STARTER_IN : country === "AE" ? STARTER : null);
 
+// The reason codes an e-invoice carries (Wafeq / PINT-AE): why a supply has no VAT, and the goods type under a reverse charge.
+const EXEMPTION_REASONS = ["DL8.46.1", "DL8.46.2", "DL8.46.3", "DL8.46.4", "VATEX-AE-OOS"];
+const REVERSE_CHARGE_TYPES = ["DL8.48.8.1", "DL8.48.8.2", "DL8.48.8.3", "DL8.48.3.1", "DL8.48.3.2", "DL8.48.3.3"];
+const checkReasons = (d) => {
+  if (d?.exemptionReasonCode && !EXEMPTION_REASONS.includes(d.exemptionReasonCode)) throw new AppError("Choose the reason from the list", 400, "INVALID_EXEMPTION_REASON");
+  if (d?.reverseChargeGoodsType && !REVERSE_CHARGE_TYPES.includes(d.reverseChargeGoodsType)) throw new AppError("Choose the goods type from the list", 400, "INVALID_GOODS_TYPE");
+};
+
 class TaxCodeService {
   static rateOn = rateOn;
   static STARTER_IN = STARTER_IN;
@@ -58,19 +66,21 @@ class TaxCodeService {
 
   static async create(data, req) {
     const { companyId } = getTenant(req);
+    checkReasons(data);
     if (data.isDefault) await TaxCode.updateMany({ companyId }, { isDefault: false });
     // only what the form is for: a body that names an id, a creation date or anything else of the system's is not taken
-    const fields = Object.fromEntries(["name", "kind", "ratePercent", "rateHistory", "isDefault", "isActive"].filter((k) => data?.[k] !== undefined).map((k) => [k, data[k]]));
+    const fields = Object.fromEntries(["name", "kind", "ratePercent", "rateHistory", "isDefault", "isActive", "exemptionReasonCode", "reverseChargeGoodsType"].filter((k) => data?.[k] !== undefined).map((k) => [k, data[k]]));
     return TaxCode.create({ ...fields, companyId });
   }
 
   static async update(id, data, req) {
     const { companyId } = getTenant(req);
+    checkReasons(data);
     const code = await TaxCode.findOne({ _id: id, companyId });
     if (!code) throw new AppError("Tax code not found", 404);
     if (data.isDefault) await TaxCode.updateMany({ companyId, _id: { $ne: id } }, { isDefault: false });
-    for (const k of ["name", "kind", "ratePercent", "rateHistory", "isDefault", "isActive"]) {
-      if (data[k] !== undefined) code[k] = data[k];
+    for (const k of ["name", "kind", "ratePercent", "rateHistory", "isDefault", "isActive", "exemptionReasonCode", "reverseChargeGoodsType"]) {
+      if (data[k] !== undefined) code[k] = data[k] === "" && ["exemptionReasonCode", "reverseChargeGoodsType"].includes(k) ? undefined : data[k];
     }
     return code.save();
   }

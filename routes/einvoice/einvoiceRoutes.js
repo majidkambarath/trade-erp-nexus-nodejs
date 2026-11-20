@@ -4,6 +4,8 @@ const { authenticateToken } = require("../../middleware/authMiddleware");
 const catchAsync = require("../../utils/catchAsync");
 const EInvoiceService = require("../../services/einvoice/einvoiceService");
 const InboundService = require("../../services/einvoice/inboundService");
+const WafeqWebhookService = require("../../services/einvoice/wafeq/webhookService");
+const WafeqConnectService = require("../../services/einvoice/wafeq/connectService");
 const AuditService = require("../../services/core/auditService");
 const { getTenant } = require("../../utils/tenant");
 const Organisation = require("../../models/core/organisationModel");
@@ -33,8 +35,19 @@ const webhook = (organisationCode) =>
 router.post("/inbound/webhook/:org", publicRoute("a signed e-invoice delivery: verified by HMAC over the raw body, no login"), webhook((req) => req.params.org));
 router.post("/inbound/webhook", publicRoute("a signed e-invoice delivery: verified by HMAC over the raw body, no login"), webhook(() => DEFAULT_TENANT.companyId));
 
+// Wafeq's own deliveries (Standard Webhooks): authenticated by the signature over the raw body, no login. :mode is "test" or "live".
+router.post("/wafeq/webhook/:mode", publicRoute("a signed Wafeq delivery: verified by the Standard Webhooks signature over the raw body, no login"), catchAsync(async (req, res) => {
+  const r = await WafeqWebhookService.handle({ mode: req.params.mode, rawBody: req.rawBody, headers: req.headers, body: req.body });
+  ok(res, { duplicate: r.duplicate });
+}));
+
 router.use(authenticateToken);
 router.use(requireFeature("einvoicing"));
+
+// Linking the business to Wafeq (OAuth authorization code + PKCE). The callback is a page of the app, which hands the code here.
+router.post("/wafeq/connect/start", requirePermission("settings.manage"), catchAsync(async (req, res) => ok(res, await WafeqConnectService.start(req.body || {}, req))));
+router.post("/wafeq/connect/finish", requirePermission("settings.manage"), catchAsync(async (req, res) => ok(res, await WafeqConnectService.finish(req.body || {}, req))));
+router.post("/wafeq/disconnect", requirePermission("settings.manage"), catchAsync(async (req, res) => ok(res, await WafeqConnectService.disconnect(req))));
 
 router.get("/settings", requirePermission(["settings.view","reports.financial"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.getSettings(req))));
 router.put(

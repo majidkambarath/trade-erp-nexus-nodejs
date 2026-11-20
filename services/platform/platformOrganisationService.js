@@ -22,6 +22,9 @@ const consoleCatalog = require("../../utils/consoleCatalog");
 const RoleService = require("../core/roleService");
 const UserService = require("../core/userService");
 const UsageService = require("../core/usageService");
+const { EInvoiceSettings } = require("../../models/modules/einvoiceModels");
+const WafeqConnectService = require("../einvoice/wafeq/connectService");
+const { hasCountryFeature } = require("../../utils/countryRules");
 
 const HEAD_OFFICE = OrganisationService.HEAD_OFFICE;
 const inOrg = async (code, fn) => {
@@ -193,6 +196,33 @@ class PlatformOrganisationService {
   static async updateCompanyProfile(code, profile, ctx) {
     const out = await OrganisationService.updateCompanyProfile(code, profile);
     await this.record({ ...ctx, action: "COMPANY_PROFILE_UPDATED", organisation: code, summary: `Company details changed: ${Object.keys(profile).join(", ")}` });
+    return out;
+  }
+
+  // ---- e-invoicing through Wafeq: linking a business to its Wafeq taxpayer by hand (sandbox testing, support)
+
+  static async wafeqLink(code) {
+    const org = await Organisation.findOne({ code: String(code || "").toLowerCase() }).lean();
+    if (!org) throw new AppError("Organisation not found", 404, "NOT_FOUND");
+    const row = await runUnscoped("the developer console reads one organisation's e-invoice link", () => EInvoiceSettings.findOne({ companyId: org.code }).lean());
+    const w = row?.wafeq || {};
+    return { provider: row?.provider || "sandbox", enabled: Boolean(row?.enabled), status: w.status || "disconnected", mode: w.mode || null, taxpayerId: w.taxpayerId || null, name: w.name || "", tin: w.tin || "", participantId: w.participantId || "", linkedVia: w.linkedVia || null, uaeOnly: !hasCountryFeature(org, "einvoicing") };
+  }
+
+  static async linkWafeq(code, input = {}, ctx = null) {
+    const org = await Organisation.findOne({ code: String(code || "").toLowerCase() }).lean();
+    if (!org) throw new AppError("Organisation not found", 404, "NOT_FOUND");
+    if (!hasCountryFeature(org, "einvoicing")) throw new AppError("E-invoicing is for organisations in the UAE on a plan that includes it", 422, "FEATURE_NOT_FOR_COUNTRY");
+    const out = await WafeqConnectService.linkDirect(org.code, { mode: input.mode, taxpayerId: input.taxpayerId, grantId: input.grantId }, ctx?.by?.email || "platform");
+    if (ctx) await this.record({ ...ctx, action: "EINVOICE_WAFEQ_LINKED", organisation: org.code, summary: `Wafeq ${input.mode} taxpayer linked: ${out.name || input.taxpayerId}` });
+    return out;
+  }
+
+  static async unlinkWafeq(code, ctx = null) {
+    const org = await Organisation.findOne({ code: String(code || "").toLowerCase() }).lean();
+    if (!org) throw new AppError("Organisation not found", 404, "NOT_FOUND");
+    const out = await WafeqConnectService.unlinkDirect(org.code);
+    if (ctx) await this.record({ ...ctx, action: "EINVOICE_WAFEQ_UNLINKED", organisation: org.code, summary: "Wafeq link removed" });
     return out;
   }
 

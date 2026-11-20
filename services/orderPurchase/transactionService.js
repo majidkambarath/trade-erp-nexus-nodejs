@@ -13,6 +13,8 @@ const costing = require("../../utils/inventoryCosting");
 const { priceLine, priceCharge, priceDocument } = require("../../utils/pricing");
 const { stampGst } = require("../../utils/gst");
 const { spreadHeaderDiscount } = require("../../utils/headerDiscount");
+const { roundVatByRate } = require("../../utils/vatRounding");
+const { roundsVatByRate } = require("../einvoice/roundingRule");
 const { convertLinesToBase, convertChargesToBase, foreignView } = require("../../utils/fxDocument");
 const FxDocumentService = require("../financial/fxDocumentService");
 const GstService = require("../financial/gstService");
@@ -157,6 +159,14 @@ async function buildPricing({ items, charges = [], discount = 0, incomingTotal, 
       const p = priceCharge(noVat ? { ...c, vatPercent: 0 } : c);
       return { code: c.code, description: c.description, amount: p.net, vatPercent: p.vatPercent, vatAmount: p.vat };
     });
+  // An organisation that sends its invoices through Wafeq prices them the e-invoice's way: VAT once per category and rate, and no round-off
+  // (services/einvoice/roundingRule.js). The fils difference goes on the group's largest line, so the net of every line is untouched.
+  if (side === "sales" && !fx && (await roundsVatByRate(session))) {
+    const r = roundVatByRate(processedItems, pricedCharges);
+    processedItems = r.lines;
+    pricedCharges = r.charges;
+    incomingTotal = undefined;
+  }
   const pricingOf = (lines, charged, opts) =>
     priceDocument(
       lines.map((i) => ({ gross: i.grossAmount, discount: i.discountAmount, taxable: i.taxableAmount, vat: i.vatAmount, rcmVat: i.rcmVat })),

@@ -14,6 +14,10 @@ const taxCodeSchema = new mongoose.Schema(
     // Rate changes over time. The rate that applies is the latest entry dated on or before the
     // document date; ratePercent is the rate when no history entry applies.
     rateHistory: [{ date: { type: Date, required: true }, ratePercent: { type: Number, min: 0, max: 100 }, _id: false }],
+    // E-invoicing through Wafeq: why an exempt / out-of-scope supply carries no VAT (DL8.46.1-4, VATEX-AE-OOS) and, on a reverse-charge code,
+    // the goods type the buyer declares (DL8.48.8.1 ...). Absent until set.
+    exemptionReasonCode: { type: String, trim: true, default: undefined },
+    reverseChargeGoodsType: { type: String, trim: true, default: undefined },
     isDefault: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
   },

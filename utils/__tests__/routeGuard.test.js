@@ -107,6 +107,7 @@ test("the routes that need no permission are few, and each says why", () => {
     "routes/core/authRoutes.js  POST /reset-password",
     "routes/einvoice/einvoiceRoutes.js  POST /inbound/webhook",
     "routes/einvoice/einvoiceRoutes.js  POST /inbound/webhook/:org",
+    "routes/einvoice/einvoiceRoutes.js  POST /wafeq/webhook/:mode",
     "routes/messaging/shareRoutes.js  GET /:token",
     // The customer's estimate: one photograph of their own car, and a WRITE a stranger can make
     // in this API - approving or declining the work. Both open only for a link whose secret verifies,

@@ -8,8 +8,25 @@ const settingsSchema = new mongoose.Schema(
     enabled: { type: Boolean, default: false },
     // Only the built-in sandbox exists today. The connection to an accredited service provider is
     // not built yet (see services/einvoice/providers.js).
-    provider: { type: String, enum: ["sandbox"], default: "sandbox" },
-    environment: { type: String, enum: ["sandbox"], default: "sandbox" },
+    provider: { type: String, enum: ["sandbox", "wafeq"], default: "sandbox" },
+    // for Wafeq: "sandbox" uses the installation's test key, "live" its live key
+    environment: { type: String, enum: ["sandbox", "live"], default: "sandbox" },
+    // The business as Wafeq knows it (the partner model: Zarvia holds the Wafeq account, each client only links its taxpayer).
+    wafeq: {
+      taxpayerId: { type: String, default: undefined }, // "txpay_..."
+      grantId: { type: String, default: undefined }, // "tgr_..."
+      tin: String,
+      participantId: String, // "0235:<tin>"
+      name: String,
+      status: { type: String, enum: ["active", "revoked", "disconnected"], default: undefined },
+      mode: { type: String, enum: ["sandbox", "live"], default: undefined },
+      linkedVia: { type: String, enum: ["oauth", "console"], default: undefined },
+      connectedAt: Date,
+      connectedBy: String,
+      lastError: String,
+    },
+    // between "Connect with Wafeq" starting and finishing: the PKCE verifier, encrypted, never returned
+    wafeqPending: { type: new mongoose.Schema({ verifierEnc: String, nonce: String, mode: String, at: Date, by: String }, { _id: false }), select: false, default: undefined },
     webhookSecretEnc: { type: String, select: false }, // signs inbound deliveries; encrypted, never returned
     participantId: { type: String, trim: true }, // the seller's Peppol id, "0235:..."
     dueDays: { type: Number, default: 0, min: 0 }, // days after the invoice date by which it should be sent
@@ -33,6 +50,11 @@ const submissionSchema = new mongoose.Schema(
     payloadHash: { type: String },
     providerEntryId: { type: String, default: null },
     providerResponse: { type: mongoose.Schema.Types.Mixed, default: null },
+    deliveryStatus: { type: String, default: null }, // the provider's delivery leg (Wafeq delivery_status), beside taxStatus
+    deliveryJobId: { type: String, default: null },
+    route: { type: String, default: null }, // delivery | reporting_only ...
+    providerMode: { type: String, default: null }, // sandbox | live
+    providerIssues: [{ code: String, message: String, _id: false }], // what the provider refused, in its words
     attempts: { type: Number, default: 0 },
     pollCount: { type: Number, default: 0 },
     retryable: { type: Boolean, default: true },
@@ -78,6 +100,14 @@ const inboundSchema = new mongoose.Schema(
 inboundSchema.index({ companyId: 1, providerId: 1 }, { unique: true });
 inboundSchema.index({ companyId: 1, status: 1, createdAt: -1 });
 
+// Webhook deliveries from Wafeq, kept so a retry is recognised. Installation level (the delivery names a Wafeq taxpayer, not one of our
+// organisations), so it carries no companyId; the organisation is found from the taxpayer id.
+const wafeqEventSchema = new mongoose.Schema(
+  { eventId: { type: String, required: true, unique: true }, type: String, taxpayerId: String, org: { type: String, default: null }, result: String, receivedAt: { type: Date, default: Date.now }, processedAt: Date },
+  { timestamps: false }
+);
+wafeqEventSchema.index({ receivedAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 }); // a month is longer than Wafeq retries
+
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
 settingsSchema.plugin(tenantPlugin);
 submissionSchema.plugin(tenantPlugin);
@@ -87,4 +117,5 @@ module.exports = {
   EInvoiceSettings: mongoose.model("EInvoiceSettings", settingsSchema),
   EInvoiceSubmission: mongoose.model("EInvoiceSubmission", submissionSchema),
   InboundInvoice: mongoose.model("InboundInvoice", inboundSchema),
+  WafeqEvent: mongoose.model("WafeqEvent", wafeqEventSchema),
 };

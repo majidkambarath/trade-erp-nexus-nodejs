@@ -61,6 +61,9 @@ exports.update = catchAsync(async (req, res) => ok(res, await Orgs.update(req.pa
 exports.extend = catchAsync(async (req, res) => ok(res, await Orgs.extend(req.params.code, req.body || {}, ctx(req))));
 exports.status = catchAsync(async (req, res) => ok(res, await Orgs.setStatus(req.params.code, req.body?.status, ctx(req))));
 exports.provision = catchAsync(async (req, res) => ok(res, await Orgs.provision(req.params.code, ctx(req))));
+exports.wafeqLink = catchAsync(async (req, res) => ok(res, await Orgs.wafeqLink(req.params.code)));
+exports.linkWafeq = catchAsync(async (req, res) => ok(res, await Orgs.linkWafeq(req.params.code, req.body || {}, ctx(req))));
+exports.unlinkWafeq = catchAsync(async (req, res) => ok(res, await Orgs.unlinkWafeq(req.params.code, ctx(req))));
 exports.profile = catchAsync(async (req, res) => ok(res, await Orgs.updateCompanyProfile(req.params.code, req.body || {}, ctx(req))));
 
 // an organisation's people and branches
