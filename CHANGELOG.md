@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.0.0.0 — 20 November 2026
+
+Major release. Frontend and backend both at 4.0.0.0. It brings together the whole 3.x programme (India GST, foreign-currency invoices, cost centres, budgets, recurring invoices, server-side lists, amount inputs and the small gaps) under one version.
+
 ## 3.16.0.0 — 20 November 2026
 
 Small gaps, closed together. Frontend and backend both at 3.16.0.0.
