@@ -44,6 +44,11 @@ const wafeq = {
 
     const adopt = async () => {
       const found = await findByNumber(mode, taxpayerId, path, number);
+      // Only OUR document may be adopted: the number may have been used at Wafeq by another document (another system, or an earlier
+      // test on a shared sandbox taxpayer). We always send source_id = our transaction id, so it must match.
+      if (found && body.source_id && String(found.source_id || "") !== String(body.source_id)) {
+        throw new ProviderError(`${number} is already used at Wafeq by another document; this invoice needs a different number`, { retryable: false, raw: b, code: "NUMBER_TAKEN_AT_WAFEQ" });
+      }
       if (found) return { entryId: found.id, status: "SUBMITTED", raw: found, extra: { deliveryStatus: found.delivery_status || null, deliveryJobId: null, route: null } };
       throw new ProviderError(`Wafeq reports ${number} was already submitted but it could not be found; check it in the Wafeq portal`, { retryable: false, raw: b, code: "NOT_FOUND_AT_WAFEQ" });
     };

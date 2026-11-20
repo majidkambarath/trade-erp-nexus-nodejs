@@ -60,6 +60,14 @@ test("duplicate_number adopts the document Wafeq already holds", async () => {
   assert.equal(r.status, "SUBMITTED");
 });
 
+test("a number Wafeq holds for ANOTHER document is never adopted", async () => {
+  const mine = { wafeq: { path: "/invoices", body: { invoice_number: "SO-1", source_id: "tx-mine", line_items: [] } } };
+  fake(ok({ success: false, status: "duplicate_number" }), ok({ items: [{ id: "inv_theirs", invoice_number: "SO-1", source_id: "tx-someone-else" }] }));
+  await assert.rejects(() => wafeq.submit(mine, { settings, submission: sub }), (e) => e.retryable === false && e.code === "NUMBER_TAKEN_AT_WAFEQ");
+  fake(ok({ success: false, status: "duplicate_number" }), ok({ items: [{ id: "inv_mine", invoice_number: "SO-1", source_id: "tx-mine" }] }));
+  assert.equal((await wafeq.submit(mine, { settings, submission: sub })).entryId, "inv_mine");
+});
+
 test("an idempotency key reused with another body also looks for the document, and fails plainly when it is not there", async () => {
   fake({ status: 409, body: { detail: { code: "idempotency_key_reused", message: "different payload" } } }, ok({ items: [] }));
   await assert.rejects(() => wafeq.submit(payload, { settings, submission: sub }), (e) => e.retryable === false && e.code === "NOT_FOUND_AT_WAFEQ");
