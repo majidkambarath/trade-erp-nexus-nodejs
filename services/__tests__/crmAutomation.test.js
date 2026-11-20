@@ -205,6 +205,34 @@ test("two open deals for one customer are ambiguous, so an unlinked invoice move
   await svc.Opp.remove(second._id, asif._id);
 });
 
+// A deal carries what it is for, line by line; its value is their total. A quotation raised FROM that deal names it, so it
+// links to the right deal even with two open for one customer - where the hook would otherwise refuse to guess.
+test("a deal's lines decide its value, and a quotation raised from it links to it even beside another open deal", { skip }, async () => {
+  const lined = await svc.Opp.create({
+    title: "Rice and delivery", customerId: String(customer._id), value: 99999,
+    items: [{ itemId: String(item._id), qty: 10, price: 60 }, { description: "Delivery to Al Ain", qty: 1, price: 150 }],
+  }, asif._id);
+  assert.equal(lined.value, 750, "10 x 60 + 150: a typed value does not stand beside lines");
+  assert.equal(lined.items[0].description, "Basmati rice 5kg", "an item's line takes the item's name when none is typed");
+  await fails(() => svc.Opp.create({ title: "Bad", customerId: String(customer._id), items: [{ description: "x", qty: 0, price: 5 }] }, asif._id), "DEAL_LINE_QTY");
+  await fails(() => svc.Opp.create({ title: "Bad", customerId: String(customer._id), items: [{ itemId: String(new mongoose.Types.ObjectId()), qty: 1, price: 5 }] }, asif._id), "ITEM_NOT_FOUND");
+  const edited = await svc.Opp.update(lined._id, { items: [{ description: "Delivery to Al Ain", qty: 2, price: 150 }], value: 5 }, asif._id);
+  assert.equal(edited.value, 300);
+  const cleared = await svc.Opp.update(lined._id, { items: [], value: 1200 }, asif._id);
+  assert.equal(cleared.value, 1200, "without lines the typed value stands again");
+  assert.ok(!cleared.items?.length);
+
+  // two open deals: the named one is linked, the other is left alone
+  const quote = await svc.Quote.create(
+    { partyId: String(customer._id), date: today(), validUntil: svc.days.addDays(today(), 14), items: [line(item, 10, 60)], opportunityId: String(lined._id) },
+    String(asif._id)
+  );
+  assert.equal((await deal(lined._id)).links.quotationId, String(quote._id));
+  assert.notEqual((await deal(pipelineDeal._id)).links.quotationId, String(quote._id), "the other open deal is not touched");
+  await svc.Quote.remove(quote._id, String(asif._id));
+  await svc.Opp.remove(lined._id, asif._id);
+});
+
 test("a rejected quotation takes back both the moves it caused", { skip }, async () => {
   // Its own customer: the first one already has an open deal, and the automation will not guess between two.
   const spice = await svc.Customer.create({ customerId: "CUST2026002", customerName: "Spice Souk", contactPerson: "Omar", paymentTerms: "Net 30" });

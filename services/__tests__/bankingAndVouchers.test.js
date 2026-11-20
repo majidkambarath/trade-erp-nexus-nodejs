@@ -436,3 +436,17 @@ test("the voucher read carries what the paper prints, and nothing else about the
     assert.ok(!wire.includes(secret), `the voucher read leaked ${secret}`);
   }
 });
+
+// A voucher keeps the party's particulars as they were: an address changed next month must not
+// rewrite a receipt already issued.
+test("the voucher keeps the party's address, tax number and terms as they were when it was made", { skip }, async () => {
+  await svc.Customer.updateOne({ _id: customer._id }, { $set: { billingAddress: "Old shop, Karama", trnNumber: "104144306800003", "vat.trn": "104144306800003", paymentTerms: "Net 15", "credit.days": 15 } });
+  const made = await receipt({ paymentMode: "cash" });
+  await svc.Customer.updateOne({ _id: customer._id }, { $set: { billingAddress: "New office, Deira", paymentTerms: "Net 45", "credit.days": 45 } });
+  const { voucher } = await svc.Financial.getVoucherById(made._id);
+  assert.equal(voucher.partySnapshot.name, "Al Noor");
+  assert.equal(voucher.partySnapshot.address, "Old shop, Karama");
+  assert.equal(voucher.partySnapshot.trn, "104144306800003");
+  assert.equal(voucher.partySnapshot.creditDays, 15);
+  assert.equal(voucher.partyId.billingAddress, "New office, Deira", "the live party has moved on; the snapshot has not");
+});

@@ -52,7 +52,12 @@ const quietly = async (what, fn) => {
  *   3. the customer's one open deal - and ONLY when there is exactly one. A customer with two open deals is
  *      ambiguous, and guessing would move the wrong one; the person moves it by hand instead.
  */
-async function dealFor({ quotationId = null, orderId = null, quoteRef = null, customerId = null }, session) {
+async function dealFor({ quotationId = null, orderId = null, quoteRef = null, customerId = null, opportunityId = null }, session) {
+  // 0. the deal the document was raised from, named by the person: it must be open and be this customer's
+  if (rules.isId(opportunityId) && rules.isId(customerId)) {
+    const named = await Opportunity.findOne({ _id: String(opportunityId), customerId: String(customerId), status: "OPEN" }).session(session || null);
+    if (named) return named;
+  }
   const byLink = async (field, value) => {
     if (!rules.isId(value)) return null;
     return Opportunity.findOne({ [field]: String(value) }).session(session || null);
@@ -170,11 +175,11 @@ class CrmHooks {
    * way. Nothing here needs a request: QuotationService's methods are given a `createdBy` string and no `req`, so the
    * hook must never depend on one.
    */
-  static async onQuotationChanged(quotation, { session, event } = {}) {
+  static async onQuotationChanged(quotation, { session, event, opportunityId = null } = {}) {
     if (!quotation) return null;
     return quietly(`quotation ${quotation.quotationNo || quotation._id} (${event})`, async () => {
       const deal = await dealFor(
-        { quotationId: quotation._id, customerId: quotation.partyId },
+        { quotationId: quotation._id, customerId: quotation.partyId, opportunityId: event === "created" ? opportunityId : null },
         session
       );
       if (!deal) return null;

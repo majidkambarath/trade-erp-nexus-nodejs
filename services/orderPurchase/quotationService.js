@@ -158,7 +158,9 @@ class QuotationService {
     );
     // The customer's open CRM deal, if there is one, learns which quotation is being made against it: see
     // services/crm/crmHooks.js. Nothing moves - a draft offer is not an offer the customer has seen.
-    await CrmHooks.onQuotationChanged(doc, { session, event: "created" });
+    // A quotation raised FROM a deal names it (`opportunityId`), so the link is explicit even when the customer has
+    // two open deals; one that does not name a deal finds the customer's only open one, as before.
+    await CrmHooks.onQuotationChanged(doc, { session, event: "created", opportunityId: data.opportunityId });
     return doc;
   });
 

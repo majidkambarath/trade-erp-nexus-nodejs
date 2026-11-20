@@ -6,6 +6,7 @@ const AppError = require("../../utils/AppError");
 const Opportunity = require("../../models/modules/crm/opportunityModel");
 const Lead = require("../../models/modules/crm/leadModel");
 const Customer = require("../../models/modules/customerModel");
+const Stock = require("../../models/modules/stockModel");
 const rules = require("../../utils/crm");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { todayInOrg } = require("../../utils/documentExpiry");
@@ -147,6 +148,7 @@ class OpportunityService {
     const stages = await CrmSetupService.stages({ session });
     const errors = rules.validateOpportunity(data, { stages });
     if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
+    const lines = await OpportunityService.dealLines(data.items, session);
 
     const customer = await Customer.findById(rules.text(data.customerId, 24)).select("customerName").lean();
     if (!customer) throw fail("Customer not found", 404, "CUSTOMER_NOT_FOUND");
@@ -169,7 +171,8 @@ class OpportunityService {
           stageName: stage.name,
           probability: stage.probability,
           stageSinceDay: today,
-          value: rules.round2(rules.num(data.value)),
+          value: lines.length ? rules.dealValueOf(lines) : rules.round2(rules.num(data.value)),
+          ...(lines.length ? { items: lines } : {}),
           expectedCloseDate: rules.day(data.expectedCloseDate),
           status: "OPEN",
           source: rules.oneOf(data.source, rules.LEAD_SOURCES) || "other",
@@ -189,6 +192,20 @@ class OpportunityService {
     return doc;
   });
 
+  // A deal's lines, checked: the rules (utils/crm.js), then each item named must be one of this organisation's items.
+  static async dealLines(input, session) {
+    const { lines, errors } = rules.validateDealLines(input);
+    if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
+    const ids = [...new Set(lines.filter((l) => l.itemId).map((l) => l.itemId))];
+    if (ids.length) {
+      const found = await Stock.find({ _id: { $in: ids } }).select("itemName").session(session || null).lean();
+      if (found.length !== ids.length) throw fail("One of the items on the deal is not in this organisation's items", 400, "ITEM_NOT_FOUND");
+      const names = new Map(found.map((s) => [String(s._id), s.itemName || ""]));
+      for (const l of lines) if (l.itemId && !l.description) l.description = names.get(l.itemId) || "";
+    }
+    return lines;
+  }
+
   static update = withTransactionSession(async (id, data, by, session) => {
     const doc = await OpportunityService.openOne(id, session);
     const stages = await CrmSetupService.stages({ session });
@@ -196,7 +213,13 @@ class OpportunityService {
     if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
 
     if (data.title !== undefined) doc.title = rules.text(data.title, 150) || doc.title;
-    if (data.value !== undefined) doc.value = rules.round2(rules.num(data.value));
+    if (data.items !== undefined) {
+      const lines = await OpportunityService.dealLines(data.items, session);
+      doc.items = lines.length ? lines : undefined;
+    }
+    // with lines the deal is worth their total; a typed value only stands for a deal without any
+    if (doc.items?.length) doc.value = rules.dealValueOf(doc.items);
+    else if (data.value !== undefined) doc.value = rules.round2(rules.num(data.value));
     if (data.expectedCloseDate !== undefined) doc.expectedCloseDate = rules.day(data.expectedCloseDate);
     if (data.source !== undefined) doc.source = rules.oneOf(data.source, rules.LEAD_SOURCES) || doc.source;
     if (data.notes !== undefined) doc.notes = rules.text(data.notes, 2000);

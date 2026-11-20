@@ -34,6 +34,8 @@ const customerSchema = new mongoose.Schema({
   // nothing is stamped on it until somebody edits the address (utils/partyAddress.js).
   country: { type: String, trim: true, uppercase: true, default: undefined },
   emirate: { type: String, trim: true, default: undefined },
+  // the address's city or town, its own field so documents and an e-invoice need not parse the free-text address
+  city: { type: String, trim: true, maxlength: 80, default: undefined },
   // The GST state code ("27") of an Indian party: where the supply is made or received (utils/gst.js). Absent for any other
   // country and on a record saved before it existed; taken from the GSTIN's first two digits when not typed.
   stateCode: { type: String, trim: true, default: undefined },

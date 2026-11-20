@@ -202,3 +202,16 @@ test("an on-account receipt moves what a customer owes by exactly its amount, an
   assert.ok(gone.status === 200 || gone.status === 204, `delete: ${gone.status} ${JSON.stringify(gone.data)}`);
   assert.equal(await bal(), owed, "and taking the receipt away restores exactly what was owed");
 });
+
+// A vendor's signed balance is "what we owe" (a purchase adds to it), so paying them on account must take it DOWN - it used to add,
+// the same direction as a purchase. Deleting the payment puts back exactly what was owed.
+test("an on-account payment lowers what we owe a vendor by its amount, and deleting it puts it back", { skip }, async () => {
+  const bal = async () => (await M.Vendor.findById(S.vendor).select("cashBalance").lean()).cashBalance || 0;
+  const owed = await bal();
+  const r = await call("POST", "/vouchers/vouchers", { body: { voucherType: "payment", vendorId: S.vendor, totalAmount: 40, date: new Date().toISOString().slice(0, 10), paymentMode: "cash" } });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(await bal(), owed - 40, "paying 40 on account leaves us owing the vendor 40 less");
+  const gone = await call("DELETE", `/vouchers/vouchers/${r.body._id || r.body.voucher?._id}`);
+  assert.ok(gone.status === 200 || gone.status === 204, `delete: ${gone.status} ${JSON.stringify(gone.data)}`);
+  assert.equal(await bal(), owed, "and taking the payment away restores exactly what was owed");
+});

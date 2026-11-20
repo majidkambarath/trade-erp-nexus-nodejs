@@ -8,6 +8,10 @@
 //
 // The links are the ones the documents already carry: an order's `quoteRef`, a quotation's `convertedTo`,
 // a note's `source` (what it was made from) and `invoice` (the order that invoices it).
+//
+// A sales ORDER DOCUMENT (TradeOrder, non-posting) heads its own deal: quotation -> order -> delivery notes ->
+// invoice(s). Its invoices are the sales_order Transactions it raised (`tradeOrderRef`, or a note's `invoice`),
+// so they belong to its deal and never make one of their own.
 
 const { invoiceClock, quotationExpiry, fulfilment } = require("./salesDocuments");
 const { isService } = require("./itemKinds");
@@ -85,7 +89,7 @@ function worstClock(notes, now) {
   return worst;
 }
 
-function buildFlow({ quotations = [], orders = [], notes = [], returns = [] }, now = new Date()) {
+function buildFlow({ quotations = [], orders = [], notes = [], returns = [], tradeOrders = [] }, now = new Date()) {
   const liveQuotes = quotations.filter((q) => q.status !== "SUPERSEDED"); // its revision stands for it
   const liveOrders = orders.filter((o) => !DEAD_ORDER.includes(o.status));
   const liveNotes = notes.filter((n) => n.status !== "CANCELLED");
@@ -95,9 +99,28 @@ function buildFlow({ quotations = [], orders = [], notes = [], returns = [] }, n
   const usedQuotes = new Set();
   const usedNotes = new Set();
 
-  // 1. a deal for every live sales order
-  const byOrder = new Map(liveOrders.map((o) => [id(o._id), { quotation: null, order: o, notes: [] }]));
+  // 0. a deal for every live order document, with its notes, its invoices and its offer
+  const deals = [];
+  const usedInvoices = new Set();
+  for (const t of tradeOrders.filter((x) => x.status !== "CANCELLED")) {
+    const mine = liveNotes.filter((n) => !usedNotes.has(id(n._id)) && n.source?.kind === "trade_order" && id(n.source.id) === id(t._id));
+    mine.forEach((n) => usedNotes.add(id(n._id)));
+    const viaNotes = new Set(mine.map((n) => id(n.invoice?.id)).filter(Boolean));
+    const invoices = liveOrders
+      .filter((o) => !usedInvoices.has(id(o._id)) && (id(o.tradeOrderRef?.tradeOrderId) === id(t._id) || viaNotes.has(id(o._id))))
+      .sort((a, b) => time(b.date) - time(a.date) || id(b._id).localeCompare(id(a._id)));
+    invoices.forEach((o) => usedInvoices.add(id(o._id)));
+    let quote = t.quoteRef ? quoteByNo.get(t.quoteRef) : null;
+    quote ||= liveQuotes.find((q) => q.convertedTo?.kind === "trade_order" && id(q.convertedTo.id) === id(t._id));
+    if (quote && usedQuotes.has(id(quote._id))) quote = null;
+    if (quote) usedQuotes.add(id(quote._id));
+    deals.push({ quotation: quote, tradeOrder: t, order: invoices[0] || null, invoices, notes: mine });
+  }
+
+  // 1. a deal for every live sales order (an invoice raised from an order document is already in that deal)
+  const byOrder = new Map(liveOrders.filter((o) => !usedInvoices.has(id(o._id))).map((o) => [id(o._id), { quotation: null, order: o, notes: [] }]));
   for (const n of liveNotes) {
+    if (usedNotes.has(id(n._id))) continue;
     const orderId = n.source?.kind === "sales_order" ? id(n.source.id) : id(n.invoice?.id);
     const deal = byOrder.get(orderId);
     if (deal) { deal.notes.push(n); usedNotes.add(id(n._id)); }
@@ -115,7 +138,7 @@ function buildFlow({ quotations = [], orders = [], notes = [], returns = [] }, n
   }
 
   // 2. a deal for every offer that has not become an order
-  const deals = [...byOrder.values()];
+  deals.push(...byOrder.values());
   for (const q of liveQuotes) {
     if (usedQuotes.has(id(q._id))) continue;
     const mine = liveNotes.filter((n) => !usedNotes.has(id(n._id)) && n.source?.kind === "quotation" && id(n.source.id) === id(q._id));
@@ -129,20 +152,23 @@ function buildFlow({ quotations = [], orders = [], notes = [], returns = [] }, n
   const chains = deals.map((d) => {
     const notesSorted = [...d.notes].sort((a, b) => time(a.deliveredAt || a.date) - time(b.deliveredAt || b.date));
     const expiry = d.quotation ? quotationExpiry(d.quotation, now) : { expired: false, daysLeft: null };
-    const mode = notesSorted.length ? (notesSorted.some((n) => n.source?.kind === "sales_order") ? "order_first" : "delivery_first") : null;
-    const delivery = d.order && (mode === "order_first" || !notesSorted.length) ? deliveryOf(d.order, notesSorted) : null;
-    const stage = stageOf({ ...d, notes: notesSorted, delivery }, expiry.expired);
-    const latest = Math.max(time(d.quotation?.date), time(d.order?.date), ...notesSorted.map((n) => time(n.deliveredAt || n.date)));
+    const t = d.tradeOrder || null;
+    const mode = t ? "order_first" : notesSorted.length ? (notesSorted.some((n) => n.source?.kind === "sales_order") ? "order_first" : "delivery_first") : null;
+    // an order document's delivery is measured against ITS lines; its invoice was raised from what was delivered
+    const delivery = t ? deliveryOf(t, notesSorted) : d.order && (mode === "order_first" || !notesSorted.length) ? deliveryOf(d.order, notesSorted) : null;
+    const stage = stageOf({ ...d, order: d.order || t, notes: notesSorted, delivery }, expiry.expired);
+    const latest = Math.max(time(d.quotation?.date), time(t?.date), time(d.order?.date), ...notesSorted.map((n) => time(n.deliveredAt || n.date)));
     return {
-      key: d.order ? `o:${id(d.order._id)}` : d.quotation ? `q:${id(d.quotation._id)}` : `n:${id(notesSorted[0]._id)}`,
+      key: t ? `t:${id(t._id)}` : d.order ? `o:${id(d.order._id)}` : d.quotation ? `q:${id(d.quotation._id)}` : `n:${id(notesSorted[0]._id)}`,
       stage,
       mode,
       quotation: d.quotation ? { ...d.quotation, expired: expiry.expired, daysLeft: expiry.daysLeft } : null,
       order: d.order ? withoutLines(d.order) : null,
+      ...(t ? { tradeOrder: withoutLines(t), invoices: (d.invoices || []).map(withoutLines) } : {}),
       notes: notesSorted.map(withoutLines),
       delivery,
       closeShort: closeShortOf(d.order, returns),
-      amount: round2(d.order?.totalAmount ?? d.quotation?.totalAmount ?? notesSorted.reduce((t, n) => t + (n.totalAmount || 0), 0)),
+      amount: round2(t?.totalAmount ?? d.order?.totalAmount ?? d.quotation?.totalAmount ?? notesSorted.reduce((t, n) => t + (n.totalAmount || 0), 0)),
       date: latest ? new Date(latest) : null,
       // what to chase: the invoice a delivery is waiting for, and an offer about to run out
       invoiceClock: worstClock(notesSorted, now),

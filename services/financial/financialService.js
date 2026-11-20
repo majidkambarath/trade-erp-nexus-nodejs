@@ -32,6 +32,12 @@ const TxRetry = require("../../utils/withTransactionSession"); // isTransient / 
 const DebitLog = require("../../models/modules/DebitLog"); // ADD THIS
 const CreditLog = require("../../models/modules/CreditLog"); // ADD THIS
 
+// Money on account moves a party's signed cashBalance the way a document does: a customer's balance goes up when they pay
+// (a sale takes it down), a vendor's goes DOWN when we pay them or they credit us (a purchase takes it up, "we owe").
+// So a receipt / credit note on account adds, a payment / debit note on account subtracts, and undoing one does the
+// opposite. It used to add for both, which made a payment on account increase what we owed the vendor.
+const onAccountOp = (partyType, reverse = false) => ((partyType === "Vendor") !== reverse ? "subtract" : "add");
+
 class FinancialService {
   // Generate voucher number based on type
   // Voucher numbers come from NumberSeriesService (one atomic counter per series and fiscal
@@ -107,7 +113,7 @@ class FinancialService {
       await invoice.save({ session });
     }
     if (voucher.partyType && voucher.onAccountAmount > 0) {
-      await this.adjustPartyCashBalance(voucher.partyId, voucher.partyType, voucher.onAccountAmount, session, "add");
+      await this.adjustPartyCashBalance(voucher.partyId, voucher.partyType, voucher.onAccountAmount, session, onAccountOp(voucher.partyType));
     }
   }
 
@@ -257,12 +263,14 @@ class FinancialService {
           await this.applyInvoiceAndPartyEffects(processedData, session);
         }
 
+        const partySnapshot = await this.partySnapshotOf(processedData.partyId, processedData.partyType, session);
         const voucherDoc = {
           voucherNo,
           voucherType,
           createdBy,
           attachments,
           ...processedData,
+          ...(partySnapshot ? { partySnapshot } : {}),
           ...(voucherData.costCentreId ? { costCentreId: voucherData.costCentreId } : {}),
         };
 
@@ -679,7 +687,7 @@ class FinancialService {
     const LogModel = voucher.partyType === "Vendor" ? DebitLog : CreditLog;
     await LogModel.deleteMany({ ref: voucher.voucherNo }, { session });
     if (voucher.partyType && voucher.onAccountAmount > 0) {
-      await this.adjustPartyCashBalance(voucher.partyId, voucher.partyType, voucher.onAccountAmount, session, "subtract");
+      await this.adjustPartyCashBalance(voucher.partyId, voucher.partyType, voucher.onAccountAmount, session, onAccountOp(voucher.partyType, true));
     }
     // The older transactor-based contra and journal vouchers also moved balances on those accounts.
     if (!voucher.ledgerBased) {
@@ -1533,9 +1541,33 @@ class FinancialService {
   // What an edit may never write itself: where the voucher stands in its approval, who made it, what it is called. A plain
   // edit used to copy the whole request body onto the voucher, so a person who could only Edit could send
   // { status: "approved" } or { createdBy: <someone else> } and skip every approval rule.
+  // The party as it stood when the voucher was made: name, address, tax number and credit days, read once from the master so a
+  // receipt reprinted next year still shows the address it was issued to. Null when the voucher names no customer or vendor.
+  static async partySnapshotOf(partyId, partyType, session) {
+    if (!partyId || !["Customer", "Vendor"].includes(partyType)) return null;
+    const Model = partyType === "Vendor" ? Vendor : Customer;
+    const p = await Model.findById(partyId)
+      .select("customerName vendorName billingAddress address trnNumber trnNO vat.trn paymentTerms credit.days city emirate country")
+      .session(session || null)
+      .lean();
+    if (!p) return null;
+    const terms = String(p.paymentTerms || "");
+    const days = Number.isFinite(p.credit?.days) ? p.credit.days : /^\s*(prepaid|cash)/i.test(terms) ? 0 : Number((terms.match(/\d+/) || [])[0]) || null;
+    const text = (v) => (String(v ?? "").trim() || undefined);
+    return {
+      name: text(p.customerName || p.vendorName),
+      address: text(p.billingAddress || p.address),
+      city: text(p.city),
+      emirate: text(p.emirate),
+      country: text(p.country),
+      trn: text(p.vat?.trn || p.trnNumber || p.trnNO),
+      creditDays: days ?? undefined,
+    };
+  }
+
   static withoutSystemFields(data) {
     const out = { ...data };
-    for (const key of ["_id", "voucherNo", "voucherType", "companyId", "branchId", "status", "approvalStatus", "approvals", "approvedBy", "approvedAt", "createdBy", "createdAt", "heldCheque", "ledgerBased", "vanTripRef"]) delete out[key];
+    for (const key of ["_id", "voucherNo", "voucherType", "companyId", "branchId", "status", "approvalStatus", "approvals", "approvedBy", "approvedAt", "createdBy", "createdAt", "heldCheque", "ledgerBased", "vanTripRef", "partySnapshot"]) delete out[key];
     return out;
   }
 
@@ -1628,7 +1660,7 @@ class FinancialService {
                 oldVoucher.partyType,
                 oldVoucher.onAccountAmount,
                 session,
-                "subtract"
+                onAccountOp(oldVoucher.partyType, true)
               );
             }
           }
@@ -1722,6 +1754,9 @@ class FinancialService {
             processedData.heldCheque = _cheque || undefined;
           }
           Object.assign(oldVoucher, processedData);
+          // the party as it is now, since the edit may have changed who the voucher is for
+          const snap = await this.partySnapshotOf(oldVoucher.partyId, oldVoucher.partyType, session);
+          if (snap) oldVoucher.partySnapshot = snap;
         } else {
           Object.assign(oldVoucher, this.withoutSystemFields(data));
         }

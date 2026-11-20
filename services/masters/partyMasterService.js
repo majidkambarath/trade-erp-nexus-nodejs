@@ -109,6 +109,7 @@ class PartyMasterService {
     // the address's country and emirate: only when the request names one, so a record that never had them is not given any
     const address = resolveAddress({ country: data.country, emirate: data.emirate, stateCode: data.stateCode }, existing);
     if (address) Object.assign(patch, address);
+    if (data.city !== undefined) patch.city = blank(data.city) ? null : String(data.city).trim().slice(0, 80);
     // an Indian party with no state typed takes the one in its GSTIN (the first two digits), so place of supply works without a second entry
     if ((patch.country || existing?.country) === "IN" && !(patch.stateCode ?? existing?.stateCode)) {
       const derived = stateCodeOfGstin(patch.vat?.trn || patch[k.legacyTrn] || existing?.vat?.trn || existing?.[k.legacyTrn]);

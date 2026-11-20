@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.16.0.0 — 20 November 2026
+
+Small gaps, closed together. Frontend and backend both at 3.16.0.0.
+
+### Added
+
+- **A city on suppliers and customers.** The address now has a City or town box of its own (beside Country and Emirate). It prints on the document under the party's address, and a customer's e-invoice city takes it before falling back to the emirate.
+- **A voucher keeps the party as it was.** A receipt, payment or note now stores the party's address, tax number and credit days on the day it is made, so reprinting an old receipt shows what it was issued to, not today's details. Vouchers made before this still read the live record.
+- **The customer's Documents tab follows order documents.** A sales order (the one that posts nothing) is now one deal with its quotation, its delivery notes and the invoice raised from them, instead of the offer, the notes and the invoice showing as separate pieces. It offers "Deliver the order", "Deliver the rest", "Approve the invoice".
+- **Line items on a CRM deal.** A deal can say what it is for, line by line (an item or plain words, quantity, price); when it has lines it is worth their total. **Create quotation** on an open deal opens the quotation form with the customer and the item lines filled in, and links the quotation to that deal even when the customer has other deals open. Shown only where Quotations are in the plan and the person may add sales documents.
+- **Leads use the shared list**: saved views, the column chooser, density and the same search and filters as Contacts and the other lists, with the status tabs kept as a filter.
+- **Cheque register by van trip**: a Van trip filter (for people who may see van sales), and a "Cheques on this trip" link on the trip page.
+
+### Fixed
+
+- **A payment to a supplier on account lowered what we owe them the wrong way.** It added to the supplier's balance (as a purchase does) instead of taking it off; so did a debit note on account, and deleting either undid it the wrong way too. Nothing read that figure on a screen or report, so no total changed, but the stored balance is now right for payments from this release on. Balances already stored from earlier payments are not rewritten.
+
 ## 3.15.0.0 — 19 November 2026
 
 Recurring invoices. Frontend and backend both at 3.15.0.0.
