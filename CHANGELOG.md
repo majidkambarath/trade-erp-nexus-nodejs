@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.1.1.0 — 21 November 2026
+
+Small e-Invoicing screen improvements. Frontend and backend both at 4.1.1.0 (no server change).
+
+### Added
+
+- **A sending dialog.** Sending, resending a correction or retrying an e-invoice now opens a dialog with an animation and the steps (checking, sending to Wafeq, waiting for the answer), then a clear result: sent and what happens next, or not sent and why. Hiding it never stops the send.
+- **Invoices and Credit notes tabs** on e-Invoicing > Outbound, in place of the type dropdown.
+
 ## 4.1.0.0 — 21 November 2026
 
 UAE e-invoicing through Wafeq, the accredited service provider. Frontend and backend both at 4.1.0.0.
