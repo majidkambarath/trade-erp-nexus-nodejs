@@ -197,6 +197,22 @@ test("a credit note names the invoice it credits, and the invoice names its cred
   assert.equal(invoiceRow.creditOf, null);
 });
 
+test("a successful read clears an error an earlier failed poll left behind; an unknown provider is a plain refusal", { skip }, async () => {
+  wafeq();
+  const inv = await sellInvoice([line("SUGAR", 2, 30)]);
+  const sub = (await svc.EI.submit(inv._id, { admin: { id: "u" } })).submission;
+  await svc.Models.EInvoiceSubmission.updateOne({ _id: sub._id }, { $set: { status: "ACKNOWLEDGED", lastError: "Cannot read properties of undefined (reading 'getStatus')" } });
+  const stale = await submissionOf(inv);
+  const after = await svc.EI.applyStatus(stale, { status: "ACKNOWLEDGED", taxStatus: "not_reported", extra: { deliveryStatus: "delivered_confirmed" } }, { polled: true });
+  assert.equal(after.lastError ?? null, null);
+  assert.equal(after.status, "ACKNOWLEDGED");
+  assert.equal(after.deliveryStatus, "delivered_confirmed");
+  // a rejection still writes its reason
+  const rej = await svc.EI.applyStatus(after, { status: "REJECTED", note: "Rejected by the buyer", extra: { deliveryStatus: "rejected", rejectedBy: "buyer" } });
+  assert.equal(rej.lastError, "Rejected by the buyer");
+  assert.throws(() => svc.EI.providerFor({ provider: "nope" }), (e) => e.code === "PROVIDER_NOT_AVAILABLE" && /not available/.test(e.message));
+});
+
 test("an accepted supplier invoice not yet recorded as a purchase is listed by recorded=0", { skip }, async () => {
   wafeq({ inbound: [{ id: "inv_in9", direction: "inbound", invoice_number: "WQS-2026-0001" }] });
   await svc.Pull.pull("default", { force: true });
