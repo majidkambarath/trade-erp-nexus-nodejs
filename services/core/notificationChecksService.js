@@ -439,6 +439,96 @@ class NotificationChecksService {
     return { checked: rows.length, told: active.length };
   }
 
+  // ---- money owed, bills falling due, paper running out (utils/moneyNotices.js) ---------------------------------------------------
+  // Each is ONE grouped row per kind per week, so a ledger with hundreds of overdue invoices fills one line of the bell, not all of it.
+  // The audience is the permission of the screen that works the problem: whoever may see sales chases customers, whoever may see
+  // purchases pays suppliers. (Not finance.view: an organisation on the trade-only plan holds no finance module at all, and its
+  // receivables are the first thing its owner wants to hear about.) No customer or supplier is named on a money row.
+
+  /** An open invoice as the money notices want it: its due date as the organisation's calendar day. */
+  static dueRow(i) {
+    return { partyId: i.partyId, partyName: i.partyName, outstanding: i.outstanding, dueDay: toExpiryDay(i.dueDate) };
+  }
+
+  /** Raise one grouped row, keyed by the week; the key is returned so the check can tell resolveMissing what is still true. */
+  static async raiseWeekly(kind, notice, { link, permission, today, now }) {
+    const dedupeKey = `${kind}:${require("../../utils/moneyNotices").weekKey(today)}`;
+    await NotificationService.raise({ kind, severity: notice.severity, title: notice.title, body: notice.body, link, dedupeKey, permission, now });
+    return dedupeKey;
+  }
+
+  /** Customer invoices past their due day: how many, how much, how old. Closes itself when the last one is paid. */
+  static async checkOverdueReceivables(now = new Date()) {
+    const AgeingService = require("../financial/ageingService");
+    const today = todayInOrg(now);
+    const open = await AgeingService.openInvoices({ type: "receivable", asOf: now });
+    const notice = require("../../utils/moneyNotices").overdueReceivables(open.map(this.dueRow), today, { currency: require("../../utils/orgLocale").baseCurrency() });
+    const active = notice ? [await this.raiseWeekly("overdue_receivables", notice, { link: "/ageing", permission: "sales.view", today, now })] : [];
+    await NotificationService.resolveMissing({ kind: "overdue_receivables", activeDedupeKeys: active, now });
+    return { checked: open.length, told: active.length };
+  }
+
+  /** Supplier bills overdue or falling due within a week. */
+  static async checkPayablesDue(now = new Date()) {
+    const AgeingService = require("../financial/ageingService");
+    const today = todayInOrg(now);
+    const open = await AgeingService.openInvoices({ type: "payable", asOf: now });
+    const notice = require("../../utils/moneyNotices").payablesDue(open.map(this.dueRow), today, { currency: require("../../utils/orgLocale").baseCurrency() });
+    const active = notice ? [await this.raiseWeekly("payables_due", notice, { link: "/ageing?type=payable", permission: "purchase.view", today, now })] : [];
+    await NotificationService.resolveMissing({ kind: "payables_due", activeDedupeKeys: active, now });
+    return { checked: open.length, told: active.length };
+  }
+
+  /** A customer's, a supplier's or an employee's documents (licence, visa, passport) expired or expiring within 30 days. */
+  static async checkDocumentsExpiring(kind, now = new Date()) {
+    const DocumentExpiryService = require("../masters/documentExpiryService");
+    const WITHIN = 30;
+    const AUDIENCE = {
+      customer: { notifyKind: "kyc_customer_documents", permission: "sales.view", link: "/kyc-documents" },
+      vendor: { notifyKind: "kyc_vendor_documents", permission: "purchase.view", link: "/kyc-documents" },
+      staff: { notifyKind: "staff_documents", permission: "hr.view", link: "/hr/documents" },
+    }[kind];
+    const today = todayInOrg(now);
+    const result = await DocumentExpiryService.list({ partyType: kind, withinDays: WITHIN, now });
+    const notice = require("../../utils/moneyNotices").documentsExpiring(result, kind, { withinDays: WITHIN });
+    const active = notice ? [await this.raiseWeekly(AUDIENCE.notifyKind, notice, { link: AUDIENCE.link, permission: AUDIENCE.permission, today, now })] : [];
+    await NotificationService.resolveMissing({ kind: AUDIENCE.notifyKind, activeDedupeKeys: active, now });
+    return { checked: result.rows.length, told: active.length };
+  }
+
+  /** Batches of goods expired or expiring within 30 days, with stock still on hand. */
+  static async checkBatchesExpiring(now = new Date()) {
+    const BatchService = require("../stock/batchService");
+    const WITHIN = 30;
+    const today = todayInOrg(now);
+    const batches = await BatchService.list({ expiringWithinDays: WITHIN });
+    const notice = require("../../utils/moneyNotices").batchesExpiring(batches, { withinDays: WITHIN });
+    const active = notice ? [await this.raiseWeekly("batches_expiring", notice, { link: "/batches", permission: "inventory.view", today, now })] : [];
+    await NotificationService.resolveMissing({ kind: "batches_expiring", activeDedupeKeys: active, now });
+    return { checked: batches.length, told: active.length };
+  }
+
+  /**
+   * E-invoices that need a person: rejected, or failed with no automatic retry left. Keyed on the NEWEST such submission instead of
+   * the week, so a new rejection is a new unread row the moment it happens, not at the start of next week; a change in the older
+   * ones only updates the figures.
+   */
+  static async checkEinvoiceAttention(now = new Date()) {
+    const { EInvoiceSubmission } = require("../../models/modules/einvoiceModels");
+    const notices = require("../../utils/moneyNotices");
+    const rows = await EInvoiceSubmission.find({ status: { $in: ["FAILED", "REJECTED"] } }).select("status rejectedBy nextRetryAt updatedAt").sort({ updatedAt: -1 }).limit(500).lean();
+    const notice = notices.einvoiceAttention(rows);
+    const active = [];
+    if (notice) {
+      const newest = rows.find(notices.needsAttention);
+      const dedupeKey = `einvoice_attention:${newest._id}`;
+      active.push(dedupeKey);
+      await NotificationService.raise({ kind: "einvoice_attention", severity: notice.severity, title: notice.title, body: notice.body, link: "/e-invoicing/dashboard", dedupeKey, permission: "sales.approve", now });
+    }
+    await NotificationService.resolveMissing({ kind: "einvoice_attention", activeDedupeKeys: active, now });
+    return { checked: rows.length, told: active.length };
+  }
+
   /**
    * The registry. `module` is the permission module an organisation must hold for the check to run at all: a CRM
    * notification for an organisation that did not buy CRM would be work nobody can see, and a row whose audience names
@@ -461,7 +551,19 @@ class NotificationChecksService {
     { key: "chequesExpiring", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesExpiring(now) },
     { key: "recurringInvoices", module: "sales", run: (now) => NotificationChecksService.checkRecurringInvoices(now) },
     { key: "emiratisationShortfall", module: "hr", run: (now) => NotificationChecksService.checkEmiratisationShortfall(now) },
+    // Money and paper (utils/moneyNotices.js). They read every open invoice or document and change by the day, not by the minute, so
+    // they run at most every `everyMinutes` for one organisation; the e-invoice one is quicker because a rejection is worth knowing soon.
+    { key: "overdueReceivables", module: "sales", everyMinutes: 60, run: (now) => NotificationChecksService.checkOverdueReceivables(now) },
+    { key: "payablesDue", module: "purchase", everyMinutes: 60, run: (now) => NotificationChecksService.checkPayablesDue(now) },
+    { key: "kycCustomers", module: "sales", everyMinutes: 60, run: (now) => NotificationChecksService.checkDocumentsExpiring("customer", now) },
+    { key: "kycVendors", module: "purchase", everyMinutes: 60, run: (now) => NotificationChecksService.checkDocumentsExpiring("vendor", now) },
+    { key: "staffDocuments", module: "hr", everyMinutes: 60, run: (now) => NotificationChecksService.checkDocumentsExpiring("staff", now) },
+    { key: "batchesExpiring", module: "inventory", feature: "batches", everyMinutes: 60, run: (now) => NotificationChecksService.checkBatchesExpiring(now) },
+    { key: "einvoiceAttention", module: "sales", feature: "einvoicing", everyMinutes: 15, run: (now) => NotificationChecksService.checkEinvoiceAttention(now) },
   ];
+
+  /** When each throttled check last ran, per organisation (`<code>:<key>` -> ms). In memory: a restart, or the free plan waking, runs each once at once. */
+  static lastRun = new Map();
 
   /**
    * Recurring invoices: make the drafts whose day has come (services/orderPurchase/recurringInvoiceService.js), then say how many
@@ -547,8 +649,16 @@ class NotificationChecksService {
         results[check.key] = { skipped: "not in the plan" };
         continue;
       }
+      // A throttled check is judged per organisation, so with no organisation to name (a direct call in a test, or a stand-in row with
+      // no code) it simply runs.
+      const stamp = organisation?.code && check.everyMinutes ? `${organisation.code}:${check.key}` : null;
+      if (stamp && now.getTime() - (this.lastRun.get(stamp) || 0) < check.everyMinutes * 60000) {
+        results[check.key] = { skipped: "ran recently" };
+        continue;
+      }
       try {
         results[check.key] = await check.run(now);
+        if (stamp) this.lastRun.set(stamp, now.getTime()); // only a check that finished: a failed one is tried again on the next pass
       } catch (err) {
         results[check.key] = { error: err.message };
       }
