@@ -315,11 +315,18 @@ class EInvoiceService {
   }
 
   // One delivery attempt. Never throws for provider problems - they become the invoice's state.
+  // The provider this business sends through. An unknown one is a plain refusal, never "cannot read getStatus of undefined".
+  static providerFor(settings) {
+    const provider = PROVIDERS[settings?.provider];
+    if (!provider) throw new ProviderError(`E-invoicing provider "${settings?.provider}" is not available on this server`, { retryable: false, code: "PROVIDER_NOT_AVAILABLE" });
+    return provider;
+  }
+
   static async attempt(sub, settings) {
-    const provider = PROVIDERS[settings.provider];
     const full = await this.loadSettings(sub.companyId);
     sub.attempts += 1;
     try {
+      const provider = this.providerFor(settings);
       const r = await provider.submit(sub.payload, { idempotencyKey: String(sub._id), settings: full, submission: sub });
       sub.providerEntryId = r.entryId;
       sub.providerResponse = r.raw ?? null;
@@ -443,11 +450,10 @@ class EInvoiceService {
   static async refreshOne(sub) {
     if (!["SUBMITTED", "ACKNOWLEDGED"].includes(sub.status)) return sub;
     const settings = await this.loadSettings(sub.companyId);
-    const provider = PROVIDERS[settings.provider];
     let r;
     sub.pollCount += 1; // the provider sees this poll counted; the stored count goes up through the update below
     try {
-      r = await provider.getStatus(sub, { settings });
+      r = await this.providerFor(settings).getStatus(sub, { settings });
     } catch (err) {
       // a failed poll never changes the invoice's state
       await this.noteLostConnection(sub.companyId, err);
@@ -482,13 +488,17 @@ class EInvoiceService {
       if (r.extra?.reasonText) $set.deliveryReasonText = r.extra.reasonText;
     }
     if (r.status === "REJECTED") $set.lastError = r.note || "Rejected by the access point";
+    // a successful read that is not a rejection clears an error left by an earlier failed poll: it no longer describes the invoice
+    const clear = r.status !== "REJECTED" && (sub.lastError || sub.providerIssues?.length);
+    if (clear) $set.providerIssues = [];
     if (steps.length) {
       $set.status = at;
       if (steps.includes("ACKNOWLEDGED")) $set.acknowledgedAt = now;
       if (steps.includes("REPORTED")) $set.reportedAt = now;
     }
-    if (!polled && !steps.length && !Object.keys($set).length) return sub;
+    if (!polled && !steps.length && !Object.keys($set).length && !clear) return sub;
     const update = polled ? { $set, $inc: { pollCount: 1 } } : { $set };
+    if (clear) update.$unset = { lastError: "" };
     if (steps.length) update.$push = { history: { $each: steps.map((status) => ({ status, at: now, note: r.note })) } };
     const moved = await EInvoiceSubmission.findOneAndUpdate({ _id: sub._id, status: sub.status }, update, { new: true });
     return moved || EInvoiceSubmission.findById(sub._id); // someone else moved it first: report where it is now
