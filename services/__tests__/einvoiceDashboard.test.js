@@ -179,6 +179,24 @@ test("the status filter is decided by the database, not by the loaded page", { s
   assert.ok(credits.every((r) => r.invoiceTypeCode === "381"));
 });
 
+test("a credit note names the invoice it credits, and the invoice names its credit notes", { skip }, async () => {
+  wafeq();
+  const inv = await sellInvoice([line("RICE", 3, 50)]);
+  const o = inv.items[0];
+  const cn = await svc.Tx.createTransaction({
+    type: "sales_return", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", returnOf: { transactionId: inv._id, transactionNo: inv.transactionNo },
+    items: [{ ...line("RICE", 1, 50), returnOfLineId: o._id }],
+  }, "tester");
+  await svc.Tx.processTransaction(cn._id, "approve", "tester");
+  const rows = await svc.EI.documents(undefined, { limit: 100 });
+  const invoiceRow = rows.find((r) => String(r._id) === String(inv._id));
+  const creditRow = rows.find((r) => String(r._id) === String(cn._id));
+  assert.equal(creditRow.creditOf, inv.transactionNo);
+  assert.deepEqual(creditRow.creditedBy, []);
+  assert.deepEqual(invoiceRow.creditedBy, [creditRow.transactionNo]);
+  assert.equal(invoiceRow.creditOf, null);
+});
+
 test("an accepted supplier invoice not yet recorded as a purchase is listed by recorded=0", { skip }, async () => {
   wafeq({ inbound: [{ id: "inv_in9", direction: "inbound", invoice_number: "WQS-2026-0001" }] });
   await svc.Pull.pull("default", { force: true });

@@ -148,3 +148,11 @@ A `scripts/backup/export.js` dump is taken first unless `--no-backup`.
 
 **This is the right tool for demo data and the wrong one for real books.** It does not reverse
 anything in accounting terms; it deletes.
+
+## wafeqFlows.js: every e-invoicing state in `wafeq-test`
+
+`node scripts/demo/wafeqFlows.js` (after `wafeqDemo.js`). Real sandbox sends where Wafeq can do it (delivered, a credit note, an invoice
+sent to ourselves that comes back as a received one); the states the sandbox cannot produce (reported to the FTA, buyer rejections BV / SV / FD,
+an FTA rejection) are DEMO events applied through `EInvoiceService.applyStatus` and marked "Demo:" in the history; a Wafeq outage and a refusal
+are simulated on one send each. Also adds two suppliers and seven supplier invoices (to review, accepted, recorded, rejected with reasons,
+unmatched supplier, credit note). Idempotent. Demo events exist only in our books: "Compare with Wafeq" still counts Wafeq's own record.

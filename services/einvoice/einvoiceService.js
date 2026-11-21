@@ -549,6 +549,10 @@ class EInvoiceService {
       .sort({ date: -1, _id: -1 }).skip((Math.max(Number(page) || 1, 1) - 1) * lim).limit(lim).lean();
     const subs = await EInvoiceSubmission.find({ companyId, sourceId: { $in: docs.map((d) => d._id) } }).lean();
     const byDoc = new Map(subs.map((s) => [String(s.sourceId), s]));
+    // the credit notes made against these invoices, so an invoice says it was credited and a credit note says what it credits
+    const credits = await Transaction.find({ type: "sales_return", status: { $nin: ["REJECTED", "CANCELLED"] }, "returnOf.transactionId": { $in: docs.filter((d) => d.type === "sales_order").map((d) => d._id) } }).select("transactionNo returnOf.transactionId").lean();
+    const creditsOf = new Map();
+    for (const c of credits) { const k = String(c.returnOf.transactionId); creditsOf.set(k, [...(creditsOf.get(k) || []), c.transactionNo]); }
     return docs.map((d) => {
       const s = byDoc.get(String(d._id));
       const party = d.partyId ? ei.partyReadiness(d.partyId) : { required: false, ready: true, missing: [] };
@@ -557,6 +561,7 @@ class EInvoiceService {
         _id: d._id, transactionNo: d.transactionNo, type: d.type, date: d.date, customer: d.partyId?.customerName,
         total: d.totalAmount, invoiceTypeCode: d.type === "sales_return" ? "381" : "380",
         status: s?.status || "NOT_SENT", taxStatus: s?.taxStatus || null, deliveryStatus: s?.deliveryStatus || null, route: s?.route || null, rejectedBy: s?.rejectedBy || null, deliveryReasonCode: s?.deliveryReasonCode || null, deliveryReasonText: s?.deliveryReasonText || null, lastError: s?.lastError || null,
+        creditOf: d.type === "sales_return" ? d.returnOf?.transactionNo || null : null, creditedBy: creditsOf.get(String(d._id)) || [],
         submissionId: s?._id || null, partyReady: party.ready, partyMissing: party.missing, dueDate: due,
         overdue: Boolean(due && !s && due < new Date()),
       };
