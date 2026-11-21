@@ -60,7 +60,11 @@ This appendix lists every screen of the program and its web address (route), by 
 | Reports | Stock reports (seven tabs) | /stock-reports | Yes |
 | Reports | Currency register | /currency-register | Yes |
 | Reports | VAT return | /vat-reports | Yes |
-| Reports | e-Invoicing | /e-invoicing | Yes |
+| e-Invoicing | Dashboard | /e-invoicing/dashboard | Yes |
+| e-Invoicing | Outbound | /e-invoicing/outbound | Yes |
+| e-Invoicing | Inbound | /e-invoicing/inbound | Yes |
+| e-Invoicing | Readiness | /e-invoicing/readiness | Yes |
+| e-Invoicing | Settings | /e-invoicing/settings | Yes |
 | People | Staff records | /staff-records | Yes |
 | Settings | Settings (five tabs) | /settings | Yes |
 

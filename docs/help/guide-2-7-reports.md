@@ -19,4 +19,4 @@ What the books and the stock say, and the VAT return. Section 5 lists each repor
 | Stock | Seven stock reports. | /stock-reports | Available |
 | Currency | Foreign-currency receipts and payments with rate and AED value. | /currency-register | Available |
 | VAT | VAT return, its documents, saved returns. | /vat-reports | Available |
-| e-Invoicing | Dashboard, outbound, inbound, readiness, settings; built-in sandbox only. Marked Soon in the menu. | /e-invoicing | Available (sandbox) |
+| e-Invoicing (now its own menu item, no longer under Reports) | Dashboard, outbound, inbound, readiness, settings. | /e-invoicing/dashboard | Available |

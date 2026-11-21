@@ -41,6 +41,7 @@ class WafeqWebhookService {
       logger.warn?.(`[wafeq] webhook for an unlinked taxpayer (${event.type})`);
       return this.finish(eventId, "unknown_taxpayer");
     }
+    await runWithTenant({ companyId: link.companyId }, () => EInvoiceSettings.updateOne({ companyId: link.companyId }, { $set: { "wafeq.lastWebhookAt": new Date() } }));
     const result = await runWithTenant({ companyId: link.companyId }, () => this.apply(event, data, link.companyId));
     return this.finish(eventId, result, link.companyId);
   }

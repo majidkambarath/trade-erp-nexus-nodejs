@@ -71,6 +71,12 @@ A developer can also link a business by hand from the developer console (**Organ
   invoice drafts a sales return for everything not yet credited, at the original prices and tax codes; approve it on Sales -> Returns, then send it
   from Outbound. A header discount given on the original is not reproduced on the draft: check its total before approving.
 
+- **Tracking.** e-Invoicing has its own menu item. Its **Dashboard** opens on "Needs you now" (unsent, failed, rejected, supplier invoices
+  to review: each tile opens the filtered list), then the period's figures, delivery to the buyer and the report to the tax authority as
+  two separate journeys, a six-month trend, and a **Connection** card. **Check connection** compares Wafeq's record (TRN, legal name)
+  with the company profile; **Compare with Wafeq** puts Wafeq's own count beside ours. In test mode the tax authority is never
+  reached, and the screen says so. Settings has "Applies to invoices dated from": older approved invoices are never counted as unsent.
+
 ## 6. Not built yet
 
 Foreign-currency e-invoices (sent in AED only), self-billing (389 / 261), Wafeq's own void, the XML download button, a "reachable on Peppol" check

@@ -14,6 +14,7 @@ const WafeqInboundPull = require("./wafeq/inboundPull");
 const { toWafeqDocument, validGtin } = require("../../utils/wafeqPayload");
 const { dueDateOf } = require("../../utils/paymentState");
 const ei = require("../../utils/eInvoice");
+const { todayInOrg } = require("../../utils/documentExpiry");
 const { encrypt } = require("../../utils/secretBox");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
@@ -35,14 +36,14 @@ class EInvoiceService {
     const w = s.wafeq || {};
     const modes = Object.fromEntries(["sandbox", "live"].map((m) => { const c = modeConfig(m); return [m, { available: c.available, oauth: c.oauth }]; }));
     return {
-      enabled: s.enabled, provider: s.provider, environment: s.environment,
+      enabled: s.enabled, provider: s.provider, environment: s.environment, startDate: s.startDate || null,
       participantId: (s.provider === "wafeq" && w.participantId) || s.participantId || "", dueDays: s.dueDays, retryMax: s.retryMax,
       // Honest about reach: invoices are exchanged with the built-in sandbox only until the business is linked to an
       // accredited service provider (Wafeq), and then only in the mode (test or live) that link was made in.
       connected: s.provider === "wafeq" && w.status === "active",
       wafeq: {
         status: w.status || "disconnected", mode: w.mode || null, name: w.name || "", tin: w.tin || "", participantId: w.participantId || "",
-        linkedVia: w.linkedVia || null, connectedAt: w.connectedAt || null, lastError: w.lastError || null, modes,
+        linkedVia: w.linkedVia || null, connectedAt: w.connectedAt || null, lastWebhookAt: w.lastWebhookAt || null, inboundPulledAt: w.inboundPulledAt || null, lastError: w.lastError || null, modes,
       },
       // secrets are write-only: the client learns only whether one is stored
       hasWebhookSecret: Boolean(s.webhookSecretEnc),
@@ -91,6 +92,10 @@ class EInvoiceService {
       if (!Number.isInteger(n) || n < 0) throw new AppError("dueDays must be a whole number, 0 or more", 400);
       s.dueDays = n;
     }
+    if (data.startDate !== undefined) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(data.startDate)) || Number.isNaN(Date.parse(data.startDate))) throw new AppError("startDate must be a day (YYYY-MM-DD)", 400, "INVALID_START_DATE");
+      s.startDate = data.startDate;
+    }
     // A non-empty secret replaces the stored one; omitted or empty keeps it.
     if (data.webhookSecret) s.webhookSecretEnc = encrypt(data.webhookSecret);
 
@@ -100,6 +105,7 @@ class EInvoiceService {
         if (bad.length) throw new AppError(`Not ready to enable: ${bad.map((c) => c.label).join("; ")}`, 422, "EINVOICE_NOT_READY");
       }
       s.enabled = Boolean(data.enabled);
+      if (s.enabled && !s.startDate) s.startDate = todayInOrg();
     }
     await s.save();
     return this.publicSettings(s);
@@ -273,7 +279,7 @@ class EInvoiceService {
     }
 
     const fresh = {
-      payload, payloadHash: ei.payloadHash(payload), buyerName: payload.buyerName,
+      payload, payloadHash: ei.payloadHash(payload), buyerName: payload.buyerName, issueDate: tx.date,
       totals: { net: payload.lineExtensionTotal, tax: payload.taxAmount, payable: payload.payableAmount },
     };
     const by = req?.admin?.id ? String(req.admin.id) : null;
@@ -525,19 +531,25 @@ class EInvoiceService {
   }
 
   // ---------- lists and dashboard ----------
-  static async documents(req, { page = 1, limit = 25, status, search } = {}) {
+  static async documents(req, { page = 1, limit = 25, status, search, overdue, kind } = {}) {
     const { companyId } = getTenant(req);
     const lim = Math.min(Math.max(Number(limit) || 25, 1), 100);
+    const settings = await this.loadSettings(companyId);
     const filter = { type: { $in: ELIGIBLE }, status: "APPROVED", isOpening: { $ne: true } };
     if (search) filter.transactionNo = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    if (kind === "380") filter.type = "sales_order";
+    if (kind === "381") filter.type = "sales_return";
+    // The status filter is decided by the database, not by whichever page happens to be loaded.
+    if (status === "NOT_SENT") filter._id = { $nin: await EInvoiceSubmission.distinct("sourceId", { companyId }) };
+    else if (status) filter._id = { $in: await EInvoiceSubmission.distinct("sourceId", { companyId, status }) };
+    if (overdue && settings.dueDays > 0) filter.date = { $lt: new Date(Date.now() - settings.dueDays * 86400000) };
     const docs = await Transaction.find(filter)
       .select("transactionNo type date partyId totalAmount returnOf")
       .populate({ path: "partyId", model: "Customer", select: "customerName trnNumber billingAddress eInvoice" })
       .sort({ date: -1, _id: -1 }).skip((Math.max(Number(page) || 1, 1) - 1) * lim).limit(lim).lean();
     const subs = await EInvoiceSubmission.find({ companyId, sourceId: { $in: docs.map((d) => d._id) } }).lean();
     const byDoc = new Map(subs.map((s) => [String(s.sourceId), s]));
-    const settings = await this.loadSettings(companyId);
-    let rows = docs.map((d) => {
+    return docs.map((d) => {
       const s = byDoc.get(String(d._id));
       const party = d.partyId ? ei.partyReadiness(d.partyId) : { required: false, ready: true, missing: [] };
       const due = settings.dueDays > 0 ? new Date(new Date(d.date).getTime() + settings.dueDays * 86400000) : null;
@@ -549,8 +561,6 @@ class EInvoiceService {
         overdue: Boolean(due && !s && due < new Date()),
       };
     });
-    if (status) rows = rows.filter((r) => r.status === status);
-    return rows;
   }
 
   static async listSubmissions(req, { status, page = 1, limit = 25 } = {}) {
@@ -572,30 +582,98 @@ class EInvoiceService {
     return sub;
   }
 
-  static async dashboard(req) {
+  // The tracking dashboard. `todo` is the worklist as of now; everything else is for the period, by the invoice's own date.
+  static async dashboard(req, { from, to } = {}) {
     const { companyId } = getTenant(req);
     const { InboundInvoice } = require("../../models/modules/einvoiceModels");
-    const [byStatus, totals, recent, inbound] = await Promise.all([
-      EInvoiceSubmission.aggregate([{ $match: { companyId } }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
+    const dash = require("../../utils/einvoiceDashboard");
+    const settings = await this.loadSettings(companyId);
+    const today = todayInOrg();
+    const DAY = /^\d{4}-\d{2}-\d{2}$/;
+    if ((from && !DAY.test(from)) || (to && !DAY.test(to))) throw new AppError("from and to must be days (YYYY-MM-DD)", 400, "INVALID_RANGE");
+    const start = from || `${today.slice(0, 8)}01`;
+    const end = to || today;
+    if (start > end) throw new AppError("The period ends before it starts", 400, "INVALID_RANGE");
+    const range = { $gte: new Date(`${start}T00:00:00.000Z`), $lte: new Date(`${end}T23:59:59.999Z`) };
+    const now = new Date();
+    const months = dash.lastMonths(end, 6);
+    const trendFrom = new Date(`${months[0]}-01T00:00:00.000Z`);
+    const sourceIds = await EInvoiceSubmission.distinct("sourceId", { companyId });
+    const unsent = { type: { $in: ELIGIBLE }, status: "APPROVED", isOpening: { $ne: true }, _id: { $nin: sourceIds }, date: { $gte: new Date(`${settings.startDate || start}T00:00:00.000Z`) } };
+    const SUBS = "documentNo issueDate status taxStatus deliveryStatus route rejectedBy deliveryReasonCode deliveryReasonText lastError invoiceTypeCode totals buyerName submittedAt updatedAt sourceId";
+
+    const [inPeriod, openRows, unsentDocs, sentTrend, inboundPeriod, inboundByStatus, inboundNotRecorded, inboundTrend, recent, attentionRows] = await Promise.all([
+      EInvoiceSubmission.find({ companyId, issueDate: range }).select(SUBS).lean(),
+      EInvoiceSubmission.find({ companyId, status: { $in: ["FAILED", "REJECTED", "SUBMITTED"] } }).select(SUBS).lean(),
+      Transaction.find(unsent).select("date totalAmount").lean(),
       EInvoiceSubmission.aggregate([
-        { $match: { companyId, status: { $in: ["SUBMITTED", "ACKNOWLEDGED", "REPORTED"] } } },
-        { $group: { _id: null, net: { $sum: "$totals.net" }, tax: { $sum: "$totals.tax" }, payable: { $sum: "$totals.payable" } } },
+        { $match: { companyId, issueDate: { $gte: trendFrom, $lte: range.$lte }, status: { $in: ["SUBMITTED", "ACKNOWLEDGED", "REPORTED"] } } },
+        { $group: { _id: { $dateToString: { format: "%Y-%m", date: "$issueDate" } }, count: { $sum: 1 }, amount: { $sum: { $cond: [{ $eq: ["$invoiceTypeCode", "381"] }, { $multiply: ["$totals.payable", -1] }, "$totals.payable"] } } } },
       ]),
-      EInvoiceSubmission.find({ companyId }).select("documentNo status buyerName totals updatedAt lastError").sort({ updatedAt: -1 }).limit(8).lean(),
+      InboundInvoice.find({ companyId, issueDate: range }).select("status kind totals sellerName purchaseOrderId").lean(),
       InboundInvoice.aggregate([{ $match: { companyId } }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
+      InboundInvoice.countDocuments({ companyId, status: "ACCEPTED", kind: { $ne: "credit_note" }, purchaseOrderId: { $in: [null, undefined] } }),
+      InboundInvoice.aggregate([
+        { $match: { companyId, issueDate: { $gte: trendFrom, $lte: range.$lte } } },
+        { $group: { _id: { $dateToString: { format: "%Y-%m", date: "$issueDate" } }, count: { $sum: 1 }, amount: { $sum: "$totals.payable" } } },
+      ]),
+      EInvoiceSubmission.find({ companyId }).select(SUBS).sort({ updatedAt: -1 }).limit(8).lean(),
+      EInvoiceSubmission.find({ companyId, status: { $in: ["FAILED", "REJECTED"] } }).select(SUBS).sort({ updatedAt: -1 }).limit(8).lean(),
     ]);
-    const c = Object.fromEntries(byStatus.map((x) => [x._id, x.count]));
+
+    const dueMs = settings.dueDays > 0 ? settings.dueDays * 86400000 : null;
+    const overdueDocs = dueMs ? unsentDocs.filter((d) => new Date(d.date).getTime() + dueMs < now.getTime()) : [];
+    const sumOf = (rows) => Math.round(rows.reduce((t, d) => t + (d.totalAmount || 0), 0) * 100) / 100;
+    const failed = openRows.filter((s) => s.status === "FAILED").length;
+    const rejected = openRows.filter((s) => s.status === "REJECTED");
+    const todo = dash.todoItems({
+      notSent: { count: unsentDocs.length, amount: sumOf(unsentDocs) }, overdue: { count: overdueDocs.length, amount: sumOf(overdueDocs) },
+      failed, rejectedByBuyer: rejected.filter((s) => s.rejectedBy !== "fta").length, rejectedByFta: rejected.filter((s) => s.rejectedBy === "fta").length,
+      stuck: openRows.filter((s) => dash.isStuck(s, now)).length,
+      inboundToReview: inboundByStatus.find((x) => x._id === "RECEIVED")?.count || 0, inboundNotRecorded,
+    });
+
+    const c = {};
+    for (const s of inPeriod) c[s.status] = (c[s.status] || 0) + 1;
     const sent = (c.SUBMITTED || 0) + (c.ACKNOWLEDGED || 0) + (c.REPORTED || 0);
     const attempted = sent + (c.FAILED || 0) + (c.REJECTED || 0);
+    const t = dash.totalsByType(inPeriod);
+    const leg = dash.legs(inPeriod.filter((s) => s.status !== "QUEUED"));
+    const reach = leg.delivery.delivered + leg.delivery.inProgress + leg.delivery.ftaOnly + leg.delivery.failed + leg.delivery.rejected;
+    const pct = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : null);
+
+    const top = (rows, key) => {
+      const m = new Map();
+      for (const r of rows) {
+        const k = r[key] || "Unknown";
+        const v = m.get(k) || { name: k, count: 0, amount: 0 };
+        v.count += 1; v.amount += (r.totals?.payable || 0) * (r.invoiceTypeCode === "381" || r.kind === "credit_note" ? -1 : 1);
+        m.set(k, v);
+      }
+      return [...m.values()].map((v) => ({ ...v, amount: Math.round(v.amount * 100) / 100 })).sort((a, b) => b.amount - a.amount).slice(0, 5);
+    };
+    const asMap = (rows) => Object.fromEntries(rows.map((r) => [r._id, { count: r.count, amount: r.amount }]));
+    const ibIn = inboundPeriod.filter((i) => i.kind !== "credit_note");
+    const act = (s) => ({ _id: s._id, documentNo: s.documentNo, sourceId: s.sourceId, invoiceTypeCode: s.invoiceTypeCode, buyerName: s.buyerName, status: s.status });
+
     return {
+      period: { from: start, to: end },
+      sandbox: settings.provider !== "wafeq" || settings.environment !== "live",
+      todo,
+      pipeline: { byStatus: c, notSent: unsentDocs.filter((d) => new Date(d.date) >= range.$gte && new Date(d.date) <= range.$lte).length, delivery: leg.delivery, fta: leg.fta, deliveredRate: pct(leg.delivery.delivered, reach), reportedRate: pct(leg.fta.reported, sent) },
+      totals: t,
+      monthly: dash.monthly(months, asMap(sentTrend), asMap(inboundTrend)),
+      topCustomers: top(inPeriod.filter((s) => ["SUBMITTED", "ACKNOWLEDGED", "REPORTED"].includes(s.status)), "buyerName"),
+      topSuppliers: top(inboundPeriod, "sellerName"),
+      inboundPeriod: { received: inboundPeriod.length, accepted: inboundPeriod.filter((i) => i.status === "ACCEPTED").length, rejected: inboundPeriod.filter((i) => i.status === "REJECTED").length, recorded: ibIn.filter((i) => i.purchaseOrderId).length, amount: Math.round(ibIn.reduce((s, i) => s + (i.totals?.payable || 0), 0) * 100) / 100 },
+      attention: attentionRows.map((s) => ({ ...act(s), ...dash.attentionOf(s) })),
+      // kept for older callers
       outbound: {
-        total: Object.values(c).reduce((t, n) => t + n, 0), byStatus: c,
-        net: totals[0]?.net || 0, tax: totals[0]?.tax || 0, payable: totals[0]?.payable || 0,
-        successRate: attempted ? Math.round(((c.REPORTED || 0) / attempted) * 1000) / 10 : null,
-        needsAttention: (c.FAILED || 0) + (c.REJECTED || 0),
+        total: Object.values(c).reduce((n, x) => n + x, 0), byStatus: c, net: t.invoices.net, tax: t.invoices.tax, payable: t.invoices.payable,
+        successRate: attempted ? Math.round(((c.REPORTED || 0) / attempted) * 1000) / 10 : null, needsAttention: (c.FAILED || 0) + (c.REJECTED || 0),
       },
-      inbound: Object.fromEntries(inbound.map((x) => [x._id, x.count])),
-      recent,
+      inbound: Object.fromEntries(inboundByStatus.map((x) => [x._id, x.count])),
+      recent: recent.map((s) => ({ ...act(s), deliveryStatus: s.deliveryStatus, taxStatus: s.taxStatus, totals: s.totals, updatedAt: s.updatedAt, lastError: s.lastError })),
     };
   }
 }

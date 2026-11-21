@@ -36,6 +36,8 @@ async function runMigrations() {
   if (chequeBranches) out.chequeBranchesBackfilled = chequeBranches;
   const vehicleNames = await backfillVehicleCustomerNames();
   if (vehicleNames) out.vehicleCustomerNamesBackfilled = vehicleNames;
+  const issued = await backfillEInvoiceIssueDates();
+  if (issued) out.einvoiceIssueDatesBackfilled = issued;
   return out;
 }
 
@@ -251,8 +253,24 @@ async function backfillVehicleCustomerNames() {
   return done;
 }
 
+// A submission now carries the invoice's own date; earlier ones hold it only inside the stored payload (a "YYYY-MM-DD" string).
+async function backfillEInvoiceIssueDates() {
+  const { EInvoiceSubmission } = require("../models/modules/einvoiceModels");
+  const why = "migration: e-invoice submissions gain their issue date, across every organisation";
+  const rows = await runUnscoped(why, () => EInvoiceSubmission.find({ issueDate: { $exists: false }, "payload.issueDate": { $type: "string" } }).select("payload.issueDate").lean());
+  let done = 0;
+  for (const r of rows) {
+    const d = new Date(`${r.payload.issueDate}T00:00:00.000Z`);
+    if (Number.isNaN(d.getTime())) continue;
+    const x = await runUnscoped(why, () => EInvoiceSubmission.updateOne({ _id: r._id, issueDate: { $exists: false } }, { $set: { issueDate: d } }));
+    done += x.modifiedCount || 0;
+  }
+  return done;
+}
+
 module.exports = {
   runMigrations,
+  backfillEInvoiceIssueDates,
   assignCoreToOriginalOrganisation,
   markVoucherNumbersHeld,
   backfillChequeBranches,

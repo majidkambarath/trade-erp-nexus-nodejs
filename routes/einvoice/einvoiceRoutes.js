@@ -6,6 +6,7 @@ const EInvoiceService = require("../../services/einvoice/einvoiceService");
 const InboundService = require("../../services/einvoice/inboundService");
 const WafeqWebhookService = require("../../services/einvoice/wafeq/webhookService");
 const WafeqConnectService = require("../../services/einvoice/wafeq/connectService");
+const WafeqHealth = require("../../services/einvoice/wafeq/healthService");
 const WafeqInboundPull = require("../../services/einvoice/wafeq/inboundPull");
 const AuditService = require("../../services/core/auditService");
 const { getTenant } = require("../../utils/tenant");
@@ -77,7 +78,9 @@ router.get("/submissions", requirePermission(["reports.financial","sales.view","
 router.get("/submissions/:id", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.getSubmission(req.params.id, req))));
 router.post("/submissions/:id/retry", requirePermission("sales.approve"), catchAsync(async (req, res) => ok(res, await EInvoiceService.retry(req.params.id, req))));
 router.post("/submissions/:id/refresh", requirePermission("sales.approve"), catchAsync(async (req, res) => ok(res, await EInvoiceService.refresh(req.params.id, req))));
-router.get("/dashboard", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.dashboard(req))));
+router.get("/dashboard", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.dashboard(req, req.query))));
+router.get("/wafeq/health", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await WafeqHealth.health(getTenant(req).companyId))));
+router.get("/wafeq/summary", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await WafeqHealth.summary(getTenant(req).companyId, req.query))));
 
 router.get("/inbound", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await InboundService.list(req, req.query))));
 router.post("/inbound", requirePermission("purchase.create"), catchAsync(async (req, res) => {

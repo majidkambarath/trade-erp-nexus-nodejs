@@ -80,10 +80,11 @@ class InboundService {
     return { invoice, duplicate: false };
   }
 
-  static async list(req, { status, page = 1, limit = 25 } = {}) {
+  static async list(req, { status, page = 1, limit = 25, recorded } = {}) {
     const { companyId } = getTenant(req);
     const q = { companyId };
     if (status) q.status = status;
+    if (String(recorded) === "0") { q.kind = { $ne: "credit_note" }; q.purchaseOrderId = { $in: [null, undefined] }; }
     const lim = Math.min(Math.max(Number(limit) || 25, 1), 100);
     const [rows, total] = await Promise.all([
       InboundInvoice.find(q).sort({ createdAt: -1 }).skip((Math.max(Number(page) || 1, 1) - 1) * lim).limit(lim)

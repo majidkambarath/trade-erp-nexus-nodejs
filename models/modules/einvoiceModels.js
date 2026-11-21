@@ -24,12 +24,14 @@ const settingsSchema = new mongoose.Schema(
       connectedAt: Date,
       connectedBy: String,
       lastError: String,
+      lastWebhookAt: Date, // the last Wafeq delivery that named this business
       inboundPulledAt: Date, // the last time received documents were asked for (services/einvoice/wafeq/inboundPull.js)
     },
     // between "Connect with Wafeq" starting and finishing: the PKCE verifier, encrypted, never returned
     wafeqPending: { type: new mongoose.Schema({ verifierEnc: String, nonce: String, mode: String, at: Date, by: String }, { _id: false }), select: false, default: undefined },
     webhookSecretEnc: { type: String, select: false }, // signs inbound deliveries; encrypted, never returned
     participantId: { type: String, trim: true }, // the seller's Peppol id, "0235:..."
+    startDate: { type: String, default: undefined }, // "YYYY-MM-DD": invoices dated on or after this day are expected to be e-invoiced
     dueDays: { type: Number, default: 0, min: 0 }, // days after the invoice date by which it should be sent
     retryMax: { type: Number, default: 5, min: 0, max: 20 },
   },
@@ -44,6 +46,7 @@ const submissionSchema = new mongoose.Schema(
     sourceType: { type: String, default: "Transaction" },
     sourceId: { type: mongoose.Schema.Types.ObjectId, required: true },
     documentNo: { type: String, required: true },
+    issueDate: { type: Date, default: undefined }, // the invoice's own date (reports and the dashboard period read it)
     invoiceTypeCode: { type: String, enum: ["380", "381"], required: true },
     status: { type: String, enum: STATUSES, default: "QUEUED" },
     taxStatus: { type: String, default: null }, // the tax-authority leg, reported separately by the ASP
@@ -78,6 +81,7 @@ const submissionSchema = new mongoose.Schema(
 submissionSchema.index({ companyId: 1, sourceType: 1, sourceId: 1 }, { unique: true });
 submissionSchema.index({ companyId: 1, status: 1, nextRetryAt: 1 });
 submissionSchema.index({ companyId: 1, createdAt: -1 });
+submissionSchema.index({ companyId: 1, issueDate: 1 });
 
 const inboundSchema = new mongoose.Schema(
   {
