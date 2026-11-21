@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.1.0.0 — 21 November 2026
+
+UAE e-invoicing through Wafeq, the accredited service provider. Frontend and backend both at 4.1.0.0.
+
+### Added
+
+- **Send e-invoices through Wafeq.** A business connects once (Connect with Wafeq, or a link made by support from the developer console); approved sales invoices and credit notes are then sent from e-Invoicing > Outbound, delivered to the buyer over Peppol and reported to the tax authority. Before sending, Wafeq's own checks run in the Review dialog. For a business sending through Wafeq, VAT is worked out once per tax rate, the way the e-invoice does it, so the books, the printed invoice and the e-invoice agree to the fils.
+- **Received invoices.** Supplier e-invoices that arrive at Wafeq are brought in automatically (and with "Check for new"), matched to the vendor, and can be recorded as a draft purchase invoice, item by item, with any difference from the supplier's total shown.
+- **Fix and resend.** When a buyer rejects an invoice for wrong buyer details, fix the customer and press Resend correction: the same number goes again, linked to the rejected one (live mode only).
+- **Credit in full.** One press drafts a credit note for everything on a sent invoice that is not yet credited.
+- **e-Invoicing is its own menu item** (it was a tab under Reports marked Soon), with Dashboard, Outbound, Inbound, Readiness and Settings. Old links still work.
+- **A tracking dashboard** in the Home dashboard's design: the delivered rate, what needs you now (not sent, failed, rejected, supplier invoices to review, each opening its list already filtered), the period's figures with their change against the period before, a six-month chart, delivery to the buyer and the report to the tax authority shown apart, the status mix, top customers and suppliers, and a connection card that can check the business against Wafeq's record and compare counts.
+- **Settings > Applies to invoices dated from**: older approved invoices are never counted as unsent.
+
+### Fixed
+
+- **The Outbound status filter only searched the page already loaded**, so a failed invoice on an older page was missed. The filter is now decided by the server.
+- **A customer's e-invoice identifier was dropped on every save** of the customer.
+
 ## 4.0.0.0 — 20 November 2026
 
 Major release. Frontend and backend both at 4.0.0.0. It brings together the whole 3.x programme (India GST, foreign-currency invoices, cost centres, budgets, recurring invoices, server-side lists, amount inputs and the small gaps) under one version.
