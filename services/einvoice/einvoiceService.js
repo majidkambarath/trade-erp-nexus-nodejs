@@ -638,6 +638,19 @@ class EInvoiceService {
     const sent = (c.SUBMITTED || 0) + (c.ACKNOWLEDGED || 0) + (c.REPORTED || 0);
     const attempted = sent + (c.FAILED || 0) + (c.REJECTED || 0);
     const t = dash.totalsByType(inPeriod);
+    // the same figures for the period before, so each one can say how it moved
+    const prev = dash.previousRange(start, end);
+    const prevRange = { $gte: new Date(`${prev.from}T00:00:00.000Z`), $lte: new Date(`${prev.to}T23:59:59.999Z`) };
+    const [prevSubs, prevInbound] = await Promise.all([
+      EInvoiceSubmission.find({ companyId, issueDate: prevRange }).select("status invoiceTypeCode totals deliveryStatus route taxStatus rejectedBy").lean(),
+      InboundInvoice.find({ companyId, issueDate: prevRange, kind: { $ne: "credit_note" } }).select("totals").lean(),
+    ]);
+    const pt = dash.totalsByType(prevSubs);
+    const pl = dash.legs(prevSubs.filter((s) => s.status !== "QUEUED"));
+    const previous = {
+      from: prev.from, to: prev.to, payable: pt.net.payable, invoices: pt.invoices.count, creditNotes: pt.creditNotes.count, creditNotesAmount: pt.creditNotes.payable,
+      delivered: pl.delivery.delivered, received: prevInbound.length, receivedAmount: Math.round(prevInbound.reduce((x, i) => x + (i.totals?.payable || 0), 0) * 100) / 100,
+    };
     const leg = dash.legs(inPeriod.filter((s) => s.status !== "QUEUED"));
     const reach = leg.delivery.delivered + leg.delivery.inProgress + leg.delivery.ftaOnly + leg.delivery.failed + leg.delivery.rejected;
     const pct = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : null);
@@ -662,6 +675,7 @@ class EInvoiceService {
       todo,
       pipeline: { byStatus: c, notSent: unsentDocs.filter((d) => new Date(d.date) >= range.$gte && new Date(d.date) <= range.$lte).length, delivery: leg.delivery, fta: leg.fta, deliveredRate: pct(leg.delivery.delivered, reach), reportedRate: pct(leg.fta.reported, sent) },
       totals: t,
+      previous,
       monthly: dash.monthly(months, asMap(sentTrend), asMap(inboundTrend)),
       topCustomers: top(inPeriod.filter((s) => ["SUBMITTED", "ACKNOWLEDGED", "REPORTED"].includes(s.status)), "buyerName"),
       topSuppliers: top(inboundPeriod, "sellerName"),

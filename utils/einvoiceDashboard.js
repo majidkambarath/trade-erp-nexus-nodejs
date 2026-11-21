@@ -112,6 +112,35 @@ function todoItems(c) {
   ];
 }
 
+/**
+ * The period to compare with, for days "YYYY-MM-DD". A period starting on the 1st and ending in the same month is compared with
+ * the same days of the month before (1-21 Nov against 1-21 Oct, a short month clamped); anything else with the same number of
+ * days just before it.
+ */
+function previousRange(start, end) {
+  const d = (s) => new Date(`${s}T00:00:00.000Z`);
+  const iso = (x) => x.toISOString().slice(0, 10);
+  const DAY = 86400000;
+  if (start.endsWith("-01") && start.slice(0, 7) === end.slice(0, 7)) {
+    const y = Number(start.slice(0, 4));
+    const m = Number(start.slice(5, 7));
+    const py = m === 1 ? y - 1 : y;
+    const pm = m === 1 ? 12 : m - 1;
+    const last = new Date(Date.UTC(py, pm, 0)).getUTCDate();
+    const day = Math.min(Number(end.slice(8, 10)), last);
+    const mm = String(pm).padStart(2, "0");
+    return { from: `${py}-${mm}-01`, to: `${py}-${mm}-${String(day).padStart(2, "0")}` };
+  }
+  const days = Math.round((d(end) - d(start)) / DAY) + 1;
+  return { from: iso(new Date(d(start).getTime() - days * DAY)), to: iso(new Date(d(start).getTime() - DAY)) };
+}
+
+/** Change against the previous period, in percent with one decimal; null when there was nothing to compare with. */
+function change(now, before) {
+  if (!before) return null;
+  return Math.round(((now - before) / Math.abs(before)) * 1000) / 10;
+}
+
 /** Compare a taxpayer profile held by the provider with our own company profile. */
 function profileMismatches(wafeq, ours) {
   const out = [];
@@ -122,4 +151,4 @@ function profileMismatches(wafeq, ours) {
   return out;
 }
 
-module.exports = { deliveryLeg, ftaLeg, legs, totalsByType, lastMonths, monthly, attentionOf, isStuck, todoItems, profileMismatches, DELIVERY_KEYS, FTA_KEYS };
+module.exports = { previousRange, change, deliveryLeg, ftaLeg, legs, totalsByType, lastMonths, monthly, attentionOf, isStuck, todoItems, profileMismatches, DELIVERY_KEYS, FTA_KEYS };

@@ -65,3 +65,13 @@ test("todo tiles link to a filtered list; profile mismatch compares TRN by digit
   assert.deepEqual(d.profileMismatches({ vatNumber: "171686550400003", legalName: "Acme LLC" }, { trn: "1716 8655 0400 003", name: "ACME, LLC" }), []);
   assert.equal(d.profileMismatches({ vatNumber: "1", legalName: "A" }, { trn: "2", name: "B" }).length, 2);
 });
+
+test("the period compared with is the same days of the month before, or the same length just before", () => {
+  assert.deepEqual(d.previousRange("2026-11-01", "2026-11-21"), { from: "2026-10-01", to: "2026-10-21" });
+  assert.deepEqual(d.previousRange("2026-03-01", "2026-03-31"), { from: "2026-02-01", to: "2026-02-28" });
+  assert.deepEqual(d.previousRange("2026-01-01", "2026-01-31"), { from: "2025-12-01", to: "2025-12-31" });
+  assert.deepEqual(d.previousRange("2026-04-10", "2026-04-19"), { from: "2026-03-31", to: "2026-04-09" });
+  assert.equal(d.change(150, 100), 50);
+  assert.equal(d.change(50, 100), -50);
+  assert.equal(d.change(5, 0), null);
+});
