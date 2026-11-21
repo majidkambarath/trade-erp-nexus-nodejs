@@ -5,6 +5,7 @@ const {
 const validate = require("../../middleware/validate");
 const { authenticateToken } = require("../../middleware/authMiddleware");
 const CustomerController = require("../../controllers/customer/customerController");
+const ImportController = require("../../controllers/core/importController");
 
 const { requirePermission } = require("../../middleware/permissionGate");
 const router = express.Router();
@@ -21,6 +22,7 @@ router.get(
 
 router.get("/customers", requirePermission(["sales.view","accounts.view"]), CustomerController.getAllCustomers);
 router.post("/", requirePermission("sales.create"), CustomerController.createCustomer);
+router.post("/import", requirePermission("sales.create"), ImportController.customers); // a spreadsheet of customers: preview, then write (controllers/core/importController.js)
 
 router.get("/:id", requirePermission(["sales.view","accounts.view"]), CustomerController.getCustomerById);
 router.put("/:id", requirePermission("sales.edit"), CustomerController.updateCustomer);

@@ -7,6 +7,7 @@ const {
 const validate = require("../../middleware/validate");
 const { authenticateToken } = require("../../middleware/authMiddleware");
 const StockController = require("../../controllers/stock/stockController");
+const ImportController = require("../../controllers/core/importController");
 
 const { requirePermission } = require("../../middleware/permissionGate");
 const router = express.Router();
@@ -17,6 +18,7 @@ router.use(require("../../middleware/costVisibility").hideCost()); // what an it
 
 // Stock CRUD routes
 router.post("/stock", requirePermission("inventory.create"), StockController.createStock);
+router.post("/stock/import", requirePermission("inventory.create"), ImportController.items); // a spreadsheet of items: preview, then write (controllers/core/importController.js)
 router.get("/stock", requirePermission(["inventory.view","lookups.view"]), StockController.getAllStock);
 router.get("/stock/stats", requirePermission(["inventory.view","lookups.view"]), StockController.getStockStats);
 router.get("/stock/:id", requirePermission(["inventory.view","lookups.view"]), StockController.getStockById);
