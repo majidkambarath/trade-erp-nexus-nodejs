@@ -30,6 +30,7 @@ const GLOBAL_UNIQUE = {
   Organisation: { code: "the registry of organisations: its code is the companyId" },
   Attachment: { key: "a random server-generated storage path, not something a person chooses" },
   PlatformUser: { email: "the developer console's own people belong to no organisation at all: their own collection, their own sign-in" },
+  WafeqEvent: { eventId: "a webhook delivery id from Wafeq, which names a Wafeq taxpayer and not one of our organisations: the log is installation level" },
   ShareLink: { publicId: "the public selector of a link: the public reader finds its row by it, with no organisation known" },
 };
 

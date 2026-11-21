@@ -23,6 +23,9 @@ const customerSchema = new mongoose.Schema({
     participantId: { type: String, trim: true, default: null }, // "0235:100123456700003"
     city: { type: String, trim: true, default: null },
     countryCode: { type: String, trim: true, uppercase: true, default: "AE" },
+    // A buyer with no TRN is identified by this (a trade licence number ...): the document then goes to the tax authority only.
+    buyerIdentifier: { type: String, trim: true, default: undefined },
+    legalRegistration: { type: { type: String, enum: ["TL", "EID", "PAS", "CD"], default: undefined }, id: { type: String, trim: true, default: undefined }, authority: { type: String, trim: true, default: undefined } },
   },
   salesPerson: { type: String, trim: true, default: null, sparse: true },
   // An insurance company is a Customer like any other: it gets a ledger account, ages its own receivables, and

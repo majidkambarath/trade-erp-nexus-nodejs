@@ -55,6 +55,14 @@ function configProblems(env = process.env) {
   if (!env.PUBLIC_APP_URL) warnings.push("PUBLIC_APP_URL is not set: reset links and customer document links point at the default frontend address.");
   if (!env.PLATFORM_JWT_SECRET) warnings.push("PLATFORM_JWT_SECRET is not set: the developer console's key is derived from JWT_SECRET.");
   if (!env.SYSTEM_MAIL_PROVIDER || env.SYSTEM_MAIL_PROVIDER === "console") warnings.push("SYSTEM_MAIL_PROVIDER is 'console': no mail leaves the server, so \"forgot my password\" answers the person normally and sends nothing. Set SYSTEM_MAIL_PROVIDER=resend|smtp with its credentials.");
+  // Wafeq (UAE e-invoicing): a mode is usable with its API key; connecting a business by OAuth also needs the client; webhooks need their secret.
+  for (const [mode, s] of [["test", "TEST"], ["live", "LIVE"]]) {
+    const key = env[`WAFEQ_API_KEY_${s}`];
+    const client = env[`WAFEQ_CLIENT_ID_${s}`] && env[`WAFEQ_CLIENT_SECRET_${s}`];
+    if (key && !env[`WAFEQ_WEBHOOK_SECRET_${s}`]) warnings.push(`WAFEQ_WEBHOOK_SECRET_${s} is not set: Wafeq's ${mode} status updates cannot be accepted, so invoices only move on when polled.`);
+    if (key && !client) warnings.push(`WAFEQ_CLIENT_ID_${s} / WAFEQ_CLIENT_SECRET_${s} are not set: businesses cannot connect themselves to Wafeq in ${mode} mode (a developer can still link one from the console).`);
+    if (!key && (env[`WAFEQ_CLIENT_ID_${s}`] || env[`WAFEQ_WEBHOOK_SECRET_${s}`])) warnings.push(`WAFEQ_API_KEY_${s} is not set, so the other Wafeq ${mode} settings are unused.`);
+  }
   return { fatal, warnings };
 }
 

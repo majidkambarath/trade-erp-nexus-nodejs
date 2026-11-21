@@ -9,14 +9,24 @@ const { isValidTerms, STANDARD_TERMS } = require("../../utils/partyMaster");
 const { retryTransientTransaction } = require("../../utils/withTransactionSession");
 
 // Customer-only fields the model has always had; the create path used to drop them.
-const cleanEInvoice = (v) =>
-  v && typeof v === "object"
-    ? {
-        participantId: v.participantId ? String(v.participantId).trim() : null,
-        city: v.city ? String(v.city).trim() : null,
-        countryCode: String(v.countryCode || "AE").trim().toUpperCase(),
-      }
-    : undefined;
+// The buyer identifier and legal registration (an e-invoice to a customer with no TRN: services/einvoice) are kept when sent, and an edit
+// that does not name them keeps the stored ones (`existing`), so saving the customer form never wipes them.
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const cleanEInvoice = (v, existing) => {
+  if (!v || typeof v !== "object") return undefined;
+  const out = {
+    participantId: v.participantId ? String(v.participantId).trim() : null,
+    city: v.city ? String(v.city).trim() : null,
+    countryCode: String(v.countryCode || "AE").trim().toUpperCase(),
+  };
+  const id = has(v, "buyerIdentifier") ? String(v.buyerIdentifier ?? "").trim() || undefined : existing?.eInvoice?.buyerIdentifier;
+  if (id) out.buyerIdentifier = id;
+  const lr = has(v, "legalRegistration") ? v.legalRegistration : existing?.eInvoice?.legalRegistration;
+  if (lr && typeof lr === "object" && ["TL", "EID", "PAS", "CD"].includes(lr.type) && String(lr.id || "").trim()) {
+    out.legalRegistration = { type: lr.type, id: String(lr.id).trim(), ...(lr.authority ? { authority: String(lr.authority).trim() } : {}) };
+  }
+  return out;
+};
 // The address's country (and, in the UAE, emirate) is what an e-invoice reads: it sets the buyer's country and fills a missing city.
 const withAddress = (einv, master) =>
   master.country
@@ -238,7 +248,7 @@ exports.getCustomerByCustomerId = async (customerId) => {
   Object.assign(data, master);
   if (master.country) {
     // keep the e-invoice details in step with the address, without replacing the participant id or a city somebody typed
-    if (data.eInvoice && typeof data.eInvoice === "object") data.eInvoice = withAddress(cleanEInvoice(data.eInvoice), master);
+    if (data.eInvoice && typeof data.eInvoice === "object") data.eInvoice = withAddress(cleanEInvoice(data.eInvoice, existing), master);
     else {
       data["eInvoice.countryCode"] = master.country;
       const city = master.city || master.emirate;

@@ -67,7 +67,7 @@ class InboundService {
   }
 
   // Idempotent: the same invoice delivered twice (a webhook retry) is stored once.
-  static async ingest(payload, { source = "manual", req } = {}) {
+  static async ingest(payload, { source = "manual", req, extra = {} } = {}) {
     const { companyId } = getTenant(req);
     const doc = this.normalise(payload);
     if (!doc.documentId) throw new AppError("documentId is required", 400);
@@ -75,15 +75,16 @@ class InboundService {
     if (dup) return { invoice: dup, duplicate: true };
     const m = await this.match(doc, companyId);
     const invoice = await InboundInvoice.create({
-      ...doc, companyId, source, matchedVendorId: m.vendorId || null, suggestedPurchaseOrderId: m.purchaseOrderId || null, matchNote: m.note,
+      ...doc, companyId, source, matchedVendorId: m.vendorId || null, suggestedPurchaseOrderId: m.purchaseOrderId || null, matchNote: m.note, ...extra,
     });
     return { invoice, duplicate: false };
   }
 
-  static async list(req, { status, page = 1, limit = 25 } = {}) {
+  static async list(req, { status, page = 1, limit = 25, recorded } = {}) {
     const { companyId } = getTenant(req);
     const q = { companyId };
     if (status) q.status = status;
+    if (String(recorded) === "0") { q.kind = { $ne: "credit_note" }; q.purchaseOrderId = { $in: [null, undefined] }; }
     const lim = Math.min(Math.max(Number(limit) || 25, 1), 100);
     const [rows, total] = await Promise.all([
       InboundInvoice.find(q).sort({ createdAt: -1 }).skip((Math.max(Number(page) || 1, 1) - 1) * lim).limit(lim)
@@ -91,6 +92,64 @@ class InboundService {
       InboundInvoice.countDocuments(q),
     ]);
     return { rows, total };
+  }
+
+  // The tax code a received line maps to: S at its rate -> the active standard code of that rate, Z / E / O / AE -> the code of that kind.
+  static taxCodeFor(codes, line) {
+    const KIND = { Z: "zero_rated", E: "exempt", O: "out_of_scope", AE: "reverse_charge" };
+    if (line.taxCategory === "S") return codes.find((c) => c.kind === "standard" && Math.abs(Number(c.ratePercent) - Number(line.taxRatePercent)) < 0.005) || null;
+    const kind = KIND[line.taxCategory];
+    return kind ? codes.find((c) => c.kind === kind) || null : null;
+  }
+
+  // Record a received supplier invoice as a DRAFT purchase invoice (never approved here: approving is the ordinary purchase approval).
+  // The person names an item for each received line; the tax comes from the supplier's own category and rate. Any difference between
+  // the draft's total and what the supplier billed is returned for the screen to show, never hidden.
+  static async recordAsPurchase(id, body = {}, req) {
+    const { companyId } = getTenant(req);
+    const TransactionService = require("../orderPurchase/transactionService"); // late: it is a large module
+    const TaxCode = require("../../models/modules/financial/taxCodeModel");
+    const Stock = require("../../models/modules/stockModel");
+    const inv = await InboundInvoice.findOne({ _id: id, companyId });
+    if (!inv) throw new AppError("Inbound invoice not found", 404);
+    if (inv.status !== "RECEIVED") throw new AppError(`This invoice was already ${inv.status.toLowerCase()}`, 409, "ALREADY_DECIDED");
+    if (inv.kind === "credit_note") throw new AppError("A supplier's credit note is accepted or rejected here; it cannot be recorded as a purchase invoice yet", 422, "INBOUND_IS_CREDIT_NOTE");
+    if (!inv.matchedVendorId) throw new AppError("Add the vendor first (its TRN or participant id must match the supplier), then check again", 422, "VENDOR_NOT_MATCHED");
+    const picked = Array.isArray(body.lines) ? body.lines : [];
+    if (!inv.lines.length) throw new AppError("The received invoice has no lines", 422, "NO_LINES");
+
+    const dup = await Transaction.exists({ type: "purchase_order", partyId: inv.matchedVendorId, vendorReference: inv.documentId, status: { $ne: "REJECTED" } });
+    if (dup) throw new AppError(`A purchase invoice from this supplier with number ${inv.documentId} already exists`, 409, "DUPLICATE_SUPPLIER_INVOICE");
+
+    const codes = await TaxCode.find({ companyId, isActive: true }).lean();
+    const items = [];
+    for (let i = 0; i < inv.lines.length; i += 1) {
+      const l = inv.lines[i];
+      const itemId = picked[i]?.itemId;
+      if (!itemId || !mongoose.isValidObjectId(itemId)) throw new AppError(`Choose the item for line ${i + 1} (${l.itemName || "no name"})`, 400, "ITEM_REQUIRED");
+      const stock = await Stock.findById(itemId).select("itemName").lean();
+      if (!stock) throw new AppError(`Item for line ${i + 1} not found`, 404, "ITEM_NOT_FOUND");
+      const code = this.taxCodeFor(codes, l);
+      if (!code) throw new AppError(`Line ${i + 1}: no active tax code matches ${l.taxCategory || "its tax"} at ${l.taxRatePercent}%. Add one in Accounting setup, then try again`, 422, "TAX_CODE_NOT_FOUND");
+      const qty = Number(l.quantity) || 0;
+      const net = round2(l.lineNetAmount);
+      if (!(qty > 0)) throw new AppError(`Line ${i + 1} has no quantity`, 422, "NO_QUANTITY");
+      const price = Math.round((net / qty) * 1e6) / 1e6; // the line's net / quantity: the draft's line then reproduces the supplier's net
+      items.push({ itemId, description: l.itemName || stock.itemName, qty, price, rate: net, taxCodeId: code._id });
+    }
+
+    const by = req?.admin?.id ? String(req.admin.id) : null;
+    const draft = await TransactionService.createTransaction({
+      type: "purchase_order", status: "DRAFT", partyId: inv.matchedVendorId, partyType: "Vendor", partyTypeRef: "Vendor",
+      vendorReference: inv.documentId, date: inv.issueDate || new Date(), items,
+    }, by);
+    inv.purchaseOrderId = draft._id;
+    inv.status = "ACCEPTED";
+    inv.decision = { by, at: new Date(), reason: `Recorded as purchase invoice ${draft.transactionNo}` };
+    await inv.save();
+    await AuditService.log({ req, action: "INBOUND_EINVOICE_RECORDED", entity: "InboundInvoice", entityId: inv._id, summary: `${inv.documentId} from ${inv.sellerName} -> ${draft.transactionNo}` });
+    const received = round2(inv.totals?.payable);
+    return { transactionId: draft._id, transactionNo: draft.transactionNo, total: round2(draft.totalAmount), receivedTotal: received, difference: round2(draft.totalAmount - received) };
   }
 
   static async decide(id, decision, { reason, purchaseOrderId } = {}, req) {
