@@ -5,8 +5,13 @@ const Sequence = require("../../models/modules/sequenceModel");
 const PartyAccounts = require("../financial/partyAccounts");
 const PartyMaster = require("../masters/partyMasterService");
 const { searchRegex } = require("../../utils/regex");
+const { retryTransientTransaction, isTransient } = require("../../utils/withTransactionSession");
 
 const tidyName = (v) => (v ? v.toString().trim().replace(/\s+/g, " ") : null); // "Omar  Ali" -> "Omar Ali"
+
+// A write conflict is passed through UNTOUCHED by the two helpers below (and not dressed as a 500 AppError): it carries MongoDB's
+// "transient" label, which is what createVendor's retryTransientTransaction looks for. Wrapped, two vendors saved at the same moment
+// made the loser a bare 500 "Sequence number generation failed" and the retry never ran.
 
 // Helper to get the next sequence number without saving it
 const getNextSequenceNumber = async (year, type, session) => {
@@ -33,6 +38,7 @@ const getNextSequenceNumber = async (year, type, session) => {
       ? Math.max(...sequence.usedNumbers) + 1
       : 1;
   } catch (error) {
+    if (isTransient(error)) throw error;
     throw new AppError(
       `Sequence number generation failed: ${error.message}`,
       500
@@ -52,6 +58,7 @@ const commitSequenceNumber = async (year, type, sequenceNumber, session) => {
       { session }
     );
   } catch (error) {
+    if (isTransient(error)) throw error;
     throw new AppError(
       `Failed to commit sequence number: ${error.message}`,
       500
@@ -82,7 +89,12 @@ const releaseSequenceNumber = async (vendorId, session) => {
 
 // `groupId` files the vendor's ledger account in that group instead of the posting-map one (the
 // account form creates a vendor straight into a chosen Payables group).
-exports.createVendor = async (data, { groupId } = {}) => {
+//
+// Wrapped like createCustomer: every new vendor reads and writes the one vendor Sequence document, so two vendors saved at
+// the same moment (two people, or a spreadsheet import) conflict on it. A conflict is run again on a fresh transaction
+// (the vendor number is counted again), and only after the attempts are used up is the person told "try again" (409
+// WRITE_CONFLICT) - never a bare 500.
+exports.createVendor = retryTransientTransaction(async (data, { groupId } = {}) => {
   const {
     vendorName,
     contactPerson,
@@ -151,12 +163,14 @@ exports.createVendor = async (data, { groupId } = {}) => {
     await PartyAccounts.onPartyCreated("Vendor", vendor, { groupId, strict: Boolean(groupId) }); // its ledger account appears in the chart
     return vendor;
   } catch (error) {
-    await session.abortTransaction();
+    // commitTransaction (above) may itself have succeeded and only a step AFTER it (PartyMaster.finish, the ledger
+    // account) threw - aborting an already-committed session throws its own confusing error and masks the real one.
+    if (session.inTransaction()) await session.abortTransaction();
     throw error;
   } finally {
     session.endSession();
   }
-};
+});
 
 exports.getAllVendors = async (filters) => {
   const query = {};

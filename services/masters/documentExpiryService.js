@@ -27,14 +27,18 @@ class DocumentExpiryService {
   }
 
   // { rows, summary }: the documents that are expired or expire within `withinDays` days, soonest
-  // first. `partyType` is "customer" or "vendor" (anything else, or none, lists both). An inactive
-  // customer is left out unless `includeInactive`.
+  // first. `partyType` is "customer", "vendor" or "staff"; none lists customers and vendors, and an
+  // employee's documents (passport and visa numbers) are listed only when asked for BY NAME - the
+  // route that serves the KYC screen is open to sales, purchase and accounts, so it checks the HR
+  // permission before it asks (controllers/masters/documentExpiryController.js). Before 21 Nov 2026 a
+  // list that named no kind included staff, and the KYC screen names none. An inactive customer is
+  // left out unless `includeInactive`.
   static async list({ withinDays, partyType, includeInactive = false, now = new Date() } = {}) {
     const within = this.parseWithin(withinDays);
     const wanted = String(partyType || "").toLowerCase();
     const validKinds = [...Object.keys(PARTIES), STAFF_KIND];
     if (wanted && !validKinds.includes(wanted)) throw new AppError("partyType must be customer, vendor or staff", 400, "INVALID_PARTY_TYPE");
-    const kinds = wanted ? [wanted] : validKinds;
+    const kinds = wanted ? [wanted] : Object.keys(PARTIES);
     const today = todayInOrg(now);
     // two days of slack in the query, so the exact Dubai-day decision is made by classify() alone
     const horizon = new Date(`${addDays(today, within + 2)}T00:00:00.000Z`);

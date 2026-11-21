@@ -82,6 +82,11 @@ async function loadInvoice(sourceId, req) {
   const customer = await Customer.findById(tx.partyId).lean();
   if (!customer) throw new AppError("The customer of this invoice was not found", 404, "CUSTOMER_NOT_FOUND");
   const { company, currency } = await companyFor(req);
+  // An invoice made in a foreign currency carries that document beside the base one (Transaction.fx, services/financial/
+  // fxDocumentService.js). The customer was quoted - and the PDF and the link show - the FOREIGN total, so the email says the
+  // foreign total in the foreign currency, never the base-currency equivalent. (It used to: an invoice of 5,000 USD was announced
+  // as "for 18,350.00 AED".) The snapshot keeps being given the base currency: it reads the foreign document itself.
+  const foreign = tx.fx?.currency && Number.isFinite(Number(tx.fx.totalAmount)) ? tx.fx : null;
   return {
     docType: "tax_invoice",
     sourceType: "Transaction",
@@ -89,8 +94,8 @@ async function loadInvoice(sourceId, req) {
     documentNo: tx.invoiceNumber || tx.transactionNo,
     date: tx.date,
     dueDate: tx.dueDate || null,
-    total: tx.pricing?.grandTotal ?? tx.totalAmount,
-    currency,
+    total: foreign ? foreign.totalAmount : tx.pricing?.grandTotal ?? tx.totalAmount,
+    currency: foreign ? foreign.currency : currency,
     partyId: customer._id,
     partyName: customer.customerName,
     contactPerson: customer.contactPerson || "",

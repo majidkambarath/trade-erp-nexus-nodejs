@@ -26,6 +26,7 @@ test.before(async () => {
     Quotation: require("../../models/modules/quotationModel"),
     DeliveryNote: require("../../models/modules/deliveryNoteModel"),
     Stock: require("../../models/modules/stockModel"),
+    Transaction: require("../../models/modules/transactionModel"),
     Vendor: require("../../models/modules/vendorModel"),
     Customer: require("../../models/modules/customerModel"),
     Admin: require("../../models/core/adminModel"),
@@ -156,4 +157,28 @@ test("WhatsApp hand-off of a draft quotation also marks it Sent", { skip }, asyn
   const q = await quote();
   await svc.Msg.handoff({ docType: "quotation", sourceId: q._id, phone: "+971501112222" }, reqOf());
   assert.equal((await svc.Quotation.findById(q._id).lean()).status, "SENT");
+});
+
+// An invoice made in a foreign currency is a foreign document beside the base one (Transaction.fx). The customer is quoted, and the PDF
+// and the link show, the foreign total; the email used to announce the base-currency equivalent ("for 210.00 AED" for a USD invoice).
+test("a foreign-currency invoice is announced in its own currency, never the base-currency equivalent", { skip }, async () => {
+  const DocumentSource = require("../messaging/documentSource");
+  const { renderDocumentEmail } = require("../../utils/emailTemplates");
+  const order = await svc.Tx.createTransaction({ type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", items: [L(10, 20)] }, "t");
+  await svc.Tx.processTransaction(order._id, "approve", "t");
+
+  // as the books hold an ordinary invoice: the base total in the base currency (and a base invoice must read exactly as it always did)
+  const base = await DocumentSource.load("tax_invoice", order._id, reqOf());
+  assert.equal(base.currency, "AED");
+  assert.equal(base.total, 210);
+  assert.match(renderDocumentEmail({ ...base }).text, /for 210\.00 AED\./);
+
+  // the same invoice as a USD document (what fxDocumentService stamps): 210.00 AED at 3.6725 is 57.18 USD
+  await svc.Transaction.updateOne({ _id: order._id }, { $set: { fx: { currency: "USD", rate: 3.6725, decimals: 2, totalAmount: 57.18, outstandingAmount: 57.18 } } });
+  const foreign = await DocumentSource.load("tax_invoice", order._id, reqOf());
+  assert.equal(foreign.currency, "USD");
+  assert.equal(foreign.total, 57.18);
+  const text = renderDocumentEmail({ ...foreign }).text;
+  assert.match(text, /for 57\.18 USD\./);
+  assert.ok(!/210\.00 AED/.test(text), "the base-currency equivalent is not what the customer owes");
 });
