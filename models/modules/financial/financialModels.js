@@ -142,6 +142,12 @@ const voucherSchema = new mongoose.Schema({
     tripId: { type: mongoose.Schema.Types.ObjectId },
     tripNo: { type: String, trim: true },
   },
+  // The recurring template that made this voucher (services/financial/recurringVoucherService.js). Written only by that service after
+  // the voucher is created; absent on every other voucher and never read from a body (see vanTripRef above).
+  recurringRef: {
+    id: { type: mongoose.Schema.Types.ObjectId, ref: "RecurringVoucher" },
+    name: { type: String, trim: true },
+  },
   description: { type: String, trim: true },
   // expense vouchers on the chart: which expense account, the VAT, who was paid
   expenseAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "LedgerAccount" },

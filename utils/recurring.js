@@ -39,24 +39,24 @@ function runDay(schedule, k) {
 }
 
 /** Checks and cleans a schedule. Returns the cleaned schedule or throws an Error with code INVALID_SCHEDULE and `field`. */
-function validateSchedule(input = {}) {
+function validateSchedule(input = {}, noun = "invoice") {
   const fail = (message, field) => Object.assign(new Error(message), { code: "INVALID_SCHEDULE", field });
   const frequency = String(input.frequency || "");
   if (!FREQUENCIES.includes(frequency)) throw fail("Choose how often: weekly, monthly, quarterly or yearly", "frequency");
   const interval = input.interval === undefined || input.interval === "" || input.interval === null ? 1 : Number(input.interval);
   if (!Number.isInteger(interval) || interval < 1 || interval > 12) throw fail("Every 1 to 12 periods", "interval");
   const startDay = String(input.startDay || "").slice(0, 10);
-  if (!isDay(startDay)) throw fail("Enter the date of the first invoice", "startDay");
+  if (!isDay(startDay)) throw fail(`Enter the date of the first ${noun}`, "startDay");
   const out = { frequency, interval, startDay };
   if (input.endDay) {
     const endDay = String(input.endDay).slice(0, 10);
     if (!isDay(endDay)) throw fail("The end date is not a date", "endDay");
-    if (endDay < startDay) throw fail("The end date is before the first invoice", "endDay");
+    if (endDay < startDay) throw fail(`The end date is before the first ${noun}`, "endDay");
     out.endDay = endDay;
   }
   if (input.maxCount !== undefined && input.maxCount !== null && input.maxCount !== "") {
     const maxCount = Number(input.maxCount);
-    if (!Number.isInteger(maxCount) || maxCount < 1 || maxCount > 1000) throw fail("The number of invoices is 1 to 1,000", "maxCount");
+    if (!Number.isInteger(maxCount) || maxCount < 1 || maxCount > 1000) throw fail(`The number of ${noun}s is 1 to 1,000`, "maxCount");
     out.maxCount = maxCount;
   }
   return out;
