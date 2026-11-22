@@ -31,6 +31,8 @@ exports.dailySummary = read((req) => LedgerReports.dailySummary({ from: req.quer
 
 exports.voucherImpact = read((req) => LedgerReports.voucherImpact(req.params.id));
 
+// The 13-week cash flow forecast: today's cash and bank, then what the books already say will come in and go out (services/reports/cashForecastService.js)
+exports.cashForecast = read((req) => require("../../services/reports/cashForecastService").forecast(req.query));
 exports.cashBook = read((req) => LedgerReports.cashBook({ from: req.query.from, to: req.query.to, kind: req.query.kind }));
 
 exports.cashFlow = read((req) => LedgerReports.cashFlow({ from: req.query.from, to: req.query.to }));

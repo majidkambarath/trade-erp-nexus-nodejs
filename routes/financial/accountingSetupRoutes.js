@@ -99,6 +99,7 @@ router.get("/reports/day-book", requirePermission(["reports.financial","finance.
 router.get("/reports/daily-summary", requirePermission(["reports.financial","finance.view"]), ledgerReports.dailySummary);
 router.get("/reports/voucher/:id", requirePermission(["reports.financial","finance.view"]), ledgerReports.voucherImpact);
 router.get("/reports/cash-book", requirePermission("reports.financial"), ledgerReports.cashBook);
+router.get("/reports/cash-forecast", requirePermission("reports.financial"), ledgerReports.cashForecast);
 router.get("/reports/cash-flow", requirePermission("reports.financial"), ledgerReports.cashFlow);
 router.get("/reports/day-end", requirePermission("reports.financial"), ledgerReports.dayEnd);
 router.get("/reports/day-end/register", requirePermission("reports.financial"), ledgerReports.dayEndRegister);
