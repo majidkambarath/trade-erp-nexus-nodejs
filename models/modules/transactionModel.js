@@ -90,6 +90,13 @@ const lastSendSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// The last payment reminder an invoice was sent (services/messaging/paymentReminderService.js): what the list says as "Reminder sent 3 Dec".
+// Separate from lastSend, which stays the last time the INVOICE itself went to the customer.
+const lastReminderSchema = new mongoose.Schema(
+  { sendId: mongoose.Schema.Types.ObjectId, step: String, channel: String, status: String, provider: String, at: Date, to: String, error: String },
+  { _id: false }
+);
+
 const transactionSchema = new mongoose.Schema({
   companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
   branchId: { type: String, default: "main" }, // the branch it belongs to; head office is "main"
@@ -281,6 +288,7 @@ const transactionSchema = new mongoose.Schema({
   // A sales order the customer will not take the rest of (utils/closeShort.js).
   closedShort: { type: closedShortSchema, default: undefined },
   lastSend: { type: lastSendSchema, default: undefined },
+  lastReminder: { type: lastReminderSchema, default: undefined },
   // Who has approved it so far. Always one entry once approved; two when the policy asked for a second approver, and
   // then the first entry is the document waiting for its second (utils/approvalRules.js).
   approvals: [{ _id: false, by: { type: String }, name: { type: String }, at: { type: Date }, step: { type: Number } }],

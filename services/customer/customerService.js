@@ -120,6 +120,7 @@ exports.createCustomer = retryTransientTransaction(async (data, { groupId } = {}
     status,
     salesPerson, // <- ADDED
     isInsurer, // D10: the field already existed on the model (customerModel.js) with nowhere to arrive from
+    remindersOff, // no payment reminders to this customer (services/messaging/paymentReminderService.js)
     eInvoice,
     minShelfLifeDays,
   } = data;
@@ -157,6 +158,7 @@ exports.createCustomer = retryTransientTransaction(async (data, { groupId } = {}
           creditLimit: Number(creditLimit) || 0,
           salesPerson: trimmedSalesPerson, // <-- ADDED
           isInsurer: Boolean(isInsurer),
+          ...(remindersOff === true || remindersOff === "true" ? { remindersOff: true } : {}),
           status,
           eInvoice: withAddress(cleanEInvoice(eInvoice), master),
           country: master.country,

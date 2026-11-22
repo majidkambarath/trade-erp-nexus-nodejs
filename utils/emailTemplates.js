@@ -54,9 +54,32 @@ const fmtMoney = (n, currency = orgLocale.baseCurrency()) => {
 const periodText = (p) => (p?.from && p?.to ? `${fmtDay(p.from)} to ${fmtDay(p.to)}` : "");
 const { orgTaxTerms } = require("./countryRules");
 
-function subjectFor({ docType, documentNo, company, validUntil, period }) {
+// A payment reminder (services/messaging/paymentReminderService.js): `reminder` is { stage: "before" | "due" | "overdue", days, outstanding }.
+// It rides the invoice email: same layout, its own subject and sentence, and no PDF (the invoice is one click away on the link).
+const REMINDER_SUBJECT = { before: "Payment reminder", due: "Payment due today", overdue: "Overdue payment" };
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function reminderFact(d) {
+  const r = d.reminder || {};
+  const label = labelFor("tax_invoice", d.company).toLowerCase();
+  const owed = fmtMoney(r.outstanding ?? d.total, d.currency);
+  const part = Number(r.outstanding) + 0.005 < Number(d.total) ? ` (of ${fmtMoney(d.total, d.currency)} in all)` : "";
+  const on = `${label} ${d.documentNo} dated ${fmtDay(d.date)}`;
+  if (r.stage === "overdue") return `This is a reminder that ${on} was due on ${fmtDay(d.dueDate)} and is now ${plural(r.days, "day")} overdue. The amount outstanding is ${owed}${part}.`;
+  if (r.stage === "due") return `This is a reminder that ${on} falls due today, ${fmtDay(d.dueDate)}. The amount outstanding is ${owed}${part}.`;
+  return `This is a friendly reminder that ${on} falls due on ${fmtDay(d.dueDate)}, in ${plural(r.days, "day")}. The amount outstanding is ${owed}${part}.`;
+}
+
+/** How to pay, from the company's own details: only what is filled in, so a company with no bank details prints nothing. */
+function bankLines(c = {}) {
+  const lines = [c.bankName && `Bank: ${c.bankName}`, c.accountName && `Account name: ${c.accountName}`, c.accountNumber && `Account number: ${c.accountNumber}`, c.ibanNumber && `IBAN: ${c.ibanNumber}`, c.swiftCode && `SWIFT: ${c.swiftCode}`].filter(Boolean);
+  return lines.length ? ["To pay by bank transfer:", ...lines].join("\n") : "";
+}
+
+function subjectFor({ docType, documentNo, company, validUntil, period, reminder }) {
   const label = labelFor(docType, company);
   const from = company?.companyName ? ` from ${company.companyName}` : "";
+  if (reminder) return `${REMINDER_SUBJECT[reminder.stage] || "Payment reminder"}: ${label} ${documentNo}${from}`;
   if (docType === "statement") return `${label}${periodText(period) ? ` - ${periodText(period)}` : ""}${from}`;
   const base = `${label} ${documentNo}${from}`;
   return docType === "quotation" && validUntil ? `${base} - valid until ${fmtDay(validUntil)}` : base;
@@ -64,6 +87,7 @@ function subjectFor({ docType, documentNo, company, validUntil, period }) {
 
 // The one factual sentence, per kind.
 function factLine(d) {
+  if (d.reminder) return reminderFact(d);
   const label = labelFor(d.docType, d.company).toLowerCase();
   const money = fmtMoney(d.total, d.currency);
   switch (d.docType) {
@@ -95,8 +119,9 @@ function renderDocumentEmail(d) {
   const subject = subjectFor(d);
   const greeting = `Dear ${d.contactPerson || d.partyName || "customer"},`;
   const fact = factLine(d);
-  const note = String(d.note || "").trim();
-  const attached = d.hasAttachment ? "A PDF copy is attached." : "";
+  // A reminder carries how to pay, and says plainly that nothing is attached: the invoice is on the link, and a person who has paid is thanked.
+  const note = d.reminder ? [bankLines(d.company), String(d.note || "").trim(), "If you have already made this payment, please disregard this reminder and accept our thanks."].filter(Boolean).join("\n\n") : String(d.note || "").trim();
+  const attached = d.reminder ? (d.shareUrl ? "No PDF is attached to this reminder: open the link to see the invoice." : "") : d.hasAttachment ? "A PDF copy is attached." : "";
   const expiry = d.shareUrl && d.shareExpiresAt ? `This link works until ${fmtDay(d.shareExpiresAt)}.` : "";
   const company = companyLines(d.company);
   const signature = String(d.signature || "").trim();
@@ -126,7 +151,7 @@ ${logo ? `<img src="${escapeHtml(logo)}" alt="" height="40" style="display:block
 ${p(escapeHtml(greeting))}
 ${p(escapeHtml(fact))}
 ${note ? p(escapeHtml(note).replace(/\r?\n/g, "<br>")) : ""}
-${d.shareUrl ? `<p style="margin:18px 0 18px;"><a href="${escapeHtml(d.shareUrl)}" style="display:inline-block;background:#1c1c1a;color:#ffffff;text-decoration:none;padding:11px 20px;border-radius:6px;font-weight:600;">View document</a></p>` : ""}
+${d.shareUrl ? `<p style="margin:18px 0 18px;"><a href="${escapeHtml(d.shareUrl)}" style="display:inline-block;background:#1c1c1a;color:#ffffff;text-decoration:none;padding:11px 20px;border-radius:6px;font-weight:600;">${d.reminder ? "View the invoice" : "View document"}</a></p>` : ""}
 ${attached ? p(escapeHtml(attached), "color:#55554f;") : ""}
 ${signature ? p(escapeHtml(signature).replace(/\r?\n/g, "<br>")) : ""}
 </td></tr>
@@ -142,4 +167,4 @@ ${expiry ? `<div style="margin-top:8px;">${escapeHtml(expiry)}</div>` : ""}
   return { subject, html, text };
 }
 
-module.exports = { renderDocumentEmail, subjectFor, escapeHtml, fmtDay, fmtMoney, DOC_LABEL };
+module.exports = { renderDocumentEmail, subjectFor, reminderFact, bankLines, escapeHtml, fmtDay, fmtMoney, DOC_LABEL };

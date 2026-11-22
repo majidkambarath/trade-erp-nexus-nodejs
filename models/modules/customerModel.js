@@ -32,6 +32,8 @@ const customerSchema = new mongoose.Schema({
   // is chosen as a job card's bill-to with no new finance code. This flag is the only thing that marks it as
   // one (garage module, services/garage/insuranceClaimService.js). False for every existing customer.
   isInsurer: { type: Boolean, default: false },
+  // No payment reminders to this customer (a dispute, a customer who pays through a portal). No default: absent reads as "send them".
+  remindersOff: { type: Boolean },
   billingAddress: { type: String, default: null, trim: true },
   // The address's country (ISO 3166 alpha-2) and, for the UAE, its emirate. Absent on a record saved before they existed, which stays valid:
   // nothing is stamped on it until somebody edits the address (utils/partyAddress.js).

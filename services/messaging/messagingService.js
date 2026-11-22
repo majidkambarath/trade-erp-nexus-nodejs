@@ -79,13 +79,15 @@ const push = (row, status, note) => row.history.push({ status, at: new Date(), n
 async function writeLastSend(row) {
   const Model = SOURCE_MODELS[row.sourceType];
   if (!Model) return;
-  const lastSend = {
+  const summary = {
     sendId: row._id, channel: row.channel, status: row.status, provider: row.provider,
     at: row.sentAt || row.failedAt || row.createdAt,
     to: row.channel === "whatsapp" ? row.phone : (row.to || []).join(", "),
     openedAt: row.openedAt || null, error: row.lastError || null,
   };
-  await Model.updateOne({ _id: row.sourceId }, { $set: { lastSend } }).catch((e) => console.error("[messaging] lastSend not written:", e.message));
+  // A payment reminder is NOT the invoice being sent: it has its own summary, so "Emailed 6 Oct" keeps meaning the invoice.
+  const set = row.purpose === "reminder" ? { lastReminder: { ...summary, step: row.reminderStep || null, openedAt: undefined } } : { lastSend: summary };
+  await Model.updateOne({ _id: row.sourceId }, { $set: set }).catch((e) => console.error("[messaging] lastSend not written:", e.message));
 }
 
 // A quotation that goes to the customer is SENT, the same as pressing Mark as sent: its CRM deal moves, its validity starts to count.
@@ -331,7 +333,7 @@ class MessagingService {
   static async list(req, q = {}) {
     const { companyId } = getTenant(req);
     const f = { companyId };
-    for (const k of ["docType", "sourceType", "channel", "status"]) if (q[k]) f[k] = String(q[k]);
+    for (const k of ["docType", "sourceType", "channel", "status", "purpose"]) if (q[k]) f[k] = String(q[k]);
     for (const k of ["sourceId", "partyId"]) if (q[k] && mongoose.isValidObjectId(q[k])) f[k] = q[k];
     const page = Math.max(1, parseInt(q.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(q.limit, 10) || 25));
@@ -411,4 +413,6 @@ class MessagingService {
 }
 
 MessagingService.parseList = parseList;
+// What the payment reminder service needs and nothing else may: the same claim, the same shape of answer, the same checks.
+MessagingService.internals = { claim, present, push, checkRecipients, oneLine, writeLastSend };
 module.exports = MessagingService;

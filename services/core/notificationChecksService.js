@@ -460,6 +460,8 @@ class NotificationChecksService {
     { key: "chequesUncleared", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesUncleared(now) },
     { key: "chequesExpiring", module: "banking", feature: "banking", run: (now) => NotificationChecksService.checkChequesExpiring(now) },
     { key: "recurringInvoices", module: "sales", run: (now) => NotificationChecksService.checkRecurringInvoices(now) },
+    // Payment reminders: a count to review, or (automatic mode) the daily pass. Held to every 30 minutes inside the service.
+    { key: "paymentReminders", module: "sales", feature: "messaging", run: (now) => require("../messaging/paymentReminderService").check(now) },
     { key: "emiratisationShortfall", module: "hr", run: (now) => NotificationChecksService.checkEmiratisationShortfall(now) },
   ];
 

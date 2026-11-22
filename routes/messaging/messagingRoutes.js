@@ -31,6 +31,13 @@ router.get("/sends", requirePermission(["sales.send","sales.view"]), c.list);
 router.get("/sends/:id", requirePermission(["sales.send","sales.view"]), c.get);
 router.post("/sends/:id/retry", requirePermission("sales.send"), c.retry);
 
+// Payment reminders: the rules and the list are visible to whoever may send; changing the rules is an administrator's.
+const reminderLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 30, key: perCompany, code: "SEND_LIMIT_REACHED", message: "Reminders have been sent in bulk several times in the last hour. Try again in a little while." });
+router.get("/reminders/settings", requirePermission(["sales.send", "settings.view"]), c.reminderSettings);
+router.put("/reminders/settings", requirePermission("settings.manage"), c.putReminderSettings);
+router.get("/reminders/due", requirePermission("sales.send"), c.reminderDue);
+router.post("/reminders/send", requirePermission("sales.send"), reminderLimit, c.reminderSend);
+
 router.get("/shares", requirePermission(["sales.send","sales.view"]), c.shares);
 router.post("/shares/:id/revoke", requirePermission("sales.send"), c.revoke);
 
