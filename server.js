@@ -179,6 +179,7 @@ app.use("/api/v1/currencies", require("./routes/financial/currencyRoutes")); // 
 app.use("/api/v1/branches", require("./routes/core/branchRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/company", require("./routes/core/companyRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/recurring-invoices", require("./routes/orderPurchase/recurringInvoiceRoutes")); // before adminRouter
+app.use("/api/v1/recurring-vouchers", require("./routes/financial/recurringVoucherRoutes")); // before adminRouter
 app.use("/api/v1/quotations", require("./routes/orderPurchase/quotationRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/delivery-notes", require("./routes/orderPurchase/deliveryNoteRoutes")); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/document-flow", require("./routes/orderPurchase/documentFlowRoutes")); // before adminRouter, whose bare GET /:id would capture it

@@ -233,7 +233,12 @@ class FinancialService {
             };
           }
         }
-        if (hold && outerSession) {
+        // A recurring template's run (services/financial/recurringVoucherService.js) has nobody behind the save, so nothing would hold it:
+        // it is held by this option, for whoever approves it to judge (their limit, the separate approver, the second approver).
+        if (!hold && processedData.status === "approved" && options.holdFor === "recurring" && (processedData.ledgerBased === true)) {
+          hold = { reason: "recurring", amount: processedData.totalAmount, message: "Made by a recurring voucher: it waits for approval before it posts." };
+        }
+        if (hold && outerSession && hold.reason !== "recurring") {
           // Part of a larger act that cannot wait (posting the entry for a bank statement line and matching the line, in one
           // transaction). A person over their own limit may not post it; where the organisation wants two approvers at this
           // amount the statement line itself is the second pair of eyes, and it posts as ever.
@@ -1383,6 +1388,11 @@ class FinancialService {
       query.partyId = filters.partyId;
     }
     if (filters.approvalStatus) query.approvalStatus = filters.approvalStatus;
+    // vouchers made by a recurring template: "1" for any, or one template's id
+    if (filters.recurring) {
+      if (filters.recurring === "1" || filters.recurring === 1 || filters.recurring === true) query["recurringRef.id"] = { $exists: true };
+      else if (mongoose.Types.ObjectId.isValid(filters.recurring)) query["recurringRef.id"] = new mongoose.Types.ObjectId(String(filters.recurring));
+    }
 
     // Date filters: plain days are the organisation's days, and a "to" day is whole (utils/listPeriod.js)
     const period = listPeriod({ dateFrom: filters.dateFrom, dateTo: filters.dateTo }, { zone: orgLocale.timezone() });
@@ -1567,7 +1577,7 @@ class FinancialService {
 
   static withoutSystemFields(data) {
     const out = { ...data };
-    for (const key of ["_id", "voucherNo", "voucherType", "companyId", "branchId", "status", "approvalStatus", "approvals", "approvedBy", "approvedAt", "createdBy", "createdAt", "heldCheque", "ledgerBased", "vanTripRef", "partySnapshot"]) delete out[key];
+    for (const key of ["_id", "voucherNo", "voucherType", "companyId", "branchId", "status", "approvalStatus", "approvals", "approvedBy", "approvedAt", "createdBy", "createdAt", "heldCheque", "ledgerBased", "vanTripRef", "recurringRef", "partySnapshot"]) delete out[key];
     return out;
   }
 

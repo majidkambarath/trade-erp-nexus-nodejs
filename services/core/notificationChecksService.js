@@ -552,6 +552,7 @@ class NotificationChecksService {
     { key: "recurringInvoices", module: "sales", run: (now) => NotificationChecksService.checkRecurringInvoices(now) },
     // Payment reminders: a count to review, or (automatic mode) the daily pass. Held to every 30 minutes inside the service.
     { key: "paymentReminders", module: "sales", feature: "messaging", run: (now) => require("../messaging/paymentReminderService").check(now) },
+    { key: "recurringVouchers", module: "finance", run: (now) => NotificationChecksService.checkRecurringVouchers(now) },
     { key: "emiratisationShortfall", module: "hr", run: (now) => NotificationChecksService.checkEmiratisationShortfall(now) },
     // Money and paper (utils/moneyNotices.js). They read every open invoice or document and change by the day, not by the minute, so
     // they run at most every `everyMinutes` for one organisation; the e-invoice one is quicker because a rejection is worth knowing soon.
@@ -612,6 +613,54 @@ class NotificationChecksService {
       });
     }
     await NotificationService.resolveMissing({ kind: "recurring_failed", activeDedupeKeys: keys, now });
+    return { ...run, waiting, failing: failed.length };
+  }
+
+  /**
+   * Recurring journal and expense vouchers: make the pending vouchers whose day has come (services/financial/recurringVoucherService.js),
+   * then say how many made that way are still waiting for approval, and which templates could not make theirs and why. Both notices
+   * resolve themselves: the first once the vouchers are approved or rejected, the second once the run succeeds.
+   */
+  static async checkRecurringVouchers(now = new Date()) {
+    const RecurringVoucherService = require("../financial/recurringVoucherService");
+    const RecurringVoucher = require("../../models/modules/financial/recurringVoucherModel");
+    const { Voucher } = require("../../models/modules/financial/financialModels");
+    const run = await RecurringVoucherService.runDue(now);
+
+    const waiting = await Voucher.countDocuments({ status: "pending", "recurringRef.id": { $exists: true } });
+    const open = [];
+    if (waiting > 0) {
+      open.push("recurring_vouchers_waiting");
+      await NotificationService.raise({
+        kind: "recurring_vouchers_waiting",
+        severity: "info",
+        title: waiting === 1 ? "1 recurring voucher is waiting for approval" : `${waiting} recurring vouchers are waiting for approval`,
+        body: "Made on schedule. Check each one and approve it to post it to the books.",
+        link: "/approvals",
+        dedupeKey: "recurring_vouchers_waiting",
+        permission: "finance.approve",
+        now,
+      });
+    }
+    await NotificationService.resolveMissing({ kind: "recurring_vouchers_waiting", activeDedupeKeys: open, now });
+
+    const failed = await RecurringVoucher.find({ status: "ACTIVE", "lastError.message": { $exists: true } }).select("name lastError").limit(100).lean();
+    const keys = [];
+    for (const t of failed) {
+      const dedupeKey = `recurring_voucher_failed:${t._id}`;
+      keys.push(dedupeKey);
+      await NotificationService.raise({
+        kind: "recurring_voucher_failed",
+        severity: "warning",
+        title: `${t.name}: the voucher for ${t.lastError.day} could not be made`,
+        body: t.lastError.message,
+        link: `/recurring-vouchers?open=${t._id}`,
+        dedupeKey,
+        permission: "finance.create",
+        now,
+      });
+    }
+    await NotificationService.resolveMissing({ kind: "recurring_voucher_failed", activeDedupeKeys: keys, now });
     return { ...run, waiting, failing: failed.length };
   }
 
