@@ -88,13 +88,16 @@ function validateBay(input = {}) {
   return errors;
 }
 
-function validateGarageService(input = {}) {
+// `makeServiceItem`: the job-card form's quick add may leave the item blank and let the server make one of the
+// job's own name (GarageSetupService.createService), so the item is not required then.
+function validateGarageService(input = {}, { makeServiceItem = false } = {}) {
   const errors = [];
   const add = (field, code, message) => errors.push({ field, code, message });
   if (!text(input.code, 20)) add("code", "SERVICE_CODE_REQUIRED", "Give the service a short code");
   if (!text(input.name, 120)) add("name", "SERVICE_NAME_REQUIRED", "Give the service a name");
-  if (!idOf(input.serviceItemId)) add("serviceItemId", "SERVICE_ITEM_REQUIRED", "Choose the service item this bills under");
+  if (!makeServiceItem && !idOf(input.serviceItemId)) add("serviceItemId", "SERVICE_ITEM_REQUIRED", "Choose the service item this bills under");
   const hours = input.standardHours == null || input.standardHours === "" ? 0 : num(input.standardHours);
+  if (makeServiceItem && input.price != null && input.price !== "" && !(num(input.price) >= 0)) add("price", "INVALID_PRICE", "Enter the price as a number, 0 or more");
   // "...as a number" was shown for 1001, which IS a number, just too many hours (D11, SET-05).
   if (!(hours >= 0 && hours <= 1000)) add("standardHours", "INVALID_HOURS", "Enter the standard hours, 0 to 1000");
   (Array.isArray(input.defaultParts) ? input.defaultParts : []).forEach((p, i) => {

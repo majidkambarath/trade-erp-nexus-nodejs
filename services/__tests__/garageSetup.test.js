@@ -75,6 +75,38 @@ test("a standard job must bill under a real service item, never a stocked one", 
   );
 });
 
+test("the quick add makes the service item when none is chosen, and leaves nothing behind when refused", { skip }, async () => {
+  const Stock = require("../../models/modules/stockModel");
+  const GarageService = require("../../models/modules/garage/garageServiceModel");
+  // no item and no flag: still refused, exactly as before
+  await assert.rejects(() => svc.Setup.createService({ code: "ALIGN", name: "Wheel alignment" }, "tester"), (e) => e.code === "SERVICE_ITEM_REQUIRED");
+
+  const row = await svc.Setup.createService({ code: "align", name: "Wheel alignment", makeServiceItem: true, price: 120 }, "tester");
+  assert.equal(row.code, "ALIGN");
+  assert.equal(row.$locals.madeServiceItem.name, "Wheel alignment");
+  const item = await Stock.findById(row.serviceItemId).lean();
+  assert.equal(item.itemType, "service");
+  assert.equal(item.itemName, "Wheel alignment");
+  assert.equal(item.salesPrice, 120);
+  assert.equal(String(item.category), String(category._id), "takes the category of the newest service item");
+  const plan = await svc.Setup.plan({ serviceId: row._id });
+  assert.equal(String(plan.lines[0].itemId), String(item._id), "the job bills the item it made");
+
+  // a code already taken is refused BEFORE an item is made
+  const before = await Stock.countDocuments({});
+  await assert.rejects(() => svc.Setup.createService({ code: "ALIGN", name: "Another alignment", makeServiceItem: true }, "tester"), (e) => e.code === "SERVICE_CODE_TAKEN");
+  assert.equal(await Stock.countDocuments({}), before, "no stray service item");
+
+  // a bad price is refused before anything is written
+  await assert.rejects(() => svc.Setup.createService({ code: "BAL", name: "Balancing", makeServiceItem: true, price: "abc" }, "tester"), (e) => e.code === "INVALID_PRICE");
+  assert.equal(await GarageService.countDocuments({ code: "BAL" }), 0);
+
+  // an explicit item still wins over the flag
+  const chosen = await svc.Setup.createService({ code: "OILQA", name: "Oil quick", serviceItemId: labourOil._id, makeServiceItem: true }, "tester");
+  assert.equal(String(chosen.serviceItemId), String(labourOil._id));
+  assert.equal(chosen.$locals.madeServiceItem, undefined);
+});
+
 test("plan() turns a standard job into a priced draft and creates nothing", { skip }, async () => {
   const svcRow = await svc.Setup.createService(
     { code: "OILSVC2", name: "Oil service 2", serviceItemId: labourOil._id, standardHours: 0.5, defaultParts: [{ stockId: brakePads._id, qty: 2 }], defaultTasks: [{ name: "Drain and refill", mode: "in_house", standardHours: 0.5 }] },
