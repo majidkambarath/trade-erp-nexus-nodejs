@@ -44,6 +44,15 @@ const settingsSchema = new mongoose.Schema(
     retryMax: { type: Number, default: 3, min: 0, max: 10 },
     dailyLimit: { type: Number, default: 200, min: 1, max: 5000 },
     lastAuthFailureAt: { type: Date, default: null },
+    // Payment reminders (utils/paymentReminders.js). Off until an administrator turns it on; "review" lists what is due for a person
+    // to send, "automatic" sends it by itself once a day from `sendHour`. Saved by its own route, never by the Sending form.
+    reminders: {
+      mode: { type: String, enum: ["off", "review", "automatic"], default: "off" },
+      steps: { type: [Number], default: undefined }, // days from the due date; absent reads as the defaults (-3, 0, 7, 14, 30)
+      sendHour: { type: Number, min: 0, max: 23 },
+      catchUpDays: { type: Number, min: 0, max: 30 },
+      lastAutoRunDay: { type: String, default: null }, // "YYYY-MM-DD": the day the automatic pass last ran (claimed once a day)
+    },
   },
   { timestamps: true }
 );
@@ -60,6 +69,10 @@ const sendSchema = new mongoose.Schema(
     partyId: { type: mongoose.Schema.Types.ObjectId },
     partyName: { type: String }, // denormalised so the history reads with no join
     channel: { type: String, enum: ["email", "whatsapp"], required: true },
+    // "reminder" for a payment reminder (services/messaging/paymentReminderService.js); absent for a document a person sent. No default,
+    // so every older row reads as the document it was. `reminderStep` is the step key ("late7") while the row holds its claim.
+    purpose: { type: String, enum: ["reminder"] },
+    reminderStep: { type: String },
     status: { type: String, enum: SEND_STATUSES, default: "QUEUED" },
     to: [String],
     cc: [String],
@@ -98,6 +111,7 @@ sendSchema.index({ companyId: 1, idempotencyKey: 1 }, { unique: true, partialFil
 sendSchema.index({ companyId: 1, sourceType: 1, sourceId: 1, createdAt: -1 }); // one document's history
 sendSchema.index({ companyId: 1, status: 1, nextRetryAt: 1 }); // the background pass
 sendSchema.index({ companyId: 1, createdAt: -1 });
+sendSchema.index({ companyId: 1, purpose: 1, sourceId: 1 }, { sparse: true }); // which reminder steps an invoice already has
 sendSchema.index({ companyId: 1, partyId: 1, createdAt: -1 });
 sendSchema.index({ shareLinkId: 1 }, { sparse: true });
 sendSchema.index({ companyId: 1, providerMessageId: 1 }, { sparse: true }); // the future webhook's lookup

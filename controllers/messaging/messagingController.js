@@ -51,6 +51,27 @@ exports.retry = catchAsync(async (req, res) => {
 exports.list = catchAsync(async (req, res) => ok(res, await MessagingService.list(req, req.query)));
 exports.get = catchAsync(async (req, res) => ok(res, await MessagingService.get(req.params.id, req)));
 
+// Payment reminders (services/messaging/paymentReminderService.js). Settings are for those who manage them; the list and the send are for
+// whoever may send an invoice.
+const Reminders = require("../../services/messaging/paymentReminderService");
+exports.reminderSettings = catchAsync(async (req, res) => {
+  const s = await Reminders.settings();
+  ok(res, { mode: s.mode, steps: s.steps, sendHour: s.sendHour, catchUpDays: s.catchUpDays, messagingOn: s.messagingOn, provider: s.provider, dailyLimit: s.dailyLimit });
+});
+exports.putReminderSettings = catchAsync(async (req, res) => {
+  const { before, after } = await Reminders.updateSettings(req.body || {});
+  await AuditService.log({ req, action: "PAYMENT_REMINDER_SETTINGS_CHANGED", entity: "MessagingSettings", summary: `Payment reminders: ${before.mode} -> ${after.mode}`, before: { mode: before.mode, steps: before.steps, sendHour: before.sendHour, catchUpDays: before.catchUpDays }, after: { mode: after.mode, steps: after.steps, sendHour: after.sendHour, catchUpDays: after.catchUpDays } });
+  ok(res, { mode: after.mode, steps: after.steps, sendHour: after.sendHour, catchUpDays: after.catchUpDays, messagingOn: after.messagingOn, provider: after.provider, dailyLimit: after.dailyLimit });
+});
+exports.reminderDue = catchAsync(async (req, res) => {
+  const d = await Reminders.due();
+  ok(res, { settings: { mode: d.settings.mode, steps: d.settings.steps, sendHour: d.settings.sendHour, catchUpDays: d.settings.catchUpDays, provider: d.settings.provider }, today: d.today, rows: d.rows, skipped: d.skipped, truncated: d.truncated, allowance: d.allowance });
+});
+exports.reminderSend = catchAsync(async (req, res) => {
+  const out = await Reminders.sendMany({ items: req.body?.items, req, by: String(req.admin?.id || "system"), byName: req.admin?.name || req.admin?.email || "system" });
+  ok(res, out);
+});
+
 exports.shares = catchAsync(async (req, res) => ok(res, await ShareService.list(req, req.query)));
 exports.revoke = catchAsync(async (req, res) => {
   const link = await ShareService.revoke(req.params.id, { by: String(req.admin?.id || ""), reason: req.body?.reason }, req);

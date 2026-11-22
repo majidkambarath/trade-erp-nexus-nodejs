@@ -458,6 +458,7 @@ class TransactionService {
       // closing an order short is its own action (orderCloseService), never a field of an edit
       delete data.closedShort;
       delete data.lastSend; // written only when a send settles (services/messaging)
+      delete data.lastReminder; // likewise, by the payment reminder service
       delete data.approvals; // written only by an approval
       delete data.vatRegistered; // written only when the server prices the document (buildPricing); a body cannot choose it
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
@@ -1046,7 +1047,7 @@ const logAmount = balanceEffect;
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
         "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
-        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend approvals jobCardRef tradeOrderRef vanTripRef recurringRef vatRegistered gstType placeOfSupply supplierState fx";
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend lastReminder approvals jobCardRef tradeOrderRef vanTripRef recurringRef vatRegistered gstType placeOfSupply supplierState fx";
       let docs;
       let total;
       if (sortKey === "party") {
