@@ -6,7 +6,7 @@ const PartyAccounts = require("../financial/partyAccounts");
 const PartyMaster = require("../masters/partyMasterService");
 const { searchRegex } = require("../../utils/regex");
 const { isValidTerms, STANDARD_TERMS } = require("../../utils/partyMaster");
-const { retryTransientTransaction } = require("../../utils/withTransactionSession");
+const { retryTransientTransaction, isTransient } = require("../../utils/withTransactionSession");
 
 // Customer-only fields the model has always had; the create path used to drop them.
 // The buyer identifier and legal registration (an e-invoice to a customer with no TRN: services/einvoice) are kept when sent, and an edit
@@ -40,6 +40,10 @@ const cleanShelfLife = (v) => {
 };
 const tidyName = (v) => (v ? v.toString().trim().replace(/\s+/g, " ") : null); // "Sara  Khan" -> "Sara Khan"
 
+// A write conflict is passed through UNTOUCHED by the two helpers below (and not dressed as a 500 AppError): it carries MongoDB's
+// "transient" label, which is what createCustomer's retryTransientTransaction looks for. Wrapped, two customers saved at the same
+// moment made the loser a bare 500 "Sequence number generation failed" and the retry never ran.
+
 // Helper to get the next sequence number without saving it
 const getNextSequenceNumber = async (year, type, session) => {
   try {
@@ -63,6 +67,7 @@ const getNextSequenceNumber = async (year, type, session) => {
 
     return sequence.usedNumbers.length > 0 ? Math.max(...sequence.usedNumbers) + 1 : 1;
   } catch (error) {
+    if (isTransient(error)) throw error;
     throw new AppError(`Sequence number generation failed: ${error.message}`, 500);
   }
 };
@@ -79,6 +84,7 @@ const commitSequenceNumber = async (year, type, sequenceNumber, session) => {
       { session }
     );
   } catch (error) {
+    if (isTransient(error)) throw error;
     throw new AppError(`Failed to commit sequence number: ${error.message}`, 500);
   }
 };

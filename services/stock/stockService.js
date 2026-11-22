@@ -60,22 +60,45 @@ async function nextSkuFor(categoryName, session) {
   }
   return `${prefix}${String(max + 1).padStart(4, "0")}`;
 }
-const AUTO_SKU_TRIES = 8;
+const CREATE_TRIES = 8;
+
+// The item's own code: the first three letters of its name and a random four-digit number, the format the item list has always
+// shown. Nothing checks it against the other items beforehand - the unique index does - so createStock draws again when two
+// items drew the same one. (About 4 in 10 odds of at least one clash among 100 items whose names start alike.)
+function generateItemId(itemName) {
+  const prefix = String(itemName || "").trim().substring(0, 3).toUpperCase() || "ITM"; // "ITM" when the name is missing
+  const randomNum = Math.floor(1000 + Math.random() * 9000);
+  return `${prefix}${randomNum}`;
+}
+
+// What an item may say about its supplier: the name and the code, nothing else. `GET /stock/stock` is open to every role
+// (lookups.view: the pick lists), and a bare populate("vendorId") handed every reader the supplier's WHOLE record - bank
+// account numbers and IBANs, KYC document numbers, credit limit, balance (found in the review of 21 Nov 2026, the same
+// class as the transaction list's party projection). The screens read `vendorName` and `_id` only.
+const VENDOR_FIELDS = "vendorName vendorId";
 
 class StockService {
   static nextSkuFor = nextSkuFor;
+  static generateItemId = generateItemId; // a seam: a test makes two items draw the same code
 
   // `autoSku: true` (the item form's automatic SKU, and an item quick-added from an order) lets the server choose the
   // SKU; anything the request typed in `sku` is then only the preview the form showed.
+  //
+  // Two things are tried again, each by running the whole create afresh in a new transaction: an automatic SKU another item
+  // took first (counted again), and an item CODE another item drew first (drawn again). A SKU the person typed is never
+  // retried: a clash there is their answer to read ("That SKU is already used").
   static async createStock(data, createdBy) {
-    if (!data?.autoSku) return this.createStockOnce(data, createdBy);
+    const autoSku = Boolean(data?.autoSku);
     for (let attempt = 1; ; attempt += 1) {
       try {
-        return await this.createStockOnce(data, createdBy, { autoSku: true });
+        return await this.createStockOnce(data, createdBy, { autoSku });
       } catch (err) {
-        // a committed twin is a duplicate key; one still in its transaction is a write conflict - either way, count again
-        const skuClash = err?.code === 11000 && (err.keyPattern?.sku || /sku/.test(String(err.message)));
-        if (!(skuClash || isTransient(err)) || attempt >= AUTO_SKU_TRIES) throw err;
+        // a committed twin is a duplicate key; one still in its transaction is a write conflict - either way, try again
+        const duplicate = err?.code === 11000;
+        const codeClash = duplicate && (err.keyPattern?.itemId || /itemId/.test(String(err.message)));
+        const skuClash = autoSku && duplicate && (err.keyPattern?.sku || /sku/.test(String(err.message)));
+        const again = codeClash || skuClash || (autoSku && isTransient(err));
+        if (!again || attempt >= CREATE_TRIES) throw err;
         await backoff(attempt);
       }
     }
@@ -127,19 +150,7 @@ class StockService {
       //   throw new AppError("Vendor not found", 404);
       // }
 
-      // Generate itemId if not provided
-      function generateItemId(itemName, itemId = null) {
-        const prefix = itemName
-          ? itemName.trim().substring(0, 3).toUpperCase()
-          : "ITM"; // fallback if name missing
-
-        const randomNum = Math.floor(1000 + Math.random() * 9000); // 4-digit random number
-
-        const newItemId = itemId || `${prefix}${randomNum}`;
-        return newItemId;
-      }
-
-      const newItemId = generateItemId(itemName);
+      const newItemId = StockService.generateItemId(itemName);
       // Check if SKU already exists
       const existingSku = await Stock.findOne({ sku }).session(session);
       if (existingSku) {
@@ -163,7 +174,8 @@ class StockService {
             ...(isService
               ? { reorderLevel: 0, currentStock: 0 }
               : {
-                  barcodeQrCode: sku,
+                  // the barcode the caller names (a spreadsheet, the API), else the SKU, which the item form draws as one
+                  barcodeQrCode: String(barcodeQrCode ?? "").trim() || sku,
                   reorderLevel: Number(reorderLevel) || 0,
                   batchNumber,
                   expiryDate: expiryDate ? new Date(expiryDate) : undefined,
@@ -589,7 +601,7 @@ class StockService {
   static async getStockWithMovements(itemId) {
     const stock = await Stock.findOne({ itemId })
       .populate("category")
-      .populate("vendorId");
+      .populate("vendorId", VENDOR_FIELDS);
     if (!stock) {
       throw new AppError("Stock item not found", 404);
     }
@@ -624,7 +636,7 @@ class StockService {
       ...kinds.STOCKED_ONLY, // a service has 0 on hand and a 0 reorder level: it would always read as low
     })
       .populate("category")
-      .populate("vendorId")
+      .populate("vendorId", VENDOR_FIELDS)
       .sort({ currentStock: 1 });
   }
 
@@ -658,6 +670,7 @@ class StockService {
         { sku: searchRegex(filters.search) },
         { itemName: searchRegex(filters.search) },
         { batchNumber: searchRegex(filters.search) },
+        { barcodeQrCode: searchRegex(filters.search) }, // what a scanner reads is what a person types
       ];
     }
 
@@ -707,14 +720,14 @@ class StockService {
 
     return Stock.find(query)
       .populate("category")
-      .populate("vendorId")
+      .populate("vendorId", VENDOR_FIELDS)
       .sort({ createdAt: -1 });
   }
 
   static async getStockById(id) {
     const stock = await Stock.findById(id)
       .populate("category")
-      .populate("vendorId")
+      .populate("vendorId", VENDOR_FIELDS)
       .populate("unitOfMeasure")
       .populate("incomeAccountId", "accountName accountCode") // a service's own accounts, named for the item screen
       .populate("expenseAccountId", "accountName accountCode");
@@ -729,7 +742,7 @@ class StockService {
       _id: itemId,
     })
       .populate("category")
-      .populate("vendorId");
+      .populate("vendorId", VENDOR_FIELDS);
     logger.debug(stock);
     if (!stock) throw new AppError("Stock item not found", 404);
     return stock;

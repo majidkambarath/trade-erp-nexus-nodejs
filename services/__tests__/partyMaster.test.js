@@ -48,6 +48,8 @@ test.before(async () => {
     Vendor: require("../../models/modules/vendorModel"),
     Attachment: require("../../models/modules/financial/attachmentModel"),
     DocumentType: require("../../models/modules/documentTypeModel"),
+    Staff: require("../../models/modules/staffModel"),
+    EmployeeDocument: require("../../models/modules/hr/employeeDocumentModel"),
     BankMaster: require("../../models/modules/banking/bankingModels").BankMaster,
     Ageing: require("../financial/ageingService"),
     expiry: require("../../utils/documentExpiry"),
@@ -636,11 +638,42 @@ test("the expiry list holds expired and soon-to-expire documents of customers an
   assert.ok((await svc.Expiry.list({ withinDays: 0, now })).rows.some((r) => r.number === "E0"));
   const onlyVendors = await svc.Expiry.list({ withinDays: 30, partyType: "vendor", now });
   assert.ok(onlyVendors.rows.length && onlyVendors.rows.every((r) => r.partyType === "Vendor"));
-  await rejectsWith(svc.Expiry.list({ partyType: "staff" }), "INVALID_PARTY_TYPE");
+  // ("staff" used to be the invalid kind named here; it became a valid third kind when HR arrived. That a list naming no kind
+  // leaves staff out, and that asking for staff needs hr.view, is the next test.)
+  await rejectsWith(svc.Expiry.list({ partyType: "supplier" }), "INVALID_PARTY_TYPE");
   await rejectsWith(svc.Expiry.list({ withinDays: -1 }), "INVALID_WITHIN_DAYS");
   await rejectsWith(svc.Expiry.list({ withinDays: "soon" }), "INVALID_WITHIN_DAYS");
   assert.equal((await svc.Expiry.list({})).withinDays, 30, "30 days unless told otherwise");
   assert.ok(c && inactive);
+});
+
+// The KYC screen names no kind and the route is open to sales, purchase and accounts, so an employee's passport and visa numbers
+// reached every one of them (found in the review of 21 Nov 2026). Staff are HR's: listed only when asked for by name, and asking
+// needs hr.view - the permission of an employee's own documents screen. The viewer role holds sales.view, purchase.view and
+// accounts.view and not hr.view.
+test("an employee's documents are not in the customers-and-vendors list, and asking for them by name needs hr.view", { skip }, async () => {
+  const now = new Date();
+  const today = svc.expiry.todayInOrg(now);
+  const staff = await svc.Staff.create({ staffId: "EMP-EXP-1", name: "Ali Driver", designation: "Driver", contactNo: "0501234567", idNo: "784199000000001", joiningDate: new Date("2024-01-01"), createdBy: "tester" });
+  await svc.EmployeeDocument.create({ staffId: staff._id, name: "Passport", number: "STAFF-PASSPORT-9", expiryDate: new Date(`${svc.expiry.addDays(today, 5)}T00:00:00.000Z`) });
+
+  // the service: no kind named lists customers and vendors only; staff only by name
+  const plain = await svc.Expiry.list({ withinDays: 30, now });
+  assert.ok(!plain.rows.some((r) => r.partyType === "Staff" || r.number === "STAFF-PASSPORT-9"), "no kind named: customers and vendors only");
+  const staffOnly = await svc.Expiry.list({ withinDays: 30, partyType: "staff", now });
+  assert.ok(staffOnly.rows.some((r) => r.number === "STAFF-PASSPORT-9" && r.partyType === "Staff"), "asked for by name, staff is listed");
+
+  // the route
+  const asViewer = await call("GET", "/document-expiry?withinDays=30", { token: tokens.viewer });
+  assert.equal(asViewer.status, 200);
+  assert.ok(!JSON.stringify(asViewer.json).includes("STAFF-PASSPORT-9"), "the passport number did not reach the viewer");
+  const refused = await call("GET", "/document-expiry?withinDays=30&partyType=staff", { token: tokens.viewer });
+  assert.equal(refused.status, 403);
+  assert.equal(refused.json.errorCode, "PERMISSION_DENIED");
+  assert.ok(!JSON.stringify(refused.json).includes("STAFF-PASSPORT-9"));
+  const owner = await call("GET", "/document-expiry?withinDays=30&partyType=staff");
+  assert.equal(owner.status, 200);
+  assert.ok(owner.body.rows.some((r) => r.number === "STAFF-PASSPORT-9"), "the owner holds hr.view");
 });
 
 // ---------------------------------------------------------------------------------------------
