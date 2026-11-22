@@ -3,6 +3,7 @@ const AppError = require("../../utils/AppError");
 const Bay = require("../../models/modules/garage/bayModel");
 const GarageService = require("../../models/modules/garage/garageServiceModel");
 const Stock = require("../../models/modules/stockModel");
+const Category = require("../../models/modules/categoryModel");
 const rules = require("../../utils/garage");
 const { getTenant } = require("../../utils/tenant");
 
@@ -57,14 +58,42 @@ class GarageSetupService {
     if (item.itemType !== "service") throw fail(`"${item.itemName}" is a stocked item, not a service - choose a service item`, 400, "ITEM_NOT_A_SERVICE");
   }
 
+  // The job-card form's quick add: no service item chosen, so make one of the job's own name. It takes the
+  // category (and unit) of the newest service item, else the first category: a stock item must have one, and
+  // guessing is better than stopping a person at the counter. Made through StockService.createStock, so it is
+  // the same record the item form would make (SKU checked, service rules applied).
+  static async #makeServiceItem(data, createdBy) {
+    const StockService = require("../stock/stockService"); // lazily: stockService pulls in much of the app
+    const like = await Stock.findOne({ itemType: "service" }).sort({ createdAt: -1 }).select("category unitOfMeasure").lean();
+    const categoryId = like?.category || (await Category.findOne({}).sort({ createdAt: 1 }).select("_id").lean())?._id;
+    if (!categoryId) throw fail("Add an item category in Inventory first: a new service item needs one", 400, "CATEGORY_REQUIRED");
+    const base = `SVC-${rules.text(data.code, 20).toUpperCase().replace(/[^A-Z0-9-]/g, "")}` || "SVC";
+    let sku = base;
+    for (let n = 2; await Stock.exists({ sku }); n += 1) sku = `${base}-${n}`;
+    return StockService.createStock({
+      itemType: "service", itemName: rules.text(data.name, 120), sku, categoryId,
+      unitOfMeasure: like?.unitOfMeasure || undefined, salesPrice: Number(data.price) || 0,
+    }, createdBy);
+  }
+
   static async createService(data, createdBy) {
-    const errors = rules.validateGarageService(data);
+    const makeItem = data.makeServiceItem === true && !isId(data.serviceItemId);
+    const errors = rules.validateGarageService(data, { makeServiceItem: makeItem });
     if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
-    await this.#checkItem(data.serviceItemId);
+    const code = rules.text(data.code, 20).toUpperCase();
+    let madeItem = null;
+    if (makeItem) {
+      // the code is checked BEFORE the item is made, so a refused job never leaves a stray item behind
+      if (await GarageService.exists({ code })) throw fail("A service with this code already exists", 409, "SERVICE_CODE_TAKEN");
+      madeItem = await this.#makeServiceItem(data, createdBy);
+      data = { ...data, serviceItemId: madeItem._id };
+    } else {
+      await this.#checkItem(data.serviceItemId);
+    }
     const { companyId } = getTenant();
     try {
-      return await GarageService.create({
-        code: rules.text(data.code, 20).toUpperCase(),
+      const svc = await GarageService.create({
+        code,
         name: rules.text(data.name, 120),
         category: rules.text(data.category, 60),
         serviceItemId: data.serviceItemId,
@@ -74,7 +103,10 @@ class GarageSetupService {
         appliesTo: { makes: Array.isArray(data.appliesTo?.makes) ? data.appliesTo.makes.map((s) => rules.text(s, 60)).filter(Boolean) : [], models: Array.isArray(data.appliesTo?.models) ? data.appliesTo.models.map((s) => rules.text(s, 60)).filter(Boolean) : [] },
         companyId, createdBy, updatedBy: createdBy,
       });
+      if (madeItem) svc.$locals.madeServiceItem = { id: madeItem._id, name: madeItem.itemName };
+      return svc;
     } catch (err) {
+      if (madeItem) await Stock.deleteOne({ _id: madeItem._id }).catch(() => {}); // nothing else can use it yet
       if (err?.code === 11000) throw fail("A service with this code already exists", 409, "SERVICE_CODE_TAKEN");
       throw err;
     }

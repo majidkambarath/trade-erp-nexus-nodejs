@@ -20,8 +20,9 @@ exports.updateBay = catchAsync(async (req, res) => {
 exports.listServices = catchAsync(async (req, res) => ok(res, await GarageSetupService.listServices(req.query)));
 exports.createService = catchAsync(async (req, res) => {
   const svc = await GarageSetupService.createService(req.body || {}, by(req));
-  await AuditService.log({ req, action: "GARAGE_SERVICE_CREATED", entity: "GarageService", entityId: svc._id, summary: `Added standard job ${svc.name}` });
-  ok(res, svc, 201);
+  const made = svc.$locals?.madeServiceItem;
+  await AuditService.log({ req, action: "GARAGE_SERVICE_CREATED", entity: "GarageService", entityId: svc._id, summary: `Added standard job ${svc.name}${made ? ` (and its service item ${made.name})` : ""}` });
+  ok(res, made ? { ...svc.toObject(), madeServiceItem: made } : svc, 201);
 });
 exports.updateService = catchAsync(async (req, res) => {
   const svc = await GarageSetupService.updateService(req.params.serviceId, req.body || {}, by(req));
