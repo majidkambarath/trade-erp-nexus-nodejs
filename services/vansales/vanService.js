@@ -7,6 +7,7 @@ const Customer = require("../../models/modules/customerModel");
 const Admin = require("../../models/core/adminModel");
 const { LedgerAccount } = require("../../models/modules/financial/financialModels");
 const rules = require("../../utils/vanSales");
+const vanSettings = require("../../utils/vanSettings");
 const { groupFamily } = require("../banking/cardService");
 const ChartOfAccountsService = require("../financial/chartOfAccountsService");
 
@@ -57,16 +58,24 @@ class VanService {
     return routeId;
   }
 
+  /** The van's own rule overrides, checked: an object of only the keys it sets, or null when it follows the organisation. */
+  static #ownRules(input) {
+    const { errors, rules: own } = vanSettings.cleanVanRules(input);
+    if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
+    return Object.keys(own).length ? own : null;
+  }
+
   static async create(input, createdBy, req) {
     const base = wrap(() => rules.validateVan(input));
     if (await Van.exists({ code: base.code })) throw fail(`A van with the code ${base.code} already exists`, 409, "VAN_CODE_TAKEN");
     const sales = await this.#salesman(input.salesmanId);
     const defaultRouteId = await this.#route(input.defaultRouteId);
+    const own = this.#ownRules(input.rules);
     // The van's own cash account, under the Cash group. What the van took is this account's balance, so settling
     // is a plain transfer of it. A chart account made through the ordinary service: it appears in the chart.
     const { rootId } = await groupFamily("cash-account-group", req);
     const account = await ChartOfAccountsService.createAccount({ accountName: `Van Cash - ${base.code}`, groupId: rootId }, req, createdBy);
-    const van = await Van.create({ ...base, ...sales, defaultRouteId, cashAccountId: account._id, createdBy });
+    const van = await Van.create({ ...base, ...sales, defaultRouteId, cashAccountId: account._id, createdBy, ...(own ? { rules: own } : {}) });
     return this.get(van._id);
   }
 
@@ -78,6 +87,8 @@ class VanService {
     const sales = input.salesmanId !== undefined ? await this.#salesman(input.salesmanId) : {};
     const defaultRouteId = input.defaultRouteId !== undefined ? await this.#route(input.defaultRouteId) : van.defaultRouteId;
     van.set({ name: base.name, plate: base.plate, ...sales, defaultRouteId, updatedBy, ...(input.cashLimit !== undefined ? { cashLimit: base.cashLimit } : {}), ...(input.offlineBlock !== undefined ? { offlineBlock: base.offlineBlock } : {}), ...("dailySalesTarget" in base ? { dailySalesTarget: base.dailySalesTarget } : {}), ...("dailyCallsTarget" in base ? { dailyCallsTarget: base.dailyCallsTarget } : {}) });
+    // the van's own rules are sent whole: a key left out (or "org") goes back to following the organisation
+    if (input.rules !== undefined) van.rules = this.#ownRules(input.rules) || undefined;
     if (typeof input.active === "boolean" && input.active !== van.active) {
       if (!input.active && (await VanTrip.exists({ vanId: van._id, status: { $in: ["LOADING", "ON_ROUTE", "UNLOADED"] } }))) {
         throw fail("This van has a trip that is not settled yet", 409, "VAN_HAS_OPEN_TRIP");

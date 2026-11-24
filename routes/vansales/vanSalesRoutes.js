@@ -42,6 +42,10 @@ router.get("/routes/:routeId/preorders", requirePermission("vansales.view"), c.r
 router.get("/customers", requirePermission("vansales.view"), c.customers);
 router.get("/payment-choices", requirePermission(["vansales.view", "vansales.sell"]), c.paymentChoices);
 
+// The organisation's rules for its vans: everyone who works the vans reads them (the phone obeys them), a manager changes them.
+router.get("/settings", requirePermission(["vansales.view", "vansales.sell", "vansales.manage"]), c.getSettings);
+router.put("/settings", requirePermission("vansales.manage"), c.saveSettings);
+
 // Reports: fixed paths before the :tripId ones, as every router here orders them.
 router.get("/reports/summary", requirePermission("vansales.view"), c.summary);
 router.get("/reports/route-profit", requirePermission("vansales.view"), c.routeProfit);

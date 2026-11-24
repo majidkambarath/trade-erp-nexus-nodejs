@@ -5,6 +5,9 @@ const Customer = require("../../models/modules/customerModel");
 const Transaction = require("../../models/modules/transactionModel");
 const { Voucher } = require("../../models/modules/financial/financialModels");
 const rules = require("../../utils/vanSales");
+const vanRules = require("../../utils/vanSettings");
+const VanSettingsService = require("./vanSettingsService");
+const VanRoute = require("../../models/modules/vansales/vanRouteModel");
 const kinds = require("../../utils/itemKinds");
 const proposals = require("../../utils/assistantProposals");
 const S = require("../orderPurchase/salesDocumentSupport");
@@ -43,9 +46,21 @@ function assertSelling(trip) {
 
 async function customerOf(id, session) {
   if (!isId(id)) throw fail("Choose a customer", 400, "CUSTOMER_REQUIRED");
-  const c = await Customer.findById(id).select("customerName status").session(session).lean();
+  const c = await Customer.findById(id).select("customerName status paymentTerms").session(session).lean();
   if (!c || c.status === "Inactive") throw fail("That customer is not available", 404, "CUSTOMER_NOT_FOUND");
   return c;
+}
+
+/**
+ * The organisation's "only the customers on the route" rule. A van that may sell to anyone, and a supervisor
+ * (`mayOverride`), are never refused, so the route is not even read for them.
+ */
+async function assertCustomerAllowed(trip, active, customerId, { mayOverride = false, session } = {}) {
+  if (active.customers !== "route" || mayOverride) return;
+  const route = trip.routeId ? await VanRoute.findById(trip.routeId).select("customers").session(session || null).lean() : null;
+  const onRoute = (route?.customers || []).some((c) => String(c.customerId) === String(customerId));
+  const bad = vanRules.checkCustomer({ rules: active, onRoute, hasRoute: Boolean(route), mayOverride });
+  if (bad) throw fail(bad.message, bad.status, bad.code);
 }
 
 /**
@@ -57,6 +72,8 @@ async function takeMoney(trip, { customerId, amount, mode = "cash", details = {}
   const total = round2(amount);
   if (!(total > 0)) throw fail("Enter the amount received", 400, "AMOUNT_REQUIRED");
   if (!["cash", "cheque"].includes(mode)) throw fail("On the road, money is taken in cash or by cheque", 400, "VAN_MODE_NOT_SUPPORTED");
+  const notAllowed = vanRules.checkMode(await VanSettingsService.forTrip(trip, { session }), mode);
+  if (notAllowed) throw fail(notAllowed.message, notAllowed.status, notAllowed.code, notAllowed.details);
   const customer = await customerOf(customerId, session);
 
   const open = (await AgeingService.openInvoices({ type: "receivable", partyId: customerId, session }))
@@ -92,6 +109,12 @@ class VanTripSales {
     const trip = await loadTrip(id, session);
     assertSelling(trip);
     const customer = await customerOf(input?.customerId, session);
+    const active = await VanSettingsService.forTrip(trip, { session }); // this van's rules, read live
+    await assertCustomerAllowed(trip, active, customer._id, { mayOverride: opts.mayUnderprice, session });
+    // what must be taken at the door is known before anything is priced; the amount is checked again once it is
+    const cashCustomer = vanRules.isCashTerms(customer.paymentTerms);
+    const unpaid = vanRules.checkPayment({ rules: active, payNow: input?.payNow, cashCustomer });
+    if (unpaid) throw fail(unpaid.message, unpaid.status, unpaid.code, unpaid.details);
     const lines = Array.isArray(input?.items) ? input.items : [];
     if (!lines.length) throw fail("Add at least one item to sell", 400, "ITEMS_REQUIRED");
 
@@ -113,14 +136,16 @@ class VanTripSales {
       const typed = l.price !== undefined && l.price !== "" && l.price !== null;
       const price = typed ? Number(l.price) : list.price;
       if (!(price >= 0)) throw fail(`Line ${i + 1}: enter a price of zero or more`, 400, "PRICE_INVALID");
-      // selling under the customer's list is a discount the business has not agreed: only someone who manages the vans may
-      if (typed && price + 0.005 < list.price && !opts.mayUnderprice) {
-        throw fail(`${s.itemName} is ${list.price.toFixed(2)} for this customer${list.listName ? ` (${list.listName})` : ""}. Selling it for less needs a supervisor.`, 403, "PRICE_BELOW_LIST", { stockId: String(s._id), listPrice: list.price });
-      }
+      // selling under the customer's list, or with a discount of his own, is a concession the business has not agreed:
+      // the organisation's price rules say how far a salesman may go, and a supervisor (manage) is never held to them
+      const typedDiscount = Number(l.discountPercent) || 0;
+      if (typedDiscount < 0 || typedDiscount > 100) throw fail(`Line ${i + 1}: a discount is between 0 and 100 percent`, 400, "DISCOUNT_INVALID");
+      const held = vanRules.checkLine({ name: s.itemName, price, list: list.price, typedPrice: typed, discountPercent: typedDiscount, listName: list.listName, rules: active, mayOverride: opts.mayUnderprice });
+      if (held) throw fail(held.message, held.status, held.code, { stockId: String(s._id), ...(held.details || {}) });
       return {
         itemId: s._id, itemCode: s.itemId, description: s.itemName, qty,
         price,
-        discountPercent: Number(l.discountPercent) || 0,
+        discountPercent: typedDiscount,
         taxCodeId: l.taxCodeId || undefined,
         vatPercent: l.vatPercent,
       };
@@ -190,6 +215,8 @@ class VanTripSales {
     if (pay && (pay.full === true || Number(pay.amount) > 0)) {
       const amount = pay.full === true ? round2(approved.totalAmount) : round2(pay.amount);
       if (amount > round2(approved.totalAmount) + 0.005) throw fail("The money taken is more than the invoice. Take the rest as a separate receipt.", 400, "PAYMENT_EXCEEDS_INVOICE");
+      const short = vanRules.checkPayment({ rules: active, payNow: pay, cashCustomer, total: approved.totalAmount });
+      if (short) throw fail(short.message, short.status, short.code, short.details);
       receipt = await takeMoney(trip, { customerId: customer._id, amount, mode: pay.mode || "cash", details: pay.details, invoiceIds: [String(approved._id)], date: day }, by, { req: opts.req, session });
     }
     await require("./vanFleetService").ping(trip, { kind: "sale", customerId: customer._id, ref: approved.transactionNo, location: input.location }, { session });
@@ -222,7 +249,10 @@ class VanTripSales {
     const opts = rest.length > 1 ? rest[0] || {} : {};
     const trip = await loadTrip(id, session);
     assertSelling(trip);
+    const active = await VanSettingsService.forTrip(trip, { session });
+    if (!active.returnsAllowed) throw fail("This business does not take goods back on the van. Bring them to the depot.", 403, "VAN_RETURNS_OFF");
     const customer = await customerOf(input?.customerId, session);
+    await assertCustomerAllowed(trip, active, customer._id, { mayOverride: opts.mayUnderprice, session });
     if (!isId(input?.returnOfId)) throw fail("Choose the invoice the goods are returned against", 400, "RETURN_LINK_REQUIRED");
     const original = await Transaction.findById(input.returnOfId).session(session);
     if (!original || original.type !== "sales_order") throw fail("That invoice does not exist", 404, "ORIGINAL_NOT_FOUND");
@@ -258,6 +288,12 @@ class VanTripSales {
     await trip.save({ session });
     return { creditNote: approved };
   });
+
+  /** The route rule for a door that does not sell itself (a pre-order): refuses a customer this van may not serve. */
+  static async assertCustomerAllowed(tripId, customerId, { mayOverride = false } = {}) {
+    const trip = await loadTrip(tripId);
+    await assertCustomerAllowed(trip, await VanSettingsService.forTrip(trip), customerId, { mayOverride });
+  }
 
   /** What each item on the van costs THIS customer (their price list, else the route's, else the item's own price). */
   static async prices(tripId, customerId) {
@@ -315,7 +351,7 @@ class VanTripSales {
     const shown = await VanTripService.present(trip);
     const route = trip.routeId ? await require("../../models/modules/vansales/vanRouteModel").findById(trip.routeId).lean() : null;
     const ids = [...new Set([...(route?.customers || []).map((c) => String(c.customerId)), ...extraCustomerIds.map(String)])].filter(isId).slice(0, 300);
-    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status").lean();
+    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status paymentTerms").lean();
     const stock = await stockOf(trip);
     const items = await Stock.find({ _id: { $in: [...stock.sellable.keys()] } }).select("salesPrice category").lean();
     const prices = {};
@@ -331,7 +367,7 @@ class VanTripSales {
     return {
       at: new Date().toISOString(),
       trip: shown,
-      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "" })),
+      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "", terms: c.paymentTerms || "" })),
       prices,
       insight,
       freeNumbers: (trip.numberBlock || []).filter((n) => !used.has(n)),

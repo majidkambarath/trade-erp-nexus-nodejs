@@ -10,8 +10,9 @@ const DefaultChartService = require("../financial/defaultChartService");
 const StockAdjustmentService = require("../stock/stockAdjustmentService");
 const { groupFamily } = require("../banking/cardService");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
-const { todayInOrg } = require("../../utils/documentExpiry");
+const { todayInOrg, orgDay } = require("../../utils/documentExpiry");
 const { loadTrip, stockOf } = require("./vanTripStock");
+const VanSettingsService = require("./vanSettingsService");
 
 const isId = (v) => mongoose.isValidObjectId(v);
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
@@ -153,8 +154,10 @@ class VanTripSettlement {
     if (pendingExpenses.length) blockers.push({ code: "PENDING_EXPENSES", message: `${pendingExpenses.length} road expense${pendingExpenses.length === 1 ? " is" : "s are"} waiting for approval. Approve or reject ${pendingExpenses.length === 1 ? "it" : "them"} first.` });
     if (pending.length) blockers.push({ code: "PENDING_RECEIPTS", message: `${pending.length} receipt${pending.length === 1 ? " is" : "s are"} waiting for approval. Approve or reject ${pending.length === 1 ? "it" : "them"} first.` });
     const warnings = [];
-    if (cash.short > 0) warnings.push({ code: "CASH_SHORT", message: `${cash.short.toFixed(2)} less cash was handed in than the van took. It is charged to the salesman's shortage account.` });
-    if (cash.over > 0) warnings.push({ code: "CASH_OVER", message: `${cash.over.toFixed(2)} more cash was handed in than the van took. It is booked to cash over and short.` });
+    // a difference at or below the organisation's tolerance still posts to the shortage / over account; it just needs no tick
+    const tolerance = (await VanSettingsService.forTrip(trip, { session })).cashTolerance;
+    if (cash.short > tolerance + 1e-9) warnings.push({ code: "CASH_SHORT", message: `${cash.short.toFixed(2)} less cash was handed in than the van took. It is charged to the salesman's shortage account.` });
+    if (cash.over > tolerance + 1e-9) warnings.push({ code: "CASH_OVER", message: `${cash.over.toFixed(2)} more cash was handed in than the van took. It is booked to cash over and short.` });
     const off = rows.filter((r) => Math.abs(r.difference) > 0.0005);
     if (off.length) warnings.push({ code: "STOCK_DIFFERENCE", message: `${off.length} item${off.length === 1 ? "" : "s"} counted differently from what the van should hold (${round2(varianceValue).toFixed(2)} at cost). It is booked as a stock adjustment.` });
     if (missing.length) warnings.push({ code: "CHEQUES_MISSING", message: `${missing.length} cheque${missing.length === 1 ? "" : "s"} taken on the road ${missing.length === 1 ? "was" : "were"} not handed in: ${missing.map((c) => c.chequeNo).join(", ")}.` });
@@ -189,6 +192,9 @@ class VanTripSettlement {
 
     const day = todayInOrg();
     const date = new Date(`${day}T00:00:00.000Z`);
+    // What the count found happened the day the van was counted back in, not the day somebody settled it: the stock
+    // moves carry the count day (and the period lock judges that day). The cash journal is the hand-in, so it keeps today.
+    const countDate = trip.unload?.at ? new Date(`${orgDay(trip.unload.at)}T00:00:00.000Z`) : date;
     const voucherIds = [];
 
     // ---- cash: one journal -----------------------------------------------------------------------------------
@@ -219,7 +225,7 @@ class VanTripSettlement {
         const stock = await Stock.findById(row.stockId).session(session); // re-read: the first move changed it
         const target = rules.round3(Number(stock.currentStock) + qty);
         if (target < -1e-9) throw fail(`${stock.itemName} would go below zero; check the count`, 409, "STOCK_WOULD_GO_NEGATIVE", { stockId: row.stockId });
-        await StockAdjustmentService.apply({ stock, newQuantity: target, eventType, referenceNumber: trip.tripNo, notes, createdBy: by, date }, { session });
+        await StockAdjustmentService.apply({ stock, newQuantity: target, eventType, referenceNumber: trip.tripNo, notes, createdBy: by, date: countDate }, { session });
       }
     }
 

@@ -23,6 +23,21 @@ const vanSchema = new mongoose.Schema(
     // Copied onto each trip as it opens (VanTrip.target), so a later change never re-judges an earlier day.
     dailySalesTarget: { type: Number, min: 0 },
     dailyCallsTarget: { type: Number, min: 0, max: 500 },
+    // The five organisation rules this van overrides for itself (utils/vanSettings.js PER_VAN_KEYS). A key that is
+    // absent means "as the organisation", so there is NO default on any of them (and none on the array).
+    rules: {
+      type: new mongoose.Schema(
+        {
+          customers: String,
+          creditSales: String,
+          priceChange: String,
+          maxDiscountPercent: Number,
+          paymentModes: { type: [String], default: undefined },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     active: { type: Boolean, default: true },
 
     createdBy: String,

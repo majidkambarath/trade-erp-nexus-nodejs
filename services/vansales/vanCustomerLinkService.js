@@ -12,8 +12,9 @@ const TradeOrderService = require("../orderPurchase/tradeOrderService");
 const { runWithTenant } = require("../../utils/tenantContext");
 const { todayInOrg } = require("../../utils/documentExpiry");
 
+const VanSettingsService = require("./vanSettingsService");
+
 const MAX_LINES = 20;
-const MAX_OPEN_REQUESTS = 3;
 const notAvailable = () => new AppError("This link does not offer that.", 404, "SHARE_NOT_FOUND");
 
 // The customer's own page for a van invoice (phase 6): what they still owe, when the van comes next, what they have
@@ -47,6 +48,7 @@ class VanCustomerLinkService {
   static async view(link) {
     return runWithTenant({ companyId: link.companyId, branchId: link.branchId }, async () => {
       const ctx = await this.#context(link);
+      const { customerOrdering: ordering } = await VanSettingsService.settings();
       const open = (await AgeingService.openInvoices({ type: "receivable", partyId: ctx.customerId })).filter((r) => String(r.partyId) === ctx.customerId);
       const orders = await TradeOrder.find({ partyId: ctx.customerId, kind: "sales", "source.routeId": { $exists: true }, status: { $in: ["DRAFT", "CONFIRMED"] } }).sort({ expectedDate: 1 }).limit(10).lean();
       return {
@@ -57,8 +59,9 @@ class VanCustomerLinkService {
         },
         nextVisit: ctx.route ? rules.nextRunDay(ctx.route.days, todayInOrg()) : null,
         orders: orders.map((o) => ({ orderNo: o.orderNo, expectedDate: o.expectedDate ? o.expectedDate.toISOString().slice(0, 10) : null, requested: o.source?.kind === "customer_link", items: (o.items || []).map((l) => ({ name: l.description, qty: l.qty })) })),
-        canRequest: Boolean(ctx.route),
-        items: ctx.route ? await this.#offer(ctx) : [],
+        // an organisation can switch off ordering through the link: the page then shows what is owed and the next visit, with no form
+        canRequest: Boolean(ctx.route) && ordering,
+        items: ctx.route && ordering ? await this.#offer(ctx) : [],
       };
     });
   }
@@ -67,6 +70,8 @@ class VanCustomerLinkService {
   static async request(link, body = {}) {
     return runWithTenant({ companyId: link.companyId, branchId: link.branchId }, async () => {
       const ctx = await this.#context(link);
+      const settings = await VanSettingsService.settings();
+      if (!settings.customerOrdering) throw new AppError("This business does not take orders through this page.", 403, "VAN_ORDERING_OFF");
       if (!ctx.route) throw new AppError("This van has no route, so there is no next visit to ask for.", 409, "ROUTE_REQUIRED");
       const offer = new Map((await this.#offer(ctx)).map((i) => [i.stockId, i]));
       const raw = Array.isArray(body.lines) ? body.lines : [];
@@ -82,7 +87,7 @@ class VanCustomerLinkService {
       }
       if (!lines.length) throw new AppError("Say how many of at least one item.", 400, "ITEMS_REQUIRED");
       const waiting = await TradeOrder.countDocuments({ partyId: ctx.customerId, "source.kind": "customer_link", status: "DRAFT" });
-      if (waiting >= MAX_OPEN_REQUESTS) throw new AppError("You already have requests waiting for the van. The salesman will bring those first.", 409, "REQUEST_LIMIT");
+      if (waiting >= settings.maxOpenRequests) throw new AppError("You already have requests waiting for the van. The salesman will bring those first.", 409, "REQUEST_LIMIT");
       const expected = rules.nextRunDay(ctx.route.days, todayInOrg());
       const order = await TradeOrderService.create(
         {

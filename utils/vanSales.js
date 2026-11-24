@@ -329,15 +329,16 @@ function validateRoute(input = {}) {
  * history: [Map(stockId -> qty sold on that run)]; preorders / onVan / free / names: Map keyed by stockId.
  * -> [{ stockId, itemName, qty, why: { preorder, average, runs, onVan, free, capped } }], largest first.
  */
-function suggestLoad({ preorders = new Map(), history = [], onVan: holding = new Map(), free = new Map(), names = new Map() } = {}) {
+function suggestLoad({ preorders = new Map(), history = [], onVan: holding = new Map(), free = new Map(), names = new Map(), extraPercent = 0 } = {}) {
   const runs = history.length;
+  const margin = 1 + (Number(extraPercent) > 0 ? Number(extraPercent) : 0) / 100; // a safety margin on the average, never on a pre-order
   const ids = new Set([...preorders.keys(), ...history.flatMap((h) => [...h.keys()])]);
   const out = [];
   for (const id of ids) {
     const pre = round3(preorders.get(id) || 0);
     const average = runs ? round3(history.reduce((t, h) => t + Number(h.get(id) || 0), 0) / runs) : 0;
     const have = round3(holding.get(id) || 0);
-    let want = Math.max(0, pre + Math.ceil(average - EPS) - have);
+    let want = Math.max(0, pre + Math.ceil(average * margin - EPS) - have);
     const avail = free.has(id) ? Math.max(0, round3(free.get(id))) : Infinity;
     const capped = want > avail + EPS;
     if (capped) want = avail;

@@ -15,6 +15,7 @@ const { getTenant } = require("../../utils/tenant");
 const { allBranches } = require("../../utils/tenantContext");
 const { todayInOrg } = require("../../utils/documentExpiry");
 const { loadTrip, stockOf } = require("./vanTripStock");
+const VanSettingsService = require("./vanSettingsService");
 
 const isId = (v) => mongoose.isValidObjectId(v);
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
@@ -60,7 +61,9 @@ class VanTripService {
     const sum = (rows) => rules.round2(rows.reduce((t, v) => t + (Number(v.totalAmount) || 0), 0));
     const salesTotal = rules.round2(s.invoices.reduce((t, i) => t + (Number(i.totalAmount) || 0), 0));
     const returnsTotal = rules.round2(s.returns.reduce((t, i) => t + (Number(i.totalAmount) || 0), 0));
-    const van = await Van.findById(trip.vanId).select("cashLimit dailySalesTarget dailyCallsTarget").lean();
+    const van = await Van.findById(trip.vanId).select("cashLimit dailySalesTarget dailyCallsTarget rules").lean();
+    // the rules this van works under now (the organisation's with its own laid over): the phone obeys these
+    const activeRules = await VanSettingsService.forVan(van);
     const cashLimit = van?.cashLimit ?? null;
     // the day's targets: the ones copied when the trip opened, else (an older trip) the van's current ones
     const target = plain.target && (plain.target.sales != null || plain.target.calls != null)
@@ -86,6 +89,7 @@ class VanTripService {
     return {
       ...plain,
       id: String(plain._id),
+      rules: activeRules,
       loaded: named(s.loaded, names),
       sold: named(s.sold, names),
       sellable: named(s.sellable, names).map((l) => ({ ...l, salesPrice: prices.get(l.stockId) || 0 })),
@@ -259,6 +263,7 @@ class VanTripService {
   static transfer = withTransactionSession(async (id, input, by, ...rest) => {
     const session = rest[rest.length - 1];
     const from = await loadTrip(id, session);
+    if (!(await VanSettingsService.forTrip(from, { session })).transfersAllowed) throw fail("This business does not hand goods from one van to another on the road", 403, "VAN_TRANSFERS_OFF");
     if (from.status !== "ON_ROUTE") throw fail("Only a van that is out can hand goods over", 409, "TRIP_NOT_ON_ROUTE");
     if (!isId(input?.toTripId) || String(input.toTripId) === String(from._id)) throw fail("Choose the other van's trip", 400, "TRANSFER_TARGET_REQUIRED");
     const to = await loadTrip(input.toTripId, session);

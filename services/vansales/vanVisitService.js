@@ -33,9 +33,10 @@ class VanVisitService {
     const outcome = input.outcome === "skipped" ? "skipped" : "no_sale";
     const reason = REASONS.includes(input.reason) ? input.reason : null;
     if (!reason) throw fail("Say why there was no sale", 400, "VISIT_REASON_REQUIRED");
+    const tracking = (await require("./vanSettingsService").forTrip(trip, { session })).captureLocation;
     const [visit] = await VanVisit.create([{
       tripId: trip._id, tripNo: trip.tripNo, customerId: c._id, customerName: c.customerName, outcome, reason,
-      note: String(input.note || "").slice(0, 300), at: input.at ? new Date(input.at) : new Date(), location: cleanLocation(input.location), by: String(by), byName: byName || "",
+      note: String(input.note || "").slice(0, 300), at: input.at ? new Date(input.at) : new Date(), location: tracking ? cleanLocation(input.location) : undefined, by: String(by), byName: byName || "",
     }], session ? { session } : undefined);
     await require("./vanFleetService").ping(trip, { kind: "visit", customerId: c._id, ref: reason, location: input.location }, { session });
     return visit;

@@ -11,6 +11,7 @@ const VanVisitService = require("../../services/vansales/vanVisitService");
 const PriceListService = require("../../services/vansales/priceListService");
 const { loadTrip } = require("../../services/vansales/vanTripStock");
 const VanCrmService = require("../../services/vansales/vanCrmService");
+const VanSettingsService = require("../../services/vansales/vanSettingsService");
 
 const by = (req) => req.admin?.id || "system";
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
@@ -65,6 +66,15 @@ exports.assignees = catchAsync(async (req, res) => ok(res, await VanService.assi
 exports.paymentChoices = catchAsync(async (req, res) => ok(res, await VanService.paymentChoices(req)));
 exports.customers = catchAsync(async (req, res) => ok(res, await VanService.customerChoices(req.query)));
 
+// ---- the organisation's rules for its vans ---------------------------------------------------------------------
+exports.getSettings = catchAsync(async (req, res) => ok(res, await VanSettingsService.settings()));
+exports.saveSettings = catchAsync(async (req, res) => {
+  const before = await VanSettingsService.settings();
+  const after = await VanSettingsService.save(req.body);
+  await AuditService.log({ req, action: "VAN_SALES_SETTINGS_SAVED", entity: "CompanySettings", summary: "Van sales rules changed", before, after });
+  ok(res, after);
+});
+
 // ---- trips ---------------------------------------------------------------------------------------------------
 exports.listTrips = catchAsync(async (req, res) => ok(res, await VanTripService.list(req.query)));
 exports.mine = catchAsync(async (req, res) => ok(res, await VanTripService.mine(by(req))));
@@ -77,7 +87,8 @@ exports.openTrip = catchAsync(async (req, res) => {
   ok(res, await VanTripService.getById(trip._id), 201);
 });
 exports.load = catchAsync(async (req, res) => {
-  const trip = await VanTripService.load(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req));
+  await require("../../services/vansales/vanPlanningService").assertExpiryOk(req.params.tripId, { lines: (req.body?.lines || []).map((l) => ({ stockId: l?.stockId, qty: l?.qty })) }, { mayOverride: holds(req, "vansales.manage") });
+  const trip =await VanTripService.load(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req));
   const units = (req.body?.lines || []).reduce((n, l) => n + (Number(l.qty) || 0), 0);
   await log(req, "VAN_LOADED", trip, `Van ${trip.vanCode} loaded: ${units} units on ${trip.tripNo}`, { load: trip.loads.length });
   ok(res, await VanTripService.getById(trip._id));
@@ -110,7 +121,7 @@ exports.collect = catchAsync(async (req, res) => {
 });
 exports.returnGoods = catchAsync(async (req, res) => {
   await assertMayWork(req);
-  const { creditNote } = await VanTripSales.returnGoods(req.params.tripId, req.body || {}, by(req), { req });
+  const { creditNote } = await VanTripSales.returnGoods(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
   await AuditService.log({ req, action: "VAN_RETURN", entity: "VanTrip", entityId: req.params.tripId, summary: `${creditNote.transactionNo} taken back on the van`, after: { return: creditNote.transactionNo } });
   ok(res, { creditNote, trip: await VanTripService.getById(req.params.tripId) }, 201);
 });
@@ -222,6 +233,7 @@ exports.updatePromotion = catchAsync(async (req, res) => {
 
 exports.createPreorder = catchAsync(async (req, res) => {
   await assertMayWork(req);
+  await VanTripSales.assertCustomerAllowed(req.params.tripId, req.body?.customerId, { mayOverride: holds(req, "vansales.manage") });
   const order = await VanPlanningService.createPreorder(req.params.tripId, { ...(req.body || {}), fromLink: false }, by(req));
   await AuditService.log({ req, action: "VAN_PREORDER", entity: "VanTrip", entityId: req.params.tripId, summary: `${order.orderNo} taken on the van for the next visit` });
   ok(res, order, 201);

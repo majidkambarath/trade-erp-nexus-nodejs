@@ -161,6 +161,16 @@ test("suggested load: pre-orders in full, the average sold per run rounded up, l
   assert.deepEqual(v.suggestLoad({}), [], "a route never run and nothing pre-ordered suggests nothing");
 });
 
+test("suggested load: an organisation's safety margin goes on the average, never on a pre-order, and is still rounded up", () => {
+  const m = (o) => new Map(Object.entries(o));
+  const base = { preorders: m({ rice: 5 }), history: [m({ rice: 10 }), m({ rice: 12 }), m({ rice: 11 })], onVan: m({}), free: m({ rice: 100 }), names: m({ rice: "Rice" }) };
+  assert.equal(v.suggestLoad(base)[0].qty, 5 + 11, "no margin: what it always was");
+  assert.equal(v.suggestLoad({ ...base, extraPercent: 0 })[0].qty, 16);
+  assert.equal(v.suggestLoad({ ...base, extraPercent: 10 })[0].qty, 5 + 13, "11 x 1.10 = 12.1, rounded up to 13; the pre-order stays 5");
+  assert.equal(v.suggestLoad({ ...base, extraPercent: -50 })[0].qty, 16, "a negative margin is not a thing");
+  assert.equal(v.suggestLoad({ ...base, extraPercent: "x" })[0].qty, 16, "nor is a word");
+});
+
 test("expiry on loading: the FEFO batches that cover the quantity, named when they die before the shelf life asked", () => {
   const batches = [{ batchNo: "B1", expiryDate: "2026-11-20", qty: 5 }, { batchNo: "B2", expiryDate: "2026-12-30", qty: 50 }];
   assert.deepEqual(v.expiringOnLoad(batches, 3, "2026-11-24"), [{ batchNo: "B1", expiryDate: "2026-11-20", qty: 3 }]);
