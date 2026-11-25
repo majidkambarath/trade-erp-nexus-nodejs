@@ -108,6 +108,8 @@ const unloadSchema = new mongoose.Schema(
         _id: false,
       },
     ],
+    // returnable containers counted on the van (crates, bottles): what should be there and what was (no default)
+    containers: [{ typeId: { type: mongoose.Schema.Types.ObjectId, ref: "ContainerType" }, name: String, expected: Number, counted: Number, difference: Number, _id: false }],
   },
   { _id: false }
 );
@@ -129,6 +131,9 @@ const settlementSchema = new mongoose.Schema(
     transfersWaiting: Number,
     stockVarianceValue: Number, // units short (negative) or over (positive), at average cost
     damagedValue: Number, // what the damaged goods were worth, written off
+    // containers missing from the van at count-in, and the deposit they were worth (charged to the salesman's shortage)
+    containersMissing: Number,
+    containersMissingValue: Number,
     acknowledged: [String],
     voucherIds: [{ type: mongoose.Schema.Types.ObjectId }],
     notes: { type: String, trim: true, maxlength: 500 },

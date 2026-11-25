@@ -87,6 +87,9 @@ class VanSalesReportService {
         transfer: round2(money.get(`${k}:transfer`) || 0),
         cashVariance: t.settlement?.cashVariance ?? null,
         stockVarianceValue: t.settlement?.stockVarianceValue ?? null,
+        // returnable containers that did not come back to the van (absent where the organisation has none)
+        containersMissing: t.settlement?.containersMissing ?? null,
+        containersMissingValue: t.settlement?.containersMissingValue ?? null,
         ...rules.calls({ buyers: buyersByTrip.get(k) || [], visited: visitedByTrip.get(k) || [] }),
       };
     });

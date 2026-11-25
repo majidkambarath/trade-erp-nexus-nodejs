@@ -189,6 +189,31 @@ async function looseLines(trip, customer, wanted, date, opts, session = null) {
   return { items, record };
 }
 
+/**
+ * The containers of a sale (services/vansales/vanContainerService.js): what the salesman counted, else what the goods
+ * sold take; written with the invoice, the deposit as its own note (a refund set against the invoice where it fits).
+ * Nothing at all where the organisation has no container types and none were sent.
+ */
+async function containersOfSale({ trip, customer, input, items, approved, by, opts, session }) {
+  const VanContainerService = require("./vanContainerService");
+  const crates = require("../../utils/vanContainers");
+  const none = { deposit: 0, voucher: null, summary: [] };
+  const sent = input?.containers !== undefined && input?.containers !== null;
+  const types = await VanContainerService.types({ session });
+  if (!types.length && !sent) return none;
+  let moves;
+  try {
+    moves = sent ? crates.cleanMoves(input.containers) : [...crates.givenFor(items.map((l) => ({ stockId: l.itemId, qty: l.qty })), types)].map(([typeId, given]) => ({ typeId, given, collected: 0 }));
+  } catch (err) {
+    if (err instanceof crates.ContainerError) throw fail(err.message, 400, err.code, err.details);
+    throw err;
+  }
+  if (!moves.length) return none;
+  const r = await VanContainerService.record({ trip, customerId: customer._id, moves, kind: "sale", transactionId: approved._id, transactionNo: approved.transactionNo, settleInvoiceId: approved._id, by, byName: opts.byName, mayOverride: opts.mayUnderprice, session });
+  const names = new Map(types.map((t) => [t.id, t.name]));
+  return { deposit: r.deposit, voucher: r.voucher, summary: moves.map((m) => ({ ...m, name: names.get(m.typeId) || "" })) };
+}
+
 class VanTripSales {
   /**
    * Sell from the van: a sales invoice for a customer, raised and APPROVED in one step (stock out, ledger, party
@@ -302,12 +327,18 @@ class VanTripSales {
       throw fail("This invoice needs a second approval before it can be completed, so it cannot be sold from the van", 409, "VAN_SALE_NEEDS_APPROVAL");
     }
 
+    // containers that went out with the goods and came back empty, and the deposit they are worth (its own note): only
+    // where the organisation set containers up. With no count sent, what the goods sold take is given and nothing collected.
+    const containers = await containersOfSale({ trip, customer, input, items, approved, by, opts, session });
+    // what is owed now: the invoice (less a deposit refund already set against it) and a deposit charged
+    const owed = round2((await Transaction.findById(approved._id).select("outstandingAmount").session(session).lean()).outstandingAmount + Math.max(0, containers.deposit));
+
     let receipt = null;
     const pay = input.payNow;
     if (pay && (pay.full === true || Number(pay.amount) > 0)) {
-      const amount = pay.full === true ? round2(approved.totalAmount) : round2(pay.amount);
-      if (amount > round2(approved.totalAmount) + 0.005) throw fail("The money taken is more than the invoice. Take the rest as a separate receipt.", 400, "PAYMENT_EXCEEDS_INVOICE");
-      const short = vanRules.checkPayment({ rules: active, payNow: pay, cashCustomer, total: approved.totalAmount });
+      const amount = pay.full === true ? owed : round2(pay.amount);
+      if (amount > owed + 0.005) throw fail("The money taken is more than the invoice. Take the rest as a separate receipt.", 400, "PAYMENT_EXCEEDS_INVOICE");
+      const short = vanRules.checkPayment({ rules: active, payNow: pay, cashCustomer, total: owed });
       if (short) throw fail(short.message, short.status, short.code, short.details);
       receipt = await takeMoney(trip, { customerId: customer._id, amount, mode: pay.mode || "cash", details: pay.details, invoiceIds: [String(approved._id)], date: day }, by, { req: opts.req, session });
     }
@@ -318,7 +349,7 @@ class VanTripSales {
       preorder.closeReason = `Delivered by van ${trip.vanCode} on ${trip.tripNo} (${approved.transactionNo})`;
       await preorder.save({ session });
     }
-    return { invoice: approved, receipt, promotions: promo.applied, preorder: preorder ? preorder.orderNo : null };
+    return { invoice: approved, receipt, promotions: promo.applied, preorder: preorder ? preorder.orderNo : null, containers: containers.summary, deposit: containers.deposit, depositNote: containers.voucher ? containers.voucher.voucherNo : null };
   });
 
   /** Take money from a customer (cash or a cheque): against named invoices, else the oldest first. */
@@ -520,7 +551,9 @@ class VanTripSales {
       .filter((r) => String(r.partyId) === String(customerId))
       .map((r) => ({ id: String(r.transactionId), number: r.transactionNo, outstanding: r.outstanding, date: r.date }));
     const owed = round2(open.reduce((t, r) => t + Number(r.outstanding || 0), 0));
-    return { owed, open };
+    // the containers they hold (crates, bottles), only where the organisation has container types
+    const containers = (await require("./vanContainerService").balances(customerId)).filter((c) => c.holds !== 0);
+    return { owed, open, containers };
   }
 
   /** The lines of an invoice that can still be returned (feeds the return form). */

@@ -56,6 +56,12 @@ router.get("/board", requirePermission(["vansales.settle", "vansales.manage"]), 
 
 // Selling lookups (a salesman holds sell, not necessarily anything else).
 router.get("/customers/:customerId/position", requirePermission("vansales.sell"), c.customerPosition);
+// returnable containers: the types (read by whoever sells, changed by a manager), what a customer holds, a supervisor's correction
+router.get("/container-types", requirePermission(["vansales.view", "vansales.sell"]), c.listContainerTypes);
+router.post("/container-types", requirePermission("vansales.manage"), c.createContainerType);
+router.put("/container-types/:typeId", requirePermission("vansales.manage"), c.updateContainerType);
+router.get("/customers/:customerId/containers", requirePermission(["vansales.view", "vansales.sell"]), c.customerContainers);
+router.post("/container-moves/adjust", requirePermission("vansales.manage"), c.adjustContainers);
 router.get("/invoices/:invoiceId/returnable", requirePermission("vansales.sell"), c.returnable);
 
 // Trips.
@@ -81,6 +87,7 @@ router.get("/trips/:tripId/preorders", requirePermission("vansales.view"), c.tri
 router.post("/trips/:tripId/preorders", requirePermission("vansales.sell"), c.createPreorder);
 router.post("/trips/:tripId/cancel", requirePermission("vansales.load"), c.cancel);
 router.post("/trips/:tripId/sell", requirePermission("vansales.sell"), c.sell);
+router.post("/trips/:tripId/containers", requirePermission("vansales.sell"), c.empties);
 router.get("/trips/:tripId/prices", requirePermission("vansales.sell"), c.prices);
 router.get("/trips/:tripId/customers/:customerId/insight", requirePermission("vansales.sell"), c.insight);
 router.get("/trips/:tripId/visits", requirePermission("vansales.view"), c.visits);

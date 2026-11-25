@@ -107,6 +107,8 @@ class VanTripService {
       id: String(plain._id),
       rules: activeRules,
       cardMachine,
+      // returnable containers (crates, bottles): the types and what should be on the van; absent where there are none
+      containers: await require("./vanContainerService").tripView(plain, s),
       loaded: named(s.loaded, names),
       sold: named(s.sold, names),
       sellable: named(s.sellable, names).map((l) => ({ ...l, salesPrice: prices.get(l.stockId) || 0 })),

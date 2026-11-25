@@ -158,12 +158,42 @@ exports.cancel = catchAsync(async (req, res) => {
 exports.sell = catchAsync(async (req, res) => {
   await assertMayWork(req);
   assertMayAcknowledge(req);
-  const { invoice, receipt } = await VanTripSales.sell(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
-  await AuditService.log({ req, action: "VAN_SALE", entity: "VanTrip", entityId: req.params.tripId, summary: `${invoice.transactionNo} sold on the van${receipt ? `, ${receipt.voucherNo} ${receipt.status === "pending" ? "taken, waiting for the bank" : "received"} (${receipt.paymentMode})` : ""}`, after: { invoice: invoice.transactionNo } });
+  await Containers().ensureAccount(req); // before the sale's transaction: a deposit needs its account
+  const { invoice, receipt, containers, deposit, depositNote } = await VanTripSales.sell(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
+  await AuditService.log({ req, action: "VAN_SALE", entity: "VanTrip", entityId: req.params.tripId, summary: `${invoice.transactionNo} sold on the van${receipt ? `, ${receipt.voucherNo} ${receipt.status === "pending" ? "taken, waiting for the bank" : "received"} (${receipt.paymentMode})` : ""}${depositNote ? `, container deposit ${depositNote}` : ""}`, after: { invoice: invoice.transactionNo, ...(containers?.length ? { containers, deposit } : {}) } });
   // after the sale committed, never able to fail it: the call on the customer's CRM timeline
   await VanCrmService.record("sale", { tripId: req.params.tripId, customerId: invoice.partyId, refId: invoice._id, ref: invoice.transactionNo, total: invoice.totalAmount, by: by(req) });
-  ok(res, { invoice, receipt, trip: await VanTripService.getById(req.params.tripId) }, 201);
+  ok(res, { invoice, receipt, containers, deposit, depositNote, trip: await VanTripService.getById(req.params.tripId) }, 201);
 });
+
+// ---- returnable containers (crates, bottles, cylinders) ----------------------------------------------------------
+const Containers = () => require("../../services/vansales/vanContainerService");
+exports.listContainerTypes = catchAsync(async (req, res) => ok(res, await Containers().types({ includeInactive: req.query.all === "1" })));
+exports.createContainerType = catchAsync(async (req, res) => {
+  const t = await Containers().create(req.body || {}, by(req));
+  await AuditService.log({ req, action: "VAN_CONTAINER_TYPE_CREATED", entity: "ContainerType", entityId: t.id, summary: `Container ${t.code} ${t.name} added`, after: t });
+  ok(res, t, 201);
+});
+exports.updateContainerType = catchAsync(async (req, res) => {
+  const t = await Containers().update(req.params.typeId, req.body || {}, by(req));
+  await AuditService.log({ req, action: "VAN_CONTAINER_TYPE_UPDATED", entity: "ContainerType", entityId: t.id, summary: `Container ${t.code} changed`, after: t });
+  ok(res, t);
+});
+exports.customerContainers = catchAsync(async (req, res) => ok(res, await Containers().balances(req.params.customerId)));
+exports.empties = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  await Containers().ensureAccount(req);
+  const r = await Containers().empties(req.params.tripId, req.body || {}, by(req), { byName: req.admin?.name, mayOverride: holds(req, "vansales.manage") });
+  const trip = await loadTrip(req.params.tripId);
+  await log(req, "VAN_CONTAINERS_MOVED", trip, `Containers at a stop on ${trip.tripNo}${r.voucher ? `, deposit ${r.voucher.voucherNo}` : ""}`, { deposit: r.deposit });
+  ok(res, { deposit: r.deposit, depositNote: r.voucher ? r.voucher.voucherNo : null, moves: r.moves.length, trip: await VanTripService.getById(req.params.tripId) }, 201);
+});
+exports.adjustContainers = catchAsync(async (req, res) => {
+  const r = await Containers().adjust(req.body || {}, by(req), { byName: req.admin?.name });
+  await AuditService.log({ req, action: "VAN_CONTAINERS_ADJUSTED", entity: "Customer", entityId: req.body?.customerId, summary: `Containers a customer holds set to ${r.holds}: ${String(req.body?.reason || "").slice(0, 120)}` });
+  ok(res, { holds: r.holds, balances: await Containers().balances(req.body.customerId) });
+});
+
 exports.collect = catchAsync(async (req, res) => {
   await assertMayWork(req);
   const { receipt } = await VanTripSales.collect(req.params.tripId, req.body || {}, by(req), { req });

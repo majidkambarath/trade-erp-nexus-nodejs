@@ -26,7 +26,33 @@ const round2 = rules.round2;
 //            adjustment at average cost (movement, ledger entry, period lock and all).
 // Cheques are not moved: they sit in Cheques in Hand until deposited; settlement only checks they were handed over.
 
-const WARNING_CODES = ["CASH_SHORT", "CASH_OVER", "STOCK_DIFFERENCE", "CHEQUES_MISSING"];
+const WARNING_CODES = ["CASH_SHORT", "CASH_OVER", "STOCK_DIFFERENCE", "CHEQUES_MISSING", "CONTAINER_DIFFERENCE"];
+
+/**
+ * The containers a trip should bring back, and what was counted: [{ typeId, name, expected, counted, difference, value }].
+ * Only where the organisation has container types. `counted` is Map(typeId -> n).
+ */
+async function containerRows(trip, stock, counted, { session } = {}) {
+  const VanContainerService = require("./vanContainerService");
+  const crates = require("../../utils/vanContainers");
+  const types = await VanContainerService.types({ includeInactive: true, session });
+  if (!types.length) return [];
+  const moves = await VanContainerService.ofTrip(trip, { session });
+  const expected = crates.expectedOnVan({ loaded: stock.loaded, moves }, types);
+  if (!expected.size && !counted.size) return [];
+  return crates.countRows(expected, counted, types);
+}
+
+/** What the person counted per container type: Map(typeId -> n). A type not sent is taken as found as expected. */
+function countedContainers(raw) {
+  const counted = new Map();
+  for (const [i, c] of (Array.isArray(raw) ? raw : []).entries()) {
+    const n = typeof c?.counted === "number" || (typeof c?.counted === "string" && c.counted.trim() !== "") ? Number(c.counted) : NaN;
+    if (typeof c?.typeId !== "string" || !Number.isInteger(n) || n < 0) throw fail(`Containers line ${i + 1}: count them, a whole number of zero or more`, 400, "CONTAINERS_INVALID");
+    counted.set(c.typeId, n);
+  }
+  return counted;
+}
 
 /** The two posting keys settlement uses, topped up for a company whose map predates them. Outside the transaction: the top-up commits on its own. */
 async function ensureKeys(req) {
@@ -78,9 +104,11 @@ class VanTripSettlement {
     const names = new Map();
     for (const load of trip.loads) for (const l of load.lines) names.set(String(l.stockId), l.itemName);
     require("./vanFleetService").applyOdometer(trip, "in", input?.odometer);
+    const containers = await containerRows(trip, stock, countedContainers(input?.containers), { session });
     trip.unload = {
       at: new Date(), by: String(by), byName: input?.byName || "",
       lines: rows.map((r) => ({ ...r, itemName: names.get(r.stockId) || "" })),
+      ...(containers.length ? { containers: containers.map((c) => ({ typeId: c.typeId, name: c.name, expected: c.expected, counted: c.counted, difference: c.difference })) } : {}),
     };
     trip.status = "UNLOADED";
     trip.updatedBy = String(by);
@@ -164,6 +192,16 @@ class VanTripSettlement {
       return row;
     });
 
+    // containers as counted in: missing ones of a deposit type are worth their deposit, charged to the salesman
+    const VanContainerService = require("./vanContainerService");
+    const depositOf = new Map((await VanContainerService.types({ includeInactive: true, session })).map((t) => [t.id, t.deposit]));
+    const containers = (trip.unload.containers || []).map((c) => ({
+      typeId: String(c.typeId), name: c.name, expected: c.expected, counted: c.counted, difference: c.difference,
+      value: round2(Math.max(0, -Number(c.difference || 0)) * (depositOf.get(String(c.typeId)) || 0)),
+    }));
+    const containersMissing = containers.reduce((n, c) => n + Math.max(0, -Number(c.difference || 0)), 0);
+    const containersMissingValue = round2(containers.reduce((t, c) => t + c.value, 0));
+
     const blockers = [];
     if (pendingExpenses.length) blockers.push({ code: "PENDING_EXPENSES", message: `${pendingExpenses.length} road expense${pendingExpenses.length === 1 ? " is" : "s are"} waiting for approval. Approve or reject ${pendingExpenses.length === 1 ? "it" : "them"} first.` });
     if (pending.length) blockers.push({ code: "PENDING_RECEIPTS", message: `${pending.length} receipt${pending.length === 1 ? " is" : "s are"} waiting for approval. Approve or reject ${pending.length === 1 ? "it" : "them"} first.` });
@@ -174,12 +212,18 @@ class VanTripSettlement {
     if (cash.over > tolerance + 1e-9) warnings.push({ code: "CASH_OVER", message: `${cash.over.toFixed(2)} more cash was handed in than the van took. It is booked to cash over and short.` });
     const off = rows.filter((r) => Math.abs(r.difference) > 0.0005);
     if (off.length) warnings.push({ code: "STOCK_DIFFERENCE", message: `${off.length} item${off.length === 1 ? "" : "s"} counted differently from what the van should hold (${round2(varianceValue).toFixed(2)} at cost). It is booked as a stock adjustment.` });
+    const containersOff = containers.filter((c) => c.difference !== 0);
+    if (containersOff.length) {
+      const said = containersOff.map((c) => (c.difference < 0 ? `${-c.difference} ${c.name} missing` : `${c.difference} ${c.name} more`)).join(", ");
+      warnings.push({ code: "CONTAINER_DIFFERENCE", message: `${said} on the van.${containersMissingValue > 0 ? ` The deposit of the missing ones, ${containersMissingValue.toFixed(2)}, is charged to the salesman's shortage account.` : ""}` });
+    }
     if (missing.length) warnings.push({ code: "CHEQUES_MISSING", message: `${missing.length} cheque${missing.length === 1 ? "" : "s"} taken on the road ${missing.length === 1 ? "was" : "were"} not handed in: ${missing.map((c) => c.chequeNo).join(", ")}.` });
 
     return {
       trip: { id: String(trip._id), tripNo: trip.tripNo, vanCode: trip.vanCode },
       cash, expenses, cheques, missingCheques: missing, cards, transfers, cardTotal, transferTotal, transfersWaiting, rows,
       stockVarianceValue: round2(varianceValue), damagedValue: round2(damagedValue),
+      containers, containersMissing, containersMissingValue,
       blockers, warnings,
     };
   }
@@ -213,7 +257,8 @@ class VanTripSettlement {
 
     // ---- cash: one journal -----------------------------------------------------------------------------------
     const { cash } = plan;
-    if (cash.expected > 0 || cash.handed > 0) {
+    const lostValue = plan.containersMissingValue || 0;
+    if (cash.expected > 0 || cash.handed > 0 || lostValue > 0) {
       const main = await mainCash(opts.req, input.toAccountId, session);
       const shortAccount = await AccountConfigService.resolveAccount("salesman-shortages", { session });
       const overAccount = await AccountConfigService.resolveAccount("cash-over-short", { session });
@@ -223,6 +268,11 @@ class VanTripSettlement {
       if (cash.short > 0) lines.push({ accountId: shortAccount, debit: cash.short, narration: `${note}: cash short, owed by ${trip.salesmanName}` });
       if (cash.expected > 0) lines.push({ accountId: trip.cashAccountId, credit: cash.expected, narration: `${note}: cash taken on the road` });
       if (cash.over > 0) lines.push({ accountId: overAccount, credit: cash.over, narration: `${note}: cash over` });
+      // containers that did not come back: their deposit is the salesman's to make good (they have no book value of their own)
+      if (lostValue > 0) {
+        lines.push({ accountId: shortAccount, debit: lostValue, narration: `${note}: ${plan.containersMissing} containers missing, owed by ${trip.salesmanName}` });
+        lines.push({ accountId: overAccount, credit: lostValue, narration: `${note}: containers missing, recovered from the salesman` });
+      }
       const voucher = await FinancialService.createVoucher({ voucherType: "journal", date, lines, narration: note, ledgerBased: true }, by, session, { req: opts.req });
       await Voucher.updateOne({ _id: voucher._id }, { $set: { vanTripRef: { tripId: trip._id, tripNo: trip.tripNo } } }, { session });
       voucherIds.push(voucher._id);
@@ -249,6 +299,7 @@ class VanTripSettlement {
       cheques: plan.cheques.map((c) => ({ ...c, handed: !plan.missingCheques.some((m) => m.chequeNo === c.chequeNo) })),
       cardTotal: plan.cardTotal, transferTotal: plan.transferTotal, transfersWaiting: plan.transfersWaiting,
       stockVarianceValue: plan.stockVarianceValue, damagedValue: plan.damagedValue,
+      ...(plan.containers.length ? { containersMissing: plan.containersMissing, containersMissingValue: plan.containersMissingValue } : {}),
       acknowledged: [...given].filter((c) => WARNING_CODES.includes(c)), voucherIds,
       notes: String(input.notes || "").slice(0, 500),
     };
