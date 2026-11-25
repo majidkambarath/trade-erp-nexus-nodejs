@@ -12,6 +12,7 @@ const AccountConfigService = require("../financial/accountConfigService");
 const { getTenant } = require("../../utils/tenant");
 const AppError = require("../../utils/AppError");
 const { round2, splitEntries } = require("../core/postingTrail");
+const { isCorrection, CORRECTION_LABEL } = require("../../utils/reissue");
 
 const TYPE_LABEL = {
   purchase_order: "Purchase order",
@@ -19,6 +20,9 @@ const TYPE_LABEL = {
   purchase_return: "Purchase return",
   sales_return: "Sales return",
 };
+
+// the credit note of a re-issue is named as what it is, not as a sales return (utils/reissue.js)
+const typeLabel = (t) => (isCorrection(t) ? CORRECTION_LABEL : TYPE_LABEL[t.type] || t.type);
 
 class DocumentAuditService {
   // The few fields worth keeping in an audit row. A whole document would bloat the log and
@@ -56,7 +60,7 @@ class DocumentAuditService {
 
   static describe(transaction) {
     const t = transaction || {};
-    return `${TYPE_LABEL[t.type] || t.type} ${t.transactionNo} - ${round2(t.totalAmount).toFixed(2)}`;
+    return `${typeLabel(t)} ${t.transactionNo} - ${round2(t.totalAmount).toFixed(2)}`;
   }
 
   // What a document actually wrote, counted. Cheap enough to run on every approval, so the audit
@@ -131,7 +135,7 @@ class DocumentAuditService {
         _id: doc._id,
         transactionNo: doc.transactionNo,
         type: doc.type,
-        typeLabel: TYPE_LABEL[doc.type] || doc.type,
+        typeLabel: typeLabel(doc),
         status: doc.status,
         date: doc.date,
         dueDate: doc.dueDate,

@@ -10,6 +10,7 @@ const AppError = require("../../utils/AppError");
 const { naturalBalance, categoryOf, round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
 const { CLOSING_VOUCHER_TYPE } = require("../../utils/yearEnd");
+const { CORRECTIONS, CORRECTION_LABEL, CORRECTION_KIND } = require("../../utils/reissue");
 
 // Reports read straight from the general ledger, so they cannot disagree with the Trial Balance:
 // General ledger, Profit and loss (with gross profit), Day book, Cash and bank book, Cash flow and
@@ -50,6 +51,7 @@ const VOUCHER_LABEL = {
   opening: "Opening balance", opening_stock: "Opening stock", stock_writeoff: "Stock write-off", closing: "Year-end closing",
   production: "Production",
   sales_order: "Sales invoice", sales_return: "Sales return", purchase_order: "Purchase invoice", purchase_return: "Purchase return",
+  [CORRECTION_KIND]: CORRECTION_LABEL,
 };
 const CASH_FLOW_LABEL = {
   receipt: "Received from customers", payment: "Paid to vendors", expense: "Expenses paid", contra: "Moved between cash and bank",
@@ -59,7 +61,7 @@ const CASH_FLOW_LABEL = {
 };
 // The order voucher kinds read in on a screen: trade documents, then money, then books, then the rest.
 const TYPE_ORDER = [
-  "sales_order", "sales_return", "purchase_order", "purchase_return", "receipt", "payment", "expense", "journal", "contra",
+  "sales_order", "sales_return", CORRECTION_KIND, "purchase_order", "purchase_return", "receipt", "payment", "expense", "journal", "contra",
   "debit_note", "credit_note", "cheque_clearance", "stock_adjustment", "stock_writeoff", "production", "opening", "opening_stock", "closing",
 ];
 const typeRank = (t) => {
@@ -325,6 +327,12 @@ class LedgerReportsService {
 
   // One line per voucher (an invoice, a receipt, a journal...) in date order, with what moved and
   // who it concerned. `includeLines` adds each voucher's debit and credit lines (the journals register).
+  // The credit notes of a re-issue in a span of dates (utils/reissue.js): few, read once per report.
+  static async correctionIds(dateRange) {
+    const Transaction = mongoose.model("Transaction");
+    return Transaction.find({ ...CORRECTIONS, ...(dateRange ? { date: dateRange } : {}) }).distinct("_id");
+  }
+
   static async dayBook({ from, to, type, search, page = 1, limit = 50, includeLines = false } = {}) {
     const start = dayStart(from);
     const end = dayEnd(to);
@@ -332,7 +340,7 @@ class LedgerReportsService {
     if (start || end) match.date = { ...(start ? { $gte: start } : {}), ...(end ? { $lte: end } : {}) };
     if (type) match.voucherType = type;
 
-    const costIds = await this.costLegAccountIds();
+    const [costIds, corrections] = await Promise.all([this.costLegAccountIds(), this.correctionIds(match.date)]);
     const size = Math.min(Math.max(Number(limit) || 50, 1), 200);
     const skip = (Math.max(Number(page) || 1, 1) - 1) * size;
     const row = this.voucherRow(costIds);
@@ -350,6 +358,8 @@ class LedgerReportsService {
       { $match: match },
       { $group: group },
       { $addFields: row.after },
+      // the credit note of a re-issue is named and counted apart from sales returns; its row keeps its real type
+      { $addFields: { kind: { $cond: [{ $in: ["$_id", corrections] }, CORRECTION_KIND, "$voucherType"] } } },
     ];
     const needle = String(search || "").trim();
     if (needle) {
@@ -360,7 +370,7 @@ class LedgerReportsService {
       $facet: {
         rows: [{ $sort: { date: -1, voucherNo: -1 } }, { $skip: skip }, { $limit: size }],
         count: [{ $count: "n" }],
-        byType: [{ $group: { _id: "$voucherType", amount: { $sum: "$amount" }, count: { $sum: 1 } } }],
+        byType: [{ $group: { _id: "$kind", amount: { $sum: "$amount" }, count: { $sum: 1 } } }],
       },
     });
     const [res] = await LedgerEntry.aggregate(pipeline);
@@ -373,7 +383,7 @@ class LedgerReportsService {
       total: res.count[0]?.n || 0,
       rows: res.rows.map((r) => ({
         voucherId: r._id, date: r.date, voucherNo: r.voucherNo, voucherType: r.voucherType,
-        typeLabel: VOUCHER_LABEL[r.voucherType] || titleCase(r.voucherType),
+        typeLabel: VOUCHER_LABEL[r.kind] || titleCase(r.kind), ...(r.kind === CORRECTION_KIND ? { correction: true } : {}),
         party: partyOf(r.accounts), narration: r.narration || "", amount: round2(r.amount),
         balanced: Math.abs(r.debitAll - r.credit) < 0.01, lineCount: r.lineCount,
         ...(includeLines ? { lines: r.lines.map((l) => ({ ...l, debit: round2(l.debit), credit: round2(l.credit) })).sort((a, b) => (b.debit > 0) - (a.debit > 0)) } : {}),
@@ -389,10 +399,11 @@ class LedgerReportsService {
     if (!mongoose.isValidObjectId(voucherId)) throw new AppError("Invalid voucher", 400);
     const lines = await LedgerEntry.find({ voucherId, isReversed: { $ne: true } }).sort({ debitAmount: -1, createdAt: 1 }).lean();
     if (!lines.length) throw new AppError("Nothing was posted for this voucher", 404, "NOT_POSTED");
+    const correction = lines[0].voucherType === "sales_return" && (await this.correctionIds()).some((id) => String(id) === String(voucherId));
     const debit = round2(lines.reduce((t, l) => t + l.debitAmount, 0));
     const credit = round2(lines.reduce((t, l) => t + l.creditAmount, 0));
     return {
-      voucherId, voucherNo: lines[0].voucherNo, voucherType: lines[0].voucherType, typeLabel: VOUCHER_LABEL[lines[0].voucherType] || titleCase(lines[0].voucherType),
+      voucherId, voucherNo: lines[0].voucherNo, voucherType: lines[0].voucherType, typeLabel: correction ? CORRECTION_LABEL : VOUCHER_LABEL[lines[0].voucherType] || titleCase(lines[0].voucherType),
       date: lines[0].date,
       lines: lines.map((l) => ({ accountId: l.accountId, accountCode: l.accountCode, accountName: l.accountName, debit: round2(l.debitAmount), credit: round2(l.creditAmount), narration: l.narration || "" })),
       totals: { debit, credit }, balanced: Math.abs(debit - credit) < 0.01,
@@ -478,11 +489,13 @@ class LedgerReportsService {
     const end = dayEnd(to);
     const match = { isReversed: { $ne: true } };
     if (start || end) match.date = { ...(start ? { $gte: start } : {}), ...(end ? { $lte: end } : {}) };
-    const row = this.voucherRow(await this.costLegAccountIds());
+    const [costIds, corrections] = await Promise.all([this.costLegAccountIds(), this.correctionIds(match.date)]);
+    const row = this.voucherRow(costIds);
     const found = await LedgerEntry.aggregate([
       { $match: match },
       { $group: { _id: "$voucherId", date: { $min: "$date" }, ...row.fields } },
       { $addFields: row.after },
+      { $addFields: { voucherType: { $cond: [{ $in: ["$_id", corrections] }, CORRECTION_KIND, "$voucherType"] } } },
       {
         $group: {
           _id: { day: { $dateToString: { format: "%Y-%m-%d", date: "$date", timezone: orgLocale.timezone() } }, type: "$voucherType" },

@@ -7,7 +7,7 @@ const AccountConfigService = require("./accountConfigService");
 const FinancialService = require("./financialService");
 const AppError = require("../../utils/AppError");
 const { TEMPLATES, figuresFor, buildEntries, round2 } = require("../../utils/postingTemplates");
-const { postingKey } = require("../../utils/reissue");
+const { postingKey, isCorrection, correctionNarration } = require("../../utils/reissue");
 const ItemKindService = require("../stock/itemKindService");
 const kinds = require("../../utils/itemKinds");
 const vatRule = require("../../utils/vatRegistration");
@@ -190,7 +190,7 @@ class PostingService {
         date: transaction.date || new Date(),
         debitAmount: e.debitAmount,
         creditAmount: e.creditAmount,
-        narration: `${transaction.type.replace("_", " ")} ${transaction.transactionNo}`,
+        narration: isCorrection(transaction) ? correctionNarration(transaction) : `${transaction.type.replace("_", " ")} ${transaction.transactionNo}`,
         partyId: transaction.partyId,
         partyType: transaction.partyType,
         referenceType: "order",

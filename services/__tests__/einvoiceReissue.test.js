@@ -41,6 +41,9 @@ test.before(async () => {
     migrate: require("../../utils/migrations").moveReissueCreditsToRevenue,
     LedgerAccount: require("../../models/modules/financial/financialModels").LedgerAccount,
     today: require("../../utils/documentExpiry").todayInOrg,
+    LedgerReports: require("../reports/ledgerReportsService"),
+    Statement: require("../financial/statementService"),
+    Audit: require("../orderPurchase/documentAuditService"),
   };
   await mongoose.connection.syncIndexes();
   await svc.seed({ log: () => {} });
@@ -346,7 +349,7 @@ test("a re-issue credit posted to Sales Returns before the rule is moved to Sale
   const balances = async () => [await a.balance(a.returns), await a.balance(a.revenue)];
   const right = await balances();
   // put it back the way it used to be posted: the row on Sales Returns, the balances with it
-  await svc.Ledger.updateOne({ voucherId: r.creditNote._id, accountId: a.revenue }, { $set: { accountId: a.returns, accountName: "Sales Returns" } });
+  await svc.Ledger.updateOne({ voucherId: r.creditNote._id, accountId: a.revenue }, { $set: { accountId: a.returns, accountName: "Sales Returns", narration: `sales return ${r.creditNote.transactionNo}` } });
   const { applyBalances } = require("../financial/ledgerBalances");
   await applyBalances([{ accountId: a.revenue, debitAmount: 0, creditAmount: 520 }, { accountId: a.returns, debitAmount: 520, creditAmount: 0 }]);
   assert.notDeepEqual(await balances(), right);
@@ -357,6 +360,7 @@ test("a re-issue credit posted to Sales Returns before the rule is moved to Sale
   assert.equal(await debitsOn(r.creditNote._id, a.revenue), 520);
   const row = await svc.Ledger.findOne({ voucherId: r.creditNote._id, accountId: a.revenue }).lean();
   assert.notEqual(row.accountName, "Sales Returns");
+  assert.ok(row.narration.startsWith("Credit note (re-issue) "), row.narration + ": " + "rows posted before the rule are given its words too");
   assert.equal(await svc.migrate(), 0);
   assert.deepEqual(await balances(), right);
 
@@ -397,4 +401,40 @@ test("the invoices that need re-issuing can be found", { skip }, async () => {
   assert.ok(!left.includes(r.creditNote.transactionNo));
   assert.equal((await rowOf(bare.transactionNo)).needsReissue, false);
   assert.equal(await count(), start);
+});
+
+test("the credit note of a re-issue is named as that wherever a document is named", { skip }, async () => {
+  const tx = await legacyInvoice();
+  const r = await svc.EI.reissue(tx._id, REQ);
+  await approve(r.creditNote._id);
+  const no = r.creditNote.transactionNo;
+  const words = `Credit note (re-issue) ${no}, cancels ${tx.transactionNo}`;
+  const day = svc.today();
+
+  // the ledger rows it posted
+  const rows = await svc.Ledger.find({ voucherId: r.creditNote._id }).lean();
+  assert.ok(rows.length && rows.every((x) => x.narration === words), JSON.stringify(rows.map((x) => x.narration)));
+  // the day book: its row named and marked, its total apart from sales returns
+  const book = await svc.LedgerReports.dayBook({ from: day, to: day, limit: 200 });
+  const row = book.rows.find((x) => x.voucherNo === no);
+  assert.equal(row.typeLabel, "Credit note (re-issue)");
+  assert.equal(row.voucherType, "sales_return", "its type is still a sales return, which opens the document");
+  assert.equal(row.correction, true);
+  assert.equal(book.byType.find((t) => t.voucherType === "reissue_credit").label, "Credit note (re-issue)");
+  assert.equal((await svc.LedgerReports.voucherImpact(r.creditNote._id)).typeLabel, "Credit note (re-issue)");
+  // the daily summary counts it under its own heading, as the day book does
+  const sum = await svc.LedgerReports.dailySummary({ from: day, to: day });
+  assert.ok(sum.types.some((t) => t.voucherType === "reissue_credit" && t.label === "Credit note (re-issue)"));
+  assert.equal(sum.days[0].byType.reissue_credit.count, book.byType.find((t) => t.voucherType === "reissue_credit").count);
+  // the customer's statement
+  const st = await svc.Statement.getStatement({ partyId: String(customer._id), partyType: "Customer" });
+  const line = st.rows.find((x) => x.voucherNo === no);
+  assert.equal(line.correction, true);
+  assert.equal(line.narration, words);
+  assert.ok(st.rows.filter((x) => x.voucherType === "sales_order").every((x) => !x.correction));
+  // the document's own audit trail
+  const trail = await svc.Audit.trail(r.creditNote._id);
+  assert.equal(trail.document.typeLabel, "Credit note (re-issue)");
+  assert.match(svc.Audit.describe(await get(r.creditNote._id)), /^Credit note \(re-issue\) /);
+  assert.match(svc.Audit.describe(tx), /^Sales order /, "any other document is named as before");
 });
