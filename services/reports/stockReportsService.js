@@ -15,6 +15,7 @@ const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
 const { getTenant } = require("../../utils/tenant");
 const { itemTypeOf, isService } = require("../../utils/itemKinds");
+const { IS_CORRECTION } = require("../../utils/reissue");
 
 // Stock reports: valuation, movement summary, item ledger, sales / purchase analysis, expiry, slow
 // stock and reorder. They read InventoryMovement (the stock audit trail), Stock, StockBatch and
@@ -573,7 +574,7 @@ class StockReportsService {
         { $unwind: "$items" },
         {
           $group: {
-            _id: { item: "$items.itemId", party: "$partyId", type: "$type" },
+            _id: { item: "$items.itemId", party: "$partyId", type: "$type", correction: IS_CORRECTION },
             qty: { $sum: "$items.qty" },
             net: { $sum: { $subtract: ["$items.lineTotal", { $ifNull: ["$items.vatAmount", 0] }] } },
             docs: { $addToSet: "$_id" },
@@ -614,9 +615,11 @@ class StockReportsService {
       const meta = master.byId.get(String(l._id.item)) || { itemId: `deleted:${l._id.item}`, sku: "", itemName: "Deleted item", categoryId: null, categoryName: "Uncategorised" };
       if (!keep(meta)) continue;
       const g = group(meta, l._id.party);
-      const isReturn = l._id.type === types[1];
-      g[isReturn ? "back" : "out"] += l.qty;
-      g[isReturn ? "backValue" : "outValue"] += l.net;
+      // a re-issue credit is a correction: less sold, not goods returned (utils/reissue.js)
+      const correction = l._id.correction === true;
+      const isReturn = l._id.type === types[1] && !correction;
+      g[isReturn ? "back" : "out"] += correction ? -l.qty : l.qty;
+      g[isReturn ? "backValue" : "outValue"] += correction ? -l.net : l.net;
       l.docs.forEach((d) => g.docs.add(String(d)));
       if (!isReturn) {
         g.suppliers.add(String(l._id.party));

@@ -110,3 +110,11 @@ test("a foreign-currency or round-off document is refused locally", () => {
   assert.ok(toWafeqDocument({ ...p, documentCurrencyCode: "USD" }, ctx).issues.some((i) => i.field === "documentCurrencyCode"));
   assert.ok(toWafeqDocument({ ...p, roundingAmount: 0.02, payableAmount: p.payableAmount + 0.02 }, ctx).issues.some((i) => i.field === "roundingAmount"));
 });
+
+test("an address part we do not hold is left out, never sent empty; a UAE buyer with no city is in their emirate's", () => {
+  const walkIn = { customerName: "Walk-in Cash Customer", eInvoice: { countryCode: "AE" } };
+  const r = toWafeqDocument(flat(tx([item()]), walkIn), { ...ctx, buyer: { emirate: "Dubai", identifier: "TL-1" } });
+  assert.deepEqual(r.body.customer.address, { city: "Dubai", country: "AE", country_subentity: "DXB" });
+  const abroad = toWafeqDocument(flat(tx([item()]), { ...walkIn, eInvoice: { countryCode: "OM" } }), { ...ctx, buyer: { identifier: "TL-1" } });
+  assert.deepEqual(abroad.body.customer.address, { country: "OM" });
+});

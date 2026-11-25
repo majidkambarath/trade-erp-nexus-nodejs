@@ -101,7 +101,10 @@ function toWafeqDocument(payload, ctx = {}) {
   const b = ctx.buyer || {};
   const registered = !blank(payload.buyerVatTrn);
   const emirate = emirateCode(b.emirate);
-  const customer = { name: payload.buyerName, address: { street: b.street || payload.buyerAddressLine1 || "", city: payload.buyerCity || "", country: buyerCountry } };
+  // Wafeq refuses an empty element (PINT ibr-079), so a part we do not hold is left out; a UAE buyer with no city on file is in their emirate's
+  const street = b.street || payload.buyerAddressLine1;
+  const city = !blank(payload.buyerCity) ? payload.buyerCity : buyerCountry === "AE" && emirate ? b.emirate : "";
+  const customer = { name: payload.buyerName, address: { ...(blank(street) ? {} : { street }), ...(blank(city) ? {} : { city }), country: buyerCountry } };
   if (buyerCountry === "AE") {
     if (!emirate) add("buyerEmirate", "Customer emirate is missing (choose it on the customer's address)");
     else customer.address.country_subentity = emirate;

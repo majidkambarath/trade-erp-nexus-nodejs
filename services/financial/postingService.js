@@ -7,6 +7,7 @@ const AccountConfigService = require("./accountConfigService");
 const FinancialService = require("./financialService");
 const AppError = require("../../utils/AppError");
 const { TEMPLATES, figuresFor, buildEntries, round2 } = require("../../utils/postingTemplates");
+const { postingKey } = require("../../utils/reissue");
 const ItemKindService = require("../stock/itemKindService");
 const kinds = require("../../utils/itemKinds");
 const vatRule = require("../../utils/vatRegistration");
@@ -133,7 +134,7 @@ class PostingService {
         leg.account.key,
         leg.account.key === "rcm-purchase"
           ? await this.rcmAccount({ session })
-          : await AccountConfigService.resolveAccount(leg.account.key, { session })
+          : await AccountConfigService.resolveAccount(postingKey(transaction, leg.account.key), { session }) // a re-issue credit is not a return
       );
     }
     let entries = await this.routeServiceLines(

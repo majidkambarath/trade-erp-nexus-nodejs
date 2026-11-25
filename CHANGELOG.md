@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.3.1.0 — 25 November 2026
+
+E-invoicing: what was left after Credit and re-issue. Frontend and backend both at 4.3.1.0.
+
+### Added
+
+- **Invoices to re-issue can be found.** e-Invoicing > Outbound has a "Needs re-issue" filter, marks those rows, and the
+  dashboard counts them (invoices priced before 18 Nov 2026 whose discount came off after VAT, not yet sent).
+
+### Fixed
+
+- **A re-issue is no longer counted as a sale and a return.** Its credit note comes off Sales revenue, not Sales Returns,
+  and the sales analysis, receivables movement, stock sales analysis and dashboard read it as less invoiced, not as goods
+  returned. A credit note already posted to Sales Returns is moved when the server starts.
+- The drafts made by Credit and re-issue and by Credit in full are dated the organisation's day, as a form dates a
+  document, not the clock time.
+- A buyer with no city on file is no longer sent to Wafeq with an empty city, which it refuses: a UAE buyer's emirate is
+  used, and an address part that is not held is left out.
+
 ## 4.3.0.0 — 25 November 2026
 
 Van sales: rules an organisation sets, card and bank transfer at the door, returns without an invoice, load requests,

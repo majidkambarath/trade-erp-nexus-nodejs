@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { DEFAULT_TENANT, runUnscoped } = require("./tenantContext");
+const { DEFAULT_TENANT, runUnscoped, runWithTenant } = require("./tenantContext");
 
 // One-off repairs of data written by older versions. Each is idempotent, so running them on every
 // start is safe and cheap.
@@ -38,6 +38,8 @@ async function runMigrations() {
   if (vehicleNames) out.vehicleCustomerNamesBackfilled = vehicleNames;
   const issued = await backfillEInvoiceIssueDates();
   if (issued) out.einvoiceIssueDatesBackfilled = issued;
+  const moved = await moveReissueCreditsToRevenue();
+  if (moved) out.reissueCreditsMovedToRevenue = moved;
   return out;
 }
 
@@ -268,8 +270,52 @@ async function backfillEInvoiceIssueDates() {
   return done;
 }
 
+// A re-issue credit note is a correction of an invoice, not goods coming back (utils/reissue.js). One approved before that rule posted its
+// sale to Sales Returns; its rows move to Sales revenue, and both accounts' balances with them. Idempotent: once moved there is nothing
+// left on Sales Returns to find. A date whose period has since been closed is left alone (and said).
+async function moveReissueCreditsToRevenue() {
+  const Transaction = mongoose.model("Transaction");
+  const { CORRECTIONS } = require("./reissue");
+  const { LedgerAccount, LedgerEntry } = require("../models/modules/financial/financialModels");
+  const { applyBalances } = require("../services/financial/ledgerBalances");
+  const AccountConfigService = require("../services/financial/accountConfigService");
+  const FiscalYearService = require("../services/core/fiscalYearService");
+  const { withTransactionSession } = require("./withTransactionSession");
+  const why = "migration: re-issue credit notes come off sales revenue, across every organisation";
+  const credits = await runUnscoped(why, () => Transaction.find({ ...CORRECTIONS, status: "APPROVED" }).select("companyId branchId transactionNo date").lean());
+  let done = 0;
+  for (const c of credits) {
+    try {
+      await runWithTenant({ companyId: c.companyId, branchId: c.branchId || "main" }, async () => {
+        const returnsId = await AccountConfigService.resolveAccount("sales-returns");
+        const revenueId = await AccountConfigService.resolveAccount("sales-revenue");
+        if (String(returnsId) === String(revenueId)) return;
+        if (!(await LedgerEntry.exists({ voucherId: c._id, accountId: returnsId }))) return;
+        await FiscalYearService.assertPostingAllowed(c.date);
+        const moved = await withTransactionSession(async (session) => {
+          const rows = await LedgerEntry.find({ voucherId: c._id, accountId: returnsId }).session(session).lean();
+          if (!rows.length) return 0;
+          const revenue = await LedgerAccount.findById(revenueId).select("accountName accountCode").session(session).lean();
+          if (!revenue) return 0;
+          await LedgerEntry.updateMany({ _id: { $in: rows.map((r) => r._id) } }, { $set: { accountId: revenueId, accountName: revenue.accountName, accountCode: revenue.accountCode || "" } }, { session });
+          // a reversed row and its reversal move together, so the balances move by what the live rows carry
+          const live = rows.filter((r) => !r.isReversed);
+          await applyBalances(live.map((r) => ({ accountId: returnsId, debitAmount: -(r.debitAmount || 0), creditAmount: -(r.creditAmount || 0) })), session);
+          await applyBalances(live.map((r) => ({ accountId: revenueId, debitAmount: r.debitAmount, creditAmount: r.creditAmount })), session);
+          return 1;
+        })();
+        done += moved;
+      });
+    } catch (err) {
+      console.warn(`[migrations] re-issue credit ${c.transactionNo} (${c.companyId}) stays on Sales Returns: ${err.message}`);
+    }
+  }
+  return done;
+}
+
 module.exports = {
   runMigrations,
+  moveReissueCreditsToRevenue,
   backfillEInvoiceIssueDates,
   assignCoreToOriginalOrganisation,
   markVoucherNumbersHeld,

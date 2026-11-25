@@ -103,6 +103,7 @@ function todoItems(c) {
   return [
     { key: "notSent", label: "Not sent", count: c.notSent?.count || 0, amount: c.notSent?.amount || 0, link: `${out}?status=NOT_SENT`, tone: "warning" },
     { key: "overdue", label: "Overdue to send", count: c.overdue?.count || 0, amount: c.overdue?.amount || 0, link: `${out}?status=NOT_SENT&overdue=1`, tone: "danger" },
+    { key: "needsReissue", label: "Invoices to re-issue", hint: "old discount, after VAT", count: c.needsReissue || 0, link: `${out}?status=NEEDS_REISSUE`, tone: "warning" },
     { key: "failed", label: "Failed", count: c.failed || 0, link: `${out}?status=FAILED`, tone: "danger" },
     { key: "rejectedByBuyer", label: "Rejected by buyer", hint: "fix and resend", count: c.rejectedByBuyer || 0, link: `${out}?status=REJECTED`, tone: "danger" },
     { key: "rejectedByFta", label: "Rejected by the tax authority", hint: "credit note", count: c.rejectedByFta || 0, link: `${out}?status=REJECTED`, tone: "danger" },
