@@ -127,7 +127,13 @@ class VanSalesReportService {
     );
     const total = { ...total0, ...rules.kpis(total0) };
     const byDay = rules.salesByDay(rows.map((r) => ({ day: new Date(r.date).toISOString().slice(0, 10), sales: r.sales, invoices: r.invoices })), start, end);
-    return { from: start, to: end, rows, byVan: roll("vanId", "vanCode"), bySalesman: roll("salesmanId", "salesmanName"), total, byDay };
+    // why goods came back, from the credit notes that still stand (one deleted while the van was out is not counted),
+    // each at its own total
+    const recorded = trips.flatMap((t) => (t.returns || []).map((r) => r.transactionId));
+    const credit = new Map(recorded.length ? (await Transaction.find({ _id: { $in: recorded }, type: "sales_return", status: "APPROVED" }).select("totalAmount").lean()).map((d) => [String(d._id), Number(d.totalAmount) || 0]) : []);
+    const standing = trips.map((t) => ({ returns: (t.returns || []).filter((r) => credit.has(String(r.transactionId))).map((r) => ({ ...r, amount: credit.get(String(r.transactionId)) })) }));
+    const returnsByReason = rules.returnsByReason(standing);
+    return { from: start, to: end, rows, byVan: roll("vanId", "vanCode"), bySalesman: roll("salesmanId", "salesmanName"), total, byDay, returnsByReason };
   }
 
   /**

@@ -85,6 +85,7 @@ router.get("/trips/:tripId/expenses", requirePermission("vansales.view"), c.trip
 router.post("/trips/:tripId/expenses", requirePermission("vansales.sell"), c.expense);
 router.post("/trips/:tripId/customers/:customerId/location", requirePermission("vansales.sell"), c.pinCustomer);
 router.post("/trips/:tripId/return", requirePermission("vansales.sell"), c.returnGoods);
+router.post("/trips/:tripId/return-quote", requirePermission("vansales.sell"), c.returnQuote);
 router.post("/trips/:tripId/unload", requirePermission(["vansales.load", "vansales.sell"]), c.unload);
 router.get("/trips/:tripId/settlement", requirePermission("vansales.settle"), c.settlementPreview);
 router.post("/trips/:tripId/settle", requirePermission("vansales.settle"), c.settle);

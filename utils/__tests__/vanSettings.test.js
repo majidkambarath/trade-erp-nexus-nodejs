@@ -8,6 +8,7 @@ test("with nothing stored every rule is what van sales did before it had setting
   const s = v.normaliseSettings(undefined);
   assert.deepEqual(s, {
     customers: "any", creditSales: "allowed", priceChange: "up_only", maxDiscountPercent: 0, paymentModes: ["cash", "cheque"], returnsAllowed: true,
+    returnsWithoutInvoice: false, maxReturnWithoutInvoice: 500, returnReasons: ["Expired", "Damaged", "Wrong item delivered", "Not selling", "Customer complaint", "Other"],
     suggestRuns: 4, suggestExtraPercent: 0, expiryCheck: "warn", transfersAllowed: true,
     captureLocation: true, farMetres: 300, quietHours: 2, cashTolerance: 0,
     slipPaper: "80mm", alwaysFullTaxInvoice: false, slipFooter: "Thank you", customerOrdering: true, maxOpenRequests: 3,
@@ -195,4 +196,35 @@ test("only the customers on the route: a supervisor and a free van are never ref
   assert.equal(off.code, "CUSTOMER_NOT_ON_ROUTE");
   assert.equal(off.status, 403);
   assert.match(v.checkCustomer({ rules: route, onRoute: false, hasRoute: false }).message, /no route/);
+});
+
+test("return reasons: an edited list, kept in its order, each once ignoring case, and matched however it is typed", () => {
+  const ok = (raw) => v.checkValue("returnReasons", raw);
+  assert.deepEqual(ok(["  Expired ", "Short  dated"]).value, ["Expired", "Short dated"], "trimmed and single-spaced, order kept");
+  assert.equal(ok([]).ok, false, "at least one");
+  assert.equal(ok("Expired").ok, false, "a list, not a word");
+  assert.equal(ok(["Expired", "EXPIRED"]).ok, false, "a repeat ignoring case");
+  assert.equal(ok(["x".repeat(41)]).ok, false, "too long");
+  assert.equal(ok([""]).ok, false, "blank");
+  assert.equal(ok([{ $ne: 1 }]).ok, false, "an object is not a reason");
+  assert.equal(ok(Array.from({ length: 21 }, (_, i) => "R" + i)).ok, false, "at most twenty");
+  assert.equal(ok(Array.from({ length: 20 }, (_, i) => "R" + i)).ok, true);
+  const rules = v.normaliseSettings({ returnReasons: ["Expired", "Not selling"] });
+  assert.equal(v.matchReason(rules, " not  SELLING "), "Not selling", "stored in the list's own wording");
+  assert.equal(v.matchReason(rules, "Damaged"), null, "not on this business's list");
+  assert.equal(v.matchReason(rules, ""), null);
+  assert.equal(v.matchReason(rules, ["Expired"]), null, "only text is a reason");
+  // the defaults are never shared by reference
+  const fresh = v.normaliseSettings({});
+  fresh.returnReasons.push("x");
+  assert.equal(v.normaliseSettings({}).returnReasons.length, 6);
+});
+
+test("the limit for goods taken back without an invoice is a positive amount, and the switch is on or off", () => {
+  assert.deepEqual(v.validateSettings({ returnsWithoutInvoice: "yes" }).map((e) => e.field), ["returnsWithoutInvoice"]);
+  assert.deepEqual(v.validateSettings({ maxReturnWithoutInvoice: 0 }).map((e) => e.field), ["maxReturnWithoutInvoice"], "zero would let nothing back: switch it off instead");
+  assert.deepEqual(v.validateSettings({ maxReturnWithoutInvoice: 1000001 }).map((e) => e.field), ["maxReturnWithoutInvoice"]);
+  assert.deepEqual(v.validateSettings({ returnsWithoutInvoice: true, maxReturnWithoutInvoice: "250.50" }), []);
+  assert.equal(v.normaliseSettings({ maxReturnWithoutInvoice: -5 }).maxReturnWithoutInvoice, 500);
+  assert.equal(v.PER_VAN_KEYS.includes("returnsWithoutInvoice"), false, "the organisation's rule alone");
 });

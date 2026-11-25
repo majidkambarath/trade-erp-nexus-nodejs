@@ -557,8 +557,29 @@ function salesByDay(rows = [], from, to) {
   return [...m.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
+/**
+ * Why goods came back over a set of trips: one row per reason with how many returns, what they credited and how many of
+ * them had no invoice behind them, biggest amount first. A return recorded before reasons existed is "Not given".
+ * `amountOf(record)` supplies the credit for an older record that did not store its own.
+ */
+const NOT_GIVEN = "Not given";
+function returnsByReason(trips, amountOf = () => 0) {
+  const by = new Map();
+  for (const t of trips || []) {
+    for (const r of t.returns || []) {
+      const reason = r.reason || NOT_GIVEN;
+      const row = by.get(reason) || { reason, count: 0, amount: 0, withoutInvoice: 0 };
+      row.count += 1;
+      row.amount = round2(row.amount + (Number.isFinite(Number(r.amount)) && r.amount !== null && r.amount !== undefined ? Number(r.amount) : Number(amountOf(r)) || 0));
+      if (r.withoutInvoice === true) row.withoutInvoice += 1;
+      by.set(reason, row);
+    }
+  }
+  return [...by.values()].sort((a, b) => b.amount - a.amount || b.count - a.count || a.reason.localeCompare(b.reason));
+}
+
 module.exports = {
-  STATUSES, HOLDING, SELLING, MOVES, VanError,
+  STATUSES, HOLDING, SELLING, MOVES, VanError, NOT_GIVEN, returnsByReason,
   round2, round3, idOf,
   loadedOf, soldOf, returnedOf, onVan, onVansAll, freeDepot,
   validateLoadLines, shortages, unloadVariance, stockMoves, cashSettlement, missingCheques, routeToday,

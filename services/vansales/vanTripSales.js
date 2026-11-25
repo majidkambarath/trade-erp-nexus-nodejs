@@ -130,6 +130,65 @@ async function takeMoney(trip, { customerId, amount, mode = "cash", details = {}
   return Voucher.findById(voucher._id).session(session); // as stored now, with the trip link on it
 }
 
+/**
+ * Why the goods came back, in the organisation's own wording, and an optional note. The screen asks every time; the
+ * server insists only where no invoice stands behind the return (an older caller returning against an invoice, or a
+ * phone syncing one, is not refused for not knowing about reasons).
+ */
+function reasonOf(active, input, { required }) {
+  const given = input?.reason;
+  if (given !== undefined && given !== null && given !== "" && typeof given !== "string") throw fail("Choose why the goods came back", 400, "RETURN_REASON_REQUIRED");
+  const note = typeof input?.note === "string" ? input.note.trim().slice(0, 300) : "";
+  if (!given) {
+    if (required) throw fail("Choose why the goods came back", 400, "RETURN_REASON_REQUIRED");
+    return { reason: null, note };
+  }
+  const reason = vanRules.matchReason(active, given);
+  if (!reason) throw fail(`"${String(given).slice(0, 40)}" is not one of this business's reasons for a return`, 400, "RETURN_REASON_UNKNOWN", { reasons: active.returnReasons });
+  return { reason, note };
+}
+
+/** Goods taken back with no invoice named: the organisation's switch, or a supervisor. */
+function assertMayReturnLoose(active, opts) {
+  if (active.returnsWithoutInvoice || opts.mayUnderprice) return;
+  throw fail("Choose the invoice the goods are returned against. Taking goods back without one needs a supervisor.", 403, "VAN_RETURN_LINK_REQUIRED");
+}
+
+/**
+ * The lines of a return with no invoice: goods only, each once, priced at what THIS customer pays today (their price
+ * list, else the route's, else the item's own price) - not what is on the van, since what comes back may never have
+ * been on it. The price is locked; a supervisor may type another. -> { items, record }
+ */
+async function looseLines(trip, customer, wanted, date, opts, session = null) {
+  const ids = wanted.map((w) => w?.stockId);
+  if (ids.some((i) => !isId(i))) throw fail("An item being returned is not valid", 400, "ITEM_INVALID");
+  if (new Set(ids.map(String)).size !== ids.length) throw fail("Each item is listed once; add up its quantity on one line", 400, "ITEM_REPEATED");
+  const stocks = await Stock.find({ _id: { $in: ids } }).select("itemId itemName itemType salesPrice status").session(session).lean();
+  const byId = new Map(stocks.map((s) => [String(s._id), s]));
+  const listed = await PriceListService.pricesFor({
+    customerId: customer._id, routeId: trip.routeId, date, session,
+    items: wanted.map((w) => ({ stockId: w.stockId, qty: Number(w.qty) || 1, itemPrice: Number(byId.get(String(w.stockId))?.salesPrice) || 0 })),
+  });
+  const items = [];
+  const record = [];
+  for (const [i, w] of wanted.entries()) {
+    const s = byId.get(String(w.stockId));
+    if (!s || s.status === "Inactive") throw fail(`Line ${i + 1}: that item does not exist`, 404, "ITEM_NOT_FOUND");
+    if (kinds.isService(s)) throw fail(`${s.itemName} is a service. Only stocked goods come back to a van.`, 400, "VAN_GOODS_ONLY");
+    const qty = typeof w.qty === "number" || typeof w.qty === "string" ? Number(w.qty) : NaN;
+    if (!(qty > 0)) throw fail(`Line ${i + 1}: enter a quantity above zero`, 400, "QTY_INVALID");
+    const list = Number(listed.get(String(s._id))?.price) || 0;
+    const typed = w.price !== undefined && w.price !== null && w.price !== "";
+    if (typed && !opts.mayUnderprice) throw fail(`${s.itemName} comes back at ${list.toFixed(2)}, this customer's price. Only a supervisor can change it.`, 403, "PRICE_LOCKED", { stockId: String(s._id), listPrice: list });
+    const price = typed ? Number(w.price) : list;
+    if (!(price >= 0) || !Number.isFinite(price)) throw fail(`Line ${i + 1}: enter a price of zero or more`, 400, "PRICE_INVALID");
+    if (!typed && !(price > 0)) throw fail(`${s.itemName} has no price for this customer, so it cannot be credited. A supervisor can enter one.`, 400, "RETURN_NO_PRICE", { stockId: String(s._id) });
+    items.push({ itemId: s._id, itemCode: s.itemId, description: s.itemName, qty, price, discountPercent: 0 });
+    record.push({ stockId: s._id, qty, condition: w.condition === "damaged" ? "damaged" : "good" });
+  }
+  return { items, record };
+}
+
 class VanTripSales {
   /**
    * Sell from the van: a sales invoice for a customer, raised and APPROVED in one step (stock out, ledger, party
@@ -274,8 +333,10 @@ class VanTripSales {
   });
 
   /**
-   * Take goods back from a customer against one of their approved invoices. Each line says whether it came back
-   * sellable (it goes back on the van) or damaged (it does not). The return is approved at once, like a sale.
+   * Take goods back from a customer. Against one of their approved invoices (the invoice's prices), or - where the
+   * organisation allows it, or for a supervisor - with no invoice at all, at the customer's own list price and up to the
+   * organisation's limit. Each line says whether it came back sellable (it goes back on the van) or damaged (it does
+   * not). The return is approved at once, like a sale, and carries the reason it came back.
    */
   static returnGoods = withTransactionSession(async (id, input, by, ...rest) => {
     const session = rest[rest.length - 1];
@@ -286,41 +347,84 @@ class VanTripSales {
     if (!active.returnsAllowed) throw fail("This business does not take goods back on the van. Bring them to the depot.", 403, "VAN_RETURNS_OFF");
     const customer = await customerOf(input?.customerId, session);
     await assertCustomerAllowed(trip, active, customer._id, { mayOverride: opts.mayUnderprice, session });
-    if (!isId(input?.returnOfId)) throw fail("Choose the invoice the goods are returned against", 400, "RETURN_LINK_REQUIRED");
-    const original = await Transaction.findById(input.returnOfId).session(session);
-    if (!original || original.type !== "sales_order") throw fail("That invoice does not exist", 404, "ORIGINAL_NOT_FOUND");
-    const wanted = Array.isArray(input.lines) ? input.lines : [];
-    if (!wanted.length) throw fail("Add at least one item being returned", 400, "ITEMS_REQUIRED");
+    const withoutInvoice = input?.returnOfId === undefined || input?.returnOfId === null || input?.returnOfId === "";
+    if (withoutInvoice) assertMayReturnLoose(active, opts);
+    const { reason, note } = reasonOf(active, input, { required: withoutInvoice });
+    const wanted = Array.isArray(input?.lines) ? input.lines : [];
 
-    const items = [];
-    const record = [];
-    for (const [i, w] of wanted.entries()) {
-      const qty = Number(w.qty);
-      if (!(qty > 0)) throw fail(`Line ${i + 1}: enter a quantity above zero`, 400, "QTY_INVALID");
-      const line = original.items.find((l) => String(l._id) === String(w.lineId)) || original.items.find((l) => String(l.itemId) === String(w.itemId));
-      if (!line) throw fail(`Line ${i + 1} is not on ${original.transactionNo}`, 400, "LINE_NOT_IN_ORIGINAL");
-      if (kinds.isService(line)) throw fail("A service cannot be returned to a van", 400, "VAN_GOODS_ONLY");
-      const condition = w.condition === "damaged" ? "damaged" : "good";
-      items.push({ ...S.toPricingInput(line, qty, line.qty), returnOfLineId: line._id });
-      record.push({ stockId: line.itemId, qty, condition });
+    let original = null;
+    let items = [];
+    let record = [];
+    if (withoutInvoice) {
+      if (!wanted.length) throw fail("Add at least one item being returned", 400, "ITEMS_REQUIRED");
+      ({ items, record } = await looseLines(trip, customer, wanted, input.date, opts, session));
+    } else {
+      if (!isId(input.returnOfId)) throw fail("That invoice does not exist", 404, "ORIGINAL_NOT_FOUND");
+      original = await Transaction.findById(input.returnOfId).session(session);
+      if (!original || original.type !== "sales_order") throw fail("That invoice does not exist", 404, "ORIGINAL_NOT_FOUND");
+      if (!wanted.length) throw fail("Add at least one item being returned", 400, "ITEMS_REQUIRED");
+      for (const [i, w] of wanted.entries()) {
+        const qty = Number(w?.qty);
+        if (!(qty > 0)) throw fail(`Line ${i + 1}: enter a quantity above zero`, 400, "QTY_INVALID");
+        const line = original.items.find((l) => String(l._id) === String(w.lineId)) || original.items.find((l) => String(l.itemId) === String(w.itemId));
+        if (!line) throw fail(`Line ${i + 1} is not on ${original.transactionNo}`, 400, "LINE_NOT_IN_ORIGINAL");
+        if (kinds.isService(line)) throw fail("A service cannot be returned to a van", 400, "VAN_GOODS_ONLY");
+        items.push({ ...S.toPricingInput(line, qty, line.qty), returnOfLineId: line._id });
+        record.push({ stockId: line.itemId, qty, condition: w.condition === "damaged" ? "damaged" : "good" });
+      }
     }
+
     const day = orgDay(input.date);
+    const said = [reason, note].filter(Boolean).join(". ");
     const ret = await TransactionService.createTransaction(
       {
         type: "sales_return", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", date: day, items,
-        returnOf: { transactionId: original._id }, status: "DRAFT", vanTripRef: refOf(trip),
-        notes: input.notes ? String(input.notes).slice(0, 500) : `Van ${trip.vanCode} ${trip.tripNo}`,
+        ...(original ? { returnOf: { transactionId: original._id } } : {}), status: "DRAFT", vanTripRef: refOf(trip),
+        notes: input.notes ? String(input.notes).slice(0, 500) : `Returned on van ${trip.vanCode} ${trip.tripNo}${said ? `: ${said}` : ""}`,
       },
       by, session
     );
+    // a return with no invoice behind it is a credit nobody has checked: past the organisation's limit it is a
+    // supervisor's. Judged on the priced total (tax included); refusing here rolls the draft back with everything else.
+    if (withoutInvoice && !opts.mayUnderprice && round2(ret.totalAmount) > Number(active.maxReturnWithoutInvoice) + 0.005) {
+      throw fail(`This return comes to ${round2(ret.totalAmount).toFixed(2)}. Without an invoice a salesman may take back up to ${Number(active.maxReturnWithoutInvoice).toFixed(2)}; a supervisor must do this one.`, 403, "VAN_RETURN_OVER_LIMIT", { amount: round2(ret.totalAmount), limit: Number(active.maxReturnWithoutInvoice) });
+    }
     await TransactionService.processTransaction(ret._id, "approve", by, { req: opts.req }, session);
     const approved = await Transaction.findById(ret._id).session(session);
     if (approved.status !== "APPROVED") throw fail("This return needs a second approval, so it cannot be taken on the van", 409, "VAN_SALE_NEEDS_APPROVAL");
-    trip.returns.push({ transactionId: approved._id, no: approved.transactionNo, at: new Date(), lines: record });
+    trip.returns.push({
+      transactionId: approved._id, no: approved.transactionNo, at: new Date(), lines: record,
+      ...(reason ? { reason } : {}), ...(note ? { note } : {}), withoutInvoice, amount: round2(approved.totalAmount),
+    });
     trip.updatedBy = String(by);
     await trip.save({ session });
     return { creditNote: approved };
   });
+
+  /**
+   * What goods taken back with no invoice would be credited at, before anything is saved: the same lines and the same
+   * pricing as the return itself, so the screen cannot promise a figure the return then differs from.
+   */
+  static async returnQuote(id, input, opts = {}) {
+    const trip = await loadTrip(id);
+    assertSelling(trip);
+    const active = await VanSettingsService.forTrip(trip);
+    if (!active.returnsAllowed) throw fail("This business does not take goods back on the van. Bring them to the depot.", 403, "VAN_RETURNS_OFF");
+    assertMayReturnLoose(active, opts);
+    const customer = await customerOf(input?.customerId);
+    await assertCustomerAllowed(trip, active, customer._id, { mayOverride: opts.mayUnderprice });
+    const wanted = Array.isArray(input?.lines) ? input.lines : [];
+    if (!wanted.length) throw fail("Add at least one item being returned", 400, "ITEMS_REQUIRED");
+    const day = orgDay(input.date);
+    const { items } = await looseLines(trip, customer, wanted, day, opts);
+    const priced = await TransactionService.buildPricing({ items, date: day, side: "sales" });
+    const total = round2(priced.totalAmount);
+    const limit = Number(active.maxReturnWithoutInvoice);
+    return {
+      lines: priced.processedItems.map((l) => ({ stockId: String(l.itemId), description: l.description, qty: l.qty, price: l.price, vatAmount: round2(l.vatAmount), lineTotal: round2(l.lineTotal) })),
+      total, limit, overLimit: !opts.mayUnderprice && total > limit + 0.005,
+    };
+  }
 
   /** The route rule for a door that does not sell itself (a pre-order): refuses a customer this van may not serve. */
   static async assertCustomerAllowed(tripId, customerId, { mayOverride = false } = {}) {

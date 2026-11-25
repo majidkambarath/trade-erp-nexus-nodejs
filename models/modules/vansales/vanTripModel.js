@@ -45,6 +45,12 @@ const returnRecord = new mongoose.Schema(
         _id: false,
       },
     ],
+    // why it came back, in the organisation's wording at the time; whether an invoice stood behind it; what it credited.
+    // No defaults: a return recorded before these existed reads exactly as it did.
+    reason: String,
+    note: String,
+    withoutInvoice: Boolean,
+    amount: Number,
   },
   { _id: false }
 );

@@ -123,8 +123,13 @@ exports.collect = catchAsync(async (req, res) => {
 exports.returnGoods = catchAsync(async (req, res) => {
   await assertMayWork(req);
   const { creditNote } = await VanTripSales.returnGoods(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
-  await AuditService.log({ req, action: "VAN_RETURN", entity: "VanTrip", entityId: req.params.tripId, summary: `${creditNote.transactionNo} taken back on the van`, after: { return: creditNote.transactionNo } });
+  const loose = !creditNote.returnOf?.transactionId;
+  await AuditService.log({ req, action: "VAN_RETURN", entity: "VanTrip", entityId: req.params.tripId, summary: `${creditNote.transactionNo} taken back on the van${loose ? " without an invoice" : ""}`, after: { return: creditNote.transactionNo, withoutInvoice: loose, amount: creditNote.totalAmount } });
   ok(res, { creditNote, trip: await VanTripService.getById(req.params.tripId) }, 201);
+});
+exports.returnQuote = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanTripSales.returnQuote(req.params.tripId, req.body || {}, { mayUnderprice: holds(req, "vansales.manage") }));
 });
 exports.customerPosition = catchAsync(async (req, res) => ok(res, await VanTripSales.customerPosition(req.params.customerId)));
 exports.returnable = catchAsync(async (req, res) => ok(res, await VanTripSales.returnable(req.params.invoiceId)));

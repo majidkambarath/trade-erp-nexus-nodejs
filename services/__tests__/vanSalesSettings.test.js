@@ -193,7 +193,7 @@ test("goods taken back, and goods handed to another van, can be switched off", {
   await rules({ returnsAllowed: false });
   await assert.rejects(() => svc.Sales.returnGoods(trip1._id, { customerId: A._id }, by()), { code: "VAN_RETURNS_OFF" });
   await reset();
-  await assert.rejects(() => svc.Sales.returnGoods(trip1._id, { customerId: A._id }, by()), { code: "RETURN_LINK_REQUIRED" }, "on: the ordinary checks follow");
+  await assert.rejects(() => svc.Sales.returnGoods(trip1._id, { customerId: A._id }, by()), { code: "VAN_RETURN_LINK_REQUIRED" }, "on: the ordinary checks follow (no invoice named, and this business takes none back without one)");
 
   await rules({ transfersAllowed: false });
   await assert.rejects(() => svc.Trip.transfer(trip1._id, { toTripId: trip2._id, lines: [{ stockId: String(rice._id), qty: 1 }] }, by()), { code: "VAN_TRANSFERS_OFF" });

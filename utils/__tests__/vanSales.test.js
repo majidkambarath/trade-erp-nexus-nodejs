@@ -266,3 +266,17 @@ test("salesByDay: every day of the period is there, quiet days as zero", () => {
   const d = v.salesByDay([{ day: "2026-11-02", sales: 5, invoices: 1 }, { day: "2026-11-02", sales: 7.5, invoices: 2 }], "2026-11-01", "2026-11-03");
   assert.deepEqual(d.map((x) => [x.day, x.sales, x.invoices]), [["2026-11-01", 0, 0], ["2026-11-02", 12.5, 3], ["2026-11-03", 0, 0]]);
 });
+
+test("returnsByReason: one row per reason, the credits added, older returns as 'Not given', biggest first", () => {
+  const trips = [
+    { returns: [{ reason: "Expired", amount: 40, withoutInvoice: true }, { reason: "Damaged", amount: 10.1 }] },
+    { returns: [{ reason: "Expired", amount: 20.2, withoutInvoice: false }, { transactionId: "old" }] },
+    {},
+  ];
+  assert.deepEqual(v.returnsByReason(trips, (r) => (r.transactionId === "old" ? 5 : 0)), [
+    { reason: "Expired", count: 2, amount: 60.2, withoutInvoice: 1 },
+    { reason: "Damaged", count: 1, amount: 10.1, withoutInvoice: 0 },
+    { reason: "Not given", count: 1, amount: 5, withoutInvoice: 0 },
+  ]);
+  assert.deepEqual(v.returnsByReason([]), []);
+});

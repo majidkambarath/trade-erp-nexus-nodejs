@@ -16,6 +16,13 @@ const PRICE_CHANGE = ["up_only", "locked", "free"];
 const EXPIRY_CHECK = ["warn", "off", "block"];
 const PAPER = ["80mm", "58mm"];
 
+// Why goods come back. An organisation edits the list; a return stores the reason in the list's own wording at the time,
+// so renaming one later never rewrites what was recorded.
+const RETURN_REASONS = Object.freeze(["Expired", "Damaged", "Wrong item delivered", "Not selling", "Customer complaint", "Other"]);
+const MAX_REASONS = 20;
+const REASON_LENGTH = 40;
+const tidyReason = (r) => (typeof r === "string" ? r.trim().replace(/\s+/g, " ") : "");
+
 const DEFAULTS = Object.freeze({
   // selling
   customers: "any", // any active customer, or only the ones on the trip's route
@@ -24,6 +31,9 @@ const DEFAULTS = Object.freeze({
   maxDiscountPercent: 0, // the most a salesman may type as a discount without a supervisor
   paymentModes: ["cash", "cheque"],
   returnsAllowed: true,
+  returnsWithoutInvoice: false, // goods taken back with no invoice named (a supervisor always may)
+  maxReturnWithoutInvoice: 500, // above this total (tax included) only a supervisor takes goods back with no invoice
+  returnReasons: RETURN_REASONS,
   // loading
   suggestRuns: 4,
   suggestExtraPercent: 0,
@@ -71,6 +81,20 @@ function checkValue(key, raw) {
       return { ok: true, value: SUPPORTED_MODES.filter((m) => raw.includes(m)) }; // one of each, in a steady order
     }
     case "returnsAllowed": return bool("Taking goods back");
+    case "returnsWithoutInvoice": return bool("Taking goods back without an invoice");
+    case "maxReturnWithoutInvoice": return range(1, 1000000, "The most taken back without an invoice");
+    case "returnReasons": {
+      if (!Array.isArray(raw) || !raw.length) return { ok: false, message: "Keep at least one reason for a return" };
+      if (raw.length > MAX_REASONS) return { ok: false, message: `At most ${MAX_REASONS} reasons for a return` };
+      const out = [];
+      for (const r of raw) {
+        const t = tidyReason(r);
+        if (!t || t.length > REASON_LENGTH) return { ok: false, message: `Each reason is text of 1 to ${REASON_LENGTH} characters` };
+        if (out.some((o) => o.toLowerCase() === t.toLowerCase())) return { ok: false, message: `"${t}" is in the list twice` };
+        out.push(t);
+      }
+      return { ok: true, value: out };
+    }
     case "suggestRuns": return range(1, 12, "The runs the suggested load looks at", true);
     case "suggestExtraPercent": return range(0, 100, "The extra on the suggested load");
     case "expiryCheck": return oneOf(EXPIRY_CHECK, "The expiry check");
@@ -219,11 +243,18 @@ function checkCustomer({ rules, onRoute, hasRoute, mayOverride = false }) {
   return refuse("CUSTOMER_NOT_ON_ROUTE", hasRoute ? "This van sells only to the customers on its route" : "This van sells only to the customers on its route, and this trip has no route", 403);
 }
 
+/** The reason as the organisation's list words it today, or null when it is not on the list. */
+function matchReason(rules, raw) {
+  const t = tidyReason(raw).toLowerCase();
+  if (!t) return null;
+  return (rules.returnReasons || []).find((r) => r.toLowerCase() === t) || null;
+}
+
 /** The settings the phone needs to behave the same with no signal: the whole effective set, nothing secret in it. */
 const forPhone = (eff) => ({ ...eff });
 
 module.exports = {
-  SUPPORTED_MODES, CUSTOMERS, CREDIT_SALES, PRICE_CHANGE, EXPIRY_CHECK, PAPER, DEFAULTS, PER_VAN_KEYS,
+  SUPPORTED_MODES, RETURN_REASONS, CUSTOMERS, CREDIT_SALES, PRICE_CHANGE, EXPIRY_CHECK, PAPER, DEFAULTS, PER_VAN_KEYS,
   checkValue, validateSettings, normaliseSettings, cleanVanRules, effective,
-  isCashTerms, mustPayNow, checkLine, checkMode, checkPayment, checkCustomer, forPhone,
+  isCashTerms, mustPayNow, checkLine, checkMode, checkPayment, checkCustomer, matchReason, forPhone,
 };
