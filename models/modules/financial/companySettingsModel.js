@@ -137,6 +137,10 @@ const companySettingsSchema = new mongoose.Schema(
       },
       emailSignature: { type: String, maxlength: 1000, default: "" },
     },
+    // The rules for the organisation's vans. Absent until somebody saves them, and read through
+    // utils/vanSettings.js normaliseSettings, which is where every default and range lives - so this stays Mixed and an
+    // older document, or one with a key missing, reads exactly as van sales behaved before it had settings.
+    vanSales: { type: mongoose.Schema.Types.Mixed, default: undefined },
   },
   { timestamps: true }
 );

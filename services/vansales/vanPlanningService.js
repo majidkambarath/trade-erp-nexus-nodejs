@@ -12,6 +12,7 @@ const BatchService = require("../stock/batchService");
 const JobWorkService = require("../stock/jobWorkService");
 const TradeOrderService = require("../orderPurchase/tradeOrderService");
 const PriceListService = require("./priceListService");
+const VanSettingsService = require("./vanSettingsService");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { allBranches } = require("../../utils/tenantContext");
 const { todayInOrg } = require("../../utils/documentExpiry");
@@ -20,7 +21,6 @@ const { loadTrip, documentsOf, stockOf } = require("./vanTripStock");
 const isId = (v) => mongoose.isValidObjectId(v);
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
 const dayOf = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d || todayInOrg()).slice(0, 10));
-const HISTORY_RUNS = 4;
 
 // Planning the next run of a route: the orders customers give the salesman for next time (pre-orders), what to load
 // for it (each figure with the reason behind it), and a warning when the stock FEFO would hand the van expires before
@@ -97,7 +97,8 @@ class VanPlanningService {
   static async suggestedLoad(tripId) {
     const trip = await loadTrip(tripId);
     if (!trip.routeId) return { runs: 0, lines: [], note: "This trip has no route, so there is nothing to learn from." };
-    const past = await VanTrip.find({ routeId: trip.routeId, status: "SETTLED", _id: { $ne: trip._id } }).sort({ date: -1, createdAt: -1 }).limit(HISTORY_RUNS);
+    const active = await VanSettingsService.forTrip(trip);
+    const past = await VanTrip.find({ routeId: trip.routeId, status: "SETTLED", _id: { $ne: trip._id } }).sort({ date: -1, createdAt: -1 }).limit(active.suggestRuns);
     const history = [];
     for (const t of past) history.push(rules.soldOf((await documentsOf(t)).invoices));
     const preorders = new Map();
@@ -115,7 +116,7 @@ class VanPlanningService {
       names.set(id, s.itemName);
       free.set(id, rules.freeDepot({ currentStock: s.currentStock, withJobWorker: away.get(id) || 0, onVans: onVans.get(id) || 0 }));
     }
-    const lines = rules.suggestLoad({ preorders, history, onVan: mine.sellable, free, names }).filter((l) => names.has(l.stockId));
+    const lines = rules.suggestLoad({ preorders, history, onVan: mine.sellable, free, names, extraPercent: active.suggestExtraPercent }).filter((l) => names.has(l.stockId));
     return { runs: history.length, lines };
   }
 
@@ -125,8 +126,9 @@ class VanPlanningService {
    */
   static async loadCheck(tripId, input = {}) {
     const trip = await loadTrip(tripId);
+    const mode = (await VanSettingsService.forTrip(trip)).expiryCheck;
     const lines = (Array.isArray(input.lines) ? input.lines : []).filter((l) => isId(l.stockId) && Number(l.qty) > 0);
-    if (!lines.length) return { mustLastUntil: null, warnings: [] };
+    if (mode === "off" || !lines.length) return { mustLastUntil: null, warnings: [], mode };
     const route = trip.routeId ? await VanRoute.findById(trip.routeId).lean() : null;
     const custIds = (route?.customers || []).map((c) => c.customerId);
     const shelf = custIds.length ? Math.max(0, ...(await Customer.find({ _id: { $in: custIds } }).select("minShelfLifeDays").lean()).map((c) => Number(c.minShelfLifeDays) || 0)) : 0;
@@ -140,7 +142,19 @@ class VanPlanningService {
       const short = rules.expiringOnLoad(ordered.map((b) => ({ batchNo: b.batchNumber, expiryDate: b.expiryDate, qty: b.qtyOnHand })), Number(l.qty), mustLastUntil);
       if (short.length) warnings.push({ code: "EXPIRY_SOON", stockId: String(l.stockId), itemName: names.get(String(l.stockId)) || "", batches: short, message: `${short.reduce((t, b) => t + b.qty, 0)} of ${names.get(String(l.stockId)) || "this item"} would expire before ${mustLastUntil}${shelf ? ` (customers on this route ask for ${shelf} days of shelf life)` : ""}` });
     }
-    return { mustLastUntil, shelfLifeDays: shelf, warnings };
+    return { mustLastUntil, shelfLifeDays: shelf, warnings, mode };
+  }
+
+  /**
+   * The strict form of the expiry check: when the organisation set it to `block`, a load that would take short-dated
+   * stock is refused (a supervisor, `mayOverride`, may still load it). `warn` and `off` never refuse.
+   */
+  static async assertExpiryOk(tripId, input = {}, { mayOverride = false } = {}) {
+    if (mayOverride) return;
+    const check = await this.loadCheck(tripId, input);
+    if (check.mode === "block" && check.warnings.length) {
+      throw fail(`${check.warnings[0].message}. Short-dated stock cannot be loaded on a van; a supervisor can allow it.`, 409, "EXPIRY_SOON", { warnings: check.warnings });
+    }
   }
 }
 

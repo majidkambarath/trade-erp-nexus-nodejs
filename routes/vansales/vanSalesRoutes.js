@@ -41,6 +41,12 @@ router.put("/promotions/:promotionId", requirePermission("vansales.manage"), c.u
 router.get("/routes/:routeId/preorders", requirePermission("vansales.view"), c.routePreorders);
 router.get("/customers", requirePermission("vansales.view"), c.customers);
 router.get("/payment-choices", requirePermission(["vansales.view", "vansales.sell"]), c.paymentChoices);
+// the machines a van can be given a card on: a manager sets one on the van, so it is a manager's read
+router.get("/card-machines", requirePermission("vansales.manage"), c.cardMachines);
+
+// The organisation's rules for its vans: everyone who works the vans reads them (the phone obeys them), a manager changes them.
+router.get("/settings", requirePermission(["vansales.view", "vansales.sell", "vansales.manage"]), c.getSettings);
+router.put("/settings", requirePermission("vansales.manage"), c.saveSettings);
 
 // Reports: fixed paths before the :tripId ones, as every router here orders them.
 router.get("/reports/summary", requirePermission("vansales.view"), c.summary);
@@ -50,22 +56,38 @@ router.get("/board", requirePermission(["vansales.settle", "vansales.manage"]), 
 
 // Selling lookups (a salesman holds sell, not necessarily anything else).
 router.get("/customers/:customerId/position", requirePermission("vansales.sell"), c.customerPosition);
+// returnable containers: the types (read by whoever sells, changed by a manager), what a customer holds, a supervisor's correction
+router.get("/container-types", requirePermission(["vansales.view", "vansales.sell"]), c.listContainerTypes);
+router.post("/container-types", requirePermission("vansales.manage"), c.createContainerType);
+router.put("/container-types/:typeId", requirePermission("vansales.manage"), c.updateContainerType);
+router.get("/customers/:customerId/containers", requirePermission(["vansales.view", "vansales.sell"]), c.customerContainers);
+router.post("/container-moves/adjust", requirePermission("vansales.manage"), c.adjustContainers);
 router.get("/invoices/:invoiceId/returnable", requirePermission("vansales.sell"), c.returnable);
 
 // Trips.
+router.get("/load-requests", requirePermission("vansales.load"), c.listLoadRequests);
+router.get("/load-requests/counts", requirePermission(["vansales.load", "vansales.sell"]), c.loadRequestCounts);
 router.get("/trips", requirePermission("vansales.view"), c.listTrips);
 router.get("/trips/mine", requirePermission("vansales.view"), c.mine);
-router.post("/trips", requirePermission("vansales.load"), c.openTrip);
+// a salesman may open his own van's trip where loads go through a request (the controller checks which van and the rule)
+router.post("/trips", requirePermission(["vansales.load", "vansales.sell"]), c.openTrip);
 router.get("/trips/:tripId", requirePermission("vansales.view"), c.getTrip);
 router.get("/trips/:tripId/activity", requirePermission("vansales.view"), c.activity);
 router.post("/trips/:tripId/load", requirePermission("vansales.load"), c.load);
 router.post("/trips/:tripId/depart", requirePermission("vansales.load"), c.depart);
-router.get("/trips/:tripId/suggested-load", requirePermission("vansales.load"), c.suggestedLoad);
+router.get("/trips/:tripId/suggested-load", requirePermission(["vansales.load", "vansales.sell"]), c.suggestedLoad);
+// load requests: the salesman asks and accepts (his own trip: the controller checks), the storekeeper loads or refuses
+router.post("/trips/:tripId/load-requests", requirePermission("vansales.sell"), c.requestLoad);
+router.post("/trips/:tripId/load-requests/:no/cancel", requirePermission("vansales.sell"), c.cancelLoadRequest);
+router.post("/trips/:tripId/load-requests/:no/accept", requirePermission("vansales.sell"), c.acceptLoad);
+router.post("/trips/:tripId/load-requests/:no/load", requirePermission("vansales.load"), c.loadFromRequest);
+router.post("/trips/:tripId/load-requests/:no/reject", requirePermission("vansales.load"), c.rejectLoadRequest);
 router.post("/trips/:tripId/load-check", requirePermission("vansales.load"), c.loadCheck);
 router.get("/trips/:tripId/preorders", requirePermission("vansales.view"), c.tripPreorders);
 router.post("/trips/:tripId/preorders", requirePermission("vansales.sell"), c.createPreorder);
 router.post("/trips/:tripId/cancel", requirePermission("vansales.load"), c.cancel);
 router.post("/trips/:tripId/sell", requirePermission("vansales.sell"), c.sell);
+router.post("/trips/:tripId/containers", requirePermission("vansales.sell"), c.empties);
 router.get("/trips/:tripId/prices", requirePermission("vansales.sell"), c.prices);
 router.get("/trips/:tripId/customers/:customerId/insight", requirePermission("vansales.sell"), c.insight);
 router.get("/trips/:tripId/visits", requirePermission("vansales.view"), c.visits);
@@ -79,6 +101,7 @@ router.get("/trips/:tripId/expenses", requirePermission("vansales.view"), c.trip
 router.post("/trips/:tripId/expenses", requirePermission("vansales.sell"), c.expense);
 router.post("/trips/:tripId/customers/:customerId/location", requirePermission("vansales.sell"), c.pinCustomer);
 router.post("/trips/:tripId/return", requirePermission("vansales.sell"), c.returnGoods);
+router.post("/trips/:tripId/return-quote", requirePermission("vansales.sell"), c.returnQuote);
 router.post("/trips/:tripId/unload", requirePermission(["vansales.load", "vansales.sell"]), c.unload);
 router.get("/trips/:tripId/settlement", requirePermission("vansales.settle"), c.settlementPreview);
 router.post("/trips/:tripId/settle", requirePermission("vansales.settle"), c.settle);

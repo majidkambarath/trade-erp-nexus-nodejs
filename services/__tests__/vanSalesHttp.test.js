@@ -183,7 +183,6 @@ test("a salesman cannot open or load a trip, settle one, or change the vans and 
     ["PUT", `/van-sales/vans/${vanId}`, { name: "renamed" }],
     ["POST", "/van-sales/routes", { name: "R" }],
     ["POST", "/van-sales/promotions", { name: "P", kind: "slab", minQty: 1, percent: 5 }],
-    ["GET", `/van-sales/trips/${tripId}/suggested-load`, undefined],
     ["POST", `/van-sales/trips/${tripId}/load-check`, { lines: [] }],
     ["GET", "/van-sales/board", undefined],
   ];
@@ -192,6 +191,8 @@ test("a salesman cannot open or load a trip, settle one, or change the vans and 
     assert.equal(r.status, 403, `${m} ${u}`);
     assert.equal(r.code, "PERMISSION_DENIED", `${m} ${u}`);
   }
+  // he may READ the suggested load for his own trip (to start a load request from it); it changes nothing
+  assert.equal((await call("ali", "GET", `/van-sales/trips/${tripId}/suggested-load`)).status, 200);
 });
 
 test("the stock list shows what is sitting in vans, and a request body cannot choose the trip link", { skip }, async () => {

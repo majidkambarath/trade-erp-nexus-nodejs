@@ -45,6 +45,7 @@ const SEED = [
   k("cash-over-short", "Cash over and short (van settlement)", "INCOME", "account"),
   k("fx-gain-loss", "Exchange gain or loss (settling foreign-currency invoices)", "INCOME", "account"),
   k("van-expenses", "Van running expenses (fuel, tolls, parking paid from a van's cash)", "EXPENSE", "account"),
+  k("container-deposits", "Deposits held on returnable containers (crates, bottles, cylinders) customers hold", "LIABILITY", "account"),
   // What labour costs, and where it is debited before any of it is moved into the cost of what it made.
   // Payroll (a later wave) debits this too, so the two meet in one account by design: the labour in a
   // product is the same expense, moved - which is why absorbing it credits the "moved to stock" contra in

@@ -15,6 +15,9 @@ const vanSchema = new mongoose.Schema(
     salesmanName: { type: String, default: "" },
     defaultRouteId: { type: mongoose.Schema.Types.ObjectId, ref: "VanRoute", default: null },
     cashAccountId: { type: mongoose.Schema.Types.ObjectId, ref: "LedgerAccount", default: null },
+    // the card machine (a merchant terminal from the card master) this van takes card payments on. The salesman never
+    // chooses one: a van with none does not offer card (null = no machine).
+    cardId: { type: mongoose.Schema.Types.ObjectId, ref: "CardMaster", default: null },
     // the most cash the van should carry before it hands some in (null = no limit): a warning, never a refusal
     cashLimit: { type: Number, min: 0, default: null },
     // invoice numbers reserved each trip for sales made with no signal (0 = this van always works online)
@@ -23,6 +26,21 @@ const vanSchema = new mongoose.Schema(
     // Copied onto each trip as it opens (VanTrip.target), so a later change never re-judges an earlier day.
     dailySalesTarget: { type: Number, min: 0 },
     dailyCallsTarget: { type: Number, min: 0, max: 500 },
+    // The five organisation rules this van overrides for itself (utils/vanSettings.js PER_VAN_KEYS). A key that is
+    // absent means "as the organisation", so there is NO default on any of them (and none on the array).
+    rules: {
+      type: new mongoose.Schema(
+        {
+          customers: String,
+          creditSales: String,
+          priceChange: String,
+          maxDiscountPercent: Number,
+          paymentModes: { type: [String], default: undefined },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     active: { type: Boolean, default: true },
 
     createdBy: String,

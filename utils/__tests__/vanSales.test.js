@@ -161,6 +161,16 @@ test("suggested load: pre-orders in full, the average sold per run rounded up, l
   assert.deepEqual(v.suggestLoad({}), [], "a route never run and nothing pre-ordered suggests nothing");
 });
 
+test("suggested load: an organisation's safety margin goes on the average, never on a pre-order, and is still rounded up", () => {
+  const m = (o) => new Map(Object.entries(o));
+  const base = { preorders: m({ rice: 5 }), history: [m({ rice: 10 }), m({ rice: 12 }), m({ rice: 11 })], onVan: m({}), free: m({ rice: 100 }), names: m({ rice: "Rice" }) };
+  assert.equal(v.suggestLoad(base)[0].qty, 5 + 11, "no margin: what it always was");
+  assert.equal(v.suggestLoad({ ...base, extraPercent: 0 })[0].qty, 16);
+  assert.equal(v.suggestLoad({ ...base, extraPercent: 10 })[0].qty, 5 + 13, "11 x 1.10 = 12.1, rounded up to 13; the pre-order stays 5");
+  assert.equal(v.suggestLoad({ ...base, extraPercent: -50 })[0].qty, 16, "a negative margin is not a thing");
+  assert.equal(v.suggestLoad({ ...base, extraPercent: "x" })[0].qty, 16, "nor is a word");
+});
+
 test("expiry on loading: the FEFO batches that cover the quantity, named when they die before the shelf life asked", () => {
   const batches = [{ batchNo: "B1", expiryDate: "2026-11-20", qty: 5 }, { batchNo: "B2", expiryDate: "2026-12-30", qty: 50 }];
   assert.deepEqual(v.expiringOnLoad(batches, 3, "2026-11-24"), [{ batchNo: "B1", expiryDate: "2026-11-20", qty: 3 }]);
@@ -255,4 +265,40 @@ test("targets: blank is no target, a bad one is refused, progress caps nothing b
 test("salesByDay: every day of the period is there, quiet days as zero", () => {
   const d = v.salesByDay([{ day: "2026-11-02", sales: 5, invoices: 1 }, { day: "2026-11-02", sales: 7.5, invoices: 2 }], "2026-11-01", "2026-11-03");
   assert.deepEqual(d.map((x) => [x.day, x.sales, x.invoices]), [["2026-11-01", 0, 0], ["2026-11-02", 12.5, 3], ["2026-11-03", 0, 0]]);
+});
+
+test("returnsByReason: one row per reason, the credits added, older returns as 'Not given', biggest first", () => {
+  const trips = [
+    { returns: [{ reason: "Expired", amount: 40, withoutInvoice: true }, { reason: "Damaged", amount: 10.1 }] },
+    { returns: [{ reason: "Expired", amount: 20.2, withoutInvoice: false }, { transactionId: "old" }] },
+    {},
+  ];
+  assert.deepEqual(v.returnsByReason(trips, (r) => (r.transactionId === "old" ? 5 : 0)), [
+    { reason: "Expired", count: 2, amount: 60.2, withoutInvoice: 1 },
+    { reason: "Damaged", count: 1, amount: 10.1, withoutInvoice: 0 },
+    { reason: "Not given", count: 1, amount: 5, withoutInvoice: 0 },
+  ]);
+  assert.deepEqual(v.returnsByReason([]), []);
+});
+
+test("load requests: an open request, what is loaded but not accepted, and what the salesman accepts", () => {
+  const req = (status, lines) => ({ no: 1, status, lines });
+  const trip = (status, loadRequests) => ({ status, loadRequests, loads: [] });
+  assert.equal(v.openRequest(trip("LOADING", [req("ACCEPTED", []), req("REJECTED", [])])), null);
+  assert.equal(v.openRequest(trip("LOADING", [req("LOADED", [])])).status, "LOADED");
+
+  const loaded = req("LOADED", [{ stockId: "a", itemName: "Rice", requested: 10, loaded: 8 }, { stockId: "b", itemName: "Oil", requested: 5, loaded: 0 }]);
+  assert.deepEqual([...v.awaitingOf(trip("LOADING", [loaded]))], [["a", 8]], "loaded, not accepted: reserved; nothing loaded of b reserves nothing");
+  assert.deepEqual([...v.awaitingOf(trip("UNLOADED", [loaded]))], [], "a trip not holding stock reserves nothing");
+  assert.deepEqual([...v.awaitingOf(trip("LOADING", [req("REQUESTED", [{ stockId: "a", requested: 9 }])]))], [], "asked for is not reserved");
+  assert.deepEqual([...v.onVansAll([{ physical: new Map([["a", 2]]), awaiting: new Map([["a", 8]]) }])], [["a", 10]], "other vans and job work see it taken");
+
+  assert.deepEqual(v.acceptPlan(loaded, []), { lines: [{ stockId: "a", itemName: "Rice", loaded: 8, accepted: 8 }], short: [] }, "a line not mentioned is accepted in full");
+  const part = v.acceptPlan(loaded, [{ stockId: "a", accepted: "6" }]);
+  assert.deepEqual(part.short, [{ stockId: "a", itemName: "Rice", loaded: 8, accepted: 6, missing: 2 }]);
+  assert.equal(v.acceptPlan(loaded, [{ stockId: "a", accepted: 0 }]).lines[0].accepted, 0, "nothing at all may be accepted");
+  assert.throws(() => v.acceptPlan(loaded, [{ stockId: "a", accepted: 9 }]), { code: "ACCEPT_MORE_THAN_LOADED" });
+  assert.throws(() => v.acceptPlan(loaded, [{ stockId: "a", accepted: -1 }]), { code: "QTY_INVALID" });
+  assert.throws(() => v.acceptPlan(loaded, [{ stockId: "a", accepted: [3] }]), { code: "QTY_INVALID" });
+  assert.throws(() => v.acceptPlan(loaded, [{ stockId: "z", accepted: 1 }]), { code: "LINE_NOT_LOADED" });
 });

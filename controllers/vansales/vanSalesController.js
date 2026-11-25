@@ -11,6 +11,7 @@ const VanVisitService = require("../../services/vansales/vanVisitService");
 const PriceListService = require("../../services/vansales/priceListService");
 const { loadTrip } = require("../../services/vansales/vanTripStock");
 const VanCrmService = require("../../services/vansales/vanCrmService");
+const VanSettingsService = require("../../services/vansales/vanSettingsService");
 
 const by = (req) => req.admin?.id || "system";
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
@@ -63,7 +64,17 @@ exports.updateRoute = catchAsync(async (req, res) => {
 });
 exports.assignees = catchAsync(async (req, res) => ok(res, await VanService.assignees()));
 exports.paymentChoices = catchAsync(async (req, res) => ok(res, await VanService.paymentChoices(req)));
+exports.cardMachines = catchAsync(async (req, res) => ok(res, await VanService.cardMachines(req)));
 exports.customers = catchAsync(async (req, res) => ok(res, await VanService.customerChoices(req.query)));
+
+// ---- the organisation's rules for its vans ---------------------------------------------------------------------
+exports.getSettings = catchAsync(async (req, res) => ok(res, await VanSettingsService.settings()));
+exports.saveSettings = catchAsync(async (req, res) => {
+  const before = await VanSettingsService.settings();
+  const after = await VanSettingsService.save(req.body);
+  await AuditService.log({ req, action: "VAN_SALES_SETTINGS_SAVED", entity: "CompanySettings", summary: "Van sales rules changed", before, after });
+  ok(res, after);
+});
 
 // ---- trips ---------------------------------------------------------------------------------------------------
 exports.listTrips = catchAsync(async (req, res) => ok(res, await VanTripService.list(req.query)));
@@ -71,17 +82,68 @@ exports.mine = catchAsync(async (req, res) => ok(res, await VanTripService.mine(
 exports.getTrip = catchAsync(async (req, res) => ok(res, await VanTripService.getById(req.params.tripId)));
 exports.activity = catchAsync(async (req, res) => ok(res, await AuditService.list(req, { entity: "VanTrip", entityId: req.params.tripId, limit: 100 })));
 
+// Where loads go through a request, a salesman opens his OWN van's trip to ask for his load; nobody else's, and only then.
+async function assertMayOpen(req) {
+  if (holds(req, "vansales.load")) return;
+  const Van = require("../../models/modules/vansales/vanModel");
+  const van = require("mongoose").isValidObjectId(req.body?.vanId) ? await Van.findById(req.body.vanId).select("salesmanId rules").lean() : null;
+  const ownVan = van && String(van.salesmanId) === String(req.admin?.id);
+  const asks = van && (await VanSettingsService.forVan(van)).loadRequests;
+  if (!ownVan || !asks || (req.body?.salesmanId && String(req.body.salesmanId) !== String(req.admin?.id))) {
+    throw new AppError("Only the storekeeper or a supervisor opens a trip, except a salesman asking for the load of the van they drive", 403, "PERMISSION_DENIED", { required: ["vansales.load"] });
+  }
+}
+
 exports.openTrip = catchAsync(async (req, res) => {
+  await assertMayOpen(req);
   const trip = await VanTripService.open(req.body || {}, by(req));
   await log(req, "VAN_TRIP_OPENED", trip, `Van trip ${trip.tripNo} opened for ${trip.vanCode}, ${trip.salesmanName}`);
   ok(res, await VanTripService.getById(trip._id), 201);
 });
 exports.load = catchAsync(async (req, res) => {
-  const trip = await VanTripService.load(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req));
+  await require("../../services/vansales/vanPlanningService").assertExpiryOk(req.params.tripId, { lines: (req.body?.lines || []).map((l) => ({ stockId: l?.stockId, qty: l?.qty })) }, { mayOverride: holds(req, "vansales.manage") });
+  const trip =await VanTripService.load(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req));
   const units = (req.body?.lines || []).reduce((n, l) => n + (Number(l.qty) || 0), 0);
   await log(req, "VAN_LOADED", trip, `Van ${trip.vanCode} loaded: ${units} units on ${trip.tripNo}`, { load: trip.loads.length });
   ok(res, await VanTripService.getById(trip._id));
 });
+// ---- load requests: the salesman asks, the storekeeper loads, the salesman accepts the count ---------------------
+const LoadRequests = () => require("../../services/vansales/vanLoadRequestService");
+const units = (lines, key) => (lines || []).reduce((n, l) => n + (Number(l[key]) || 0), 0);
+exports.listLoadRequests = catchAsync(async (req, res) => ok(res, await LoadRequests().waiting()));
+exports.loadRequestCounts = catchAsync(async (req, res) => ok(res, await LoadRequests().counts(by(req), { mayLoad: holds(req, "vansales.load") })));
+exports.requestLoad = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const { trip, request } = await LoadRequests().request(req.params.tripId, req.body || {}, by(req), { byName: req.admin?.name });
+  await log(req, "VAN_LOAD_REQUESTED", trip, `Load request ${request.no} on ${trip.tripNo}: ${units(request.lines, "requested")} units asked for`, { requestNo: request.no });
+  ok(res, { request, trip: await VanTripService.getById(trip._id) }, 201);
+});
+exports.cancelLoadRequest = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const { trip, request } = await LoadRequests().cancel(req.params.tripId, req.params.no, by(req), { byName: req.admin?.name, reason: req.body?.reason });
+  await log(req, "VAN_LOAD_REQUEST_CANCELLED", trip, `Load request ${request.no} on ${trip.tripNo} cancelled`, { requestNo: request.no });
+  ok(res, { request, trip: await VanTripService.getById(trip._id) });
+});
+exports.rejectLoadRequest = catchAsync(async (req, res) => {
+  const { trip, request } = await LoadRequests().reject(req.params.tripId, req.params.no, req.body || {}, by(req), { byName: req.admin?.name });
+  await log(req, "VAN_LOAD_REQUEST_REJECTED", trip, `Load request ${request.no} on ${trip.tripNo} refused: ${request.reason}`, { requestNo: request.no });
+  ok(res, { request, trip: await VanTripService.getById(trip._id) });
+});
+exports.loadFromRequest = catchAsync(async (req, res) => {
+  const lines = (Array.isArray(req.body?.lines) ? req.body.lines : []).filter((l) => Number(l?.qty) > 0).map((l) => ({ stockId: l?.stockId, qty: l?.qty }));
+  if (lines.length) await require("../../services/vansales/vanPlanningService").assertExpiryOk(req.params.tripId, { lines }, { mayOverride: holds(req, "vansales.manage") });
+  const { trip, request } = await LoadRequests().load(req.params.tripId, req.params.no, req.body || {}, by(req), { byName: req.admin?.name });
+  await log(req, "VAN_LOAD_REQUEST_LOADED", trip, `Load request ${request.no} on ${trip.tripNo} loaded: ${units(request.lines, "loaded")} of ${units(request.lines, "requested")} units asked for`, { requestNo: request.no });
+  ok(res, { request, trip: await VanTripService.getById(trip._id) });
+});
+exports.acceptLoad = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const { trip, request, short } = await LoadRequests().accept(req.params.tripId, req.params.no, req.body || {}, by(req), { byName: req.admin?.name });
+  const missing = short.reduce((n, l) => n + l.missing, 0);
+  await log(req, "VAN_LOAD_ACCEPTED", trip, `Load request ${request.no} on ${trip.tripNo} accepted${missing ? `, ${missing} units short: ${request.reason}` : " in full"}`, { requestNo: request.no, short });
+  ok(res, { request, short, trip: await VanTripService.getById(trip._id) });
+});
+
 exports.depart = catchAsync(async (req, res) => {
   const trip = await VanTripService.depart(req.params.tripId, by(req), { odometer: req.body?.odometer });
   await log(req, "VAN_DEPARTED", trip, `Van ${trip.vanCode} sent out on ${trip.tripNo}`);
@@ -96,12 +158,42 @@ exports.cancel = catchAsync(async (req, res) => {
 exports.sell = catchAsync(async (req, res) => {
   await assertMayWork(req);
   assertMayAcknowledge(req);
-  const { invoice, receipt } = await VanTripSales.sell(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
-  await AuditService.log({ req, action: "VAN_SALE", entity: "VanTrip", entityId: req.params.tripId, summary: `${invoice.transactionNo} sold on the van${receipt ? `, ${receipt.voucherNo} received` : ""}`, after: { invoice: invoice.transactionNo } });
+  await Containers().ensureAccount(req); // before the sale's transaction: a deposit needs its account
+  const { invoice, receipt, containers, deposit, depositNote } = await VanTripSales.sell(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
+  await AuditService.log({ req, action: "VAN_SALE", entity: "VanTrip", entityId: req.params.tripId, summary: `${invoice.transactionNo} sold on the van${receipt ? `, ${receipt.voucherNo} ${receipt.status === "pending" ? "taken, waiting for the bank" : "received"} (${receipt.paymentMode})` : ""}${depositNote ? `, container deposit ${depositNote}` : ""}`, after: { invoice: invoice.transactionNo, ...(containers?.length ? { containers, deposit } : {}) } });
   // after the sale committed, never able to fail it: the call on the customer's CRM timeline
   await VanCrmService.record("sale", { tripId: req.params.tripId, customerId: invoice.partyId, refId: invoice._id, ref: invoice.transactionNo, total: invoice.totalAmount, by: by(req) });
-  ok(res, { invoice, receipt, trip: await VanTripService.getById(req.params.tripId) }, 201);
+  ok(res, { invoice, receipt, containers, deposit, depositNote, trip: await VanTripService.getById(req.params.tripId) }, 201);
 });
+
+// ---- returnable containers (crates, bottles, cylinders) ----------------------------------------------------------
+const Containers = () => require("../../services/vansales/vanContainerService");
+exports.listContainerTypes = catchAsync(async (req, res) => ok(res, await Containers().types({ includeInactive: req.query.all === "1" })));
+exports.createContainerType = catchAsync(async (req, res) => {
+  const t = await Containers().create(req.body || {}, by(req));
+  await AuditService.log({ req, action: "VAN_CONTAINER_TYPE_CREATED", entity: "ContainerType", entityId: t.id, summary: `Container ${t.code} ${t.name} added`, after: t });
+  ok(res, t, 201);
+});
+exports.updateContainerType = catchAsync(async (req, res) => {
+  const t = await Containers().update(req.params.typeId, req.body || {}, by(req));
+  await AuditService.log({ req, action: "VAN_CONTAINER_TYPE_UPDATED", entity: "ContainerType", entityId: t.id, summary: `Container ${t.code} changed`, after: t });
+  ok(res, t);
+});
+exports.customerContainers = catchAsync(async (req, res) => ok(res, await Containers().balances(req.params.customerId)));
+exports.empties = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  await Containers().ensureAccount(req);
+  const r = await Containers().empties(req.params.tripId, req.body || {}, by(req), { byName: req.admin?.name, mayOverride: holds(req, "vansales.manage") });
+  const trip = await loadTrip(req.params.tripId);
+  await log(req, "VAN_CONTAINERS_MOVED", trip, `Containers at a stop on ${trip.tripNo}${r.voucher ? `, deposit ${r.voucher.voucherNo}` : ""}`, { deposit: r.deposit });
+  ok(res, { deposit: r.deposit, depositNote: r.voucher ? r.voucher.voucherNo : null, moves: r.moves.length, trip: await VanTripService.getById(req.params.tripId) }, 201);
+});
+exports.adjustContainers = catchAsync(async (req, res) => {
+  const r = await Containers().adjust(req.body || {}, by(req), { byName: req.admin?.name });
+  await AuditService.log({ req, action: "VAN_CONTAINERS_ADJUSTED", entity: "Customer", entityId: req.body?.customerId, summary: `Containers a customer holds set to ${r.holds}: ${String(req.body?.reason || "").slice(0, 120)}` });
+  ok(res, { holds: r.holds, balances: await Containers().balances(req.body.customerId) });
+});
+
 exports.collect = catchAsync(async (req, res) => {
   await assertMayWork(req);
   const { receipt } = await VanTripSales.collect(req.params.tripId, req.body || {}, by(req), { req });
@@ -110,9 +202,14 @@ exports.collect = catchAsync(async (req, res) => {
 });
 exports.returnGoods = catchAsync(async (req, res) => {
   await assertMayWork(req);
-  const { creditNote } = await VanTripSales.returnGoods(req.params.tripId, req.body || {}, by(req), { req });
-  await AuditService.log({ req, action: "VAN_RETURN", entity: "VanTrip", entityId: req.params.tripId, summary: `${creditNote.transactionNo} taken back on the van`, after: { return: creditNote.transactionNo } });
+  const { creditNote } = await VanTripSales.returnGoods(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
+  const loose = !creditNote.returnOf?.transactionId;
+  await AuditService.log({ req, action: "VAN_RETURN", entity: "VanTrip", entityId: req.params.tripId, summary: `${creditNote.transactionNo} taken back on the van${loose ? " without an invoice" : ""}`, after: { return: creditNote.transactionNo, withoutInvoice: loose, amount: creditNote.totalAmount } });
   ok(res, { creditNote, trip: await VanTripService.getById(req.params.tripId) }, 201);
+});
+exports.returnQuote = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanTripSales.returnQuote(req.params.tripId, req.body || {}, { mayUnderprice: holds(req, "vansales.manage") }));
 });
 exports.customerPosition = catchAsync(async (req, res) => ok(res, await VanTripSales.customerPosition(req.params.customerId)));
 exports.returnable = catchAsync(async (req, res) => ok(res, await VanTripSales.returnable(req.params.invoiceId)));
@@ -123,7 +220,7 @@ exports.unload = catchAsync(async (req, res) => {
   await log(req, "VAN_UNLOADED", trip, `Van ${trip.vanCode} counted back in on ${trip.tripNo}`);
   ok(res, await VanTripService.getById(trip._id));
 });
-exports.settlementPreview = catchAsync(async (req, res) => ok(res, await VanTripSettlement.preview(req.params.tripId, { ...req.query, chequesHanded: req.query.chequesHanded ? String(req.query.chequesHanded).split(",") : undefined }, { req })));
+exports.settlementPreview = catchAsync(async (req, res) => ok(res, await VanTripSettlement.preview(req.params.tripId, { ...req.query, chequesHanded: req.query.chequesHanded !== undefined ? String(req.query.chequesHanded).split(",").filter(Boolean) : undefined }, { req })));
 exports.settle = catchAsync(async (req, res) => {
   const { trip, plan } = await VanTripSettlement.settle(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req), { req });
   await log(req, "VAN_SETTLED", trip, `Van trip ${trip.tripNo} settled: cash ${plan.cash.handed.toFixed(2)} of ${plan.cash.expected.toFixed(2)}`, { cashVariance: plan.cash.variance, stockVarianceValue: plan.stockVarianceValue });
@@ -222,13 +319,18 @@ exports.updatePromotion = catchAsync(async (req, res) => {
 
 exports.createPreorder = catchAsync(async (req, res) => {
   await assertMayWork(req);
+  await VanTripSales.assertCustomerAllowed(req.params.tripId, req.body?.customerId, { mayOverride: holds(req, "vansales.manage") });
   const order = await VanPlanningService.createPreorder(req.params.tripId, { ...(req.body || {}), fromLink: false }, by(req));
   await AuditService.log({ req, action: "VAN_PREORDER", entity: "VanTrip", entityId: req.params.tripId, summary: `${order.orderNo} taken on the van for the next visit` });
   ok(res, order, 201);
 });
 exports.tripPreorders = catchAsync(async (req, res) => ok(res, await VanPlanningService.preordersForTrip(req.params.tripId)));
 exports.routePreorders = catchAsync(async (req, res) => ok(res, await VanPlanningService.preordersForRoute(req.params.routeId, { customerId: req.query.customerId })));
-exports.suggestedLoad = catchAsync(async (req, res) => ok(res, await VanPlanningService.suggestedLoad(req.params.tripId)));
+// a salesman asking for his load may start from the suggestion, for his own van only
+exports.suggestedLoad = catchAsync(async (req, res) => {
+  if (!holds(req, "vansales.load")) await assertMayWork(req);
+  ok(res, await VanPlanningService.suggestedLoad(req.params.tripId));
+});
 exports.loadCheck = catchAsync(async (req, res) => ok(res, await VanPlanningService.loadCheck(req.params.tripId, req.body || {})));
 
 // ---- running the fleet (phase 5): the board, road expenses, pins, route profitability --------------------------

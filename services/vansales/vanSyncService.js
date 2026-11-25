@@ -38,7 +38,7 @@ class VanSyncService {
             const { receipt } = await VanTripSales.collect(tripId, body, by, { req }, session);
             r = { receiptId: String(receipt._id), receiptNo: receipt.voucherNo };
           } else if (op.kind === "return") {
-            const { creditNote } = await VanTripSales.returnGoods(tripId, body, by, { req }, session);
+            const { creditNote } = await VanTripSales.returnGoods(tripId, body, by, { req, mayUnderprice }, session);
             r = { returnId: String(creditNote._id), returnNo: creditNote.transactionNo };
           } else {
             const v = await VanVisitService.record(tripId, { ...(op.body || {}), at }, by, byName, session);

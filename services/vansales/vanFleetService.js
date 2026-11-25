@@ -14,6 +14,7 @@ const { withTransactionSession } = require("../../utils/withTransactionSession")
 const { todayInOrg } = require("../../utils/documentExpiry");
 const { cleanLocation } = require("./vanVisitService");
 const { loadTrip } = require("./vanTripStock");
+const VanSettingsService = require("./vanSettingsService");
 
 const isId = (v) => mongoose.isValidObjectId(v);
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
@@ -33,8 +34,11 @@ class VanFleetService {
   static async ping(trip, { kind, customerId, ref, location }, { session } = {}) {
     const here = cleanLocation(location);
     if (!here || !isId(customerId)) return null;
+    // an organisation that does not track location keeps none, whatever a phone sends
+    const active = await VanSettingsService.forTrip(trip, { session });
+    if (!active.captureLocation) return null;
     const c = await withSession(Customer.findById(customerId).select("location").lean(), session);
-    const flag = rules.farFrom(c?.location, here);
+    const flag = rules.farFrom(c?.location, here, active.farMetres);
     const row = { at: new Date(), kind, customerId, ref: ref ? String(ref).slice(0, 40) : "", ...here, ...(flag ? { distanceM: flag.distanceM, far: flag.far } : {}) };
     await VanTrip.updateOne({ _id: trip._id }, { $push: { pings: row } }, session ? { session } : undefined);
     return row;
@@ -46,6 +50,7 @@ class VanFleetService {
    */
   static async pinCustomer(tripId, customerId, location, by, { mayRepin = false } = {}) {
     const trip = await loadTrip(tripId);
+    if (!(await VanSettingsService.forTrip(trip)).captureLocation) throw fail("This business does not use the phone's location, so shops are not pinned from the van", 403, "LOCATION_OFF");
     if (!isId(customerId)) throw fail("Choose the customer", 400, "CUSTOMER_REQUIRED");
     const here = cleanLocation(location);
     if (!here) throw fail("The phone did not give a usable location. Try again outside, with location switched on.", 400, "LOCATION_REQUIRED");
@@ -146,7 +151,7 @@ class VanFleetService {
       ]);
       const times = [inv?.createdAt, rec?.createdAt, visit?.at, ...(t.pings || []).map((p) => p.at)].filter(Boolean).map((d) => new Date(d).getTime());
       const lastAt = times.length ? new Date(Math.max(...times)).toISOString() : null;
-      const row = rules.boardRow({ status: t.status, stops: shown.route, lastAt, departedAt: t.departedAt, now });
+      const row = rules.boardRow({ status: t.status, stops: shown.route, lastAt, departedAt: t.departedAt, now, quietHours: shown.rules?.quietHours });
       const far = (t.pings || []).filter((p) => p.far);
       rows.push({
         id: String(t._id), tripNo: t.tripNo, vanCode: t.vanCode, vanName: t.vanName, salesmanName: t.salesmanName, routeName: t.routeName, status: t.status,

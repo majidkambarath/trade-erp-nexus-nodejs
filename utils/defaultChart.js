@@ -91,6 +91,7 @@ const ACCOUNTS = [
   ["Cash Over and Short", "Other Income", "cash-over-short"],
   ["Exchange Gain / Loss", "Other Income", "fx-gain-loss"],
   ["Van Running Expenses", "Operating Expenses", "van-expenses"],
+  ["Container Deposits Held", "Current Liabilities", "container-deposits"],
 ];
 
 // Which default group backs each group-kind posting key.

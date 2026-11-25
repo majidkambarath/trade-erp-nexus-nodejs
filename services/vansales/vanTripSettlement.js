@@ -10,8 +10,9 @@ const DefaultChartService = require("../financial/defaultChartService");
 const StockAdjustmentService = require("../stock/stockAdjustmentService");
 const { groupFamily } = require("../banking/cardService");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
-const { todayInOrg } = require("../../utils/documentExpiry");
+const { todayInOrg, orgDay } = require("../../utils/documentExpiry");
 const { loadTrip, stockOf } = require("./vanTripStock");
+const VanSettingsService = require("./vanSettingsService");
 
 const isId = (v) => mongoose.isValidObjectId(v);
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
@@ -25,7 +26,33 @@ const round2 = rules.round2;
 //            adjustment at average cost (movement, ledger entry, period lock and all).
 // Cheques are not moved: they sit in Cheques in Hand until deposited; settlement only checks they were handed over.
 
-const WARNING_CODES = ["CASH_SHORT", "CASH_OVER", "STOCK_DIFFERENCE", "CHEQUES_MISSING"];
+const WARNING_CODES = ["CASH_SHORT", "CASH_OVER", "STOCK_DIFFERENCE", "CHEQUES_MISSING", "CONTAINER_DIFFERENCE"];
+
+/**
+ * The containers a trip should bring back, and what was counted: [{ typeId, name, expected, counted, difference, value }].
+ * Only where the organisation has container types. `counted` is Map(typeId -> n).
+ */
+async function containerRows(trip, stock, counted, { session } = {}) {
+  const VanContainerService = require("./vanContainerService");
+  const crates = require("../../utils/vanContainers");
+  const types = await VanContainerService.types({ includeInactive: true, session });
+  if (!types.length) return [];
+  const moves = await VanContainerService.ofTrip(trip, { session });
+  const expected = crates.expectedOnVan({ loaded: stock.loaded, moves }, types);
+  if (!expected.size && !counted.size) return [];
+  return crates.countRows(expected, counted, types);
+}
+
+/** What the person counted per container type: Map(typeId -> n). A type not sent is taken as found as expected. */
+function countedContainers(raw) {
+  const counted = new Map();
+  for (const [i, c] of (Array.isArray(raw) ? raw : []).entries()) {
+    const n = typeof c?.counted === "number" || (typeof c?.counted === "string" && c.counted.trim() !== "") ? Number(c.counted) : NaN;
+    if (typeof c?.typeId !== "string" || !Number.isInteger(n) || n < 0) throw fail(`Containers line ${i + 1}: count them, a whole number of zero or more`, 400, "CONTAINERS_INVALID");
+    counted.set(c.typeId, n);
+  }
+  return counted;
+}
 
 /** The two posting keys settlement uses, topped up for a company whose map predates them. Outside the transaction: the top-up commits on its own. */
 async function ensureKeys(req) {
@@ -65,6 +92,7 @@ class VanTripSettlement {
     const session = rest[rest.length - 1];
     const trip = await loadTrip(id, session);
     if (!rules.canMove(trip.status, "UNLOADED")) throw fail("Only a van that is out can be counted back in", 409, "TRIP_NOT_ON_ROUTE");
+    require("./vanTripService").assertNoOpenRequest(trip, "be counted back in");
     const stock = await stockOf(trip, { session });
     let rows;
     try {
@@ -76,9 +104,11 @@ class VanTripSettlement {
     const names = new Map();
     for (const load of trip.loads) for (const l of load.lines) names.set(String(l.stockId), l.itemName);
     require("./vanFleetService").applyOdometer(trip, "in", input?.odometer);
+    const containers = await containerRows(trip, stock, countedContainers(input?.containers), { session });
     trip.unload = {
       at: new Date(), by: String(by), byName: input?.byName || "",
       lines: rows.map((r) => ({ ...r, itemName: names.get(r.stockId) || "" })),
+      ...(containers.length ? { containers: containers.map((c) => ({ typeId: c.typeId, name: c.name, expected: c.expected, counted: c.counted, difference: c.difference })) } : {}),
     };
     trip.status = "UNLOADED";
     trip.updatedBy = String(by);
@@ -102,9 +132,12 @@ class VanTripSettlement {
   static async plan(trip, input = {}, { session, req } = {}) {
     if (trip.status !== "UNLOADED" || !trip.unload) throw fail("Count the van back in before settling it", 409, "TRIP_NOT_UNLOADED");
     const vouchers = await Voucher.find({ "vanTripRef.tripId": trip._id, voucherType: "receipt" })
-      .select("voucherNo status paymentMode totalAmount paymentDetails.chequeDetails").session(session || null).lean();
+      .select("voucherNo status paymentMode totalAmount paymentDetails.chequeDetails paymentDetails.reference paymentDetails.approvalCode paymentDetails.cardLabel partyName").session(session || null).lean();
     const live = vouchers.filter((v) => v.status === "approved");
-    const pending = vouchers.filter((v) => v.status === "pending");
+    // a bank transfer taken on the road waits for the office to see it in the bank (financialService, holdFor "van_transfer"):
+    // it is the bank's to confirm, never the van's, so it does not stop the trip being settled. Any other receipt still waiting does.
+    const waitingTransfers = vouchers.filter((v) => v.status === "pending" && v.paymentMode === "transfer");
+    const pending = vouchers.filter((v) => v.status === "pending" && v.paymentMode !== "transfer");
     // the van's cash: what it took, less what it paid out on the road (fuel, tolls) from the same account
     const spent = await Voucher.find({ "vanTripRef.tripId": trip._id, voucherType: "expense" }).select("voucherNo status totalAmount").session(session || null).lean();
     const expenses = round2(spent.filter((v) => v.status === "approved").reduce((t, v) => t + Number(v.totalAmount || 0), 0));
@@ -118,6 +151,16 @@ class VanTripSettlement {
       const c = register.get(String(v._id));
       return { chequeNo: c?.chequeNo || v.paymentDetails?.chequeDetails?.chequeNumber || v.voucherNo, amount: round2(v.totalAmount), bank: c?.drawnOnBankName || "", from: c?.partyName || "", date: c?.chequeDate || null, voucherNo: v.voucherNo };
     });
+
+    // card and transfer takings never reached the van's cash, so they are not in the cash expected or the journal: they are
+    // listed so the supervisor sees everything the trip took, and which transfers are still waiting for the bank
+    const sumOf = (rows) => round2(rows.reduce((t, v) => t + Number(v.totalAmount || 0), 0));
+    const cards = live.filter((v) => v.paymentMode === "card").map((v) => ({ voucherNo: v.voucherNo, amount: round2(v.totalAmount), from: v.partyName || "", approvalCode: v.paymentDetails?.approvalCode || "", card: v.paymentDetails?.cardLabel || "" }));
+    const transfers = [...live.filter((v) => v.paymentMode === "transfer").map((v) => ({ v, waiting: false })), ...waitingTransfers.map((v) => ({ v, waiting: true }))]
+      .map(({ v, waiting }) => ({ voucherNo: v.voucherNo, amount: round2(v.totalAmount), from: v.partyName || "", reference: v.paymentDetails?.reference || "", waiting }));
+    const cardTotal = sumOf(live.filter((v) => v.paymentMode === "card"));
+    const transferTotal = sumOf(live.filter((v) => v.paymentMode === "transfer"));
+    const transfersWaiting = sumOf(waitingTransfers);
 
     const handed = input.cashHanded === undefined || input.cashHanded === "" ? expected : Number(input.cashHanded);
     if (!Number.isFinite(handed)) throw fail("Enter the cash handed in", 400, "CASH_REQUIRED");
@@ -149,20 +192,38 @@ class VanTripSettlement {
       return row;
     });
 
+    // containers as counted in: missing ones of a deposit type are worth their deposit, charged to the salesman
+    const VanContainerService = require("./vanContainerService");
+    const depositOf = new Map((await VanContainerService.types({ includeInactive: true, session })).map((t) => [t.id, t.deposit]));
+    const containers = (trip.unload.containers || []).map((c) => ({
+      typeId: String(c.typeId), name: c.name, expected: c.expected, counted: c.counted, difference: c.difference,
+      value: round2(Math.max(0, -Number(c.difference || 0)) * (depositOf.get(String(c.typeId)) || 0)),
+    }));
+    const containersMissing = containers.reduce((n, c) => n + Math.max(0, -Number(c.difference || 0)), 0);
+    const containersMissingValue = round2(containers.reduce((t, c) => t + c.value, 0));
+
     const blockers = [];
     if (pendingExpenses.length) blockers.push({ code: "PENDING_EXPENSES", message: `${pendingExpenses.length} road expense${pendingExpenses.length === 1 ? " is" : "s are"} waiting for approval. Approve or reject ${pendingExpenses.length === 1 ? "it" : "them"} first.` });
     if (pending.length) blockers.push({ code: "PENDING_RECEIPTS", message: `${pending.length} receipt${pending.length === 1 ? " is" : "s are"} waiting for approval. Approve or reject ${pending.length === 1 ? "it" : "them"} first.` });
     const warnings = [];
-    if (cash.short > 0) warnings.push({ code: "CASH_SHORT", message: `${cash.short.toFixed(2)} less cash was handed in than the van took. It is charged to the salesman's shortage account.` });
-    if (cash.over > 0) warnings.push({ code: "CASH_OVER", message: `${cash.over.toFixed(2)} more cash was handed in than the van took. It is booked to cash over and short.` });
+    // a difference at or below the organisation's tolerance still posts to the shortage / over account; it just needs no tick
+    const tolerance = (await VanSettingsService.forTrip(trip, { session })).cashTolerance;
+    if (cash.short > tolerance + 1e-9) warnings.push({ code: "CASH_SHORT", message: `${cash.short.toFixed(2)} less cash was handed in than the van took. It is charged to the salesman's shortage account.` });
+    if (cash.over > tolerance + 1e-9) warnings.push({ code: "CASH_OVER", message: `${cash.over.toFixed(2)} more cash was handed in than the van took. It is booked to cash over and short.` });
     const off = rows.filter((r) => Math.abs(r.difference) > 0.0005);
     if (off.length) warnings.push({ code: "STOCK_DIFFERENCE", message: `${off.length} item${off.length === 1 ? "" : "s"} counted differently from what the van should hold (${round2(varianceValue).toFixed(2)} at cost). It is booked as a stock adjustment.` });
+    const containersOff = containers.filter((c) => c.difference !== 0);
+    if (containersOff.length) {
+      const said = containersOff.map((c) => (c.difference < 0 ? `${-c.difference} ${c.name} missing` : `${c.difference} ${c.name} more`)).join(", ");
+      warnings.push({ code: "CONTAINER_DIFFERENCE", message: `${said} on the van.${containersMissingValue > 0 ? ` The deposit of the missing ones, ${containersMissingValue.toFixed(2)}, is charged to the salesman's shortage account.` : ""}` });
+    }
     if (missing.length) warnings.push({ code: "CHEQUES_MISSING", message: `${missing.length} cheque${missing.length === 1 ? "" : "s"} taken on the road ${missing.length === 1 ? "was" : "were"} not handed in: ${missing.map((c) => c.chequeNo).join(", ")}.` });
 
     return {
       trip: { id: String(trip._id), tripNo: trip.tripNo, vanCode: trip.vanCode },
-      cash, expenses, cheques, missingCheques: missing, rows,
+      cash, expenses, cheques, missingCheques: missing, cards, transfers, cardTotal, transferTotal, transfersWaiting, rows,
       stockVarianceValue: round2(varianceValue), damagedValue: round2(damagedValue),
+      containers, containersMissing, containersMissingValue,
       blockers, warnings,
     };
   }
@@ -189,11 +250,15 @@ class VanTripSettlement {
 
     const day = todayInOrg();
     const date = new Date(`${day}T00:00:00.000Z`);
+    // What the count found happened the day the van was counted back in, not the day somebody settled it: the stock
+    // moves carry the count day (and the period lock judges that day). The cash journal is the hand-in, so it keeps today.
+    const countDate = trip.unload?.at ? new Date(`${orgDay(trip.unload.at)}T00:00:00.000Z`) : date;
     const voucherIds = [];
 
     // ---- cash: one journal -----------------------------------------------------------------------------------
     const { cash } = plan;
-    if (cash.expected > 0 || cash.handed > 0) {
+    const lostValue = plan.containersMissingValue || 0;
+    if (cash.expected > 0 || cash.handed > 0 || lostValue > 0) {
       const main = await mainCash(opts.req, input.toAccountId, session);
       const shortAccount = await AccountConfigService.resolveAccount("salesman-shortages", { session });
       const overAccount = await AccountConfigService.resolveAccount("cash-over-short", { session });
@@ -203,6 +268,11 @@ class VanTripSettlement {
       if (cash.short > 0) lines.push({ accountId: shortAccount, debit: cash.short, narration: `${note}: cash short, owed by ${trip.salesmanName}` });
       if (cash.expected > 0) lines.push({ accountId: trip.cashAccountId, credit: cash.expected, narration: `${note}: cash taken on the road` });
       if (cash.over > 0) lines.push({ accountId: overAccount, credit: cash.over, narration: `${note}: cash over` });
+      // containers that did not come back: their deposit is the salesman's to make good (they have no book value of their own)
+      if (lostValue > 0) {
+        lines.push({ accountId: shortAccount, debit: lostValue, narration: `${note}: ${plan.containersMissing} containers missing, owed by ${trip.salesmanName}` });
+        lines.push({ accountId: overAccount, credit: lostValue, narration: `${note}: containers missing, recovered from the salesman` });
+      }
       const voucher = await FinancialService.createVoucher({ voucherType: "journal", date, lines, narration: note, ledgerBased: true }, by, session, { req: opts.req });
       await Voucher.updateOne({ _id: voucher._id }, { $set: { vanTripRef: { tripId: trip._id, tripNo: trip.tripNo } } }, { session });
       voucherIds.push(voucher._id);
@@ -219,7 +289,7 @@ class VanTripSettlement {
         const stock = await Stock.findById(row.stockId).session(session); // re-read: the first move changed it
         const target = rules.round3(Number(stock.currentStock) + qty);
         if (target < -1e-9) throw fail(`${stock.itemName} would go below zero; check the count`, 409, "STOCK_WOULD_GO_NEGATIVE", { stockId: row.stockId });
-        await StockAdjustmentService.apply({ stock, newQuantity: target, eventType, referenceNumber: trip.tripNo, notes, createdBy: by, date }, { session });
+        await StockAdjustmentService.apply({ stock, newQuantity: target, eventType, referenceNumber: trip.tripNo, notes, createdBy: by, date: countDate }, { session });
       }
     }
 
@@ -227,7 +297,9 @@ class VanTripSettlement {
       at: new Date(), by: String(by), byName: input.byName || "",
       cashExpected: cash.expected, cashHanded: cash.handed, cashVariance: cash.variance, expenses: plan.expenses,
       cheques: plan.cheques.map((c) => ({ ...c, handed: !plan.missingCheques.some((m) => m.chequeNo === c.chequeNo) })),
+      cardTotal: plan.cardTotal, transferTotal: plan.transferTotal, transfersWaiting: plan.transfersWaiting,
       stockVarianceValue: plan.stockVarianceValue, damagedValue: plan.damagedValue,
+      ...(plan.containers.length ? { containersMissing: plan.containersMissing, containersMissingValue: plan.containersMissingValue } : {}),
       acknowledged: [...given].filter((c) => WARNING_CODES.includes(c)), voucherIds,
       notes: String(input.notes || "").slice(0, 500),
     };

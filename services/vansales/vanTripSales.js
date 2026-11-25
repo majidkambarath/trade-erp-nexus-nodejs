@@ -2,9 +2,13 @@ const mongoose = require("mongoose");
 const AppError = require("../../utils/AppError");
 const Stock = require("../../models/modules/stockModel");
 const Customer = require("../../models/modules/customerModel");
+const Van = require("../../models/modules/vansales/vanModel");
 const Transaction = require("../../models/modules/transactionModel");
 const { Voucher } = require("../../models/modules/financial/financialModels");
 const rules = require("../../utils/vanSales");
+const vanRules = require("../../utils/vanSettings");
+const VanSettingsService = require("./vanSettingsService");
+const VanRoute = require("../../models/modules/vansales/vanRouteModel");
 const kinds = require("../../utils/itemKinds");
 const proposals = require("../../utils/assistantProposals");
 const S = require("../orderPurchase/salesDocumentSupport");
@@ -43,20 +47,66 @@ function assertSelling(trip) {
 
 async function customerOf(id, session) {
   if (!isId(id)) throw fail("Choose a customer", 400, "CUSTOMER_REQUIRED");
-  const c = await Customer.findById(id).select("customerName status").session(session).lean();
+  const c = await Customer.findById(id).select("customerName status paymentTerms").session(session).lean();
   if (!c || c.status === "Inactive") throw fail("That customer is not available", 404, "CUSTOMER_NOT_FOUND");
   return c;
 }
 
 /**
- * Take money against a customer on this trip: one receipt voucher, into the van's own cash account (cash) or the
- * cheque register (cheque). Joins the caller's transaction. Allocated to the invoices named, else oldest first;
+ * The organisation's "only the customers on the route" rule. A van that may sell to anyone, and a supervisor
+ * (`mayOverride`), are never refused, so the route is not even read for them.
+ */
+async function assertCustomerAllowed(trip, active, customerId, { mayOverride = false, session } = {}) {
+  if (active.customers !== "route" || mayOverride) return;
+  const route = trip.routeId ? await VanRoute.findById(trip.routeId).select("customers").session(session || null).lean() : null;
+  const onRoute = (route?.customers || []).some((c) => String(c.customerId) === String(customerId));
+  const bad = vanRules.checkCustomer({ rules: active, onRoute, hasRoute: Boolean(route), mayOverride });
+  if (bad) throw fail(bad.message, bad.status, bad.code);
+}
+
+const VAN_MODES = ["cash", "cheque", "card", "transfer"];
+const text = (v) => String(v ?? "").trim();
+
+/**
+ * The details the shared receipt path (PaymentModeService.resolve) needs for each way of taking money, BUILT HERE and
+ * never passed through from the request, so a phone cannot name a card machine, a cash account or any other field of
+ * its own choosing:
+ *   cash      the van's own cash account;
+ *   cheque    the account it will be deposited to, number, date and the bank it is drawn on;
+ *   card      the VAN's card machine (Van.cardId) and the approval code from its slip: a van with none takes no card;
+ *   transfer  the bank account, the customer's reference and its date.
+ * resolve keeps every field rule (REFERENCE_REQUIRED, APPROVAL_CODE_REQUIRED, DRAWN_ON_BANK_REQUIRED, BANK_ACCOUNT_REQUIRED).
+ */
+async function paymentDetailsFor(trip, mode, details = {}, session) {
+  const d = details && typeof details === "object" ? details : {};
+  if (mode === "cash") return { accountId: trip.cashAccountId };
+  if (mode === "cheque") {
+    return {
+      accountId: d.accountId || undefined, chequeNo: text(d.chequeNo), chequeDate: d.chequeDate,
+      ...(isId(d.drawnOnBankId) ? { drawnOnBankId: d.drawnOnBankId } : { drawnOnBankName: text(d.drawnOnBankName) }),
+    };
+  }
+  if (mode === "card") {
+    const van = await Van.findById(trip.vanId).select("cardId").session(session || null).lean();
+    if (!van?.cardId) throw fail("This van has no card machine. Ask a supervisor to set one on the van, or take another way of payment.", 409, "VAN_NO_CARD_MACHINE");
+    return { cardId: van.cardId, approvalCode: text(d.approvalCode) };
+  }
+  return { accountId: d.accountId || undefined, reference: text(d.reference), referenceDate: d.referenceDate || undefined };
+}
+
+/**
+ * Take money against a customer on this trip: one receipt voucher - into the van's own cash account (cash), the cheque
+ * register (cheque), the van's card machine's bank account less its fee (card), or the bank (transfer). A TRANSFER is
+ * saved waiting for the office to see it in the bank: nobody can count it at the van, so it posts nothing and settles no
+ * invoice until it is approved. Joins the caller's transaction. Allocated to the invoices named, else oldest first;
  * whatever is left stays on account.
  */
 async function takeMoney(trip, { customerId, amount, mode = "cash", details = {}, invoiceIds, date, narration }, by, { req, session }) {
   const total = round2(amount);
   if (!(total > 0)) throw fail("Enter the amount received", 400, "AMOUNT_REQUIRED");
-  if (!["cash", "cheque"].includes(mode)) throw fail("On the road, money is taken in cash or by cheque", 400, "VAN_MODE_NOT_SUPPORTED");
+  if (!VAN_MODES.includes(mode)) throw fail("On the road, money is taken in cash, by cheque, by card or by bank transfer", 400, "VAN_MODE_NOT_SUPPORTED");
+  const notAllowed = vanRules.checkMode(await VanSettingsService.forTrip(trip, { session }), mode);
+  if (notAllowed) throw fail(notAllowed.message, notAllowed.status, notAllowed.code, notAllowed.details);
   const customer = await customerOf(customerId, session);
 
   const open = (await AgeingService.openInvoices({ type: "receivable", partyId: customerId, session }))
@@ -65,7 +115,7 @@ async function takeMoney(trip, { customerId, amount, mode = "cash", details = {}
   const wanted = Array.isArray(invoiceIds) && invoiceIds.length ? new Set(invoiceIds.map(String)) : null;
   const { allocations } = proposals.allocateOldestFirst(wanted ? open.filter((i) => wanted.has(i.id)) : open, total);
 
-  const paymentDetails = mode === "cash" ? { accountId: trip.cashAccountId } : { ...details };
+  const paymentDetails = await paymentDetailsFor(trip, mode, details, session);
   const voucher = await FinancialService.createVoucher(
     {
       voucherType: "receipt", customerId, customerName: customer.customerName, date: orgDay(date), totalAmount: total,
@@ -73,11 +123,95 @@ async function takeMoney(trip, { customerId, amount, mode = "cash", details = {}
       linkedInvoices: allocations.map((a) => ({ invoiceId: a.invoiceId, amount: a.amount, balance: a.balance })),
       narration: narration || `Van ${trip.vanCode} ${trip.tripNo}`,
     },
-    by, session, { req }
+    by, session, { req, ...(mode === "transfer" ? { holdFor: "van_transfer" } : {}) }
   );
   // the link to the trip is written after the voucher exists: a voucher body cannot carry it in
   await Voucher.updateOne({ _id: voucher._id }, { $set: { vanTripRef: { tripId: trip._id, tripNo: trip.tripNo } } }, { session });
   return Voucher.findById(voucher._id).session(session); // as stored now, with the trip link on it
+}
+
+/**
+ * Why the goods came back, in the organisation's own wording, and an optional note. The screen asks every time; the
+ * server insists only where no invoice stands behind the return (an older caller returning against an invoice, or a
+ * phone syncing one, is not refused for not knowing about reasons).
+ */
+function reasonOf(active, input, { required }) {
+  const given = input?.reason;
+  if (given !== undefined && given !== null && given !== "" && typeof given !== "string") throw fail("Choose why the goods came back", 400, "RETURN_REASON_REQUIRED");
+  const note = typeof input?.note === "string" ? input.note.trim().slice(0, 300) : "";
+  if (!given) {
+    if (required) throw fail("Choose why the goods came back", 400, "RETURN_REASON_REQUIRED");
+    return { reason: null, note };
+  }
+  const reason = vanRules.matchReason(active, given);
+  if (!reason) throw fail(`"${String(given).slice(0, 40)}" is not one of this business's reasons for a return`, 400, "RETURN_REASON_UNKNOWN", { reasons: active.returnReasons });
+  return { reason, note };
+}
+
+/** Goods taken back with no invoice named: the organisation's switch, or a supervisor. */
+function assertMayReturnLoose(active, opts) {
+  if (active.returnsWithoutInvoice || opts.mayUnderprice) return;
+  throw fail("Choose the invoice the goods are returned against. Taking goods back without one needs a supervisor.", 403, "VAN_RETURN_LINK_REQUIRED");
+}
+
+/**
+ * The lines of a return with no invoice: goods only, each once, priced at what THIS customer pays today (their price
+ * list, else the route's, else the item's own price) - not what is on the van, since what comes back may never have
+ * been on it. The price is locked; a supervisor may type another. -> { items, record }
+ */
+async function looseLines(trip, customer, wanted, date, opts, session = null) {
+  const ids = wanted.map((w) => w?.stockId);
+  if (ids.some((i) => !isId(i))) throw fail("An item being returned is not valid", 400, "ITEM_INVALID");
+  if (new Set(ids.map(String)).size !== ids.length) throw fail("Each item is listed once; add up its quantity on one line", 400, "ITEM_REPEATED");
+  const stocks = await Stock.find({ _id: { $in: ids } }).select("itemId itemName itemType salesPrice status").session(session).lean();
+  const byId = new Map(stocks.map((s) => [String(s._id), s]));
+  const listed = await PriceListService.pricesFor({
+    customerId: customer._id, routeId: trip.routeId, date, session,
+    items: wanted.map((w) => ({ stockId: w.stockId, qty: Number(w.qty) || 1, itemPrice: Number(byId.get(String(w.stockId))?.salesPrice) || 0 })),
+  });
+  const items = [];
+  const record = [];
+  for (const [i, w] of wanted.entries()) {
+    const s = byId.get(String(w.stockId));
+    if (!s || s.status === "Inactive") throw fail(`Line ${i + 1}: that item does not exist`, 404, "ITEM_NOT_FOUND");
+    if (kinds.isService(s)) throw fail(`${s.itemName} is a service. Only stocked goods come back to a van.`, 400, "VAN_GOODS_ONLY");
+    const qty = typeof w.qty === "number" || typeof w.qty === "string" ? Number(w.qty) : NaN;
+    if (!(qty > 0)) throw fail(`Line ${i + 1}: enter a quantity above zero`, 400, "QTY_INVALID");
+    const list = Number(listed.get(String(s._id))?.price) || 0;
+    const typed = w.price !== undefined && w.price !== null && w.price !== "";
+    if (typed && !opts.mayUnderprice) throw fail(`${s.itemName} comes back at ${list.toFixed(2)}, this customer's price. Only a supervisor can change it.`, 403, "PRICE_LOCKED", { stockId: String(s._id), listPrice: list });
+    const price = typed ? Number(w.price) : list;
+    if (!(price >= 0) || !Number.isFinite(price)) throw fail(`Line ${i + 1}: enter a price of zero or more`, 400, "PRICE_INVALID");
+    if (!typed && !(price > 0)) throw fail(`${s.itemName} has no price for this customer, so it cannot be credited. A supervisor can enter one.`, 400, "RETURN_NO_PRICE", { stockId: String(s._id) });
+    items.push({ itemId: s._id, itemCode: s.itemId, description: s.itemName, qty, price, discountPercent: 0 });
+    record.push({ stockId: s._id, qty, condition: w.condition === "damaged" ? "damaged" : "good" });
+  }
+  return { items, record };
+}
+
+/**
+ * The containers of a sale (services/vansales/vanContainerService.js): what the salesman counted, else what the goods
+ * sold take; written with the invoice, the deposit as its own note (a refund set against the invoice where it fits).
+ * Nothing at all where the organisation has no container types and none were sent.
+ */
+async function containersOfSale({ trip, customer, input, items, approved, by, opts, session }) {
+  const VanContainerService = require("./vanContainerService");
+  const crates = require("../../utils/vanContainers");
+  const none = { deposit: 0, voucher: null, summary: [] };
+  const sent = input?.containers !== undefined && input?.containers !== null;
+  const types = await VanContainerService.types({ session });
+  if (!types.length && !sent) return none;
+  let moves;
+  try {
+    moves = sent ? crates.cleanMoves(input.containers) : [...crates.givenFor(items.map((l) => ({ stockId: l.itemId, qty: l.qty })), types)].map(([typeId, given]) => ({ typeId, given, collected: 0 }));
+  } catch (err) {
+    if (err instanceof crates.ContainerError) throw fail(err.message, 400, err.code, err.details);
+    throw err;
+  }
+  if (!moves.length) return none;
+  const r = await VanContainerService.record({ trip, customerId: customer._id, moves, kind: "sale", transactionId: approved._id, transactionNo: approved.transactionNo, settleInvoiceId: approved._id, by, byName: opts.byName, mayOverride: opts.mayUnderprice, session });
+  const names = new Map(types.map((t) => [t.id, t.name]));
+  return { deposit: r.deposit, voucher: r.voucher, summary: moves.map((m) => ({ ...m, name: names.get(m.typeId) || "" })) };
 }
 
 class VanTripSales {
@@ -92,6 +226,12 @@ class VanTripSales {
     const trip = await loadTrip(id, session);
     assertSelling(trip);
     const customer = await customerOf(input?.customerId, session);
+    const active = await VanSettingsService.forTrip(trip, { session }); // this van's rules, read live
+    await assertCustomerAllowed(trip, active, customer._id, { mayOverride: opts.mayUnderprice, session });
+    // what must be taken at the door is known before anything is priced; the amount is checked again once it is
+    const cashCustomer = vanRules.isCashTerms(customer.paymentTerms);
+    const unpaid = vanRules.checkPayment({ rules: active, payNow: input?.payNow, cashCustomer });
+    if (unpaid) throw fail(unpaid.message, unpaid.status, unpaid.code, unpaid.details);
     const lines = Array.isArray(input?.items) ? input.items : [];
     if (!lines.length) throw fail("Add at least one item to sell", 400, "ITEMS_REQUIRED");
 
@@ -113,14 +253,16 @@ class VanTripSales {
       const typed = l.price !== undefined && l.price !== "" && l.price !== null;
       const price = typed ? Number(l.price) : list.price;
       if (!(price >= 0)) throw fail(`Line ${i + 1}: enter a price of zero or more`, 400, "PRICE_INVALID");
-      // selling under the customer's list is a discount the business has not agreed: only someone who manages the vans may
-      if (typed && price + 0.005 < list.price && !opts.mayUnderprice) {
-        throw fail(`${s.itemName} is ${list.price.toFixed(2)} for this customer${list.listName ? ` (${list.listName})` : ""}. Selling it for less needs a supervisor.`, 403, "PRICE_BELOW_LIST", { stockId: String(s._id), listPrice: list.price });
-      }
+      // selling under the customer's list, or with a discount of his own, is a concession the business has not agreed:
+      // the organisation's price rules say how far a salesman may go, and a supervisor (manage) is never held to them
+      const typedDiscount = Number(l.discountPercent) || 0;
+      if (typedDiscount < 0 || typedDiscount > 100) throw fail(`Line ${i + 1}: a discount is between 0 and 100 percent`, 400, "DISCOUNT_INVALID");
+      const held = vanRules.checkLine({ name: s.itemName, price, list: list.price, typedPrice: typed, discountPercent: typedDiscount, listName: list.listName, rules: active, mayOverride: opts.mayUnderprice });
+      if (held) throw fail(held.message, held.status, held.code, { stockId: String(s._id), ...(held.details || {}) });
       return {
         itemId: s._id, itemCode: s.itemId, description: s.itemName, qty,
         price,
-        discountPercent: Number(l.discountPercent) || 0,
+        discountPercent: typedDiscount,
         taxCodeId: l.taxCodeId || undefined,
         vatPercent: l.vatPercent,
       };
@@ -185,11 +327,19 @@ class VanTripSales {
       throw fail("This invoice needs a second approval before it can be completed, so it cannot be sold from the van", 409, "VAN_SALE_NEEDS_APPROVAL");
     }
 
+    // containers that went out with the goods and came back empty, and the deposit they are worth (its own note): only
+    // where the organisation set containers up. With no count sent, what the goods sold take is given and nothing collected.
+    const containers = await containersOfSale({ trip, customer, input, items, approved, by, opts, session });
+    // what is owed now: the invoice (less a deposit refund already set against it) and a deposit charged
+    const owed = round2((await Transaction.findById(approved._id).select("outstandingAmount").session(session).lean()).outstandingAmount + Math.max(0, containers.deposit));
+
     let receipt = null;
     const pay = input.payNow;
     if (pay && (pay.full === true || Number(pay.amount) > 0)) {
-      const amount = pay.full === true ? round2(approved.totalAmount) : round2(pay.amount);
-      if (amount > round2(approved.totalAmount) + 0.005) throw fail("The money taken is more than the invoice. Take the rest as a separate receipt.", 400, "PAYMENT_EXCEEDS_INVOICE");
+      const amount = pay.full === true ? owed : round2(pay.amount);
+      if (amount > owed + 0.005) throw fail("The money taken is more than the invoice. Take the rest as a separate receipt.", 400, "PAYMENT_EXCEEDS_INVOICE");
+      const short = vanRules.checkPayment({ rules: active, payNow: pay, cashCustomer, total: owed });
+      if (short) throw fail(short.message, short.status, short.code, short.details);
       receipt = await takeMoney(trip, { customerId: customer._id, amount, mode: pay.mode || "cash", details: pay.details, invoiceIds: [String(approved._id)], date: day }, by, { req: opts.req, session });
     }
     await require("./vanFleetService").ping(trip, { kind: "sale", customerId: customer._id, ref: approved.transactionNo, location: input.location }, { session });
@@ -199,7 +349,7 @@ class VanTripSales {
       preorder.closeReason = `Delivered by van ${trip.vanCode} on ${trip.tripNo} (${approved.transactionNo})`;
       await preorder.save({ session });
     }
-    return { invoice: approved, receipt, promotions: promo.applied, preorder: preorder ? preorder.orderNo : null };
+    return { invoice: approved, receipt, promotions: promo.applied, preorder: preorder ? preorder.orderNo : null, containers: containers.summary, deposit: containers.deposit, depositNote: containers.voucher ? containers.voucher.voucherNo : null };
   });
 
   /** Take money from a customer (cash or a cheque): against named invoices, else the oldest first. */
@@ -214,50 +364,104 @@ class VanTripSales {
   });
 
   /**
-   * Take goods back from a customer against one of their approved invoices. Each line says whether it came back
-   * sellable (it goes back on the van) or damaged (it does not). The return is approved at once, like a sale.
+   * Take goods back from a customer. Against one of their approved invoices (the invoice's prices), or - where the
+   * organisation allows it, or for a supervisor - with no invoice at all, at the customer's own list price and up to the
+   * organisation's limit. Each line says whether it came back sellable (it goes back on the van) or damaged (it does
+   * not). The return is approved at once, like a sale, and carries the reason it came back.
    */
   static returnGoods = withTransactionSession(async (id, input, by, ...rest) => {
     const session = rest[rest.length - 1];
     const opts = rest.length > 1 ? rest[0] || {} : {};
     const trip = await loadTrip(id, session);
     assertSelling(trip);
+    const active = await VanSettingsService.forTrip(trip, { session });
+    if (!active.returnsAllowed) throw fail("This business does not take goods back on the van. Bring them to the depot.", 403, "VAN_RETURNS_OFF");
     const customer = await customerOf(input?.customerId, session);
-    if (!isId(input?.returnOfId)) throw fail("Choose the invoice the goods are returned against", 400, "RETURN_LINK_REQUIRED");
-    const original = await Transaction.findById(input.returnOfId).session(session);
-    if (!original || original.type !== "sales_order") throw fail("That invoice does not exist", 404, "ORIGINAL_NOT_FOUND");
-    const wanted = Array.isArray(input.lines) ? input.lines : [];
-    if (!wanted.length) throw fail("Add at least one item being returned", 400, "ITEMS_REQUIRED");
+    await assertCustomerAllowed(trip, active, customer._id, { mayOverride: opts.mayUnderprice, session });
+    const withoutInvoice = input?.returnOfId === undefined || input?.returnOfId === null || input?.returnOfId === "";
+    if (withoutInvoice) assertMayReturnLoose(active, opts);
+    const { reason, note } = reasonOf(active, input, { required: withoutInvoice });
+    const wanted = Array.isArray(input?.lines) ? input.lines : [];
 
-    const items = [];
-    const record = [];
-    for (const [i, w] of wanted.entries()) {
-      const qty = Number(w.qty);
-      if (!(qty > 0)) throw fail(`Line ${i + 1}: enter a quantity above zero`, 400, "QTY_INVALID");
-      const line = original.items.find((l) => String(l._id) === String(w.lineId)) || original.items.find((l) => String(l.itemId) === String(w.itemId));
-      if (!line) throw fail(`Line ${i + 1} is not on ${original.transactionNo}`, 400, "LINE_NOT_IN_ORIGINAL");
-      if (kinds.isService(line)) throw fail("A service cannot be returned to a van", 400, "VAN_GOODS_ONLY");
-      const condition = w.condition === "damaged" ? "damaged" : "good";
-      items.push({ ...S.toPricingInput(line, qty, line.qty), returnOfLineId: line._id });
-      record.push({ stockId: line.itemId, qty, condition });
+    let original = null;
+    let items = [];
+    let record = [];
+    if (withoutInvoice) {
+      if (!wanted.length) throw fail("Add at least one item being returned", 400, "ITEMS_REQUIRED");
+      ({ items, record } = await looseLines(trip, customer, wanted, input.date, opts, session));
+    } else {
+      if (!isId(input.returnOfId)) throw fail("That invoice does not exist", 404, "ORIGINAL_NOT_FOUND");
+      original = await Transaction.findById(input.returnOfId).session(session);
+      if (!original || original.type !== "sales_order") throw fail("That invoice does not exist", 404, "ORIGINAL_NOT_FOUND");
+      if (!wanted.length) throw fail("Add at least one item being returned", 400, "ITEMS_REQUIRED");
+      for (const [i, w] of wanted.entries()) {
+        const qty = Number(w?.qty);
+        if (!(qty > 0)) throw fail(`Line ${i + 1}: enter a quantity above zero`, 400, "QTY_INVALID");
+        const line = original.items.find((l) => String(l._id) === String(w.lineId)) || original.items.find((l) => String(l.itemId) === String(w.itemId));
+        if (!line) throw fail(`Line ${i + 1} is not on ${original.transactionNo}`, 400, "LINE_NOT_IN_ORIGINAL");
+        if (kinds.isService(line)) throw fail("A service cannot be returned to a van", 400, "VAN_GOODS_ONLY");
+        items.push({ ...S.toPricingInput(line, qty, line.qty), returnOfLineId: line._id });
+        record.push({ stockId: line.itemId, qty, condition: w.condition === "damaged" ? "damaged" : "good" });
+      }
     }
+
     const day = orgDay(input.date);
+    const said = [reason, note].filter(Boolean).join(". ");
     const ret = await TransactionService.createTransaction(
       {
         type: "sales_return", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", date: day, items,
-        returnOf: { transactionId: original._id }, status: "DRAFT", vanTripRef: refOf(trip),
-        notes: input.notes ? String(input.notes).slice(0, 500) : `Van ${trip.vanCode} ${trip.tripNo}`,
+        ...(original ? { returnOf: { transactionId: original._id } } : {}), status: "DRAFT", vanTripRef: refOf(trip),
+        notes: input.notes ? String(input.notes).slice(0, 500) : `Returned on van ${trip.vanCode} ${trip.tripNo}${said ? `: ${said}` : ""}`,
       },
       by, session
     );
+    // a return with no invoice behind it is a credit nobody has checked: past the organisation's limit it is a
+    // supervisor's. Judged on the priced total (tax included); refusing here rolls the draft back with everything else.
+    if (withoutInvoice && !opts.mayUnderprice && round2(ret.totalAmount) > Number(active.maxReturnWithoutInvoice) + 0.005) {
+      throw fail(`This return comes to ${round2(ret.totalAmount).toFixed(2)}. Without an invoice a salesman may take back up to ${Number(active.maxReturnWithoutInvoice).toFixed(2)}; a supervisor must do this one.`, 403, "VAN_RETURN_OVER_LIMIT", { amount: round2(ret.totalAmount), limit: Number(active.maxReturnWithoutInvoice) });
+    }
     await TransactionService.processTransaction(ret._id, "approve", by, { req: opts.req }, session);
     const approved = await Transaction.findById(ret._id).session(session);
     if (approved.status !== "APPROVED") throw fail("This return needs a second approval, so it cannot be taken on the van", 409, "VAN_SALE_NEEDS_APPROVAL");
-    trip.returns.push({ transactionId: approved._id, no: approved.transactionNo, at: new Date(), lines: record });
+    trip.returns.push({
+      transactionId: approved._id, no: approved.transactionNo, at: new Date(), lines: record,
+      ...(reason ? { reason } : {}), ...(note ? { note } : {}), withoutInvoice, amount: round2(approved.totalAmount),
+    });
     trip.updatedBy = String(by);
     await trip.save({ session });
     return { creditNote: approved };
   });
+
+  /**
+   * What goods taken back with no invoice would be credited at, before anything is saved: the same lines and the same
+   * pricing as the return itself, so the screen cannot promise a figure the return then differs from.
+   */
+  static async returnQuote(id, input, opts = {}) {
+    const trip = await loadTrip(id);
+    assertSelling(trip);
+    const active = await VanSettingsService.forTrip(trip);
+    if (!active.returnsAllowed) throw fail("This business does not take goods back on the van. Bring them to the depot.", 403, "VAN_RETURNS_OFF");
+    assertMayReturnLoose(active, opts);
+    const customer = await customerOf(input?.customerId);
+    await assertCustomerAllowed(trip, active, customer._id, { mayOverride: opts.mayUnderprice });
+    const wanted = Array.isArray(input?.lines) ? input.lines : [];
+    if (!wanted.length) throw fail("Add at least one item being returned", 400, "ITEMS_REQUIRED");
+    const day = orgDay(input.date);
+    const { items } = await looseLines(trip, customer, wanted, day, opts);
+    const priced = await TransactionService.buildPricing({ items, date: day, side: "sales" });
+    const total = round2(priced.totalAmount);
+    const limit = Number(active.maxReturnWithoutInvoice);
+    return {
+      lines: priced.processedItems.map((l) => ({ stockId: String(l.itemId), description: l.description, qty: l.qty, price: l.price, vatAmount: round2(l.vatAmount), lineTotal: round2(l.lineTotal) })),
+      total, limit, overLimit: !opts.mayUnderprice && total > limit + 0.005,
+    };
+  }
+
+  /** The route rule for a door that does not sell itself (a pre-order): refuses a customer this van may not serve. */
+  static async assertCustomerAllowed(tripId, customerId, { mayOverride = false } = {}) {
+    const trip = await loadTrip(tripId);
+    await assertCustomerAllowed(trip, await VanSettingsService.forTrip(trip), customerId, { mayOverride });
+  }
 
   /** What each item on the van costs THIS customer (their price list, else the route's, else the item's own price). */
   static async prices(tripId, customerId) {
@@ -315,7 +519,7 @@ class VanTripSales {
     const shown = await VanTripService.present(trip);
     const route = trip.routeId ? await require("../../models/modules/vansales/vanRouteModel").findById(trip.routeId).lean() : null;
     const ids = [...new Set([...(route?.customers || []).map((c) => String(c.customerId)), ...extraCustomerIds.map(String)])].filter(isId).slice(0, 300);
-    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status").lean();
+    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status paymentTerms").lean();
     const stock = await stockOf(trip);
     const items = await Stock.find({ _id: { $in: [...stock.sellable.keys()] } }).select("salesPrice category").lean();
     const prices = {};
@@ -331,7 +535,7 @@ class VanTripSales {
     return {
       at: new Date().toISOString(),
       trip: shown,
-      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "" })),
+      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "", terms: c.paymentTerms || "" })),
       prices,
       insight,
       freeNumbers: (trip.numberBlock || []).filter((n) => !used.has(n)),
@@ -347,7 +551,9 @@ class VanTripSales {
       .filter((r) => String(r.partyId) === String(customerId))
       .map((r) => ({ id: String(r.transactionId), number: r.transactionNo, outstanding: r.outstanding, date: r.date }));
     const owed = round2(open.reduce((t, r) => t + Number(r.outstanding || 0), 0));
-    return { owed, open };
+    // the containers they hold (crates, bottles), only where the organisation has container types
+    const containers = (await require("./vanContainerService").balances(customerId)).filter((c) => c.holds !== 0);
+    return { owed, open, containers };
   }
 
   /** The lines of an invoice that can still be returned (feeds the return form). */

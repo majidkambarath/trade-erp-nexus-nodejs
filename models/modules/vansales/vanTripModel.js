@@ -22,10 +22,46 @@ const loadSchema = new mongoose.Schema(
     no: { type: Number, required: true }, // 1 = the first load, 2.. = top-ups
     kind: { type: String, enum: ["load", "transfer_in", "transfer_out"], default: "load" },
     peerTripNo: String, // the other van's trip, on a transfer
+    requestNo: Number, // the load request this load was accepted from (absent on a direct load)
     at: { type: Date, default: Date.now },
     by: String,
     byName: String,
     lines: [loadLine],
+  },
+  { _id: false }
+);
+
+// A load the salesman ASKED for (CompanySettings.vanSales.loadRequests). It is not a load: nothing here is on the van
+// until the salesman accepts it, which pushes an ordinary loads[] entry at the quantities he accepted. While it is
+// LOADED (on the van, not yet accepted) its `loaded` quantities reserve depot stock but cannot be sold.
+const loadRequestSchema = new mongoose.Schema(
+  {
+    no: { type: Number, required: true },
+    status: { type: String, enum: ["REQUESTED", "LOADED", "ACCEPTED", "REJECTED", "CANCELLED"], default: "REQUESTED" },
+    note: String,
+    requestedAt: { type: Date, default: Date.now },
+    requestedBy: String,
+    requestedByName: String,
+    loadedAt: Date,
+    loadedBy: String,
+    loadedByName: String,
+    acceptedAt: Date,
+    acceptedBy: String,
+    acceptedByName: String,
+    closedAt: Date, // rejected or cancelled
+    closedByName: String,
+    reason: String, // why it was refused, or why less arrived than was loaded
+    loadNo: Number, // the loads[] entry its acceptance made
+    lines: [
+      {
+        stockId: { type: mongoose.Schema.Types.ObjectId, ref: "Stock", required: true },
+        itemName: String,
+        requested: { type: Number, default: 0, min: 0 },
+        loaded: Number,
+        accepted: Number,
+        _id: false,
+      },
+    ],
   },
   { _id: false }
 );
@@ -45,6 +81,12 @@ const returnRecord = new mongoose.Schema(
         _id: false,
       },
     ],
+    // why it came back, in the organisation's wording at the time; whether an invoice stood behind it; what it credited.
+    // No defaults: a return recorded before these existed reads exactly as it did.
+    reason: String,
+    note: String,
+    withoutInvoice: Boolean,
+    amount: Number,
   },
   { _id: false }
 );
@@ -66,6 +108,8 @@ const unloadSchema = new mongoose.Schema(
         _id: false,
       },
     ],
+    // returnable containers counted on the van (crates, bottles): what should be there and what was (no default)
+    containers: [{ typeId: { type: mongoose.Schema.Types.ObjectId, ref: "ContainerType" }, name: String, expected: Number, counted: Number, difference: Number, _id: false }],
   },
   { _id: false }
 );
@@ -80,8 +124,16 @@ const settlementSchema = new mongoose.Schema(
     cashVariance: Number,
     expenses: Number, // paid from the van's cash on the road (fuel, tolls), taken off the cash expected
     cheques: [{ chequeNo: String, amount: Number, handed: Boolean, _id: false }],
+    // taken by card (to the machine's bank account) and by bank transfer: not cash, so not in the journal; a transfer may still
+    // be waiting for the office to see it in the bank when the trip is settled (no default: absent on earlier trips)
+    cardTotal: Number,
+    transferTotal: Number,
+    transfersWaiting: Number,
     stockVarianceValue: Number, // units short (negative) or over (positive), at average cost
     damagedValue: Number, // what the damaged goods were worth, written off
+    // containers missing from the van at count-in, and the deposit they were worth (charged to the salesman's shortage)
+    containersMissing: Number,
+    containersMissingValue: Number,
     acknowledged: [String],
     voucherIds: [{ type: mongoose.Schema.Types.ObjectId }],
     notes: { type: String, trim: true, maxlength: 500 },
@@ -104,6 +156,7 @@ const vanTripSchema = new mongoose.Schema(
     status: { type: String, enum: ["LOADING", "ON_ROUTE", "UNLOADED", "SETTLED", "CANCELLED"], default: "LOADING" },
 
     loads: [loadSchema],
+    loadRequests: [loadRequestSchema],
     // invoice numbers reserved when the van went out, for sales made with no signal (phase 3). Which are used is
     // derived from the invoices; the rest are retired with a reason when the van is counted in.
     numberBlock: [{ type: String, trim: true }],
