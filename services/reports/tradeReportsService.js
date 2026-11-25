@@ -10,6 +10,7 @@ const AgeingService = require("../financial/ageingService");
 const orgLocale = require("../../utils/orgLocale");
 const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
+const { IS_CORRECTION, CORRECTIONS } = require("../../utils/reissue");
 
 // Trade reports: who bought what and from whom, and what each customer or vendor owes or is owed.
 //
@@ -84,7 +85,7 @@ class TradeReportsService {
       {
         $group: {
           _id: {
-            party: "$partyId", item: "$items.itemId", type: "$type",
+            party: "$partyId", item: "$items.itemId", type: "$type", correction: IS_CORRECTION,
             month: { $dateToString: { format: "%Y-%m", date: "$date", timezone: tz } },
           },
           qty: { $sum: { $ifNull: ["$items.qty", 0] } },
@@ -192,11 +193,13 @@ class TradeReportsService {
         });
       }
       const b = buckets.get(key);
-      const isReturn = g._id.type === returnType;
-      const sign = isReturn ? -1 : 1;
+      // a re-issue credit is a correction: less sold, not goods returned (utils/reissue.js)
+      const correction = g._id.correction === true;
+      const isReturn = g._id.type === returnType && !correction;
+      const sign = g._id.type === returnType ? -1 : 1;
       const net = (g.total || 0) - (g.vat || 0);
-      b[isReturn ? "back" : "out"] += g.qty;
-      b[isReturn ? "backNet" : "outNet"] += net;
+      b[isReturn ? "back" : "out"] += correction ? -g.qty : g.qty;
+      b[isReturn ? "backNet" : "outNet"] += correction ? -net : net;
       b.vat += sign * (g.vat || 0);
       b.total += sign * (g.total || 0);
       g.docs.forEach((d) => b.docs.add(String(d)));
@@ -289,7 +292,7 @@ class TradeReportsService {
           date: 1, transactionNo: 1, type: 1, partyId: 1, lpono: 1, vendorReference: 1,
           itemId: "$items.itemId", description: "$items.description", qty: "$items.qty", price: { $ifNull: ["$items.price", "$items.rate"] },
           discount: { $ifNull: ["$items.discountAmount", 0] }, vat: { $ifNull: ["$items.vatAmount", 0] }, total: { $ifNull: ["$items.lineTotal", 0] },
-          vatPercent: "$items.vatPercent",
+          vatPercent: "$items.vatPercent", correction: IS_CORRECTION,
         },
       },
       { $sort: { date: -1, transactionNo: -1 } },
@@ -310,7 +313,7 @@ class TradeReportsService {
       const isReturn = r.type === kind.types[1];
       const sign = isReturn ? -1 : 1;
       return {
-        date: r.date, documentNo: r.transactionNo, kind: isReturn ? "return" : "invoice", reference: r.lpono || r.vendorReference || "",
+        date: r.date, documentNo: r.transactionNo, kind: r.correction ? "correction" : isReturn ? "return" : "invoice", reference: r.lpono || r.vendorReference || "",
         partyId: String(r.partyId), partyName: p.name, partyCode: p.code,
         itemId: String(r.itemId), itemName: i.name, itemCode: i.code, category: i.category,
         quantity: r6(sign * (Number(r.qty) || 0)), price: r5(Number(r.price) || 0),
@@ -353,12 +356,14 @@ class TradeReportsService {
     const nameOf = new Map(accounts.map((a) => [String(a._id), a.accountName.replace(rx, "")]));
     const OPENING = ["opening", "opening_stock"];
 
+    // a re-issue credit takes back an invoice, so it comes off "invoiced", not into "returns"
+    const corrections = customer ? await Transaction.find(CORRECTIONS).distinct("_id") : [];
     const sums = await LedgerEntry.aggregate([
       { $match: { accountId: { $in: accounts.map((a) => a._id) }, isReversed: { $ne: true }, date: { $lte: w.end } } },
       {
         $group: {
           _id: {
-            account: "$accountId", type: "$voucherType",
+            account: "$accountId", type: "$voucherType", correction: { $in: ["$voucherId", corrections] },
             phase: { $cond: [{ $or: [{ $lt: ["$date", w.start] }, { $in: ["$voucherType", OPENING] }] }, "before", "in"] },
           },
           debit: { $sum: "$debitAmount" }, credit: { $sum: "$creditAmount" },
@@ -380,6 +385,8 @@ class TradeReportsService {
       const natural = customer ? s.debit - s.credit : s.credit - s.debit;
       if (s._id.phase === "before") {
         r.opening += natural;
+      } else if (s._id.correction) {
+        r.invoiced += natural;
       } else if (raises.includes(s._id.type) && natural > 0) {
         r.invoiced += natural;
       } else if (returns.includes(s._id.type) && natural < 0) {

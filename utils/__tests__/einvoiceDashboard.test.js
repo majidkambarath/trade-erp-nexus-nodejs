@@ -61,7 +61,8 @@ test("stuck means sent and unanswered for more than a day", () => {
 test("todo tiles link to a filtered list; profile mismatch compares TRN by digits and name loosely", () => {
   const t = d.todoItems({ failed: 2 });
   assert.equal(t.find((x) => x.key === "failed").link, "/e-invoicing/outbound?status=FAILED");
-  assert.equal(t.length, 8);
+  assert.equal(t.length, 9);
+  assert.equal(d.todoItems({ needsReissue: 2 }).find((x) => x.key === "needsReissue").link, "/e-invoicing/outbound?status=NEEDS_REISSUE");
   assert.deepEqual(d.profileMismatches({ vatNumber: "171686550400003", legalName: "Acme LLC" }, { trn: "1716 8655 0400 003", name: "ACME, LLC" }), []);
   assert.equal(d.profileMismatches({ vatNumber: "1", legalName: "A" }, { trn: "2", name: "B" }).length, 2);
 });

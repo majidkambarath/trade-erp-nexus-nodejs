@@ -35,6 +35,12 @@ test.before(async () => {
     Customer: require("../../models/modules/customerModel"),
     TaxCode: require("../../models/modules/financial/taxCodeModel"),
     Transaction: require("../../models/modules/transactionModel"),
+    Trade: require("../reports/tradeReportsService"),
+    StockReports: require("../reports/stockReportsService"),
+    Dash: require("../reports/dashboardQueries"),
+    migrate: require("../../utils/migrations").moveReissueCreditsToRevenue,
+    LedgerAccount: require("../../models/modules/financial/financialModels").LedgerAccount,
+    today: require("../../utils/documentExpiry").todayInOrg,
   };
   await mongoose.connection.syncIndexes();
   await svc.seed({ log: () => {} });
@@ -127,6 +133,8 @@ test("credit and re-issue end to end: a mirror credit note, a correct new invoic
   // drafts only: nothing approved, nothing posted
   assert.equal(credit.status, "DRAFT");
   assert.equal(invoice.status, "DRAFT");
+  // dated the organisation's day, as a form saves one, not the clock
+  for (const d of [credit, invoice]) assert.equal(new Date(d.date).toISOString(), `${svc.today()}T00:00:00.000Z`);
   // the credit note reverses the old invoice to the fils: net 520, VAT 26.00, 10 off after the tax, 536
   assert.equal(credit.type, "sales_return");
   assert.equal(credit.pricing.net, 520);
@@ -264,4 +272,129 @@ test("only for this one problem: other invoices are refused, and Credit in full 
 
   await refused(() => svc.EI.reissue("nope", REQ), undefined);
   assert.equal(await svc.Transaction.countDocuments({ type: "sales_return" }), returnsBefore, "no refusal drafted anything");
+});
+
+// ---- the credit note of a re-issue is a correction, not a sales return (utils/reissue.js)
+const accounts = async () => {
+  const [returns, revenue] = await Promise.all(["sales-returns", "sales-revenue"].map((k) => svc.Config.resolveAccount(k)));
+  const balance = async (id) => (await svc.LedgerAccount.findById(id).select("currentBalance").lean()).currentBalance;
+  return { returns, revenue, balance };
+};
+const debitsOn = async (voucherId, accountId) => round2((await svc.Ledger.find({ voucherId, accountId }).lean()).reduce((t, r) => t + r.debitAmount - r.creditAmount, 0));
+
+test("a re-issue is not counted as a sale and a return: books, analysis and the dashboard", { skip }, async () => {
+  const buyer = await svc.Customer.create({
+    customerId: "C2", customerName: "Analysis Buyer LLC", contactPerson: "x", trnNumber: "100999888700011", billingAddress: "Deira", emirate: "Dubai", country: "AE",
+    paymentTerms: "Net 30", eInvoice: { participantId: "0235:1009998888", city: "Dubai", countryCode: "AE" },
+  });
+  const keep = customer;
+  customer = buyer;
+  let tx;
+  try { tx = await legacyInvoice(); } finally { customer = keep; }
+  const day = svc.today();
+  const figures = async () => ({
+    stats: await svc.Dash.invoiceStats(day, day),
+    totals: await svc.Dash.documentTotals("sales_order", day, day),
+    today: (await svc.Dash.dailyOrders(day, day))[0],
+  });
+  const before = await figures();
+  const r = await svc.EI.reissue(tx._id, REQ);
+  await approve(r.creditNote._id);
+  await approve(r.invoice._id);
+  const invoice = await get(r.invoice._id);
+  const net = invoice.pricing.net; // 520 less the discount's share before tax
+
+  // the books: the credit comes off Sales revenue, nothing on Sales Returns
+  const a = await accounts();
+  assert.equal(await debitsOn(r.creditNote._id, a.revenue), 520);
+  assert.equal(await debitsOn(r.creditNote._id, a.returns), 0);
+
+  // sales by item: nothing returned, and what was sold is what the new invoice sold
+  const q = { direction: "sales", from: day, to: day, partyId: String(buyer._id) };
+  const byItem = await svc.Trade.summary({ ...q, groupBy: "item" });
+  assert.equal(byItem.totals.returns, 0);
+  assert.equal(byItem.totals.net, net);
+  assert.deepEqual(byItem.rows.map((x) => x.returnedQty), [0, 0]);
+  assert.deepEqual(byItem.rows.map((x) => x.soldQty).sort(), [1, 4]);
+  const reg = await svc.Trade.register(q);
+  assert.deepEqual([...new Set(reg.rows.map((x) => x.kind))].sort(), ["correction", "invoice"]);
+  // the receivables movement: invoiced once, nothing returned
+  const move = (await svc.Trade.partyMovement({ type: "customer", from: day, to: day, search: "Analysis Buyer" })).rows[0];
+  // the fixture posted 546 before it was rewritten as a legacy invoice, so the ledger holds 546 + 536 - 536 (a real one posted 536)
+  assert.equal(move.invoiced, 546);
+  assert.equal(move.returns, 0);
+  assert.equal(move.closing, 546);
+  // the stock reports' sales analysis agrees
+  const sa = await svc.StockReports.salesAnalysis({ from: day, to: day, groupBy: "customer" });
+  const mine = sa.rows.find((x) => x.name === "Analysis Buyer LLC");
+  assert.equal(mine.returns, 0);
+  assert.equal(mine.netRevenue, net);
+  // the dashboard: still one invoice for it, at the new invoice's figures; no return that day
+  const after = await figures();
+  assert.equal(after.stats.invoices, before.stats.invoices);
+  assert.equal(after.stats.net, round2(before.stats.net - 520 + net));
+  assert.deepEqual(after.totals, before.totals);
+  assert.deepEqual(after.today, before.today);
+});
+
+test("a re-issue credit posted to Sales Returns before the rule is moved to Sales revenue once", { skip }, async () => {
+  const tx = await legacyInvoice();
+  const r = await svc.EI.reissue(tx._id, REQ);
+  await approve(r.creditNote._id);
+  assert.equal(await svc.migrate(), 0, "what the rule posts has nothing to move");
+  const a = await accounts();
+  const balances = async () => [await a.balance(a.returns), await a.balance(a.revenue)];
+  const right = await balances();
+  // put it back the way it used to be posted: the row on Sales Returns, the balances with it
+  await svc.Ledger.updateOne({ voucherId: r.creditNote._id, accountId: a.revenue }, { $set: { accountId: a.returns, accountName: "Sales Returns" } });
+  const { applyBalances } = require("../financial/ledgerBalances");
+  await applyBalances([{ accountId: a.revenue, debitAmount: 0, creditAmount: 520 }, { accountId: a.returns, debitAmount: 520, creditAmount: 0 }]);
+  assert.notDeepEqual(await balances(), right);
+
+  assert.equal(await svc.migrate(), 1);
+  assert.deepEqual(await balances(), right);
+  assert.equal(await debitsOn(r.creditNote._id, a.returns), 0);
+  assert.equal(await debitsOn(r.creditNote._id, a.revenue), 520);
+  const row = await svc.Ledger.findOne({ voucherId: r.creditNote._id, accountId: a.revenue }).lean();
+  assert.notEqual(row.accountName, "Sales Returns");
+  assert.equal(await svc.migrate(), 0);
+  assert.deepEqual(await balances(), right);
+
+  // an ordinary return stays on Sales Returns
+  const sale = await approved(lines());
+  const ret = await svc.Tx.createTransaction({ type: "sales_return", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", returnOf: { transactionId: sale._id, transactionNo: sale.transactionNo }, items: [{ ...lines()[0], qty: 1, returnOfLineId: sale.items[0]._id }] }, ADMIN);
+  await approve(ret._id);
+  assert.equal(await debitsOn(ret._id, a.returns), 100);
+  assert.equal(await svc.migrate(), 0);
+});
+
+test("the invoices that need re-issuing can be found", { skip }, async () => {
+  const list = async (extra = {}) => svc.EI.documents(undefined, { status: "NEEDS_REISSUE", limit: 100, ...extra });
+  const count = async () => (await svc.EI.dashboard(undefined, {})).todo.find((t) => t.key === "needsReissue").count;
+  const start = (await list()).length;
+  assert.equal(await count(), start);
+
+  const legacy = await legacyInvoice();
+  const bare = await legacyInvoice(); // as an invoice from before pricing was stored: only the discount
+  await svc.Transaction.updateOne({ _id: bare._id }, { $unset: { pricing: "" } });
+  const spread = await svc.Tx.createTransaction({ type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", items: lines(), discount: 10 }, ADMIN);
+  await approve(spread._id);
+
+  const found = (await list()).map((d) => d.transactionNo);
+  assert.equal(found.length, start + 2);
+  assert.ok(found.includes(legacy.transactionNo) && found.includes(bare.transactionNo));
+  assert.ok(!found.includes(spread.transactionNo), "a discount shared over the lines needs nothing");
+  assert.equal(await count(), start + 2);
+  assert.equal((await rowOf(legacy.transactionNo)).needsReissue, true);
+  assert.equal((await rowOf(spread.transactionNo)).needsReissue, false);
+  assert.equal((await list({ kind: "381" })).length, 0, "only invoices");
+
+  // sent, or credited and issued again: no longer work
+  await svc.Models.EInvoiceSubmission.create({ companyId: "default", sourceType: "Transaction", sourceId: bare._id, documentNo: bare.transactionNo, invoiceTypeCode: "380", status: "SUBMITTED", payload: {}, payloadHash: "y" });
+  const r = await svc.EI.reissue(legacy._id, REQ);
+  const left = (await list()).map((d) => d.transactionNo);
+  assert.equal(left.length, start);
+  assert.ok(!left.includes(r.creditNote.transactionNo));
+  assert.equal((await rowOf(bare.transactionNo)).needsReissue, false);
+  assert.equal(await count(), start);
 });

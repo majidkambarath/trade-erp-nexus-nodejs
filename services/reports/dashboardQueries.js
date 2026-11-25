@@ -6,6 +6,7 @@ const LedgerReports = require("./ledgerReportsService");
 const { naturalBalance, categoryOf, round2 } = require("../../utils/accounting");
 const orgLocale = require("../../utils/orgLocale");
 const { CLOSING_VOUCHER_TYPE } = require("../../utils/yearEnd");
+const { IS_CORRECTION, CORRECTIONS } = require("../../utils/reissue");
 
 // The aggregations behind the home dashboard that no report offers by month, week or hour. Each is
 // ONE pass over its collection (grouped by Dubai month / day), so a 8-month chart costs one query
@@ -185,13 +186,17 @@ async function itemSalesByMonth(months, lastDay, itemId) {
   return rows.map((r) => ({ month: r._id.month, itemId: String(r._id.item), net: sign(r._id.type) * r.net }));
 }
 
+// Sales invoices together with the re-issue credits that take one back (utils/reissue.js): such a credit counts as one invoice less.
+const SALES_INVOICES = { $or: [{ type: "sales_order" }, CORRECTIONS] };
+const asInvoiced = (value) => ({ $cond: [{ $eq: ["$type", "sales_order"] }, value, { $multiply: [value, -1] }] });
+
 // Approved sales invoices of a period: how many, their value before VAT, and their total with VAT.
 async function invoiceStats(from, to) {
   const [row] = await Transaction.aggregate([
-    { $match: { type: "sales_order", status: { $in: APPROVED }, isOpening: { $ne: true }, date: range(from, to) } },
+    { $match: { ...SALES_INVOICES, status: { $in: APPROVED }, isOpening: { $ne: true }, date: range(from, to) } },
     { $unwind: "$items" },
-    { $group: { _id: "$_id", net: { $sum: LINE_NET }, total: { $first: "$totalAmount" } } },
-    { $group: { _id: null, invoices: { $sum: 1 }, net: { $sum: "$net" }, total: { $sum: "$total" } } },
+    { $group: { _id: "$_id", type: { $first: "$type" }, net: { $sum: LINE_NET }, total: { $first: "$totalAmount" } } },
+    { $group: { _id: null, invoices: { $sum: asInvoiced(1) }, net: { $sum: asInvoiced("$net") }, total: { $sum: asInvoiced("$total") } } },
   ]);
   return { invoices: row?.invoices || 0, net: round2(row?.net || 0), total: round2(row?.total || 0) };
 }
@@ -199,9 +204,10 @@ async function invoiceStats(from, to) {
 // Approved documents of one type in a period, with VAT: how many and what they come to (what is actually owed on them).
 // Opening balances are left out, as in invoiceStats.
 async function documentTotals(type, from, to) {
+  const sales = type === "sales_order";
   const [row] = await Transaction.aggregate([
-    { $match: { type, status: { $in: APPROVED }, isOpening: { $ne: true }, date: range(from, to) } },
-    { $group: { _id: null, documents: { $sum: 1 }, total: { $sum: "$totalAmount" } } },
+    { $match: { ...(sales ? SALES_INVOICES : { type }), status: { $in: APPROVED }, isOpening: { $ne: true }, date: range(from, to) } },
+    { $group: { _id: null, documents: { $sum: sales ? asInvoiced(1) : 1 }, total: { $sum: sales ? asInvoiced("$totalAmount") : "$totalAmount" } } },
   ]);
   return { documents: row?.documents || 0, total: round2(row?.total || 0) };
 }
@@ -243,11 +249,13 @@ async function drafts(type) {
 async function dailyOrders(from, to) {
   const rows = await Transaction.aggregate([
     { $match: { type: { $in: ["sales_order", "sales_return"] }, status: { $in: APPROVED }, isOpening: { $ne: true }, date: range(from, to) } },
-    { $group: { _id: { day: dayKey("$date"), type: "$type" }, n: { $sum: 1 } } },
+    { $group: { _id: { day: dayKey("$date"), type: "$type", correction: IS_CORRECTION }, n: { $sum: 1 } } },
   ]);
-  const by = new Map(rows.map((r) => [`${r._id.day}|${r._id.type}`, r.n]));
+  const by = new Map(rows.map((r) => [`${r._id.day}|${r._id.correction ? "correction" : r._id.type}`, r.n]));
   const days = Array.from({ length: daysBetween(from, to) + 1 }, (_, i) => addDays(from, i));
-  return days.map((date) => ({ date, orders: by.get(`${date}|sales_order`) || 0, returns: by.get(`${date}|sales_return`) || 0 }));
+  const of = (date, kind) => by.get(`${date}|${kind}`) || 0;
+  // a re-issue credit is not a return: it takes one invoice off the day it was issued again
+  return days.map((date) => ({ date, orders: of(date, "sales_order") - of(date, "correction"), returns: of(date, "sales_return") }));
 }
 
 // Where a period's sales orders stand: created, approved, paid in part or in full, paid in full.
