@@ -174,6 +174,10 @@ const LABELS = {
 const label = (k) => LABELS[k] || k;
 const blank = (v) => v === undefined || v === null || v === "" || v === "-" || (typeof v === "number" && Number.isNaN(v)) || (Array.isArray(v) && v.length === 0);
 
+// The discount an invoice took off its total AFTER the tax, the way documents were priced before 18 Nov 2026 (utils/headerDiscount.js). 0 for one
+// priced since (its discount is shared over its lines and pricing.headerDiscount is 0) and for one with no discount at all.
+const legacyHeaderDiscount = (tx) => Math.max(0, Number(tx?.pricing?.headerDiscount ?? tx?.discount ?? 0) || 0);
+
 // -> [{ field, message }]  (empty = ready to send). Messages are the ones users see.
 function validatePayload(p, { headerDiscount = 0 } = {}) {
   const issues = [];
@@ -191,7 +195,14 @@ function validatePayload(p, { headerDiscount = 0 } = {}) {
     add("customerParticipantId", "Customer Participant ID must look like 0235:100123456700003");
   }
   if (Number(headerDiscount) > 0) {
-    add("headerDiscount", "A header discount cannot be sent on an e-invoice; use line discounts");
+    // An invoice priced before 18 Nov 2026 took its whole-invoice discount off the total AFTER the tax. An e-invoice has nowhere to put that (a
+    // document-level allowance carries a VAT category, so it would change the tax and the total from what the books say), and an approved
+    // invoice cannot be edited: the way out is a credit note and a new invoice that shares the discount over its lines (EInvoiceService.reissue).
+    const amount = Math.round(Number(headerDiscount) * 100) / 100;
+    issues.push({
+      field: "headerDiscount", amount, action: "reissue",
+      message: `This invoice took ${amount.toFixed(2)} off its total after VAT, the way invoices were priced before 18 Nov 2026. An e-invoice cannot carry that. Use Credit and re-issue: it drafts a credit note for this invoice and a new invoice that shares the discount over its lines.`,
+    });
   }
 
   (p.lines || []).forEach((l, i) => {
@@ -251,5 +262,5 @@ const canTransition = (from, to) => (TRANSITIONS[from] || []).includes(to);
 module.exports = {
   TRN_RE, PARTICIPANT_RE, CATEGORY_BY_KIND, STATUSES, TRANSITIONS,
   taxCategoryFor, dubaiDate, isUae, buyerRequiresDetails, partyReadiness,
-  buildPayload, validatePayload, payloadHash, canTransition,
+  buildPayload, validatePayload, payloadHash, canTransition, legacyHeaderDiscount,
 };

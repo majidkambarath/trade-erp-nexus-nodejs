@@ -186,7 +186,7 @@ class EInvoiceService {
     const payload = ei.buildPayload({
       transaction: tx, customer, seller: cs?.profile || {}, sellerParticipantId: (viaWafeq && settings.wafeq?.participantId) || settings.participantId,
     });
-    const issues = ei.validatePayload(payload, { headerDiscount: tx.pricing?.headerDiscount ?? tx.discount ?? 0 });
+    const issues = ei.validatePayload(payload, { headerDiscount: ei.legacyHeaderDiscount(tx) });
     if (viaWafeq) {
       const w = await this.wafeqDocument({ tx, payload, customer, companyId });
       payload.wafeq = { path: w.path, body: w.body };
@@ -400,13 +400,79 @@ class EInvoiceService {
     const draft = await TransactionService.createTransaction({
       type: "sales_return", status: "DRAFT", partyId: tx.partyId, partyType: "Customer", partyTypeRef: "Customer",
       returnOf: { transactionId: tx._id, transactionNo: tx.transactionNo },
-      items: lines.map((l) => ({
-        itemId: l.itemId, description: l.description, qty: l.remainingQty, price: l.price, rate: l.price, discountPercent: l.discountPercent || 0,
-        taxCodeId: tx.items.find((i) => String(i._id) === String(l.lineId))?.taxCodeId, returnOfLineId: l.lineId,
-      })),
+      items: this.creditLines(tx, lines),
     }, by);
     await AuditService.log({ req, action: "EINVOICE_CREDIT_IN_FULL", entity: "Transaction", entityId: draft._id, summary: `${draft.transactionNo} drafted to credit ${tx.transactionNo}` });
     return { _id: draft._id, transactionNo: draft.transactionNo, credits: tx.transactionNo };
+  }
+
+  // The lines of a credit note for what is left of an invoice, at the invoice's prices and tax codes (a line with no code keeps its rate).
+  static creditLines(tx, lines) {
+    return lines.map((l) => {
+      const taxCodeId = tx.items.find((i) => String(i._id) === String(l.lineId))?.taxCodeId;
+      return {
+        itemId: l.itemId, description: l.description, qty: l.remainingQty, price: l.price, rate: l.price, discountPercent: l.discountPercent || 0,
+        ...(taxCodeId ? { taxCodeId } : { vatPercent: l.vatPercent ?? 0 }), returnOfLineId: l.lineId,
+      };
+    });
+  }
+
+  // ---------- credit and re-issue ----------
+  // An invoice priced before 18 Nov 2026 took its whole-invoice discount off the total AFTER the tax (ei.legacyHeaderDiscount), which an e-invoice
+  // cannot carry, and an approved invoice cannot be edited. This drafts, in ONE transaction, a credit note for the whole invoice and a new invoice
+  // with the same customer, lines, charges and discount: priced today, the discount is shared over the lines, so the new invoice's total is what
+  // the old one's was and its tax is right. Both credit note and new invoice carry the discount, so the customer is credited and charged the same
+  // amount. Nothing is approved or posted: a person approves the credit note, then the new invoice, and sends that.
+  // Only for this one problem: any other invoice that was never e-invoiced is still not credited from here (creditInFull: NOT_E_INVOICED).
+  static async reissue(transactionId, req) {
+    const { companyId } = getTenant(req);
+    if (!mongoose.isValidObjectId(transactionId)) throw new AppError("Invalid document id", 400);
+    const tx = await Transaction.findById(transactionId).lean();
+    if (!tx || tx.type !== "sales_order") throw new AppError("Sales invoice not found", 404);
+    if (tx.isOpening) throw new AppError("An opening balance invoice is not e-invoiced", 409, "NOT_REISSUABLE");
+    if (tx.status !== "APPROVED") throw new AppError("Only an approved invoice is credited and issued again; a draft can simply be edited", 409, "NOT_REISSUABLE");
+    if (tx.fx?.currency) throw new AppError("A foreign-currency invoice is not e-invoiced", 409, "NOT_REISSUABLE");
+    const discount = ei.legacyHeaderDiscount(tx);
+    if (!(discount > 0)) throw new AppError("This invoice has no discount taken off after VAT, so there is nothing to re-issue it for", 409, "NOT_REISSUABLE");
+    const sub = await EInvoiceSubmission.findOne({ companyId, sourceType: "Transaction", sourceId: tx._id, status: { $in: ["QUEUED", "SUBMITTED", "ACKNOWLEDGED", "REPORTED"] } }).select("status").lean();
+    if (sub) throw new AppError("This invoice was already sent as an e-invoice: use Credit in full instead", 409, "ALREADY_E_INVOICED");
+
+    const ReturnService = require("../orderPurchase/returnService");
+    const TransactionService = require("../orderPurchase/transactionService");
+    const { withTransactionSession } = require("../../utils/withTransactionSession");
+    const by = req?.admin?.id ? String(req.admin.id) : null;
+    const charges = (tx.charges || []).map((c) => ({ code: c.code, description: c.description, amount: c.amount, vatPercent: c.vatPercent }));
+
+    const made = await withTransactionSession(async (session) => {
+      // read inside the transaction, so two presses cannot both see the whole invoice still to credit (the second sees the first's draft)
+      const r = await ReturnService.returnable(tx._id, { session });
+      if (r.lines.some((l) => !(l.remainingQty === l.originalQty))) {
+        throw new AppError("Part of this invoice is already credited (or a credit note is waiting in Sales > Returns); re-issue it by hand", 409, "ALREADY_CREDITED");
+      }
+      const credit = await TransactionService.createTransaction({
+        type: "sales_return", status: "DRAFT", partyId: tx.partyId, partyType: "Customer", partyTypeRef: "Customer",
+        returnOf: { transactionId: tx._id, transactionNo: tx.transactionNo },
+        items: this.creditLines(tx, r.lines), charges, discount,
+        notes: `Credits ${tx.transactionNo} so it can be issued again with its discount shared over the lines (e-invoicing).`,
+      }, by, session);
+      const invoice = await TransactionService.createTransaction({
+        type: "sales_order", status: "DRAFT", partyId: tx.partyId, partyType: "Customer", partyTypeRef: "Customer",
+        items: (tx.items || []).map((l) => ({
+          itemId: l.itemId, description: l.description, qty: l.qty, price: l.price ?? l.rate, rate: l.price ?? l.rate,
+          discountPercent: l.discountPercent || 0, ...(l.taxCodeId ? { taxCodeId: l.taxCodeId } : { vatPercent: l.vatPercent ?? 0 }),
+          ...(l.costCentreId ? { costCentreId: l.costCentreId } : {}),
+        })),
+        charges, discount,
+        ...(tx.costCentreId ? { costCentreId: tx.costCentreId } : {}),
+        ...(tx.lpono ? { lpono: tx.lpono } : {}), ...(tx.terms ? { terms: tx.terms } : {}),
+        notes: [`Issued again in place of ${tx.transactionNo}.`, tx.notes].filter(Boolean).join(" "),
+      }, by, session);
+      return { credit, invoice };
+    })();
+
+    await AuditService.log({ req, action: "EINVOICE_REISSUED", entity: "Transaction", entityId: tx._id, summary: `${tx.transactionNo}: credit note ${made.credit.transactionNo} and new invoice ${made.invoice.transactionNo} drafted` });
+    const brief = (d) => ({ _id: d._id, transactionNo: d.transactionNo, totalAmount: d.totalAmount, vat: d.pricing ? Math.round(((d.pricing.lineVat || 0) + (d.pricing.chargesVat || 0)) * 100) / 100 : undefined });
+    return { original: tx.transactionNo, creditNote: brief(made.credit), invoice: brief(made.invoice) };
   }
 
   // What a provider tells us beside the step: its delivery leg, the job and the route.

@@ -101,7 +101,19 @@ test("a credit note needs the invoice it credits, and a header discount cannot b
   assert.ok(validatePayload(cn).some((i) => i.field === "invoiceRef"));
   const ok = build(tx({ type: "sales_return", returnOf: { transactionNo: "SO-2026-0001" } }));
   assert.deepEqual(validatePayload(ok), []);
-  assert.ok(validatePayload(build(), { headerDiscount: 15 }).some((i) => i.field === "headerDiscount"));
+  const hd = validatePayload(build(), { headerDiscount: 15 }).find((i) => i.field === "headerDiscount");
+  assert.equal(hd.amount, 15);
+  assert.equal(hd.action, "reissue"); // the screen offers Credit and re-issue for it
+  assert.match(hd.message, /15\.00 off its total after VAT/);
+});
+
+test("the discount taken off after VAT is read the way the invoice was priced", () => {
+  const { legacyHeaderDiscount } = require("../eInvoice");
+  assert.equal(legacyHeaderDiscount({ pricing: { headerDiscount: 10 }, discount: 10 }), 10); // priced before 18 Nov 2026
+  assert.equal(legacyHeaderDiscount({ pricing: { headerDiscount: 0, headerDiscountSpread: 10 }, discount: 10 }), 0); // shared over the lines
+  assert.equal(legacyHeaderDiscount({ discount: 7 }), 7); // no pricing record at all
+  assert.equal(legacyHeaderDiscount({}), 0);
+  assert.equal(legacyHeaderDiscount(null), 0);
 });
 
 test("tampered totals are caught", () => {
