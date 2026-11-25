@@ -338,9 +338,12 @@ class LedgerReportsService {
     const end = dayEnd(to);
     const match = { isReversed: { $ne: true } };
     if (start || end) match.date = { ...(start ? { $gte: start } : {}), ...(end ? { $lte: end } : {}) };
-    if (type) match.voucherType = type;
 
     const [costIds, corrections] = await Promise.all([this.costLegAccountIds(), this.correctionIds(match.date)]);
+    // the credit note of a re-issue is its own kind here: "Sales return" leaves it out, CORRECTION_KIND asks for it alone
+    if (type === CORRECTION_KIND) Object.assign(match, { voucherType: "sales_return", voucherId: { $in: corrections } });
+    else if (type === "sales_return") Object.assign(match, { voucherType: "sales_return", voucherId: { $nin: corrections } });
+    else if (type) match.voucherType = type;
     const size = Math.min(Math.max(Number(limit) || 50, 1), 200);
     const skip = (Math.max(Number(page) || 1, 1) - 1) * size;
     const row = this.voucherRow(costIds);

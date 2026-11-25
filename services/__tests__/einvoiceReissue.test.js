@@ -422,6 +422,16 @@ test("the credit note of a re-issue is named as that wherever a document is name
   assert.equal(row.correction, true);
   assert.equal(book.byType.find((t) => t.voucherType === "reissue_credit").label, "Credit note (re-issue)");
   assert.equal((await svc.LedgerReports.voucherImpact(r.creditNote._id)).typeLabel, "Credit note (re-issue)");
+  // its own type in the filter: asking for sales returns leaves it out, asking for re-issue credits finds it alone
+  const sale = await approved(lines());
+  const ret = await svc.Tx.createTransaction({ type: "sales_return", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", returnOf: { transactionId: sale._id, transactionNo: sale.transactionNo }, items: [{ ...lines()[0], qty: 1, returnOfLineId: sale.items[0]._id }] }, ADMIN);
+  await approve(ret._id);
+  const only = await svc.LedgerReports.dayBook({ from: day, to: day, type: "reissue_credit", limit: 200 });
+  assert.ok(only.rows.length >= 1 && only.rows.every((x) => x.correction === true), JSON.stringify(only.rows.map((x) => x.voucherNo)));
+  assert.ok(only.rows.some((x) => x.voucherNo === no));
+  const returns = await svc.LedgerReports.dayBook({ from: day, to: day, type: "sales_return", limit: 200 });
+  assert.ok(returns.rows.every((x) => !x.correction), "sales returns are only real returns");
+  assert.ok(returns.rows.some((x) => String(x.voucherId) === String(ret._id)), "an ordinary return is still listed");
   // the daily summary counts it under its own heading, as the day book does
   const sum = await svc.LedgerReports.dailySummary({ from: day, to: day });
   assert.ok(sum.types.some((t) => t.voucherType === "reissue_credit" && t.label === "Credit note (re-issue)"));
@@ -435,6 +445,8 @@ test("the credit note of a re-issue is named as that wherever a document is name
   // the document's own audit trail
   const trail = await svc.Audit.trail(r.creditNote._id);
   assert.equal(trail.document.typeLabel, "Credit note (re-issue)");
+  assert.equal(trail.document.correction, true, "the screen names its party rows from this");
+  assert.ok(trail.partyBalance.rows.length >= 1);
   assert.match(svc.Audit.describe(await get(r.creditNote._id)), /^Credit note \(re-issue\) /);
   assert.match(svc.Audit.describe(tx), /^Sales order /, "any other document is named as before");
 });

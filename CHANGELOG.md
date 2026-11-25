@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.3.2.1 — 26 November 2026
+
+E-invoicing: two last places a re-issue credit note was called a sales return. Frontend and backend both at 4.3.2.1.
+
+### Changed
+
+- **Day book:** the Voucher type filter has "Credit note (re-issue)" of its own, and "Sales return" now lists only real
+  returns.
+- **Audit trail:** a re-issue credit note's customer balance rows say "Credit note (re-issue)" (and "... reversed"), not
+  "Sales return".
+
 ## 4.3.2.0 — 25 November 2026
 
 E-invoicing: the last of Credit and re-issue. Frontend and backend both at 4.3.2.0.

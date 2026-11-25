@@ -136,6 +136,7 @@ class DocumentAuditService {
         transactionNo: doc.transactionNo,
         type: doc.type,
         typeLabel: typeLabel(doc),
+        ...(isCorrection(doc) ? { correction: true } : {}),
         status: doc.status,
         date: doc.date,
         dueDate: doc.dueDate,
