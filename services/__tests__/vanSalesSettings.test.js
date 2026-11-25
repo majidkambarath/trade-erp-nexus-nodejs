@@ -119,7 +119,7 @@ test("saving the rules: merged key by key, validated, stored under vanSales and 
   const two = await rules({ farMetres: 500 });
   assert.equal(two.customers, "route", "a second save does not undo the first");
   assert.equal(two.farMetres, 500);
-  await assert.rejects(() => rules({ paymentModes: ["card"] }), { code: "VAN_SETTING_INVALID" });
+  await assert.rejects(() => rules({ paymentModes: ["online"] }), { code: "VAN_SETTING_INVALID" });
   await assert.rejects(() => rules({ farMetres: 1 }), { code: "VAN_SETTING_INVALID" });
   await assert.rejects(() => rules(null), { code: "VAN_SETTING_INVALID" });
   await assert.rejects(() => rules([]), { code: "VAN_SETTING_INVALID" });

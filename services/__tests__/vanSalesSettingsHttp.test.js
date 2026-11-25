@@ -136,7 +136,7 @@ test("a change is saved, merged, audited with before and after, and read back by
 test("hostile or wrong bodies are refused cleanly, never a 500, and store nothing", { skip }, async () => {
   const before = (await call("owner", "GET", "/van-sales/settings")).body;
   const bad = [
-    { paymentModes: ["card"] }, { paymentModes: [] }, { paymentModes: "cash" }, { farMetres: "far" }, { farMetres: 1 }, { farMetres: [300] },
+    { paymentModes: ["online"] }, { paymentModes: [] }, { paymentModes: "cash" }, { farMetres: "far" }, { farMetres: 1 }, { farMetres: [300] },
     { customers: { $ne: "route" } }, { creditSales: ["never"] }, { slipFooter: { $gt: "" } }, { maxDiscountPercent: 500 }, { returnsAllowed: "yes" },
   ];
   for (const body of bad) {

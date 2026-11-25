@@ -5,7 +5,10 @@
 // screen sees nothing change. A stored document from an older version is read through normaliseSettings, which fills
 // whatever is missing with these defaults and clamps whatever is out of range.
 
-const SUPPORTED_MODES = ["cash", "cheque"]; // what takeMoney can post today; card and transfer are a later branch
+// The ways money can be taken on the road. The DEFAULT is still cash and cheque (nobody's van changes until they tick a
+// box); card needs the van's own card machine and, like a cheque, the banking part of the plan; a transfer waits for the
+// office to see it in the bank (financialService.createVoucher, holdFor "van_transfer").
+const SUPPORTED_MODES = ["cash", "cheque", "card", "transfer"];
 
 const CUSTOMERS = ["any", "route"];
 const CREDIT_SALES = ["allowed", "cashTerms", "never"];

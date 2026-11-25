@@ -82,6 +82,9 @@ class VanSalesReportService {
         returned: round2(sales.get(`${k}:sales_return`)?.total || 0),
         cash: round2(money.get(`${k}:cash`) || 0),
         cheques: round2(money.get(`${k}:cheque`) || 0),
+        // approved only: a transfer still waiting for the bank is not takings yet
+        card: round2(money.get(`${k}:card`) || 0),
+        transfer: round2(money.get(`${k}:transfer`) || 0),
         cashVariance: t.settlement?.cashVariance ?? null,
         stockVarianceValue: t.settlement?.stockVarianceValue ?? null,
         ...rules.calls({ buyers: buyersByTrip.get(k) || [], visited: visitedByTrip.get(k) || [] }),
@@ -90,7 +93,7 @@ class VanSalesReportService {
     const roll = (key, label) => {
       const m = new Map();
       for (const r of rows) {
-        const cur = m.get(r[key]) || { id: r[key], name: r[label], trips: 0, invoices: 0, lines: 0, expenses: 0, sales: 0, netSales: 0, returned: 0, cash: 0, cheques: 0, cashVariance: 0, calls: 0, productive: 0, days: new Map() };
+        const cur = m.get(r[key]) || { id: r[key], name: r[label], trips: 0, invoices: 0, lines: 0, expenses: 0, sales: 0, netSales: 0, returned: 0, cash: 0, cheques: 0, card: 0, transfer: 0, cashVariance: 0, calls: 0, productive: 0, days: new Map() };
         cur.calls += r.calls;
         cur.productive += r.productive;
         cur.trips += 1;
@@ -108,6 +111,8 @@ class VanSalesReportService {
         cur.returned = round2(cur.returned + r.returned);
         cur.cash = round2(cur.cash + r.cash);
         cur.cheques = round2(cur.cheques + r.cheques);
+        cur.card = round2(cur.card + r.card);
+        cur.transfer = round2(cur.transfer + r.transfer);
         cur.cashVariance = round2(cur.cashVariance + (r.cashVariance || 0));
         m.set(r[key], cur);
       }
@@ -117,8 +122,8 @@ class VanSalesReportService {
       }).sort((a, b) => b.sales - a.sales);
     };
     const total0 = rows.reduce(
-      (t, r) => ({ trips: t.trips + 1, invoices: t.invoices + r.invoices, lines: t.lines + r.lines, netSales: round2(t.netSales + r.netSales), expenses: round2(t.expenses + r.expenses), calls: t.calls + r.calls, productive: t.productive + r.productive, sales: round2(t.sales + r.sales), returned: round2(t.returned + r.returned), cash: round2(t.cash + r.cash), cheques: round2(t.cheques + r.cheques), cashVariance: round2(t.cashVariance + (r.cashVariance || 0)) }),
-      { trips: 0, invoices: 0, lines: 0, netSales: 0, expenses: 0, calls: 0, productive: 0, sales: 0, returned: 0, cash: 0, cheques: 0, cashVariance: 0 }
+      (t, r) => ({ trips: t.trips + 1, invoices: t.invoices + r.invoices, lines: t.lines + r.lines, netSales: round2(t.netSales + r.netSales), expenses: round2(t.expenses + r.expenses), calls: t.calls + r.calls, productive: t.productive + r.productive, sales: round2(t.sales + r.sales), returned: round2(t.returned + r.returned), cash: round2(t.cash + r.cash), cheques: round2(t.cheques + r.cheques), card: round2(t.card + r.card), transfer: round2(t.transfer + r.transfer), cashVariance: round2(t.cashVariance + (r.cashVariance || 0)) }),
+      { trips: 0, invoices: 0, lines: 0, netSales: 0, expenses: 0, calls: 0, productive: 0, sales: 0, returned: 0, cash: 0, cheques: 0, card: 0, transfer: 0, cashVariance: 0 }
     );
     const total = { ...total0, ...rules.kpis(total0) };
     const byDay = rules.salesByDay(rows.map((r) => ({ day: new Date(r.date).toISOString().slice(0, 10), sales: r.sales, invoices: r.invoices })), start, end);

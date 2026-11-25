@@ -8,7 +8,8 @@ const Admin = require("../../models/core/adminModel");
 const { LedgerAccount } = require("../../models/modules/financial/financialModels");
 const rules = require("../../utils/vanSales");
 const vanSettings = require("../../utils/vanSettings");
-const { groupFamily } = require("../banking/cardService");
+const { groupFamily, CardService } = require("../banking/cardService");
+const UsageService = require("../core/usageService");
 const ChartOfAccountsService = require("../financial/chartOfAccountsService");
 
 const isId = (v) => mongoose.isValidObjectId(v);
@@ -65,17 +66,27 @@ class VanService {
     return Object.keys(own).length ? own : null;
   }
 
+  /** The van's card machine: an active merchant terminal, and only where the plan has banking. null clears it. */
+  static async #card(cardId, req) {
+    if (cardId === null || cardId === "" || cardId === undefined) return null;
+    if (!isId(cardId)) throw fail("Choose a card machine from the list", 400, "CARD_REQUIRED");
+    await UsageService.assertFeature("banking");
+    const card = await CardService.forUse(cardId, "receipt", { req }); // a terminal, and active: it refuses anything else
+    return card._id;
+  }
+
   static async create(input, createdBy, req) {
     const base = wrap(() => rules.validateVan(input));
     if (await Van.exists({ code: base.code })) throw fail(`A van with the code ${base.code} already exists`, 409, "VAN_CODE_TAKEN");
     const sales = await this.#salesman(input.salesmanId);
     const defaultRouteId = await this.#route(input.defaultRouteId);
     const own = this.#ownRules(input.rules);
+    const cardId = await this.#card(input.cardId, req);
     // The van's own cash account, under the Cash group. What the van took is this account's balance, so settling
     // is a plain transfer of it. A chart account made through the ordinary service: it appears in the chart.
     const { rootId } = await groupFamily("cash-account-group", req);
     const account = await ChartOfAccountsService.createAccount({ accountName: `Van Cash - ${base.code}`, groupId: rootId }, req, createdBy);
-    const van = await Van.create({ ...base, ...sales, defaultRouteId, cashAccountId: account._id, createdBy, ...(own ? { rules: own } : {}) });
+    const van = await Van.create({ ...base, ...sales, defaultRouteId, cashAccountId: account._id, createdBy, cardId, ...(own ? { rules: own } : {}) });
     return this.get(van._id);
   }
 
@@ -89,6 +100,7 @@ class VanService {
     van.set({ name: base.name, plate: base.plate, ...sales, defaultRouteId, updatedBy, ...(input.cashLimit !== undefined ? { cashLimit: base.cashLimit } : {}), ...(input.offlineBlock !== undefined ? { offlineBlock: base.offlineBlock } : {}), ...("dailySalesTarget" in base ? { dailySalesTarget: base.dailySalesTarget } : {}), ...("dailyCallsTarget" in base ? { dailyCallsTarget: base.dailyCallsTarget } : {}) });
     // the van's own rules are sent whole: a key left out (or "org") goes back to following the organisation
     if (input.rules !== undefined) van.rules = this.#ownRules(input.rules) || undefined;
+    if (input.cardId !== undefined) van.cardId = await this.#card(input.cardId);
     if (typeof input.active === "boolean" && input.active !== van.active) {
       if (!input.active && (await VanTrip.exists({ vanId: van._id, status: { $in: ["LOADING", "ON_ROUTE", "UNLOADED"] } }))) {
         throw fail("This van has a trip that is not settled yet", 409, "VAN_HAS_OPEN_TRIP");
@@ -174,15 +186,31 @@ class VanService {
   }
 
   /**
+   * The card machines a van can be given: the organisation's active merchant terminals, by name and fee only. The van
+   * module's own narrow read (a van manager need not hold banking.view), and empty without the banking feature.
+   */
+  static async cardMachines(req) {
+    const banking = !req?.organisation || require("../../utils/plans").hasFeature(req.organisation, "banking");
+    if (!banking) return [];
+    const cards = await CardService.list(req, { kind: "terminal", active: true });
+    return cards.map((c) => ({ id: String(c._id), label: c.label, feePercent: c.effectiveFeePercent ?? 0 }));
+  }
+
+  /**
    * What a salesman may take money into on the road: cash always (the van's own account), and a cheque only where the
    * organisation has banking, with the bank accounts it can be deposited to. Names and ids only: no balances.
    */
   static async paymentChoices(req) {
     const banking = !req?.organisation || require("../../utils/plans").hasFeature(req.organisation, "banking");
-    if (!banking) return { cheque: false, bankAccounts: [] };
+    // a bank transfer needs no part of the plan (the office receipt path does not ask either), so the bank accounts are
+    // always offered; a cheque and a card are the banking feature's, and the banks a cheque is drawn on come with them
     const { ids } = await groupFamily("bank-account-group", req);
     const rows = await LedgerAccount.find({ groupId: { $in: ids }, isActive: true, allowDirectPosting: { $ne: false } }).select("accountName accountCode").sort({ accountCode: 1 }).lean();
-    return { cheque: true, bankAccounts: rows.map((a) => ({ id: String(a._id), name: a.accountName })) };
+    const bankAccounts = rows.map((a) => ({ id: String(a._id), name: a.accountName }));
+    if (!banking) return { cheque: false, card: false, bankAccounts, banks: [] };
+    const { BankMaster } = require("../../models/modules/banking/bankingModels");
+    const banks = await BankMaster.find({ isActive: true }).select("bankName").sort({ bankName: 1 }).lean();
+    return { cheque: true, card: true, bankAccounts, banks: banks.map((b) => ({ id: String(b._id), name: b.bankName })) };
   }
 
   /** The van's cash account, for a caller that needs its current balance (the settlement preview). */

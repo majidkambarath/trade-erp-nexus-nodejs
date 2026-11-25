@@ -238,7 +238,14 @@ class FinancialService {
         if (!hold && processedData.status === "approved" && options.holdFor === "recurring" && (processedData.ledgerBased === true)) {
           hold = { reason: "recurring", amount: processedData.totalAmount, message: "Made by a recurring voucher: it waits for approval before it posts." };
         }
-        if (hold && outerSession && hold.reason !== "recurring") {
+        // A bank transfer a van salesman says the customer made (services/vansales/vanTripSales.js takeMoney): nobody can
+        // count it at the van, so it waits for someone who may approve receipts to see it in the bank. Until then it posts
+        // nothing and settles no invoice, exactly like any held voucher (effectsDeferred).
+        if (!hold && processedData.status === "approved" && options.holdFor === "van_transfer" && voucherType === "receipt") {
+          hold = { reason: "van_transfer", amount: processedData.totalAmount, message: "A bank transfer taken on a van: it waits for someone to see it in the bank before it posts." };
+        }
+        // Both of these are made inside a larger transaction by design (a recurring run, a van sale), and must still wait.
+        if (hold && outerSession && hold.reason !== "recurring" && hold.reason !== "van_transfer") {
           // Part of a larger act that cannot wait (posting the entry for a bank statement line and matching the line, in one
           // transaction). A person over their own limit may not post it; where the organisation wants two approvers at this
           // amount the statement line itself is the second pair of eyes, and it posts as ever.

@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const AppError = require("../../utils/AppError");
 const Stock = require("../../models/modules/stockModel");
 const Customer = require("../../models/modules/customerModel");
+const Van = require("../../models/modules/vansales/vanModel");
 const Transaction = require("../../models/modules/transactionModel");
 const { Voucher } = require("../../models/modules/financial/financialModels");
 const rules = require("../../utils/vanSales");
@@ -63,15 +64,47 @@ async function assertCustomerAllowed(trip, active, customerId, { mayOverride = f
   if (bad) throw fail(bad.message, bad.status, bad.code);
 }
 
+const VAN_MODES = ["cash", "cheque", "card", "transfer"];
+const text = (v) => String(v ?? "").trim();
+
 /**
- * Take money against a customer on this trip: one receipt voucher, into the van's own cash account (cash) or the
- * cheque register (cheque). Joins the caller's transaction. Allocated to the invoices named, else oldest first;
+ * The details the shared receipt path (PaymentModeService.resolve) needs for each way of taking money, BUILT HERE and
+ * never passed through from the request, so a phone cannot name a card machine, a cash account or any other field of
+ * its own choosing:
+ *   cash      the van's own cash account;
+ *   cheque    the account it will be deposited to, number, date and the bank it is drawn on;
+ *   card      the VAN's card machine (Van.cardId) and the approval code from its slip: a van with none takes no card;
+ *   transfer  the bank account, the customer's reference and its date.
+ * resolve keeps every field rule (REFERENCE_REQUIRED, APPROVAL_CODE_REQUIRED, DRAWN_ON_BANK_REQUIRED, BANK_ACCOUNT_REQUIRED).
+ */
+async function paymentDetailsFor(trip, mode, details = {}, session) {
+  const d = details && typeof details === "object" ? details : {};
+  if (mode === "cash") return { accountId: trip.cashAccountId };
+  if (mode === "cheque") {
+    return {
+      accountId: d.accountId || undefined, chequeNo: text(d.chequeNo), chequeDate: d.chequeDate,
+      ...(isId(d.drawnOnBankId) ? { drawnOnBankId: d.drawnOnBankId } : { drawnOnBankName: text(d.drawnOnBankName) }),
+    };
+  }
+  if (mode === "card") {
+    const van = await Van.findById(trip.vanId).select("cardId").session(session || null).lean();
+    if (!van?.cardId) throw fail("This van has no card machine. Ask a supervisor to set one on the van, or take another way of payment.", 409, "VAN_NO_CARD_MACHINE");
+    return { cardId: van.cardId, approvalCode: text(d.approvalCode) };
+  }
+  return { accountId: d.accountId || undefined, reference: text(d.reference), referenceDate: d.referenceDate || undefined };
+}
+
+/**
+ * Take money against a customer on this trip: one receipt voucher - into the van's own cash account (cash), the cheque
+ * register (cheque), the van's card machine's bank account less its fee (card), or the bank (transfer). A TRANSFER is
+ * saved waiting for the office to see it in the bank: nobody can count it at the van, so it posts nothing and settles no
+ * invoice until it is approved. Joins the caller's transaction. Allocated to the invoices named, else oldest first;
  * whatever is left stays on account.
  */
 async function takeMoney(trip, { customerId, amount, mode = "cash", details = {}, invoiceIds, date, narration }, by, { req, session }) {
   const total = round2(amount);
   if (!(total > 0)) throw fail("Enter the amount received", 400, "AMOUNT_REQUIRED");
-  if (!["cash", "cheque"].includes(mode)) throw fail("On the road, money is taken in cash or by cheque", 400, "VAN_MODE_NOT_SUPPORTED");
+  if (!VAN_MODES.includes(mode)) throw fail("On the road, money is taken in cash, by cheque, by card or by bank transfer", 400, "VAN_MODE_NOT_SUPPORTED");
   const notAllowed = vanRules.checkMode(await VanSettingsService.forTrip(trip, { session }), mode);
   if (notAllowed) throw fail(notAllowed.message, notAllowed.status, notAllowed.code, notAllowed.details);
   const customer = await customerOf(customerId, session);
@@ -82,7 +115,7 @@ async function takeMoney(trip, { customerId, amount, mode = "cash", details = {}
   const wanted = Array.isArray(invoiceIds) && invoiceIds.length ? new Set(invoiceIds.map(String)) : null;
   const { allocations } = proposals.allocateOldestFirst(wanted ? open.filter((i) => wanted.has(i.id)) : open, total);
 
-  const paymentDetails = mode === "cash" ? { accountId: trip.cashAccountId } : { ...details };
+  const paymentDetails = await paymentDetailsFor(trip, mode, details, session);
   const voucher = await FinancialService.createVoucher(
     {
       voucherType: "receipt", customerId, customerName: customer.customerName, date: orgDay(date), totalAmount: total,
@@ -90,7 +123,7 @@ async function takeMoney(trip, { customerId, amount, mode = "cash", details = {}
       linkedInvoices: allocations.map((a) => ({ invoiceId: a.invoiceId, amount: a.amount, balance: a.balance })),
       narration: narration || `Van ${trip.vanCode} ${trip.tripNo}`,
     },
-    by, session, { req }
+    by, session, { req, ...(mode === "transfer" ? { holdFor: "van_transfer" } : {}) }
   );
   // the link to the trip is written after the voucher exists: a voucher body cannot carry it in
   await Voucher.updateOne({ _id: voucher._id }, { $set: { vanTripRef: { tripId: trip._id, tripNo: trip.tripNo } } }, { session });

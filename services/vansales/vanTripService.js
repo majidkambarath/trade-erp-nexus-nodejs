@@ -61,9 +61,13 @@ class VanTripService {
     const sum = (rows) => rules.round2(rows.reduce((t, v) => t + (Number(v.totalAmount) || 0), 0));
     const salesTotal = rules.round2(s.invoices.reduce((t, i) => t + (Number(i.totalAmount) || 0), 0));
     const returnsTotal = rules.round2(s.returns.reduce((t, i) => t + (Number(i.totalAmount) || 0), 0));
-    const van = await Van.findById(trip.vanId).select("cashLimit dailySalesTarget dailyCallsTarget rules").lean();
+    const van = await Van.findById(trip.vanId).select("cashLimit dailySalesTarget dailyCallsTarget rules cardId").lean();
     // the rules this van works under now (the organisation's with its own laid over): the phone obeys these
     const activeRules = await VanSettingsService.forVan(van);
+    // the van's card machine, by name and fee only (the salesman never needs, and never gets, its id): none when the van
+    // has none, or the machine has since been switched off
+    const machine = van?.cardId ? await require("../../models/modules/banking/bankingModels").CardMaster.findById(van.cardId).populate("cardTypeId", "feePercent").select("label isActive feePercent cardTypeId").lean() : null;
+    const cardMachine = machine && machine.isActive !== false ? { label: machine.label, feePercent: machine.feePercent ?? machine.cardTypeId?.feePercent ?? 0 } : null;
     const cashLimit = van?.cashLimit ?? null;
     // the day's targets: the ones copied when the trip opened, else (an older trip) the van's current ones
     const target = plain.target && (plain.target.sales != null || plain.target.calls != null)
@@ -90,6 +94,7 @@ class VanTripService {
       ...plain,
       id: String(plain._id),
       rules: activeRules,
+      cardMachine,
       loaded: named(s.loaded, names),
       sold: named(s.sold, names),
       sellable: named(s.sellable, names).map((l) => ({ ...l, salesPrice: prices.get(l.stockId) || 0 })),
@@ -102,8 +107,14 @@ class VanTripService {
         returned: returnsTotal,
         cash: sum(live.filter((v) => v.paymentMode === "cash")),
         cheques: sum(live.filter((v) => v.paymentMode === "cheque")),
+        // card takings reach the machine's bank account and a transfer the bank: neither is in the van, so neither is in
+        // the cash in hand. A transfer waits for the office to see it in the bank (financialService, holdFor "van_transfer").
+        card: sum(live.filter((v) => v.paymentMode === "card")),
+        transfer: sum(live.filter((v) => v.paymentMode === "transfer")),
+        transferWaiting: sum(vouchers.filter((v) => v.status === "pending" && v.paymentMode === "transfer")),
         receipts: live.length,
-        pendingReceipts: vouchers.filter((v) => v.status === "pending").length,
+        // a held transfer waits for the bank by design: it never blocks settling, so it is not counted among the receipts that do
+        pendingReceipts: vouchers.filter((v) => v.status === "pending" && v.paymentMode !== "transfer").length,
         cashLimit,
         cashOverLimit: rules.overCashLimit(sum(live.filter((v) => v.paymentMode === "cash")) - expenses, cashLimit),
         expenses,

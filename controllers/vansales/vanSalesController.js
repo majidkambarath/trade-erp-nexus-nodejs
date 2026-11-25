@@ -64,6 +64,7 @@ exports.updateRoute = catchAsync(async (req, res) => {
 });
 exports.assignees = catchAsync(async (req, res) => ok(res, await VanService.assignees()));
 exports.paymentChoices = catchAsync(async (req, res) => ok(res, await VanService.paymentChoices(req)));
+exports.cardMachines = catchAsync(async (req, res) => ok(res, await VanService.cardMachines(req)));
 exports.customers = catchAsync(async (req, res) => ok(res, await VanService.customerChoices(req.query)));
 
 // ---- the organisation's rules for its vans ---------------------------------------------------------------------
@@ -108,7 +109,7 @@ exports.sell = catchAsync(async (req, res) => {
   await assertMayWork(req);
   assertMayAcknowledge(req);
   const { invoice, receipt } = await VanTripSales.sell(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
-  await AuditService.log({ req, action: "VAN_SALE", entity: "VanTrip", entityId: req.params.tripId, summary: `${invoice.transactionNo} sold on the van${receipt ? `, ${receipt.voucherNo} received` : ""}`, after: { invoice: invoice.transactionNo } });
+  await AuditService.log({ req, action: "VAN_SALE", entity: "VanTrip", entityId: req.params.tripId, summary: `${invoice.transactionNo} sold on the van${receipt ? `, ${receipt.voucherNo} ${receipt.status === "pending" ? "taken, waiting for the bank" : "received"} (${receipt.paymentMode})` : ""}`, after: { invoice: invoice.transactionNo } });
   // after the sale committed, never able to fail it: the call on the customer's CRM timeline
   await VanCrmService.record("sale", { tripId: req.params.tripId, customerId: invoice.partyId, refId: invoice._id, ref: invoice.transactionNo, total: invoice.totalAmount, by: by(req) });
   ok(res, { invoice, receipt, trip: await VanTripService.getById(req.params.tripId) }, 201);
@@ -134,7 +135,7 @@ exports.unload = catchAsync(async (req, res) => {
   await log(req, "VAN_UNLOADED", trip, `Van ${trip.vanCode} counted back in on ${trip.tripNo}`);
   ok(res, await VanTripService.getById(trip._id));
 });
-exports.settlementPreview = catchAsync(async (req, res) => ok(res, await VanTripSettlement.preview(req.params.tripId, { ...req.query, chequesHanded: req.query.chequesHanded ? String(req.query.chequesHanded).split(",") : undefined }, { req })));
+exports.settlementPreview = catchAsync(async (req, res) => ok(res, await VanTripSettlement.preview(req.params.tripId, { ...req.query, chequesHanded: req.query.chequesHanded !== undefined ? String(req.query.chequesHanded).split(",").filter(Boolean) : undefined }, { req })));
 exports.settle = catchAsync(async (req, res) => {
   const { trip, plan } = await VanTripSettlement.settle(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req), { req });
   await log(req, "VAN_SETTLED", trip, `Van trip ${trip.tripNo} settled: cash ${plan.cash.handed.toFixed(2)} of ${plan.cash.expected.toFixed(2)}`, { cashVariance: plan.cash.variance, stockVarianceValue: plan.stockVarianceValue });

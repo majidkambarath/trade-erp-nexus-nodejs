@@ -41,6 +41,8 @@ router.put("/promotions/:promotionId", requirePermission("vansales.manage"), c.u
 router.get("/routes/:routeId/preorders", requirePermission("vansales.view"), c.routePreorders);
 router.get("/customers", requirePermission("vansales.view"), c.customers);
 router.get("/payment-choices", requirePermission(["vansales.view", "vansales.sell"]), c.paymentChoices);
+// the machines a van can be given a card on: a manager sets one on the van, so it is a manager's read
+router.get("/card-machines", requirePermission("vansales.manage"), c.cardMachines);
 
 // The organisation's rules for its vans: everyone who works the vans reads them (the phone obeys them), a manager changes them.
 router.get("/settings", requirePermission(["vansales.view", "vansales.sell", "vansales.manage"]), c.getSettings);

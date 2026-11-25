@@ -80,6 +80,11 @@ const settlementSchema = new mongoose.Schema(
     cashVariance: Number,
     expenses: Number, // paid from the van's cash on the road (fuel, tolls), taken off the cash expected
     cheques: [{ chequeNo: String, amount: Number, handed: Boolean, _id: false }],
+    // taken by card (to the machine's bank account) and by bank transfer: not cash, so not in the journal; a transfer may still
+    // be waiting for the office to see it in the bank when the trip is settled (no default: absent on earlier trips)
+    cardTotal: Number,
+    transferTotal: Number,
+    transfersWaiting: Number,
     stockVarianceValue: Number, // units short (negative) or over (positive), at average cost
     damagedValue: Number, // what the damaged goods were worth, written off
     acknowledged: [String],

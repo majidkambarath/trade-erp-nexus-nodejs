@@ -103,9 +103,12 @@ class VanTripSettlement {
   static async plan(trip, input = {}, { session, req } = {}) {
     if (trip.status !== "UNLOADED" || !trip.unload) throw fail("Count the van back in before settling it", 409, "TRIP_NOT_UNLOADED");
     const vouchers = await Voucher.find({ "vanTripRef.tripId": trip._id, voucherType: "receipt" })
-      .select("voucherNo status paymentMode totalAmount paymentDetails.chequeDetails").session(session || null).lean();
+      .select("voucherNo status paymentMode totalAmount paymentDetails.chequeDetails paymentDetails.reference paymentDetails.approvalCode paymentDetails.cardLabel partyName").session(session || null).lean();
     const live = vouchers.filter((v) => v.status === "approved");
-    const pending = vouchers.filter((v) => v.status === "pending");
+    // a bank transfer taken on the road waits for the office to see it in the bank (financialService, holdFor "van_transfer"):
+    // it is the bank's to confirm, never the van's, so it does not stop the trip being settled. Any other receipt still waiting does.
+    const waitingTransfers = vouchers.filter((v) => v.status === "pending" && v.paymentMode === "transfer");
+    const pending = vouchers.filter((v) => v.status === "pending" && v.paymentMode !== "transfer");
     // the van's cash: what it took, less what it paid out on the road (fuel, tolls) from the same account
     const spent = await Voucher.find({ "vanTripRef.tripId": trip._id, voucherType: "expense" }).select("voucherNo status totalAmount").session(session || null).lean();
     const expenses = round2(spent.filter((v) => v.status === "approved").reduce((t, v) => t + Number(v.totalAmount || 0), 0));
@@ -119,6 +122,16 @@ class VanTripSettlement {
       const c = register.get(String(v._id));
       return { chequeNo: c?.chequeNo || v.paymentDetails?.chequeDetails?.chequeNumber || v.voucherNo, amount: round2(v.totalAmount), bank: c?.drawnOnBankName || "", from: c?.partyName || "", date: c?.chequeDate || null, voucherNo: v.voucherNo };
     });
+
+    // card and transfer takings never reached the van's cash, so they are not in the cash expected or the journal: they are
+    // listed so the supervisor sees everything the trip took, and which transfers are still waiting for the bank
+    const sumOf = (rows) => round2(rows.reduce((t, v) => t + Number(v.totalAmount || 0), 0));
+    const cards = live.filter((v) => v.paymentMode === "card").map((v) => ({ voucherNo: v.voucherNo, amount: round2(v.totalAmount), from: v.partyName || "", approvalCode: v.paymentDetails?.approvalCode || "", card: v.paymentDetails?.cardLabel || "" }));
+    const transfers = [...live.filter((v) => v.paymentMode === "transfer").map((v) => ({ v, waiting: false })), ...waitingTransfers.map((v) => ({ v, waiting: true }))]
+      .map(({ v, waiting }) => ({ voucherNo: v.voucherNo, amount: round2(v.totalAmount), from: v.partyName || "", reference: v.paymentDetails?.reference || "", waiting }));
+    const cardTotal = sumOf(live.filter((v) => v.paymentMode === "card"));
+    const transferTotal = sumOf(live.filter((v) => v.paymentMode === "transfer"));
+    const transfersWaiting = sumOf(waitingTransfers);
 
     const handed = input.cashHanded === undefined || input.cashHanded === "" ? expected : Number(input.cashHanded);
     if (!Number.isFinite(handed)) throw fail("Enter the cash handed in", 400, "CASH_REQUIRED");
@@ -164,7 +177,7 @@ class VanTripSettlement {
 
     return {
       trip: { id: String(trip._id), tripNo: trip.tripNo, vanCode: trip.vanCode },
-      cash, expenses, cheques, missingCheques: missing, rows,
+      cash, expenses, cheques, missingCheques: missing, cards, transfers, cardTotal, transferTotal, transfersWaiting, rows,
       stockVarianceValue: round2(varianceValue), damagedValue: round2(damagedValue),
       blockers, warnings,
     };
@@ -233,6 +246,7 @@ class VanTripSettlement {
       at: new Date(), by: String(by), byName: input.byName || "",
       cashExpected: cash.expected, cashHanded: cash.handed, cashVariance: cash.variance, expenses: plan.expenses,
       cheques: plan.cheques.map((c) => ({ ...c, handed: !plan.missingCheques.some((m) => m.chequeNo === c.chequeNo) })),
+      cardTotal: plan.cardTotal, transferTotal: plan.transferTotal, transfersWaiting: plan.transfersWaiting,
       stockVarianceValue: plan.stockVarianceValue, damagedValue: plan.damagedValue,
       acknowledged: [...given].filter((c) => WARNING_CODES.includes(c)), voucherIds,
       notes: String(input.notes || "").slice(0, 500),

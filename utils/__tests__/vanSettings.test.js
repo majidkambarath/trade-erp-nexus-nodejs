@@ -24,7 +24,7 @@ test("the defaults are the same constants the rest of the module already used", 
 });
 
 test("a stored document with a missing or out-of-range key reads as the default for that key only", () => {
-  const s = v.normaliseSettings({ customers: "route", farMetres: 99999, quietHours: "soon", paymentModes: ["card"], slipFooter: "x".repeat(500), creditSales: "never" });
+  const s = v.normaliseSettings({ customers: "route", farMetres: 99999, quietHours: "soon", paymentModes: ["online"], slipFooter: "x".repeat(500), creditSales: "never" });
   assert.equal(s.customers, "route");
   assert.equal(s.creditSales, "never");
   assert.equal(s.farMetres, 300, "out of range: the default");
@@ -46,7 +46,8 @@ test("every setting is validated: type, choice and range", () => {
   assert.deepEqual(bad({ maxDiscountPercent: 101 }), ["maxDiscountPercent"]);
   assert.deepEqual(bad({ maxDiscountPercent: -1 }), ["maxDiscountPercent"]);
   assert.deepEqual(bad({ paymentModes: [] }), ["paymentModes"], "at least one way of taking money");
-  assert.deepEqual(bad({ paymentModes: ["card"] }), ["paymentModes"]);
+  assert.deepEqual(bad({ paymentModes: ["online"] }), ["paymentModes"], "online is the voucher's old name for a transfer, not a van mode");
+  assert.deepEqual(v.validateSettings({ paymentModes: ["card", "transfer", "cash", "cheque"] }), [], "all four ways of taking money are valid");
   assert.deepEqual(bad({ paymentModes: "cash" }), ["paymentModes"]);
   assert.deepEqual(bad({ suggestRuns: 0 }), ["suggestRuns"]);
   assert.deepEqual(bad({ suggestRuns: 2.5 }), ["suggestRuns"], "whole runs only");
@@ -72,6 +73,7 @@ test("hostile input is refused cleanly, never thrown on", () => {
 
 test("payment modes are kept once each, in a steady order", () => {
   assert.deepEqual(v.checkValue("paymentModes", ["cheque", "cash", "cash"]).value, ["cash", "cheque"]);
+  assert.deepEqual(v.checkValue("paymentModes", ["transfer", "card", "cheque", "cash"]).value, ["cash", "cheque", "card", "transfer"]);
 });
 
 test("a van's own rules: only the five it may override, a blank means 'as the organisation'", () => {
