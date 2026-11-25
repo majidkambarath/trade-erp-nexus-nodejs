@@ -66,6 +66,7 @@ class VanTripSettlement {
     const session = rest[rest.length - 1];
     const trip = await loadTrip(id, session);
     if (!rules.canMove(trip.status, "UNLOADED")) throw fail("Only a van that is out can be counted back in", 409, "TRIP_NOT_ON_ROUTE");
+    require("./vanTripService").assertNoOpenRequest(trip, "be counted back in");
     const stock = await stockOf(trip, { session });
     let rows;
     try {

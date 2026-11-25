@@ -39,6 +39,7 @@ const DEFAULTS = Object.freeze({
   suggestExtraPercent: 0,
   expiryCheck: "warn",
   transfersAllowed: true,
+  loadRequests: false, // on: the salesman asks, the storekeeper loads, the salesman accepts the count; no direct loads
   // on the road
   captureLocation: true,
   farMetres: 300,
@@ -99,6 +100,7 @@ function checkValue(key, raw) {
     case "suggestExtraPercent": return range(0, 100, "The extra on the suggested load");
     case "expiryCheck": return oneOf(EXPIRY_CHECK, "The expiry check");
     case "transfersAllowed": return bool("Van-to-van transfers");
+    case "loadRequests": return bool("Loads through a request");
     case "captureLocation": return bool("Reading the phone's location");
     case "farMetres": return range(50, 5000, "The 'far from the shop' distance", true);
     case "quietHours": return range(1, 12, "The 'quiet' time", true);

@@ -280,3 +280,25 @@ test("returnsByReason: one row per reason, the credits added, older returns as '
   ]);
   assert.deepEqual(v.returnsByReason([]), []);
 });
+
+test("load requests: an open request, what is loaded but not accepted, and what the salesman accepts", () => {
+  const req = (status, lines) => ({ no: 1, status, lines });
+  const trip = (status, loadRequests) => ({ status, loadRequests, loads: [] });
+  assert.equal(v.openRequest(trip("LOADING", [req("ACCEPTED", []), req("REJECTED", [])])), null);
+  assert.equal(v.openRequest(trip("LOADING", [req("LOADED", [])])).status, "LOADED");
+
+  const loaded = req("LOADED", [{ stockId: "a", itemName: "Rice", requested: 10, loaded: 8 }, { stockId: "b", itemName: "Oil", requested: 5, loaded: 0 }]);
+  assert.deepEqual([...v.awaitingOf(trip("LOADING", [loaded]))], [["a", 8]], "loaded, not accepted: reserved; nothing loaded of b reserves nothing");
+  assert.deepEqual([...v.awaitingOf(trip("UNLOADED", [loaded]))], [], "a trip not holding stock reserves nothing");
+  assert.deepEqual([...v.awaitingOf(trip("LOADING", [req("REQUESTED", [{ stockId: "a", requested: 9 }])]))], [], "asked for is not reserved");
+  assert.deepEqual([...v.onVansAll([{ physical: new Map([["a", 2]]), awaiting: new Map([["a", 8]]) }])], [["a", 10]], "other vans and job work see it taken");
+
+  assert.deepEqual(v.acceptPlan(loaded, []), { lines: [{ stockId: "a", itemName: "Rice", loaded: 8, accepted: 8 }], short: [] }, "a line not mentioned is accepted in full");
+  const part = v.acceptPlan(loaded, [{ stockId: "a", accepted: "6" }]);
+  assert.deepEqual(part.short, [{ stockId: "a", itemName: "Rice", loaded: 8, accepted: 6, missing: 2 }]);
+  assert.equal(v.acceptPlan(loaded, [{ stockId: "a", accepted: 0 }]).lines[0].accepted, 0, "nothing at all may be accepted");
+  assert.throws(() => v.acceptPlan(loaded, [{ stockId: "a", accepted: 9 }]), { code: "ACCEPT_MORE_THAN_LOADED" });
+  assert.throws(() => v.acceptPlan(loaded, [{ stockId: "a", accepted: -1 }]), { code: "QTY_INVALID" });
+  assert.throws(() => v.acceptPlan(loaded, [{ stockId: "a", accepted: [3] }]), { code: "QTY_INVALID" });
+  assert.throws(() => v.acceptPlan(loaded, [{ stockId: "z", accepted: 1 }]), { code: "LINE_NOT_LOADED" });
+});

@@ -82,7 +82,20 @@ exports.mine = catchAsync(async (req, res) => ok(res, await VanTripService.mine(
 exports.getTrip = catchAsync(async (req, res) => ok(res, await VanTripService.getById(req.params.tripId)));
 exports.activity = catchAsync(async (req, res) => ok(res, await AuditService.list(req, { entity: "VanTrip", entityId: req.params.tripId, limit: 100 })));
 
+// Where loads go through a request, a salesman opens his OWN van's trip to ask for his load; nobody else's, and only then.
+async function assertMayOpen(req) {
+  if (holds(req, "vansales.load")) return;
+  const Van = require("../../models/modules/vansales/vanModel");
+  const van = require("mongoose").isValidObjectId(req.body?.vanId) ? await Van.findById(req.body.vanId).select("salesmanId rules").lean() : null;
+  const ownVan = van && String(van.salesmanId) === String(req.admin?.id);
+  const asks = van && (await VanSettingsService.forVan(van)).loadRequests;
+  if (!ownVan || !asks || (req.body?.salesmanId && String(req.body.salesmanId) !== String(req.admin?.id))) {
+    throw new AppError("Only the storekeeper or a supervisor opens a trip, except a salesman asking for the load of the van they drive", 403, "PERMISSION_DENIED", { required: ["vansales.load"] });
+  }
+}
+
 exports.openTrip = catchAsync(async (req, res) => {
+  await assertMayOpen(req);
   const trip = await VanTripService.open(req.body || {}, by(req));
   await log(req, "VAN_TRIP_OPENED", trip, `Van trip ${trip.tripNo} opened for ${trip.vanCode}, ${trip.salesmanName}`);
   ok(res, await VanTripService.getById(trip._id), 201);
@@ -94,6 +107,43 @@ exports.load = catchAsync(async (req, res) => {
   await log(req, "VAN_LOADED", trip, `Van ${trip.vanCode} loaded: ${units} units on ${trip.tripNo}`, { load: trip.loads.length });
   ok(res, await VanTripService.getById(trip._id));
 });
+// ---- load requests: the salesman asks, the storekeeper loads, the salesman accepts the count ---------------------
+const LoadRequests = () => require("../../services/vansales/vanLoadRequestService");
+const units = (lines, key) => (lines || []).reduce((n, l) => n + (Number(l[key]) || 0), 0);
+exports.listLoadRequests = catchAsync(async (req, res) => ok(res, await LoadRequests().waiting()));
+exports.loadRequestCounts = catchAsync(async (req, res) => ok(res, await LoadRequests().counts(by(req), { mayLoad: holds(req, "vansales.load") })));
+exports.requestLoad = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const { trip, request } = await LoadRequests().request(req.params.tripId, req.body || {}, by(req), { byName: req.admin?.name });
+  await log(req, "VAN_LOAD_REQUESTED", trip, `Load request ${request.no} on ${trip.tripNo}: ${units(request.lines, "requested")} units asked for`, { requestNo: request.no });
+  ok(res, { request, trip: await VanTripService.getById(trip._id) }, 201);
+});
+exports.cancelLoadRequest = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const { trip, request } = await LoadRequests().cancel(req.params.tripId, req.params.no, by(req), { byName: req.admin?.name, reason: req.body?.reason });
+  await log(req, "VAN_LOAD_REQUEST_CANCELLED", trip, `Load request ${request.no} on ${trip.tripNo} cancelled`, { requestNo: request.no });
+  ok(res, { request, trip: await VanTripService.getById(trip._id) });
+});
+exports.rejectLoadRequest = catchAsync(async (req, res) => {
+  const { trip, request } = await LoadRequests().reject(req.params.tripId, req.params.no, req.body || {}, by(req), { byName: req.admin?.name });
+  await log(req, "VAN_LOAD_REQUEST_REJECTED", trip, `Load request ${request.no} on ${trip.tripNo} refused: ${request.reason}`, { requestNo: request.no });
+  ok(res, { request, trip: await VanTripService.getById(trip._id) });
+});
+exports.loadFromRequest = catchAsync(async (req, res) => {
+  const lines = (Array.isArray(req.body?.lines) ? req.body.lines : []).filter((l) => Number(l?.qty) > 0).map((l) => ({ stockId: l?.stockId, qty: l?.qty }));
+  if (lines.length) await require("../../services/vansales/vanPlanningService").assertExpiryOk(req.params.tripId, { lines }, { mayOverride: holds(req, "vansales.manage") });
+  const { trip, request } = await LoadRequests().load(req.params.tripId, req.params.no, req.body || {}, by(req), { byName: req.admin?.name });
+  await log(req, "VAN_LOAD_REQUEST_LOADED", trip, `Load request ${request.no} on ${trip.tripNo} loaded: ${units(request.lines, "loaded")} of ${units(request.lines, "requested")} units asked for`, { requestNo: request.no });
+  ok(res, { request, trip: await VanTripService.getById(trip._id) });
+});
+exports.acceptLoad = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const { trip, request, short } = await LoadRequests().accept(req.params.tripId, req.params.no, req.body || {}, by(req), { byName: req.admin?.name });
+  const missing = short.reduce((n, l) => n + l.missing, 0);
+  await log(req, "VAN_LOAD_ACCEPTED", trip, `Load request ${request.no} on ${trip.tripNo} accepted${missing ? `, ${missing} units short: ${request.reason}` : " in full"}`, { requestNo: request.no, short });
+  ok(res, { request, short, trip: await VanTripService.getById(trip._id) });
+});
+
 exports.depart = catchAsync(async (req, res) => {
   const trip = await VanTripService.depart(req.params.tripId, by(req), { odometer: req.body?.odometer });
   await log(req, "VAN_DEPARTED", trip, `Van ${trip.vanCode} sent out on ${trip.tripNo}`);
@@ -246,7 +296,11 @@ exports.createPreorder = catchAsync(async (req, res) => {
 });
 exports.tripPreorders = catchAsync(async (req, res) => ok(res, await VanPlanningService.preordersForTrip(req.params.tripId)));
 exports.routePreorders = catchAsync(async (req, res) => ok(res, await VanPlanningService.preordersForRoute(req.params.routeId, { customerId: req.query.customerId })));
-exports.suggestedLoad = catchAsync(async (req, res) => ok(res, await VanPlanningService.suggestedLoad(req.params.tripId)));
+// a salesman asking for his load may start from the suggestion, for his own van only
+exports.suggestedLoad = catchAsync(async (req, res) => {
+  if (!holds(req, "vansales.load")) await assertMayWork(req);
+  ok(res, await VanPlanningService.suggestedLoad(req.params.tripId));
+});
 exports.loadCheck = catchAsync(async (req, res) => ok(res, await VanPlanningService.loadCheck(req.params.tripId, req.body || {})));
 
 // ---- running the fleet (phase 5): the board, road expenses, pins, route profitability --------------------------

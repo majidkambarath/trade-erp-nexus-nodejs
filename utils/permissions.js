@@ -339,8 +339,8 @@ const BUILT_IN = {
     key: "storekeeper",
     name: "Storekeeper",
     rank: 40,
-    description: "Looks after items and stock, including adjustments. Sees sales and purchase documents but cannot raise them.",
-    permissions: only("inventory.create", "inventory.edit", "inventory.adjust", "sales.view", "purchase.view", "reports.view"),
+    description: "Looks after items and stock, including adjustments, and loads the vans. Sees sales and purchase documents but cannot raise them.",
+    permissions: only("inventory.create", "inventory.edit", "inventory.adjust", "sales.view", "purchase.view", "reports.view", "vansales.load"),
   },
   viewer: {
     key: "viewer",

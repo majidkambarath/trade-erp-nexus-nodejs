@@ -92,11 +92,69 @@ function onVan({ status, loaded = new Map(), sold = new Map(), returned = { good
   return { sellable, physical, damaged };
 }
 
-/** Add several trips' physical stock together: what is on every van at once, as Map(stockId -> qty). */
+/**
+ * Add several trips' stock together: what every van holds at once, as Map(stockId -> qty). A trip's `awaiting` (loaded
+ * from a request, not yet accepted by the salesman) counts too: it has left the depot, so no other van or job worker
+ * may be given it, even though it cannot be sold yet.
+ */
 function onVansAll(perTrip) {
   const out = new Map();
-  for (const p of perTrip || []) for (const [id, q] of p.physical || p) bump(out, id, q);
+  for (const p of perTrip || []) {
+    for (const [id, q] of p.physical || p) bump(out, id, q);
+    for (const [id, q] of p.awaiting || []) bump(out, id, q);
+  }
   return out;
+}
+
+// ---- load requests -------------------------------------------------------------------------------------------
+const OPEN_REQUEST = new Set(["REQUESTED", "LOADED"]);
+
+/** The trip's request still waiting for the storekeeper or for the salesman, or null. */
+function openRequest(trip) {
+  return (trip?.loadRequests || []).find((r) => OPEN_REQUEST.has(r.status)) || null;
+}
+
+/** What has been loaded from a request and not yet accepted, as Map(stockId -> qty); nothing on a trip not holding stock. */
+function awaitingOf(trip) {
+  const out = new Map();
+  if (!HOLDING.has(trip?.status)) return out;
+  for (const r of trip?.loadRequests || []) {
+    if (r.status !== "LOADED") continue;
+    for (const l of r.lines || []) if (Number(l.loaded) > 0) bump(out, l.stockId, l.loaded);
+  }
+  return out;
+}
+
+/**
+ * What the salesman accepts of a loaded request. `counts` is [{ stockId, accepted }]; a line he does not mention is
+ * accepted in full. Never more than was loaded, never below nothing. -> { lines: [{...line, accepted}], short: [{stockId,
+ * itemName, loaded, accepted, missing}] }
+ */
+function acceptPlan(request, counts) {
+  const given = new Map();
+  for (const [i, c] of (Array.isArray(counts) ? counts : []).entries()) {
+    const stockId = idOf(c?.stockId);
+    if (!stockId) throw new VanError(`Line ${i + 1}: choose an item`, "ITEM_REQUIRED", { line: i + 1 });
+    const raw = c.accepted;
+    const n = typeof raw === "number" || (typeof raw === "string" && raw.trim() !== "") ? Number(raw) : NaN;
+    if (!Number.isFinite(n) || n < 0) throw new VanError(`Line ${i + 1}: enter what arrived, zero or more`, "QTY_INVALID", { line: i + 1 });
+    given.set(stockId, round3(n));
+  }
+  const lines = [];
+  const short = [];
+  for (const l of request?.lines || []) {
+    const loaded = round3(Number(l.loaded) || 0);
+    if (!(loaded > 0)) continue;
+    const id = String(l.stockId);
+    const accepted = given.has(id) ? given.get(id) : loaded;
+    if (accepted > loaded + EPS) throw new VanError(`${l.itemName || "That item"}: ${loaded} was loaded, so no more than ${loaded} can be accepted`, "ACCEPT_MORE_THAN_LOADED", { stockId: id, loaded });
+    lines.push({ stockId: id, itemName: l.itemName, loaded, accepted });
+    if (accepted < loaded - EPS) short.push({ stockId: id, itemName: l.itemName, loaded, accepted, missing: round3(loaded - accepted) });
+  }
+  for (const id of given.keys()) {
+    if (!lines.some((l) => l.stockId === id)) throw new VanError("An item counted was not on this load", "LINE_NOT_LOADED", { stockId: id });
+  }
+  return { lines, short };
 }
 
 /**
@@ -115,7 +173,8 @@ function validateLoadLines(lines) {
     const n = i + 1;
     const stockId = idOf(l?.stockId);
     if (!stockId) throw new VanError(`Line ${n}: choose an item`, "ITEM_REQUIRED", { line: n });
-    const qty = Number(l.qty);
+    // a number or its text only: Number([1]) is 1, and a list or an object is never a quantity
+    const qty = typeof l.qty === "number" || (typeof l.qty === "string" && l.qty.trim() !== "") ? Number(l.qty) : NaN;
     if (!Number.isFinite(qty) || qty <= 0) throw new VanError(`Line ${n}: enter a quantity above zero`, "QTY_INVALID", { line: n });
     const cur = merged.get(stockId) || { stockId, itemName: text(l.itemName), qty: 0 };
     cur.qty = round3(cur.qty + qty);
@@ -579,7 +638,7 @@ function returnsByReason(trips, amountOf = () => 0) {
 }
 
 module.exports = {
-  STATUSES, HOLDING, SELLING, MOVES, VanError, NOT_GIVEN, returnsByReason,
+  STATUSES, HOLDING, SELLING, MOVES, VanError, NOT_GIVEN, returnsByReason, openRequest, awaitingOf, acceptPlan,
   round2, round3, idOf,
   loadedOf, soldOf, returnedOf, onVan, onVansAll, freeDepot,
   validateLoadLines, shortages, unloadVariance, stockMoves, cashSettlement, missingCheques, routeToday,

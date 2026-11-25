@@ -9,7 +9,7 @@ test("with nothing stored every rule is what van sales did before it had setting
   assert.deepEqual(s, {
     customers: "any", creditSales: "allowed", priceChange: "up_only", maxDiscountPercent: 0, paymentModes: ["cash", "cheque"], returnsAllowed: true,
     returnsWithoutInvoice: false, maxReturnWithoutInvoice: 500, returnReasons: ["Expired", "Damaged", "Wrong item delivered", "Not selling", "Customer complaint", "Other"],
-    suggestRuns: 4, suggestExtraPercent: 0, expiryCheck: "warn", transfersAllowed: true,
+    suggestRuns: 4, suggestExtraPercent: 0, expiryCheck: "warn", transfersAllowed: true, loadRequests: false,
     captureLocation: true, farMetres: 300, quietHours: 2, cashTolerance: 0,
     slipPaper: "80mm", alwaysFullTaxInvoice: false, slipFooter: "Thank you", customerOrdering: true, maxOpenRequests: 3,
   });

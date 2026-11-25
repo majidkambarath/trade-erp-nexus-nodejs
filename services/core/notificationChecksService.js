@@ -227,6 +227,49 @@ class NotificationChecksService {
   }
 
   /**
+   * Van loads that go through a request (CompanySettings.vanSales.loadRequests): the storekeeper is told what is waiting
+   * to be loaded, the salesman (and he alone) that his load is on the van for him to count, and the storekeeper again
+   * when a salesman accepted less than was loaded - that last one stays until the trip is settled.
+   */
+  static async checkVanLoadRequests(now = new Date()) {
+    const VanTrip = require("../../models/modules/vansales/vanTripModel");
+    const trips = await VanTrip.find({ status: { $in: ["LOADING", "ON_ROUTE", "UNLOADED"] }, "loadRequests.0": { $exists: true } })
+      .select("tripNo vanCode salesmanId salesmanName status loadRequests").limit(300).lean();
+    const active = { van_load_requested: [], van_load_ready: [], van_load_short: [] };
+    const say = async (kind, row, fields) => {
+      active[kind].push(fields.dedupeKey);
+      await NotificationService.raise({ kind, now, ...fields });
+    };
+    for (const t of trips) {
+      for (const r of t.loadRequests || []) {
+        const key = `${t._id}:${r.no}`;
+        const units = (field) => (r.lines || []).reduce((n, l) => n + (Number(l[field]) || 0), 0);
+        if (r.status === "REQUESTED" && t.status !== "UNLOADED") {
+          await say("van_load_requested", r, {
+            severity: "info", title: `${t.vanCode} asks for a load`,
+            body: `${t.salesmanName || "The salesman"} asked for ${units("requested")} units on ${t.tripNo}.`,
+            link: `/van-sales/trips?open=${t._id}`, dedupeKey: `van_load_requested:${key}`, permission: "vansales.load",
+          });
+        } else if (r.status === "LOADED" && t.status !== "UNLOADED") {
+          await say("van_load_ready", r, {
+            severity: "info", title: "Your load is on the van", body: `Count what you got on ${t.tripNo} and accept it before you go out.`,
+            link: "/van-sales/my-van", dedupeKey: `van_load_ready:${key}`, permission: "vansales.sell", adminId: t.salesmanId || null,
+          });
+        } else if (r.status === "ACCEPTED" && (r.lines || []).some((l) => Number(l.accepted) + 1e-9 < Number(l.loaded))) {
+          const missing = (r.lines || []).reduce((n, l) => n + Math.max(0, (Number(l.loaded) || 0) - (Number(l.accepted) || 0)), 0);
+          await say("van_load_short", r, {
+            severity: "warning", title: `${t.vanCode} got less than was loaded`,
+            body: `${t.salesmanName || "The salesman"} accepted ${missing} units fewer than loaded on ${t.tripNo}: ${r.reason || "no reason given"}.`,
+            link: `/van-sales/trips?open=${t._id}`, dedupeKey: `van_load_short:${key}`, permission: "vansales.load",
+          });
+        }
+      }
+    }
+    for (const kind of Object.keys(active)) await NotificationService.resolveMissing({ kind, activeDedupeKeys: active[kind], now });
+    return { checked: trips.length };
+  }
+
+  /**
    * A job promised for a day already past, and not yet handed back. Told to whoever may act (garage.view - a
    * workshop's whole floor, not one owner: nobody "owns" a job card the way a CRM deal has one person on it).
    */
@@ -541,6 +584,7 @@ class NotificationChecksService {
     { key: "crmStaleDeals", module: "crm", run: (now) => NotificationChecksService.checkStaleDeals(now) },
     { key: "crmUncontactedLeads", module: "crm", run: (now) => NotificationChecksService.checkUncontactedLeads(now) },
     { key: "crmQuotationsExpiring", module: "crm", run: (now) => NotificationChecksService.checkQuotationsExpiring(now) },
+    { key: "vanLoadRequests", module: "vansales", run: (now) => NotificationChecksService.checkVanLoadRequests(now) },
     { key: "garageJobsOverdue", module: "garage", run: (now) => NotificationChecksService.checkGarageJobsOverdue(now) },
     { key: "garageEstimatesWaiting", module: "garage", run: (now) => NotificationChecksService.checkGarageEstimatesWaiting(now) },
     { key: "garageClaimsWaiting", module: "garage", run: (now) => NotificationChecksService.checkGarageClaimsWaiting(now) },

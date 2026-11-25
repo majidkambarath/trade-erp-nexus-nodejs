@@ -59,14 +59,23 @@ router.get("/customers/:customerId/position", requirePermission("vansales.sell")
 router.get("/invoices/:invoiceId/returnable", requirePermission("vansales.sell"), c.returnable);
 
 // Trips.
+router.get("/load-requests", requirePermission("vansales.load"), c.listLoadRequests);
+router.get("/load-requests/counts", requirePermission(["vansales.load", "vansales.sell"]), c.loadRequestCounts);
 router.get("/trips", requirePermission("vansales.view"), c.listTrips);
 router.get("/trips/mine", requirePermission("vansales.view"), c.mine);
-router.post("/trips", requirePermission("vansales.load"), c.openTrip);
+// a salesman may open his own van's trip where loads go through a request (the controller checks which van and the rule)
+router.post("/trips", requirePermission(["vansales.load", "vansales.sell"]), c.openTrip);
 router.get("/trips/:tripId", requirePermission("vansales.view"), c.getTrip);
 router.get("/trips/:tripId/activity", requirePermission("vansales.view"), c.activity);
 router.post("/trips/:tripId/load", requirePermission("vansales.load"), c.load);
 router.post("/trips/:tripId/depart", requirePermission("vansales.load"), c.depart);
-router.get("/trips/:tripId/suggested-load", requirePermission("vansales.load"), c.suggestedLoad);
+router.get("/trips/:tripId/suggested-load", requirePermission(["vansales.load", "vansales.sell"]), c.suggestedLoad);
+// load requests: the salesman asks and accepts (his own trip: the controller checks), the storekeeper loads or refuses
+router.post("/trips/:tripId/load-requests", requirePermission("vansales.sell"), c.requestLoad);
+router.post("/trips/:tripId/load-requests/:no/cancel", requirePermission("vansales.sell"), c.cancelLoadRequest);
+router.post("/trips/:tripId/load-requests/:no/accept", requirePermission("vansales.sell"), c.acceptLoad);
+router.post("/trips/:tripId/load-requests/:no/load", requirePermission("vansales.load"), c.loadFromRequest);
+router.post("/trips/:tripId/load-requests/:no/reject", requirePermission("vansales.load"), c.rejectLoadRequest);
 router.post("/trips/:tripId/load-check", requirePermission("vansales.load"), c.loadCheck);
 router.get("/trips/:tripId/preorders", requirePermission("vansales.view"), c.tripPreorders);
 router.post("/trips/:tripId/preorders", requirePermission("vansales.sell"), c.createPreorder);

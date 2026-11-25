@@ -41,7 +41,9 @@ async function stockOf(trip, { session } = {}) {
   const loaded = rules.loadedOf(trip);
   const sold = rules.soldOf(invoices);
   const shelf = rules.onVan({ status: trip.status, loaded, sold, returned });
-  return { loaded, sold, returned, ...shelf, invoices, returns };
+  // loaded from a request and not yet accepted: off the depot's shelf, not yet the salesman's to sell
+  const awaiting = rules.awaitingOf(trip);
+  return { loaded, sold, returned, ...shelf, awaiting, invoices, returns };
 }
 
 module.exports = { loadTrip, documentsOf, stockOf };
