@@ -280,6 +280,25 @@ const transactionSchema = new mongoose.Schema({
     id: { type: mongoose.Schema.Types.ObjectId, ref: "RecurringInvoice" },
     name: { type: String, trim: true },
   },
+  // Credit and re-issue (EInvoiceService.reissue): an invoice priced before 18 Nov 2026 whose discount came off after VAT, the credit note
+  // that cancels it and the invoice that replaces it all carry this, so they know they belong together. The first two are never
+  // e-invoiced; the credit note mirrors the old invoice exactly and neither paper document moves stock (services/orderPurchase/reissueLinks.js).
+  // Set only by that service, stripped from a request body like vanTripRef, cleared when the pair is broken. Absent on every other document.
+  reissue: {
+    type: new mongoose.Schema({
+      role: { type: String, enum: ["original", "credit", "invoice"] },
+      originalId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction" },
+      originalNo: String,
+      creditNoteId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction" },
+      creditNoteNo: String,
+      invoiceId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction" },
+      invoiceNo: String,
+      dueDate: Date, // the new invoice keeps the old one's due date (the customer's terms do not restart)
+      appliedCredit: Number, // the new invoice: what the credit note could not use on the old (already paid) invoice, taken off this one
+      at: Date,
+    }, { _id: false }),
+    default: undefined,
+  },
   creditNoteIssued: { type: Boolean, default: false },
   // Whether the organisation was registered for VAT on this document's date (UAE organisations only; services/financial/vatRegistrationService.js).
   // Stamped when it is priced and never defaulted: ABSENT means the document predates the rule and reads as it always did. A purchase

@@ -112,6 +112,8 @@ test("the discount taken off after VAT is read the way the invoice was priced", 
   assert.equal(legacyHeaderDiscount({ pricing: { headerDiscount: 10 }, discount: 10 }), 10); // priced before 18 Nov 2026
   assert.equal(legacyHeaderDiscount({ pricing: { headerDiscount: 0, headerDiscountSpread: 10 }, discount: 10 }), 0); // shared over the lines
   assert.equal(legacyHeaderDiscount({ discount: 7 }), 7); // no pricing record at all
+  // SO989 in the live books (default organisation): no pricing record, lines 220 + VAT 11 = 231, stored total 211, so 20 came off after the tax
+  assert.equal(legacyHeaderDiscount({ discount: 20, totalAmount: 211 }), 20);
   assert.equal(legacyHeaderDiscount({}), 0);
   assert.equal(legacyHeaderDiscount(null), 0);
 });

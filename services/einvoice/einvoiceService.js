@@ -22,6 +22,15 @@ const { runWithTenant, runUnscoped } = require("../../utils/tenantContext");
 const UsageService = require("../core/usageService");
 
 const ELIGIBLE = ["sales_order", "sales_return"];
+// The old invoice of a credit and re-issue and the credit note that cancels it (Transaction.reissue): they cancel each other and are never
+// e-invoiced, so they are left out of what is waiting to be sent. -> the words saying why, or null for any other document.
+const NOT_REPLACED = { "reissue.role": { $nin: ["original", "credit"] } };
+function replacedNote(tx) {
+  const r = tx?.reissue;
+  if (r?.role === "original") return r.invoiceNo ? `${tx.transactionNo} was credited and issued again as ${r.invoiceNo}: send that one.` : `${tx.transactionNo} is cancelled by credit note ${r.creditNoteNo} and is not e-invoiced.`;
+  if (r?.role === "credit") return `${tx.transactionNo} cancels ${r.originalNo}, which was never e-invoiced, so it is not e-invoiced either${r.invoiceNo ? `: ${r.invoiceNo} is sent in its place` : ""}.`;
+  return null;
+}
 const BACKOFF_MS = (attempt) => Math.min(60000 * 2 ** Math.max(attempt - 1, 0), 6 * 3600 * 1000); // 1m, 2m, 4m ... capped at 6h
 
 class EInvoiceService {
@@ -176,6 +185,9 @@ class EInvoiceService {
     if (!ELIGIBLE.includes(tx.type)) throw new AppError("Only sales invoices and sales returns (credit notes) are e-invoiced", 422, "NOT_ELIGIBLE");
     if (tx.isOpening) throw new AppError("An opening balance invoice was issued before go-live and is not e-invoiced", 422, "NOT_ELIGIBLE");
     if (tx.status !== "APPROVED") throw new AppError("Only an approved document can be sent", 422, "NOT_APPROVED");
+    // the old invoice of a credit and re-issue and the credit note that cancels it are never e-invoiced: the new invoice is the one that is sent
+    const replaced = replacedNote(tx);
+    if (replaced) throw new AppError(replaced, 409, "REPLACED");
 
     const [customer, cs, settings] = await Promise.all([
       Customer.findById(tx.partyId).lean(),
@@ -449,12 +461,18 @@ class EInvoiceService {
       if (r.lines.some((l) => !(l.remainingQty === l.originalQty))) {
         throw new AppError("Part of this invoice is already credited (or a credit note is waiting in Sales > Returns); re-issue it by hand", 409, "ALREADY_CREDITED");
       }
+      // The credit note MIRRORS the old invoice (priced the way it was: the discount after the tax), so it reverses it to the fils, VAT
+      // included; neither it nor the new invoice moves stock (the goods never moved). See services/orderPurchase/reissueLinks.js.
       const credit = await TransactionService.createTransaction({
         type: "sales_return", status: "DRAFT", partyId: tx.partyId, partyType: "Customer", partyTypeRef: "Customer",
         returnOf: { transactionId: tx._id, transactionNo: tx.transactionNo },
         items: this.creditLines(tx, r.lines), charges, discount,
-        notes: `Credits ${tx.transactionNo} so it can be issued again with its discount shared over the lines (e-invoicing).`,
+        reissue: { role: "credit", originalId: tx._id, originalNo: tx.transactionNo, at: new Date() },
+        notes: `Cancels ${tx.transactionNo}, which is issued again with its discount shared over the lines (e-invoicing). Not e-invoiced itself.`,
       }, by, session);
+      // the new invoice keeps the old one's due date: the stored one, else the customer's terms from the old invoice's day
+      const customer = await Customer.findById(tx.partyId).select("paymentTerms").session(session).lean();
+      const due = dueDateOf({ date: tx.date, dueDate: tx.dueDate, paymentTerms: customer?.paymentTerms });
       const invoice = await TransactionService.createTransaction({
         type: "sales_order", status: "DRAFT", partyId: tx.partyId, partyType: "Customer", partyTypeRef: "Customer",
         items: (tx.items || []).map((l) => ({
@@ -463,10 +481,15 @@ class EInvoiceService {
           ...(l.costCentreId ? { costCentreId: l.costCentreId } : {}),
         })),
         charges, discount,
+        reissue: { role: "invoice", originalId: tx._id, originalNo: tx.transactionNo, creditNoteId: credit._id, creditNoteNo: credit.transactionNo, ...(due ? { dueDate: due } : {}), at: new Date() },
         ...(tx.costCentreId ? { costCentreId: tx.costCentreId } : {}),
         ...(tx.lpono ? { lpono: tx.lpono } : {}), ...(tx.terms ? { terms: tx.terms } : {}),
+        ...(tx.serialNo ? { serialNo: tx.serialNo } : {}), ...(tx.docno ? { docno: tx.docno } : {}),
         notes: [`Issued again in place of ${tx.transactionNo}.`, tx.notes].filter(Boolean).join(" "),
       }, by, session);
+      const link = { invoiceId: invoice._id, invoiceNo: invoice.transactionNo };
+      await Transaction.updateOne({ _id: credit._id }, { $set: { "reissue.invoiceId": link.invoiceId, "reissue.invoiceNo": link.invoiceNo } }, { session });
+      await Transaction.updateOne({ _id: tx._id }, { $set: { reissue: { role: "original", creditNoteId: credit._id, creditNoteNo: credit.transactionNo, ...link, at: new Date() } } }, { session });
       return { credit, invoice };
     })();
 
@@ -616,11 +639,12 @@ class EInvoiceService {
     if (kind === "380") filter.type = "sales_order";
     if (kind === "381") filter.type = "sales_return";
     // The status filter is decided by the database, not by whichever page happens to be loaded.
-    if (status === "NOT_SENT") filter._id = { $nin: await EInvoiceSubmission.distinct("sourceId", { companyId }) };
+    if (status === "REPLACED") filter["reissue.role"] = { $in: ["original", "credit"] };
+    else if (status === "NOT_SENT") Object.assign(filter, NOT_REPLACED, { _id: { $nin: await EInvoiceSubmission.distinct("sourceId", { companyId }) } });
     else if (status) filter._id = { $in: await EInvoiceSubmission.distinct("sourceId", { companyId, status }) };
     if (overdue && settings.dueDays > 0) filter.date = { $lt: new Date(Date.now() - settings.dueDays * 86400000) };
     const docs = await Transaction.find(filter)
-      .select("transactionNo type date partyId totalAmount returnOf")
+      .select("transactionNo type date partyId totalAmount returnOf reissue")
       .populate({ path: "partyId", model: "Customer", select: "customerName trnNumber billingAddress eInvoice" })
       .sort({ date: -1, _id: -1 }).skip((Math.max(Number(page) || 1, 1) - 1) * lim).limit(lim).lean();
     const subs = await EInvoiceSubmission.find({ companyId, sourceId: { $in: docs.map((d) => d._id) } }).lean();
@@ -633,13 +657,16 @@ class EInvoiceService {
       const s = byDoc.get(String(d._id));
       const party = d.partyId ? ei.partyReadiness(d.partyId) : { required: false, ready: true, missing: [] };
       const due = settings.dueDays > 0 ? new Date(new Date(d.date).getTime() + settings.dueDays * 86400000) : null;
+      const replaced = !s && ["original", "credit"].includes(d.reissue?.role);
       return {
         _id: d._id, transactionNo: d.transactionNo, type: d.type, date: d.date, customer: d.partyId?.customerName,
         total: d.totalAmount, invoiceTypeCode: d.type === "sales_return" ? "381" : "380",
-        status: s?.status || "NOT_SENT", taxStatus: s?.taxStatus || null, deliveryStatus: s?.deliveryStatus || null, route: s?.route || null, rejectedBy: s?.rejectedBy || null, deliveryReasonCode: s?.deliveryReasonCode || null, deliveryReasonText: s?.deliveryReasonText || null, lastError: s?.lastError || null,
+        status: replaced ? "REPLACED" : s?.status || "NOT_SENT",
+        replacedBy: replaced ? { invoiceNo: d.reissue.invoiceNo || null, creditNoteNo: d.reissue.role === "original" ? d.reissue.creditNoteNo || null : d.transactionNo, originalNo: d.reissue.role === "credit" ? d.reissue.originalNo : d.transactionNo } : null,
+        replaces: d.reissue?.role === "invoice" ? d.reissue.originalNo : null, taxStatus: s?.taxStatus || null, deliveryStatus: s?.deliveryStatus || null, route: s?.route || null, rejectedBy: s?.rejectedBy || null, deliveryReasonCode: s?.deliveryReasonCode || null, deliveryReasonText: s?.deliveryReasonText || null, lastError: s?.lastError || null,
         creditOf: d.type === "sales_return" ? d.returnOf?.transactionNo || null : null, creditedBy: creditsOf.get(String(d._id)) || [],
         submissionId: s?._id || null, partyReady: party.ready, partyMissing: party.missing, dueDate: due,
-        overdue: Boolean(due && !s && due < new Date()),
+        overdue: Boolean(due && !s && !replaced && due < new Date()),
       };
     });
   }
@@ -680,7 +707,7 @@ class EInvoiceService {
     const months = dash.lastMonths(end, 6);
     const trendFrom = new Date(`${months[0]}-01T00:00:00.000Z`);
     const sourceIds = await EInvoiceSubmission.distinct("sourceId", { companyId });
-    const unsent = { type: { $in: ELIGIBLE }, status: "APPROVED", isOpening: { $ne: true }, _id: { $nin: sourceIds }, date: { $gte: new Date(`${settings.startDate || start}T00:00:00.000Z`) } };
+    const unsent = { type: { $in: ELIGIBLE }, status: "APPROVED", isOpening: { $ne: true }, ...NOT_REPLACED, _id: { $nin: sourceIds }, date: { $gte: new Date(`${settings.startDate || start}T00:00:00.000Z`) } };
     const SUBS = "documentNo issueDate status taxStatus deliveryStatus route rejectedBy deliveryReasonCode deliveryReasonText lastError invoiceTypeCode totals buyerName submittedAt updatedAt sourceId";
 
     const [inPeriod, openRows, unsentDocs, sentTrend, inboundPeriod, inboundByStatus, inboundNotRecorded, inboundTrend, recent, attentionRows] = await Promise.all([
