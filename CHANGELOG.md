@@ -1,5 +1,23 @@
 # Changelog
 
+## 4.2.2.0 — 25 November 2026
+
+e-Invoicing: an invoice whose discount came off after VAT can now be sent. Frontend and backend both at 4.2.2.0.
+
+### Added
+
+- **Credit and re-issue.** An invoice approved before 18 Nov 2026 with a discount on the whole invoice took that discount off
+  the total after VAT, which an e-invoice cannot carry, so Review refused it with advice nobody could follow. Review now
+  says what to do, shows the invoice total in the books beside the e-invoice's, and offers Credit and re-issue. That makes
+  two drafts and approves nothing: a credit note that cancels the invoice exactly, and a new invoice with the same customer,
+  lines, discount, due date and serial number, whose discount is shared over its lines so its VAT is right. Approve the
+  credit note, then the new invoice, and send the new invoice.
+  - A payment already made on the old invoice moves to the new one, so it does not read unpaid.
+  - Stock does not move, and no cost of goods is posted twice.
+  - The old invoice and its credit note show as **Replaced** in Outbound and are never sent as e-invoices; they are left out
+    of the dashboard's "not sent". The sales and returns lists say "Replaces …", "Issued again as …" or "Cancels …".
+  - The new invoice moves no CRM deal.
+
 ## 4.1.1.0 — 21 November 2026
 
 Small e-Invoicing screen improvements. Frontend and backend both at 4.1.1.0 (no server change).
