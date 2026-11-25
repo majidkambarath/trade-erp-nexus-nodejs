@@ -116,4 +116,13 @@ async function release(transaction, { session } = {}) {
   await Transaction.updateMany({ _id: { $in: ids } }, { $unset: { reissue: "" } }, opts);
 }
 
-module.exports = { assertEditable, assertMayApprove, settle, unsettle, assertMayUndoCredit, release, paper, roleOf };
+// Which of these document ids are the credit note of a re-issue (a ledger row's voucherId is its document's id), as strings. One read.
+async function correctionsAmong(ids, session) {
+  const list = [...new Set((ids || []).filter(Boolean).map(String))];
+  if (!list.length) return new Set();
+  const { CORRECTIONS } = require("../../utils/reissue");
+  const found = await Transaction.find({ _id: { $in: list }, ...CORRECTIONS }).select("_id").session(session || null).lean();
+  return new Set(found.map((d) => String(d._id)));
+}
+
+module.exports = { assertEditable, assertMayApprove, settle, unsettle, assertMayUndoCredit, release, paper, roleOf, correctionsAmong };

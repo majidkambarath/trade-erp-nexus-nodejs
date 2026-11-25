@@ -5,6 +5,8 @@ const AccountConfigService = require("./accountConfigService");
 const ChartOfAccountsService = require("./chartOfAccountsService");
 const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
+const { correctionsAmong } = require("../orderPurchase/reissueLinks");
+const { isCorrection, correctionNarration } = require("../../utils/reissue");
 
 // Statement of account for one customer or vendor, read from the ledger so it always agrees with
 // the Trial Balance: invoices, returns, receipts and payments, in date order, with a running
@@ -72,7 +74,7 @@ class StatementService {
     const rows = entries.map((e) => {
       running = round2(running + sign * (e.debit - e.credit));
       return {
-        _id: e._id, date: e.date, voucherNo: e.voucherNo, voucherType: e.voucherType,
+        _id: e._id, date: e.date, voucherNo: e.voucherNo, voucherType: e.voucherType, ...(e.correction ? { correction: true } : {}),
         narration: e.narration, debit: round2(e.debit), credit: round2(e.credit), balance: running,
         // `balance` is signed FOR THE PARTY (positive = they owe us / we owe them); `net` is always
         // debit minus credit, so one field means one thing on a party's statement and an account's.
@@ -108,6 +110,7 @@ class StatementService {
       AccountConfigService.isPostingEnabled(),
     ]);
     const a = ledger.account;
+    const corrections = await correctionsAmong(ledger.rows.filter((r) => r.voucherType === "sales_return").map((r) => r.voucherId));
     return {
       party: null,
       account: a,
@@ -116,7 +119,7 @@ class StatementService {
       opening: ledger.opening, openingNet: ledger.openingNet,
       rows: ledger.rows.map((r) => ({
         _id: r._id, date: r.date, voucherId: r.voucherId, voucherNo: r.voucherNo, voucherType: r.voucherType,
-        referenceType: r.referenceType, narration: r.narration,
+        referenceType: r.referenceType, narration: r.narration, ...(corrections.has(String(r.voucherId)) ? { correction: true } : {}),
         debit: r.debit, credit: r.credit, balance: r.balance, net: r.net,
       })),
       closing: ledger.closing, closingNet: ledger.closingNet,
@@ -130,9 +133,11 @@ class StatementService {
 
   static async ledgerMovements(accountIds) {
     const entries = await LedgerEntry.find({ accountId: { $in: accountIds }, isReversed: { $ne: true } }).lean();
+    const corrections = await correctionsAmong(entries.filter((e) => e.voucherType === "sales_return").map((e) => e.voucherId));
     return entries.map((e) => ({
       _id: e._id, date: e.date, voucherNo: e.voucherNo, voucherType: e.voucherType,
       narration: e.narration, debit: e.debitAmount, credit: e.creditAmount,
+      ...(corrections.has(String(e.voucherId)) ? { correction: true } : {}),
     }));
   }
 
@@ -145,7 +150,7 @@ class StatementService {
       purchase_order: "Purchase invoice", purchase_return: "Purchase return",
     };
     const [docs, vouchers] = await Promise.all([
-      Transaction.find({ partyId, type: { $in: types }, status: "APPROVED" }).select("transactionNo type date totalAmount isOpening docno").lean(),
+      Transaction.find({ partyId, type: { $in: types }, status: "APPROVED" }).select("transactionNo type date totalAmount isOpening docno reissue").lean(),
       Voucher.find({ partyId, partyType, status: "approved", voucherType: { $in: ["receipt", "payment"] } })
         .select("voucherNo voucherType date totalAmount narration paymentMode").lean(),
     ]);
@@ -156,7 +161,8 @@ class StatementService {
       const amount = round2(d.totalAmount);
       rows.push({
         _id: d._id, date: d.date, voucherNo: d.transactionNo, voucherType: d.type,
-        narration: d.isOpening ? `Opening ${d.type === "sales_order" ? "sales" : "purchase"} invoice${d.docno ? " " + d.docno : ""}` : LABEL[d.type],
+        narration: d.isOpening ? `Opening ${d.type === "sales_order" ? "sales" : "purchase"} invoice${d.docno ? " " + d.docno : ""}` : isCorrection(d) ? correctionNarration(d) : LABEL[d.type],
+        ...(isCorrection(d) ? { correction: true } : {}),
         debit: isVendor ? (increases ? 0 : amount) : (increases ? amount : 0),
         credit: isVendor ? (increases ? amount : 0) : (increases ? 0 : amount),
       });

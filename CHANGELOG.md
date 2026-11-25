@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.3.2.0 — 25 November 2026
+
+E-invoicing: the last of Credit and re-issue. Frontend and backend both at 4.3.2.0.
+
+### Changed
+
+- **The credit note of a credit and re-issue is called "Credit note (re-issue)"**, not "Sales return", on the day book and
+  its totals, the daily summary, the customer's and an account's statement, and the document's audit trail; its ledger
+  rows say which invoice it cancels. Rows posted before this get the new description when the server starts.
+- **e-Invoicing > Outbound:** a row that needs credit and re-issue offers that button instead of Send, which could only
+  fail.
+
+### Documentation
+
+- Credit and re-issue is written up for developers (CLAUDE.md) and in the frontend reference (DOCUMENTATION.md), whose
+  e-invoicing row was out of date.
+
 ## 4.3.1.0 — 25 November 2026
 
 E-invoicing: what was left after Credit and re-issue. Frontend and backend both at 4.3.1.0.

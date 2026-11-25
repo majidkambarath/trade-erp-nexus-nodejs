@@ -282,7 +282,12 @@ async function moveReissueCreditsToRevenue() {
   const FiscalYearService = require("../services/core/fiscalYearService");
   const { withTransactionSession } = require("./withTransactionSession");
   const why = "migration: re-issue credit notes come off sales revenue, across every organisation";
-  const credits = await runUnscoped(why, () => Transaction.find({ ...CORRECTIONS, status: "APPROVED" }).select("companyId branchId transactionNo date").lean());
+  const credits = await runUnscoped(why, () => Transaction.find({ ...CORRECTIONS, status: "APPROVED" }).select("companyId branchId transactionNo date reissue").lean());
+  // the words on their ledger rows, whatever account the rows are on (a closed period is no reason to keep a wrong description)
+  const { correctionNarration } = require("./reissue");
+  for (const c of credits) {
+    await runUnscoped(why, () => LedgerEntry.updateMany({ voucherId: c._id, narration: { $ne: correctionNarration(c) }, referenceType: "order" }, { $set: { narration: correctionNarration(c) } }));
+  }
   let done = 0;
   for (const c of credits) {
     try {

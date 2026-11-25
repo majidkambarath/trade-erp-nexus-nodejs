@@ -47,6 +47,7 @@ test.before(async () => {
     Customer: require("../../models/modules/customerModel"),
     Stock: require("../../models/modules/stockModel"),
     VATReport: require("../../models/modules/financial/VATReport"),
+    Transaction: require("../../models/modules/transactionModel"),
   };
   await mongoose.connection.syncIndexes();
 
@@ -413,6 +414,21 @@ test("e-invoicing: configure, check, send, follow to reported, and the inbound s
 
   const dash = await call("GET", "/einvoice/dashboard");
   assert.equal(dash.body.outbound.byStatus.REPORTED, 1);
+
+  // an invoice priced the old way (10 off AFTER the tax) is found by the "Needs re-issue" filter and counted on the dashboard
+  const old = await order("sales_order", S.customer, "Customer", [line(4, 100, { taxCodeId: S.std._id })]);
+  assert.equal((await processDoc(old.body._id, "approve")).status, 200);
+  await M.Transaction.updateOne({ _id: old.body._id }, { $set: { discount: 10, "pricing.headerDiscount": 10, totalAmount: 410, outstandingAmount: 410 }, $unset: { "pricing.headerDiscountSpread": "" } });
+  const needs = await call("GET", "/einvoice/documents?status=NEEDS_REISSUE", { token: S.viewer });
+  assert.equal(needs.status, 200, JSON.stringify(needs.data));
+  assert.deepEqual(needs.body.map((x) => x._id), [old.body._id], "only that invoice, and a viewer may read the list");
+  assert.equal(needs.body[0].needsReissue, true);
+  assert.equal((await call("GET", "/einvoice/dashboard")).body.todo.find((t) => t.key === "needsReissue").count, 1);
+  assert.equal((await call("GET", "/einvoice/documents?status=NEEDS_REISSUE&kind=381")).body.length, 0, "never a credit note");
+  const odd = await call("GET", "/einvoice/documents?status[]=NEEDS_REISSUE");
+  assert.ok(odd.status < 500, `a strange status is not a server error (${odd.status})`);
+  await M.Transaction.updateOne({ _id: old.body._id }, { $set: { discount: 0, "pricing.headerDiscount": 0 } }); // out of the way of the steps below
+  assert.equal((await call("GET", "/einvoice/documents?status=NEEDS_REISSUE")).body.length, 0);
 
   // inbound: by hand, then a signed webhook, then an unsigned one
   const inv = { providerId: "IN-1", documentId: "SUP-1", sellerName: "Mill", sellerVatTrn: "100555444300003", payableAmount: 966, lineExtensionTotal: 920, taxAmount: 46 };

@@ -13,4 +13,12 @@ const IS_CORRECTION = { $eq: ["$reissue.role", "credit"] };
 // find filter for those credit notes
 const CORRECTIONS = { type: "sales_return", "reissue.role": "credit" };
 
-module.exports = { isCorrection, postingKey, IS_CORRECTION, CORRECTIONS };
+// What such a credit note is called wherever a document's kind is named (day book, statements, the audit trail). `CORRECTION_KIND` is the key
+// it is counted under where documents are totted up by kind, so it is never added into "Sales return"; a row keeps its real voucherType.
+const CORRECTION_LABEL = "Credit note (re-issue)";
+const CORRECTION_KIND = "reissue_credit";
+
+// the words its ledger rows carry
+const correctionNarration = (tx) => `Credit note (re-issue) ${tx.transactionNo}${tx.reissue?.originalNo ? `, cancels ${tx.reissue.originalNo}` : ""}`;
+
+module.exports = { isCorrection, postingKey, IS_CORRECTION, CORRECTIONS, CORRECTION_LABEL, CORRECTION_KIND, correctionNarration };
