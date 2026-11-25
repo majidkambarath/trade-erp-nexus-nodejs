@@ -1,5 +1,41 @@
 # Changelog
 
+## 4.3.0.0 — 25 November 2026
+
+Van sales: rules an organisation sets, card and bank transfer at the door, returns without an invoice, load requests,
+and empties and crates. Frontend and backend both at 4.3.0.0.
+
+### Added
+
+- **Rules for the vans** (Vans and routes > Rules). About twenty rules that were fixed in code are now the organisation's
+  to set, five of them per van: who a van may sell to, credit, changing the price, the discount a salesman may give, the
+  ways money is taken, returns, the suggested load, the expiry check, transfers, location, the "quiet" and "far" flags,
+  the cash tolerance and the printed slip. Every default is what van sales did before, so nothing changes until a rule
+  is changed.
+- **Card and bank transfer at the door, and part payment.** A card is taken on the van's own card machine; a bank
+  transfer waits for the office to see it in the bank before it posts, and does not stop the trip being settled. A
+  customer may pay part now; the rest is taken later with Collect money.
+- **Goods taken back without an invoice**, where the organisation allows it, at the customer's own price (only a
+  supervisor can change it) and up to a limit per return. **Every return asks why** the goods came back, from a list the
+  organisation edits; Reports shows returns by reason.
+- **Load requests** (a switch, off by default). The salesman asks for what they want on the van, the storekeeper loads it
+  and may change it, and the salesman counts what arrived and accepts it. Only what they accept is theirs to sell; anything
+  short stays in the depot and the storekeeper is told. The ready-made Storekeeper role can now load vans.
+- **Empties and crates.** Container types (crates, bottles, cylinders) with the items that come in them and an optional
+  deposit. A sale fills in how many go out; the salesman types how many came back; each customer's holding is kept and
+  shown at the door. A deposit is held as a liability (its own debit or credit note to the customer, out of scope for
+  VAT: confirm the treatment with an adviser) and refunded when containers come back. Containers missing at count-in are
+  a warning at settlement, their deposit charged to the salesman's shortage.
+
+### Fixed
+
+- Every cheque taken on a van was refused (the bank it is drawn on was never sent).
+- "Cheques not handed in" could never be reported at settlement.
+- A typed discount on a van sale was not checked against the list price, and a negative one raised the price.
+- The van slip printed "AED" whatever the organisation's currency.
+- Stock counted short or over at count-in was dated the settlement day instead of the count day.
+- A load quantity sent as a list was read as a number.
+
 ## 4.2.2.0 — 25 November 2026
 
 e-Invoicing: an invoice whose discount came off after VAT can now be sent. Frontend and backend both at 4.2.2.0.
