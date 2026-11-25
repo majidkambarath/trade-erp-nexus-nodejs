@@ -33,6 +33,7 @@ const { withTransactionSession } = require("../../utils/withTransactionSession")
 const DocumentLinks = require("./deliveryNoteLinks");
 const ReceiptLinks = require("./receiptLinks");
 const CrmHooks = require("../crm/crmHooks");
+const ReissueLinks = require("./reissueLinks");
 const JobCardLinks = require("../garage/jobCardLinks");
 const ShareService = require("../messaging/shareService");
 const ItemKindService = require("../stock/itemKindService");
@@ -140,7 +141,9 @@ function calculateItems(items) {
 // is only for a caller that must keep the old after-tax behaviour.
 // `fx` (a foreign-currency invoice: FxDocumentService.resolve) says the prices are in that currency: the document is priced in it, then every figure is
 // converted to the base currency at the document's rate (utils/fxDocument.js) and the foreign figures are kept beside them.
-async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date, side, registeredAs, gst, fx, spreadDiscount = true }, session) {
+// `mirror` (the credit note of a credit and re-issue) prices a document exactly as an invoice of before 18 Nov 2026 was: the discount after the tax
+// and the VAT line by line, so it reverses that invoice to the fils. It is never e-invoiced, so the e-invoice's rounding does not apply.
+async function buildPricing({ items, charges = [], discount = 0, incomingTotal, date, side, registeredAs, gst, fx, spreadDiscount = true, mirror = false }, session) {
   const onDate = side ? await VatRegistrationService.stateOn(date, { session }) : { governs: false, registered: true };
   const vat = onDate.governs && typeof registeredAs === "boolean" ? { ...onDate, registered: registeredAs } : onDate;
   const noVat = vat.governs && !vat.registered && side === "sales";
@@ -149,7 +152,7 @@ async function buildPricing({ items, charges = [], discount = 0, incomingTotal, 
   // is priced and taxed like any other but moves no stock (utils/itemKinds.js)
   let processedItems = await ItemKindService.stamp(calculateItems(withTax), { session });
   let spread = { applied: 0 };
-  if (spreadDiscount && Number(discount) > 0) {
+  if (spreadDiscount && !mirror && Number(discount) > 0) {
     spread = spreadHeaderDiscount(processedItems, discount);
     processedItems = spread.lines;
   }
@@ -161,7 +164,7 @@ async function buildPricing({ items, charges = [], discount = 0, incomingTotal, 
     });
   // An organisation that sends its invoices through Wafeq prices them the e-invoice's way: VAT once per category and rate, and no round-off
   // (services/einvoice/roundingRule.js). The fils difference goes on the group's largest line, so the net of every line is untouched.
-  if (side === "sales" && !fx && (await roundsVatByRate(session))) {
+  if (side === "sales" && !fx && !mirror && (await roundsVatByRate(session))) {
     const r = roundVatByRate(processedItems, pricedCharges);
     processedItems = r.lines;
     pricedCharges = r.charges;
@@ -325,6 +328,7 @@ class TransactionService {
         // a line id sent with a new document belongs to some other document: every line here gets its own
         {
           items: pricedInput.map(({ _id, ...line }) => line), charges: data.charges, discount, incomingTotal: totalAmount, date: date || new Date(), side: sideOfType(type),
+          mirror: data.reissue?.role === "credit",
           registeredAs: await ReturnService.originalRegistration({ type, returnOf: data.returnOf }, { session }),
           gst: await GstService.context({ partyType, partyId, side: sideOfType(type), returnOf: data.returnOf, session }),
           fx: await FxDocumentService.resolve(
@@ -400,6 +404,10 @@ class TransactionService {
         vanTripRef: data.vanTripRef || undefined,
         // Set only by RecurringInvoiceService (a draft made on a schedule); stripped from a request body.
         recurringRef: data.recurringRef || undefined,
+        // Set only by EInvoiceService.reissue (an invoice credited and issued again); stripped from a request body. The new invoice keeps the
+        // old one's due date, which a body can never set.
+        ...(data.reissue?.role ? { reissue: data.reissue } : {}),
+        ...(data.reissue?.role === "invoice" && data.reissue.dueDate ? { dueDate: data.reissue.dueDate } : {}),
         // Set only by TradeOrderService.createInvoice (an order converted straight to its invoice); stripped
         // from a request body like jobCardRef.
         tradeOrderRef: type === "sales_order" ? data.tradeOrderRef || undefined : undefined,
@@ -447,6 +455,8 @@ class TransactionService {
       if (this.isProcessed(transaction.status))
         throw new AppError("Cannot edit processed transactions", 400);
       assertStatusNotForced(data.status);
+      // the credit note and the new invoice of a credit and re-issue keep their lines: only their words may change
+      ReissueLinks.assertEditable(transaction, data);
       if (data.partyId !== undefined && String(data.partyId) !== String(transaction.partyId)) {
         await assertPartyExists(data.partyId, data.partyType || transaction.partyType, session, transaction.type);
         data.partyType = data.partyType === "Vendor" ? "Vendor" : "Customer";
@@ -464,7 +474,7 @@ class TransactionService {
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
-      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "recurringRef", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx"]) delete data[key];
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "recurringRef", "reissue", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx"]) delete data[key];
       await assertCentres(data, session, transaction);
       if (data.costCentreId === null) {
         transaction.set("costCentreId", undefined);
@@ -605,6 +615,7 @@ class TransactionService {
 
       const wasApproved = transaction.status === "APPROVED";
       if (wasApproved) await require("../vansales/vanTripGuard").assertNotCountedIn(transaction, { session });
+      await ReissueLinks.assertMayUndoCredit(transaction, { session });
 
       // An invoice that has gone out as an e-invoice is a legal record: it is corrected with a
       // credit note, never deleted. (A failed attempt never left the building, so it does not count.)
@@ -653,6 +664,8 @@ class TransactionService {
 
       // Delivery notes and quotations that pointed at this order are released.
       await DocumentLinks.onSalesOrderChanged(transaction, { session, deleted: true });
+      // a credit and re-issue whose credit note or new invoice is deleted is broken: the documents read as they were
+      await ReissueLinks.release(transaction, { session });
       await ReceiptLinks.onPurchaseInvoiceChanged(transaction, { session, deleted: true });
       // The CRM deal this invoice won is put back where it was: see services/crm/crmHooks.js.
       await CrmHooks.onSalesDocumentReversed(transaction, { session });
@@ -709,6 +722,8 @@ class TransactionService {
         // A document raised on a van trip may only be approved while that trip is still out, and an invoice only while the
         // stock it sells is still on the van - whoever presses Approve and from whichever screen.
         await require("../vansales/vanTripGuard").assertTripAllows(transaction, { session });
+        // the new invoice of a credit and re-issue waits for its credit note
+        await ReissueLinks.assertMayApprove(transaction, { session });
         const stockUpdates = await this.processTransactionStock(id, transaction, createdBy, session);
         // Accounting entries (receivable/payable, revenue or inventory, VAT, cost of goods sold).
         // A no-op until the company has mapped its accounts and switched ledger posting on.
@@ -719,6 +734,8 @@ class TransactionService {
         await this.updatePartyBalanceAndLog(transaction, createdBy, session);
         // A return is applied to the invoice it returns, as a payment is: what is still owed on that invoice falls by it
         await ReturnService.applyToOriginal(transaction, { session });
+        // ...and the new invoice of a credit and re-issue takes over what its credit note could not use on the (paid) old invoice
+        await ReissueLinks.settle(transaction, { session });
 
         // Handle purchase_order specific
         if (transaction.type === "purchase_order") {
@@ -746,6 +763,8 @@ class TransactionService {
       if (action === "cancel") {
         if (wasApproved) {
           await require("../vansales/vanTripGuard").assertNotCountedIn(transaction, { session });
+          await ReissueLinks.assertMayUndoCredit(transaction, { session });
+          ReissueLinks.unsettle(transaction);
           await PostingService.reverseTransaction(transaction, { session });
           await this.reverseTransactionStock(
             id,
@@ -777,6 +796,8 @@ class TransactionService {
       // (rejected, cancelled); a converted quotation is released if its order was rejected or cancelled.
       await DocumentLinks.onSalesOrderChanged(transaction, { session });
       await ReceiptLinks.onPurchaseInvoiceChanged(transaction, { session });
+      // a credit and re-issue whose credit note or new invoice is turned down or cancelled is broken: see services/orderPurchase/reissueLinks.js
+      if (action === "reject" || action === "cancel") await ReissueLinks.release(transaction, { session });
       // And the CRM deal behind it is won, or put back if this was a rejection or a cancellation. This line is
       // deliberately HERE and not earlier: an approval that is only the first of two returns above (line ~535), so a
       // deal is never won by a document still waiting for its second approver.
@@ -1047,7 +1068,7 @@ const logAmount = balanceEffect;
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
         "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
-        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend lastReminder approvals jobCardRef tradeOrderRef vanTripRef recurringRef vatRegistered gstType placeOfSupply supplierState fx";
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend lastReminder approvals jobCardRef tradeOrderRef vanTripRef recurringRef reissue vatRegistered gstType placeOfSupply supplierState fx";
       let docs;
       let total;
       if (sortKey === "party") {
@@ -1155,6 +1176,9 @@ const logAmount = balanceEffect;
     session
   ) {
     if (transaction.isOpening) return []; // no lines, no stock: its balance came in through Opening balances
+    // The credit note and the new invoice of a credit and re-issue are paper: no goods changed hands, so the old invoice keeps its one
+    // cost of goods and stock never moves (their lines are locked, so nothing can be added that should move: reissueLinks.assertEditable).
+    if (["credit", "invoice"].includes(transaction.reissue?.role)) return [];
     const { type, items, transactionNo } = transaction;
     const costBasis = costing.COST_BASIS_BY_TYPE[type];
     if (!costBasis) throw new AppError(`Cannot move stock for ${type}`, 400);

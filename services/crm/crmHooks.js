@@ -222,6 +222,9 @@ class CrmHooks {
     if (!transaction || transaction.type !== SALES_INVOICE) return null;
     // An opening invoice is the go-live balance of a customer who was already trading: it is not a deal anybody won.
     if (transaction.isOpening) return null;
+    // The invoice that replaces one credited and issued again (EInvoiceService.reissue) wins nothing: the old invoice already won its deal,
+    // and a customer with one other open deal must not have that one marked won by a paper correction.
+    if (transaction.reissue?.role === "invoice") return null;
 
     return quietly(`sales invoice ${transaction.transactionNo || transaction._id} (${transaction.status})`, async () => {
       const deal = await dealFor(
@@ -250,6 +253,7 @@ class CrmHooks {
   /** The approved invoice was deleted, and with it everything it moved - including the deal it won. */
   static async onSalesDocumentReversed(transaction, { session } = {}) {
     if (!transaction || transaction.type !== SALES_INVOICE) return null;
+    if (transaction.reissue?.role === "invoice") return null; // a credit and re-issue never moved a deal (onSalesDocumentProcessed)
     return quietly(`sales invoice ${transaction.transactionNo || transaction._id} (deleted)`, async () => {
       const deal = await dealFor({ orderId: transaction._id, quoteRef: transaction.quoteRef }, session);
       if (!deal) return null;

@@ -74,6 +74,7 @@ router.post("/submit/:transactionId", requirePermission("sales.approve"), catchA
 
 router.post("/submissions/:id/correct", requirePermission("sales.approve"), catchAsync(async (req, res) => ok(res, await EInvoiceService.correct(req.params.id, req))));
 router.post("/documents/:transactionId/credit-in-full", requirePermission("sales.create"), catchAsync(async (req, res) => ok(res, await EInvoiceService.creditInFull(req.params.transactionId, req), 201)));
+router.post("/documents/:transactionId/reissue", requirePermission("sales.create"), catchAsync(async (req, res) => ok(res, await EInvoiceService.reissue(req.params.transactionId, req), 201)));
 router.get("/submissions", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.listSubmissions(req, req.query))));
 router.get("/submissions/:id", requirePermission(["reports.financial","sales.view","purchase.view"]), catchAsync(async (req, res) => ok(res, await EInvoiceService.getSubmission(req.params.id, req))));
 router.post("/submissions/:id/retry", requirePermission("sales.approve"), catchAsync(async (req, res) => ok(res, await EInvoiceService.retry(req.params.id, req))));
