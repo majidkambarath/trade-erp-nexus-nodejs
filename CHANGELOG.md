@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.3.4.0 — 26 November 2026
+
+One loading screen for the whole product (frontend only). Frontend and backend both at 4.3.4.0; the backend has no change
+beyond the version.
+
 ## 4.3.3.0 — 26 November 2026
 
 A proper loading screen while a session is restored (frontend only). Frontend and backend both at 4.3.3.0; the backend
