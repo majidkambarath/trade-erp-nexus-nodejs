@@ -104,7 +104,7 @@ class VatReturnService {
     const lines = [];
 
     const docs = await Transaction.find({ status: "APPROVED", isOpening: { $ne: true }, date: { $gte: start, $lte: end } })
-      .select("transactionNo type date partyId partyType items charges vatRegistered branchId vendorReference fx.currency")
+      .select("transactionNo type date partyId partyType items charges vatRegistered branchId vendorReference fx.currency selfBilledNo")
       .lean();
     const OUT = { sales_order: 1, sales_return: -1 };
     const IN = { purchase_order: 1, purchase_return: -1 };
@@ -116,7 +116,7 @@ class VatReturnService {
       const sign = (OUT[d.type] ?? IN[d.type]);
       const base = {
         source: "invoice", docId: d._id, docNo: d.transactionNo, docType: d.type, date: d.date, direction, partyId: d.partyId, partyType: d.partyType,
-        branchId: d.branchId, supplierRef: d.vendorReference || "",
+        branchId: d.branchId, supplierRef: d.vendorReference || "", selfBilledNo: d.selfBilledNo || "",
       };
       // the foreign amounts of a line, when the document was made in a foreign currency (the figures above stay in base)
       const inForeign = (taxable, vat) => (d.fx?.currency ? { currency: d.fx.currency, taxable: num(taxable) * sign, vat: num(vat) * sign } : null);

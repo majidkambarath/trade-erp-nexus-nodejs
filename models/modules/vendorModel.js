@@ -30,6 +30,8 @@ const vendorSchema = new mongoose.Schema({
   // country and on a record saved before it existed; taken from the GSTIN's first two digits when not typed.
   stateCode: { type: String, trim: true, default: undefined },
   // "30 days", "Net 30", "45 days", "Net 60", "60 days", "COD", or "Net <days>" for any other credit period.
+  // The written agreement that lets us raise this supplier's tax invoices ourselves (utils/selfBilling.js). Absent = none.
+  selfBilling: { agreed: Boolean, agreementRef: { type: String, trim: true }, from: String },
   paymentTerms: {
     type: String,
     validate: { validator: (v) => isValidTerms("vendor", v), message: "Invalid paymentTerms" },

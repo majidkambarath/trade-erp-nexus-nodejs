@@ -34,6 +34,7 @@ const DocumentLinks = require("./deliveryNoteLinks");
 const ReceiptLinks = require("./receiptLinks");
 const CrmHooks = require("../crm/crmHooks");
 const ReissueLinks = require("./reissueLinks");
+const SelfBilling = require("../financial/selfBillingService");
 const JobCardLinks = require("../garage/jobCardLinks");
 const ShareService = require("../messaging/shareService");
 const ItemKindService = require("../stock/itemKindService");
@@ -288,6 +289,8 @@ class TransactionService {
       await FiscalYearService.assertPostingAllowed(date || new Date(), { session });
       if (!items?.length) throw new AppError("Items are required", 400);
       await assertCentres(data, session);
+      // a purchase invoice we raise for the supplier (and the credit note of its return): checked before a number is used
+      const selfBilled = await SelfBilling.forNew(data, { session });
 
       // The number: the one a person typed where this document's type allows that, else the next from
       // the counter. It goes through NumberSeriesService.numberFor, as every other document kind does,
@@ -407,6 +410,7 @@ class TransactionService {
         // Set only by EInvoiceService.reissue (an invoice credited and issued again); stripped from a request body. The new invoice keeps the
         // old one's due date, which a body can never set.
         ...(data.reissue?.role ? { reissue: data.reissue } : {}),
+        ...(selfBilled ? { selfBilled: true } : {}),
         ...(data.reissue?.role === "invoice" && data.reissue.dueDate ? { dueDate: data.reissue.dueDate } : {}),
         // Set only by TradeOrderService.createInvoice (an order converted straight to its invoice); stripped
         // from a request body like jobCardRef.
@@ -474,7 +478,15 @@ class TransactionService {
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
-      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "recurringRef", "reissue", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx"]) delete data[key];
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "recurringRef", "reissue", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx", "selfBilledNo"]) delete data[key];
+      // self-billing is chosen on a purchase invoice only; a return follows its invoice
+      if (data.selfBilled !== undefined) {
+        if (transaction.type !== "purchase_order") delete data.selfBilled;
+        else {
+          data.selfBilled = data.selfBilled === true;
+          if (data.selfBilled) await SelfBilling.assertAllowed({ partyId: data.partyId || transaction.partyId, date: data.date || transaction.date, session });
+        }
+      }
       await assertCentres(data, session, transaction);
       if (data.costCentreId === null) {
         transaction.set("costCentreId", undefined);
@@ -661,6 +673,10 @@ class TransactionService {
         by: createdBy,
         session,
       });
+      // the self-billed number we issued for it stays used: a tax invoice number is never given twice
+      if (transaction.selfBilledNo) {
+        await NumberSeriesService.release({ number: transaction.selfBilledNo, reason: "Self-billed document deleted", retire: true, by: createdBy, session });
+      }
 
       // Delivery notes and quotations that pointed at this order are released.
       await DocumentLinks.onSalesOrderChanged(transaction, { session, deleted: true });
@@ -724,6 +740,8 @@ class TransactionService {
         await require("../vansales/vanTripGuard").assertTripAllows(transaction, { session });
         // the new invoice of a credit and re-issue waits for its credit note
         await ReissueLinks.assertMayApprove(transaction, { session });
+        // a self-billed document is checked again on the day it counts, and takes its own statutory number
+        if (transaction.selfBilled) await SelfBilling.stamp(transaction, { session });
         const stockUpdates = await this.processTransactionStock(id, transaction, createdBy, session);
         // Accounting entries (receivable/payable, revenue or inventory, VAT, cost of goods sold).
         // A no-op until the company has mapped its accounts and switched ledger posting on.
@@ -1068,7 +1086,7 @@ const logAmount = balanceEffect;
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
         "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
-        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend lastReminder approvals jobCardRef tradeOrderRef vanTripRef recurringRef reissue vatRegistered gstType placeOfSupply supplierState fx";
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend lastReminder approvals jobCardRef tradeOrderRef vanTripRef recurringRef reissue vatRegistered gstType placeOfSupply supplierState fx selfBilled selfBilledNo";
       let docs;
       let total;
       if (sortKey === "party") {

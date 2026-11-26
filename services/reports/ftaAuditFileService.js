@@ -62,8 +62,9 @@ class FtaAuditFileService {
         party: party.name || l.partyName || "",
         trn: party.trn || "",
         day: orgLocale.dayOf(l.date),
-        // a supplier's own invoice number where it was recorded; otherwise our document's number
-        invoiceNo: (input && l.docType === "purchase_order" && l.supplierRef) || (input && l.source === "expense" && l.supplierRef) || l.docNo,
+        // the tax invoice's number: the one we issued where we raised it ourselves, else the supplier's own where it was
+        // recorded; otherwise our document's number
+        invoiceNo: l.selfBilledNo || (input && l.docType === "purchase_order" && l.supplierRef) || (input && l.source === "expense" && l.supplierRef) || l.docNo,
         permitNo: "", // customs import permits are not recorded
         lineNo: l.lineNo || 1,
         description: String(l.description || "").trim() || itemName.get(String(l.itemId)) || "",

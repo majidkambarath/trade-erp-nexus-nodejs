@@ -163,6 +163,10 @@ const transactionSchema = new mongoose.Schema({
   creditedAmount: { type: Number, default: 0, min: 0 },
   appliedToInvoice: { type: Number, default: 0, min: 0 },
   items: [itemSchema],
+  // Self-billing (utils/selfBilling.js): we raise the tax invoice for the supplier. `selfBilledNo` is that invoice's (or
+  // credit note's) own number, taken on approval; a request body can never set it. Absent on every other document.
+  selfBilled: { type: Boolean },
+  selfBilledNo: { type: String, trim: true },
   // Header charges (freight, handling, ...): each has its own tax and posts to its own account.
   charges: [
     {
