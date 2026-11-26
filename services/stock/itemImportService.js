@@ -26,7 +26,7 @@ class ItemImportService {
       Category.find({}).select("name").lean(),
       UOM.find({ status: { $ne: "Inactive" } }).select("unitName shortCode").lean(),
       Vendor.find({}).select("vendorName").limit(50000).lean(),
-      Stock.find({}).select("sku itemName").limit(100000).lean(),
+      Stock.find({}).select("sku itemName barcodeQrCode").limit(100000).lean(),
     ]);
     return {
       categories: categories.map((c) => ({ id: c._id, name: c.name })),
@@ -35,6 +35,8 @@ class ItemImportService {
       existing: {
         skus: new Set(stocks.map((s) => String(s.sku ?? "").trim().toLowerCase()).filter(Boolean)),
         names: new Set(stocks.map((s) => masterImport.same(s.itemName)).filter(Boolean)),
+        // every code a scanner could already find an item by (its barcode and its SKU), matched exactly
+        codes: new Set(stocks.flatMap((s) => [s.barcodeQrCode, s.sku]).map((v) => String(v ?? "").trim()).filter(Boolean)),
       },
     };
   }

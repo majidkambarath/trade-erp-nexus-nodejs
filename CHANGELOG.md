@@ -1,5 +1,18 @@
 # Changelog
 
+## Not yet released
+
+Barcodes on items, used when invoicing in the ERP and on the van.
+
+### Added
+
+- **One barcode, one item.** An item's barcode is checked when it is created or changed: another item's barcode or SKU
+  is refused (`409 BARCODE_TAKEN`), anything that is not plain text up to 64 characters is `400 INVALID_BARCODE`, and a
+  blank takes the SKU. An item that already shares a barcode from before can still be saved until its barcode changes.
+  A lookup index on the barcode (not unique, because older items may share one).
+- **A barcode column in the item import**, refused when repeated in the file or already another item's code.
+- **The van's items carry their SKU and barcode**, in the trip and in the offline pack.
+
 ## 4.4.0.0 — 26 November 2026
 
 Van sales: the slip a van prints, and printing it again. Frontend and backend both at 4.4.0.0.

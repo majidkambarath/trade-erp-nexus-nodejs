@@ -12,6 +12,7 @@ const kinds = require("../../utils/itemKinds");
 const { searchRegex } = require("../../utils/regex");
 const { isTransient, backoff } = require("../../utils/withTransactionSession");
 const { normaliseHsn } = require("../../utils/gst");
+const { cleanBarcode } = require("../../utils/barcodes");
 
 // The HSN / SAC code a request names: digits or nothing. undefined = not named; a bad one is refused.
 function requestedHsn(data) {
@@ -19,6 +20,35 @@ function requestedHsn(data) {
   const code = normaliseHsn(data.hsnCode);
   if (code === undefined) throw new AppError("An HSN / SAC code is 4 to 8 digits", 400, "INVALID_HSN");
   return code;
+}
+
+// The barcode a request names, trimmed; "" when it names none (the item then takes its SKU). A bad one is refused.
+function requestedBarcode(value) {
+  const { value: code, error } = cleanBarcode(value);
+  if (error) throw new AppError(error, 400, "INVALID_BARCODE", { fields: ["barcodeQrCode"] });
+  return code;
+}
+
+// A scanner reading a code must find ONE item, so a barcode may not be another item's barcode or SKU. Checked here
+// rather than by a unique index: an organisation's older items may already share one, and an index that cannot be built
+// would protect nothing. An item that already shares one is not refused until somebody changes that barcode.
+// `fromSku`: nobody typed a barcode, the SKU is standing in (or becoming the new SKU), so it is the SKU box that is wrong.
+// `barcodesOnly`: look only at barcodes (a changed SKU: another item's SKU is the unique index's own refusal).
+async function assertBarcodeFree(code, exceptId, session, { fromSku = false, barcodesOnly = false } = {}) {
+  if (!code) return;
+  const filter = barcodesOnly ? { barcodeQrCode: code } : { $or: [{ barcodeQrCode: code }, { sku: code }] };
+  if (exceptId) filter._id = { $ne: exceptId };
+  const other = await Stock.findOne(filter).select("itemName sku").session(session || null).lean();
+  if (other) {
+    throw new AppError(
+      fromSku
+        ? `That SKU is the barcode of ${other.itemName} (${other.sku}). Choose another SKU, or give this item its own barcode.`
+        : `That barcode is already used by ${other.itemName} (${other.sku}). Each item needs its own barcode.`,
+      409,
+      "BARCODE_TAKEN",
+      { fields: [fromSku ? "sku" : "barcodeQrCode"], itemId: String(other._id) }
+    );
+  }
 }
 
 // The item type a request names, or goods when it names none. Anything else is refused with a code the screen can show.
@@ -58,7 +88,14 @@ async function nextSkuFor(categoryName, session) {
     const n = parseInt(String(r.sku).slice(prefix.length), 10);
     if (!Number.isNaN(n) && n > max) max = n;
   }
-  return `${prefix}${String(max + 1).padStart(4, "0")}`;
+  const numbered = (n) => `${prefix}${String(n).padStart(4, "0")}`;
+  // the SKU also stands in as the barcode, so a number some item already carries as its barcode is passed over
+  let next = max + 1;
+  for (;;) {
+    const held = Stock.exists({ barcodeQrCode: numbered(next) });
+    if (!(await (session ? held.session(session) : held))) return numbered(next);
+    next += 1;
+  }
 }
 const CREATE_TRIES = 8;
 
@@ -157,6 +194,11 @@ class StockService {
         throw new AppError("That SKU is already used by another item", 400, "DUPLICATE_SKU", { fields: ["sku"] });
       }
 
+      // goods carry a barcode: the one named, else the SKU, which the item form draws as one
+      const typed = isService ? "" : requestedBarcode(barcodeQrCode);
+      const barcode = isService ? "" : typed || sku;
+      if (!isService) await assertBarcodeFree(barcode, null, session, { fromSku: !typed });
+
       // Create stock record
       const stock = await Stock.create(
         [
@@ -174,8 +216,7 @@ class StockService {
             ...(isService
               ? { reorderLevel: 0, currentStock: 0 }
               : {
-                  // the barcode the caller names (a spreadsheet, the API), else the SKU, which the item form draws as one
-                  barcodeQrCode: String(barcodeQrCode ?? "").trim() || sku,
+                  barcodeQrCode: barcode,
                   reorderLevel: Number(reorderLevel) || 0,
                   batchNumber,
                   expiryDate: expiryDate ? new Date(expiryDate) : undefined,
@@ -309,6 +350,16 @@ class StockService {
       if (data.expiryDate) updateData.expiryDate = new Date(data.expiryDate);
       if (data.itemType !== undefined) updateData.itemType = nextType;
       if (data.hsnCode !== undefined) updateData.hsnCode = requestedHsn(data);
+      if (data.sku !== undefined && String(data.sku) !== currentStock.sku && nextType !== kinds.SERVICE) {
+        await assertBarcodeFree(String(data.sku).trim(), id, session, { fromSku: true, barcodesOnly: true });
+      }
+      // a barcode named on an edit: blank goes back to the SKU; only a CHANGED one is checked, so an item that already
+      // shares a barcode with another (from before the rule) can still be saved for an unrelated change
+      if (data.barcodeQrCode !== undefined && nextType !== kinds.SERVICE) {
+        const barcode = requestedBarcode(data.barcodeQrCode) || data.sku || currentStock.sku;
+        if (barcode !== currentStock.barcodeQrCode) await assertBarcodeFree(barcode, id, session);
+        updateData.barcodeQrCode = barcode;
+      }
       // goods name no accounts of their own; a service that becomes goods (only possible while unused) forgets them
       if (nextType === kinds.GOODS && currentType === kinds.SERVICE) Object.assign(updateData, { incomeAccountId: null, expenseAccountId: null });
 

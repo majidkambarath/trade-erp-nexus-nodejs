@@ -83,6 +83,9 @@ test("the offline pack holds the van, the customer's prices and the free numbers
   pack = await svc.Sales.offlinePack(trip._id, { extraCustomerIds: [String(A._id)] });
   assert.ok(pack.at);
   assert.equal(pack.trip.sellable[0].qty, 20);
+  // a scanner finds the item with no signal: the pack carries its SKU and barcode (the SKU stands in when none was given)
+  assert.equal(pack.trip.sellable[0].sku, "RICE");
+  assert.equal(pack.trip.sellable[0].barcode, "RICE");
   assert.deepEqual(pack.customers.map((c) => c.name), ["Al Noor"]);
   assert.equal(pack.prices[String(A._id)][String(rice._id)], 20);
   assert.deepEqual(pack.freeNumbers, trip.numberBlock);

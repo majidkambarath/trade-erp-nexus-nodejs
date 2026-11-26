@@ -66,7 +66,10 @@ class VanTripService {
   static async present(trip, { stock } = {}) {
     const s = stock || (await stockOf(trip));
     const names = await this.#names(trip);
-    const prices = new Map((await Stock.find({ _id: { $in: [...s.sellable.keys()] } }).select("salesPrice").lean()).map((x) => [String(x._id), Number(x.salesPrice) || 0]));
+    // the price, and the codes a scanner reads (barcode, else the SKU), so the phone finds an item by scanning it, signal or not
+    const masters = await Stock.find({ _id: { $in: [...s.sellable.keys()] } }).select("salesPrice sku barcodeQrCode").lean();
+    const prices = new Map(masters.map((x) => [String(x._id), Number(x.salesPrice) || 0]));
+    const codes = new Map(masters.map((x) => [String(x._id), { sku: x.sku || "", barcode: x.barcodeQrCode || "" }]));
     const plain = typeof trip.toObject === "function" ? trip.toObject() : trip;
     const vouchers = await Voucher.find({ "vanTripRef.tripId": trip._id, voucherType: "receipt" }).select("voucherNo status paymentMode totalAmount partyId").lean();
     const live = vouchers.filter((v) => v.status === "approved");
@@ -111,7 +114,7 @@ class VanTripService {
       containers: await require("./vanContainerService").tripView(plain, s),
       loaded: named(s.loaded, names),
       sold: named(s.sold, names),
-      sellable: named(s.sellable, names).map((l) => ({ ...l, salesPrice: prices.get(l.stockId) || 0 })),
+      sellable: named(s.sellable, names).map((l) => ({ ...l, salesPrice: prices.get(l.stockId) || 0, ...(codes.get(l.stockId) || { sku: "", barcode: "" }) })),
       damaged: named(s.damaged, names),
       route,
       totals: {
