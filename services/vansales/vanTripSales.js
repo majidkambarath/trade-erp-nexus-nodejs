@@ -22,6 +22,7 @@ const TradeOrder = require("../../models/modules/tradeOrderModel");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { todayInOrg } = require("../../utils/documentExpiry");
 const { loadTrip, stockOf } = require("./vanTripStock");
+const { addressOf } = require("../../utils/vanSlip");
 
 const isId = (v) => mongoose.isValidObjectId(v);
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
@@ -66,6 +67,15 @@ async function assertCustomerAllowed(trip, active, customerId, { mayOverride = f
 
 const VAN_MODES = ["cash", "cheque", "card", "transfer"];
 const text = (v) => String(v ?? "").trim();
+
+/** The customer's reference typed at the door: none, or a line of text up to 40 characters. */
+function referenceOf(raw) {
+  if (raw === undefined || raw === null || raw === "") return "";
+  if (typeof raw !== "string" && typeof raw !== "number") throw fail("The customer's reference is text, such as their order number", 400, "REFERENCE_INVALID");
+  const ref = String(raw).replace(/\s+/g, " ").trim();
+  if (ref.length > 40) throw fail("The customer's reference is at most 40 characters", 400, "REFERENCE_INVALID");
+  return ref;
+}
 
 /**
  * The details the shared receipt path (PaymentModeService.resolve) needs for each way of taking money, BUILT HERE and
@@ -234,6 +244,8 @@ class VanTripSales {
     if (unpaid) throw fail(unpaid.message, unpaid.status, unpaid.code, unpaid.details);
     const lines = Array.isArray(input?.items) ? input.items : [];
     if (!lines.length) throw fail("Add at least one item to sell", 400, "ITEMS_REQUIRED");
+    // the customer's own reference for the sale (their LPO or order number), printed on the slip; plain text only
+    const reference = referenceOf(input?.reference);
 
     const ids = lines.map((l) => l.itemId);
     if (ids.some((i) => !isId(i))) throw fail("An item on the invoice is not valid", 400, "ITEM_INVALID");
@@ -316,6 +328,7 @@ class VanTripSales {
         reservedNumber,
         type: "sales_order", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", date: day, items,
         notes: input.notes ? String(input.notes).slice(0, 500) : `Van ${trip.vanCode} ${trip.tripNo}`,
+        ...(reference ? { lpono: reference } : {}),
         status: "DRAFT", vanTripRef: refOf(trip),
       },
       by, session
@@ -519,7 +532,7 @@ class VanTripSales {
     const shown = await VanTripService.present(trip);
     const route = trip.routeId ? await require("../../models/modules/vansales/vanRouteModel").findById(trip.routeId).lean() : null;
     const ids = [...new Set([...(route?.customers || []).map((c) => String(c.customerId)), ...extraCustomerIds.map(String)])].filter(isId).slice(0, 300);
-    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status paymentTerms").lean();
+    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status paymentTerms billingAddress city emirate").lean();
     const stock = await stockOf(trip);
     const items = await Stock.find({ _id: { $in: [...stock.sellable.keys()] } }).select("salesPrice category").lean();
     const prices = {};
@@ -535,7 +548,7 @@ class VanTripSales {
     return {
       at: new Date().toISOString(),
       trip: shown,
-      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "", terms: c.paymentTerms || "" })),
+      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "", terms: c.paymentTerms || "", address: addressOf(c) })),
       prices,
       insight,
       freeNumbers: (trip.numberBlock || []).filter((n) => !used.has(n)),

@@ -12,6 +12,8 @@ const PriceListService = require("../../services/vansales/priceListService");
 const { loadTrip } = require("../../services/vansales/vanTripStock");
 const VanCrmService = require("../../services/vansales/vanCrmService");
 const VanSettingsService = require("../../services/vansales/vanSettingsService");
+const VanSlipService = require("../../services/vansales/vanSlipService");
+const logger = require("../../utils/logger");
 
 const by = (req) => req.admin?.id || "system";
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
@@ -163,7 +165,23 @@ exports.sell = catchAsync(async (req, res) => {
   await AuditService.log({ req, action: "VAN_SALE", entity: "VanTrip", entityId: req.params.tripId, summary: `${invoice.transactionNo} sold on the van${receipt ? `, ${receipt.voucherNo} ${receipt.status === "pending" ? "taken, waiting for the bank" : "received"} (${receipt.paymentMode})` : ""}${depositNote ? `, container deposit ${depositNote}` : ""}`, after: { invoice: invoice.transactionNo, ...(containers?.length ? { containers, deposit } : {}) } });
   // after the sale committed, never able to fail it: the call on the customer's CRM timeline
   await VanCrmService.record("sale", { tripId: req.params.tripId, customerId: invoice.partyId, refId: invoice._id, ref: invoice.transactionNo, total: invoice.totalAmount, by: by(req) });
-  ok(res, { invoice, receipt, containers, deposit, depositNote, trip: await VanTripService.getById(req.params.tripId) }, 201);
+  // the slip, read after the sale committed by the same function a reprint uses, so the two can never differ
+  // (a failure here must not fail a sale that is already made: the slip can be printed again from the trip)
+  const slip = await VanSlipService.forInvoice(req.params.tripId, invoice._id).catch((err) => {
+    logger.warn(`Van slip for ${invoice.transactionNo} could not be read: ${err.message}`);
+    return null;
+  });
+  ok(res, { invoice, receipt, containers, deposit, depositNote, slip, trip: await VanTripService.getById(req.params.tripId) }, 201);
+});
+
+// ---- the printed slip: any invoice sold on the trip, printed again ----------------------------------------------
+exports.tripInvoices = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanSlipService.invoices(req.params.tripId));
+});
+exports.invoiceSlip = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanSlipService.forInvoice(req.params.tripId, req.params.invoiceId));
 });
 
 // ---- returnable containers (crates, bottles, cylinders) ----------------------------------------------------------

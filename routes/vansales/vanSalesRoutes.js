@@ -95,6 +95,9 @@ router.post("/trips/:tripId/visits", requirePermission("vansales.sell"), c.recor
 router.post("/trips/:tripId/transfer", requirePermission("vansales.load"), c.transfer);
 router.get("/trips/:tripId/offline", requirePermission("vansales.sell"), c.offlinePack);
 router.post("/trips/:tripId/sync", requirePermission("vansales.sell"), c.sync);
+// the trip's invoices and the slip of each, to print it again (the salesman's own trip: the controller checks)
+router.get("/trips/:tripId/invoices", requirePermission("vansales.sell"), c.tripInvoices);
+router.get("/trips/:tripId/invoices/:invoiceId/slip", requirePermission("vansales.sell"), c.invoiceSlip);
 router.post("/trips/:tripId/invoices/:invoiceId/whatsapp", requirePermission("vansales.sell"), requireFeature("messaging"), sendLimit, c.whatsappInvoice);
 router.post("/trips/:tripId/collect", requirePermission("vansales.sell"), c.collect);
 router.get("/trips/:tripId/expenses", requirePermission("vansales.view"), c.tripExpenses);

@@ -11,6 +11,7 @@ const vanSettings = require("../../utils/vanSettings");
 const { groupFamily, CardService } = require("../banking/cardService");
 const UsageService = require("../core/usageService");
 const ChartOfAccountsService = require("../financial/chartOfAccountsService");
+const { addressOf } = require("../../utils/vanSlip");
 
 const isId = (v) => mongoose.isValidObjectId(v);
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
@@ -178,10 +179,11 @@ class VanService {
     }
     if (String(query.status || "") !== "all") q.status = { $ne: "Inactive" };
     const limit = Math.min(500, Math.max(1, Math.round(Number(query.limit)) || 200));
-    const rows = await Customer.find(q).select("customerName customerId phone status paymentTerms trnNumber trnNO vat.trn").sort({ customerName: 1, _id: 1 }).limit(limit).lean();
+    const rows = await Customer.find(q).select("customerName customerId phone status paymentTerms trnNumber trnNO vat.trn billingAddress city emirate").sort({ customerName: 1, _id: 1 }).limit(limit).lean();
     return rows.map((r) => ({
       id: String(r._id), name: r.customerName || "", code: r.customerId || "", phone: r.phone || "",
       terms: r.paymentTerms || "", active: r.status !== "Inactive", trn: r.vat?.trn || r.trnNumber || r.trnNO || "",
+      address: addressOf(r), // printed on the slip: the street and the place, nothing else of the record
     }));
   }
 
