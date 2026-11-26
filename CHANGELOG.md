@@ -1,5 +1,23 @@
 # Changelog
 
+## Not yet released
+
+UAE tax files: what the FTA expects accounting software to produce.
+
+### Added
+
+- **The FTA VAT audit file (FAF)** for any period (`GET /vat-return/faf`, `reports.vat`, all branches): company
+  details, the purchase and supply listings made from the same lines as the VAT return, and the general ledger, each with
+  its totals. Generated on request, nothing in it can be edited, and each download is in the audit log.
+- **Standard-rated supplies by emirate**: a branch may name its own emirate; its sales go under that box of the return,
+  every other sale under the company's.
+- **Totals by tax code and by emirate** (`GET /vat-return/analysis`).
+- **A saved VAT return keeps who it was for** (tax number, names, address) and shows who prepared, finalised and filed it.
+- **Self-billed tax invoices.** A supplier may carry a written self-billing agreement (reference and starting day). A
+  purchase invoice ticked self-billed takes its own number on approval (`SBI-`), and the credit note of its return
+  `SBC-`; refused without our tax number, the agreement or the supplier's, and before the agreement starts. The audit file
+  carries our number. A return made after the agreement ends is booked as an ordinary return.
+
 ## 4.5.1.0 — 26 November 2026
 
 No backend change: released with the frontend's Install button in the salesman's app. Frontend and backend both at 4.5.1.0.

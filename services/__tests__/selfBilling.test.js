@@ -29,6 +29,7 @@ test.before(async () => {
     Settings: require("../../models/modules/financial/companySettingsModel"),
     Issued: require("../../models/modules/financial/issuedNumberModel"),
     Stock: require("../../models/modules/stockModel"),
+    UOM: require("../../models/modules/uomModel"),
   };
   require("../../models/core/organisationModel");
   await mongoose.connection.syncIndexes();
@@ -76,6 +77,7 @@ test("its own number is taken on approval, never from a request, and an ordinary
   assert.equal(draft.selfBilledNo, undefined, "a draft has no number yet");
   const first = await approve(draft);
   assert.match(first.selfBilledNo, /^SBI-\d{4}-0001$/);
+  assert.equal(first.selfBillingRef, "SBA-2026-7", "the agreement is kept on the document");
   const second = await approve(await bill({ selfBilled: true }));
   assert.match(second.selfBilledNo, /0002$/);
   // a draft may be switched on and off before it counts
@@ -96,6 +98,10 @@ test("a return of a self-billed invoice is our credit note; the audit file carri
   assert.equal(returned.selfBilled, true);
   const note = await approve(returned);
   assert.match(note.selfBilledNo, /^SBC-\d{4}-0001$/);
+  assert.equal(note.selfBilledAgainst, invoice.selfBilledNo);
+  const listed = await svc.Tx.getAllTransactions({ type: "purchase_return" });
+  const rows = listed.transactions || listed.data || listed;
+  assert.ok(rows.some((r) => r.selfBilledAgainst === invoice.selfBilledNo && r.selfBillingRef === "SBA-2026-7"), "the list carries what the paper prints");
 
   await svc.Settings.updateOne({}, { $set: { "profile.trn": "100123456700003" } });
   const file = await svc.Faf.generate({ from: orgDay(-1), to: orgDay(1) });

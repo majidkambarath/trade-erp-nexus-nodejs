@@ -478,7 +478,7 @@ class TransactionService {
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
-      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "recurringRef", "reissue", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx", "selfBilledNo"]) delete data[key];
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "recurringRef", "reissue", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx", "selfBilledNo", "selfBillingRef", "selfBilledAgainst"]) delete data[key];
       // self-billing is chosen on a purchase invoice only; a return follows its invoice
       if (data.selfBilled !== undefined) {
         if (transaction.type !== "purchase_order") delete data.selfBilled;
@@ -1086,7 +1086,7 @@ const logAmount = balanceEffect;
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
         "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
-        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend lastReminder approvals jobCardRef tradeOrderRef vanTripRef recurringRef reissue vatRegistered gstType placeOfSupply supplierState fx selfBilled selfBilledNo";
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend lastReminder approvals jobCardRef tradeOrderRef vanTripRef recurringRef reissue vatRegistered gstType placeOfSupply supplierState fx selfBilled selfBilledNo selfBillingRef selfBilledAgainst";
       let docs;
       let total;
       if (sortKey === "party") {

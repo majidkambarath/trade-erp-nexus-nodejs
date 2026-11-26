@@ -167,6 +167,9 @@ const transactionSchema = new mongoose.Schema({
   // credit note's) own number, taken on approval; a request body can never set it. Absent on every other document.
   selfBilled: { type: Boolean },
   selfBilledNo: { type: String, trim: true },
+  // what its paper prints, kept as on the day it was approved: the agreement, and for a credit note the invoice credited
+  selfBillingRef: { type: String, trim: true },
+  selfBilledAgainst: { type: String, trim: true },
   // Header charges (freight, handling, ...): each has its own tax and posts to its own account.
   charges: [
     {

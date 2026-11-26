@@ -67,6 +67,13 @@ class SelfBillingService {
       return;
     }
     if (refused) throw new AppError(refused.message, 400, refused.code);
+    // what the paper prints, kept as it was on the day: the agreement, and for a credit note the tax invoice it credits
+    const vendor = await mongoose.model("Vendor").findById(transaction.partyId).select("selfBilling").session(session || null).lean();
+    transaction.set("selfBillingRef", vendor?.selfBilling?.agreementRef);
+    if (transaction.type === "purchase_return" && transaction.returnOf?.transactionId) {
+      const original = await mongoose.model("Transaction").findById(transaction.returnOf.transactionId).select("selfBilledNo").session(session || null).lean();
+      transaction.set("selfBilledAgainst", original?.selfBilledNo);
+    }
     if (!transaction.selfBilledNo) transaction.selfBilledNo = await this.number(transaction, { session });
   }
 
