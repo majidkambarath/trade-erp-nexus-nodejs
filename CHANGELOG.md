@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.3.3.0 — 26 November 2026
+
+A proper loading screen while a session is restored (frontend only). Frontend and backend both at 4.3.3.0; the backend
+has no change beyond the version.
+
 ## 4.3.2.1 — 26 November 2026
 
 E-invoicing: two last places a re-issue credit note was called a sales return. Frontend and backend both at 4.3.2.1.
