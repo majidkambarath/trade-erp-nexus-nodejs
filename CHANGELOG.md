@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.1.3.0 — 26 November 2026
+
+A proper loading screen while a session is restored (frontend only). Frontend and backend both at 3.1.3.0; the backend
+has no change beyond the version.
+
 ## 3.1.0.0 — 16 November 2026
 
 Garage guides and videos, backend side. Frontend and backend both at 3.1.0.0. No API change.
