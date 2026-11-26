@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.5.0.0 — 26 November 2026
+
+Van sales: a ready-made Van salesman role, for the salesman's own app. Frontend and backend both at 4.5.0.0.
+
+### Added
+
+- **Van salesman**, a built-in role: van selling on his own trip and nothing else of the ERP. Offered (and accepted when
+  adding a person) only where van sales is in the organisation's plan; elsewhere it is not listed and is refused.
+
 ## 4.4.0.0 — 26 November 2026
 
 Van sales: the slip a van prints, and printing it again. Frontend and backend both at 4.4.0.0.
