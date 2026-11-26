@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.5.1.0 — 26 November 2026
+
+No backend change: released with the frontend's Install button in the salesman's app. Frontend and backend both at 4.5.1.0.
+
 ## 4.5.0.0 — 26 November 2026
 
 Van sales: a ready-made Van salesman role, for the salesman's own app. Frontend and backend both at 4.5.0.0.
