@@ -1,5 +1,20 @@
 # Changelog
 
+## 4.4.0.0 — 26 November 2026
+
+Van sales: the slip a van prints, and printing it again. Frontend and backend both at 4.4.0.0.
+
+### Added
+
+- **The slip of a van sale** (`GET /van-sales/trips/:tripId/invoices/:invoiceId/slip`): its lines with the item's
+  barcode and unit, the customer's address, phone and TRN, the van, trip and salesman, the customer's reference, the
+  totals with VAT by rate, the money taken so far (a transfer still waiting shown apart; nothing taken is a credit sale),
+  containers and deposit. A sale answers with its slip. Only the trip's own salesman, or whoever settles or manages the
+  vans, reads it.
+- **The trip's invoices** (`GET /van-sales/trips/:tripId/invoices`), to print any slip again.
+- **A customer reference on a van sale** (their order or LPO number, up to 40 characters).
+- The van customer list and the offline pack carry the customer's address.
+
 ## 4.3.4.0 — 26 November 2026
 
 One loading screen for the whole product (frontend only). Frontend and backend both at 4.3.4.0; the backend has no change
