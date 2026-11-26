@@ -421,6 +421,7 @@ class EInvoiceService {
     const draft = await TransactionService.createTransaction({
       type: "sales_return", status: "DRAFT", partyId: tx.partyId, partyType: "Customer", partyTypeRef: "Customer", date: documentDay(),
       returnOf: { transactionId: tx._id, transactionNo: tx.transactionNo },
+      returnReason: `Credit in full of ${tx.transactionNo}`,
       items: this.creditLines(tx, lines),
     }, by);
     await AuditService.log({ req, action: "EINVOICE_CREDIT_IN_FULL", entity: "Transaction", entityId: draft._id, summary: `${draft.transactionNo} drafted to credit ${tx.transactionNo}` });
@@ -477,6 +478,7 @@ class EInvoiceService {
         returnOf: { transactionId: tx._id, transactionNo: tx.transactionNo },
         items: this.creditLines(tx, r.lines), charges, discount,
         reissue: { role: "credit", originalId: tx._id, originalNo: tx.transactionNo, at: new Date() },
+        returnReason: `Correction: ${tx.transactionNo} is cancelled and issued again with its discount taken before the tax`,
         notes: `Cancels ${tx.transactionNo}, which is issued again with its discount shared over the lines (e-invoicing). Not e-invoiced itself.`,
       }, by, session);
       // the new invoice keeps the old one's due date: the stored one, else the customer's terms from the old invoice's day

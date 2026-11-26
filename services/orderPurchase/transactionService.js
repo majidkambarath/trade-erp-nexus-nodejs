@@ -353,8 +353,10 @@ class TransactionService {
       const processedItems = checked.items;
       const finalTotalAmount = built.totalAmount;
       const returnOf = checked.original
-        ? { transactionId: checked.original._id, transactionNo: checked.original.transactionNo }
+        ? { transactionId: checked.original._id, transactionNo: checked.original.transactionNo, ...(await ReturnService.snapshotOf(checked.original, { session })) }
         : undefined;
+      // a return says why the goods came back (the credit note prints it); one not given reads as what a return is
+      const returnReason = ["sales_return", "purchase_return"].includes(type) ? ReturnService.reasonOf(data.returnReason, type) : undefined;
       logger.debug(
         "Service: Final totalAmount (incoming/calculated):",
         finalTotalAmount
@@ -377,6 +379,7 @@ class TransactionService {
         // company's own state is not on file
         ...(built.gstType ? { gstType: built.gstType, placeOfSupply: built.placeOfSupply, supplierState: built.supplierState } : {}),
         returnOf,
+        ...(returnReason ? { returnReason } : {}),
         attachments: data.attachments || [],
         vendorReference,
         status: status || "DRAFT", // USE: Incoming or default
@@ -479,6 +482,10 @@ class TransactionService {
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
       for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "recurringRef", "reissue", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx", "selfBilledNo", "selfBillingRef", "selfBilledAgainst"]) delete data[key];
+      if (data.returnReason !== undefined) {
+        if (["sales_return", "purchase_return"].includes(transaction.type)) data.returnReason = ReturnService.reasonOf(data.returnReason, transaction.type);
+        else delete data.returnReason;
+      }
       // self-billing is chosen on a purchase invoice only; a return follows its invoice
       if (data.selfBilled !== undefined) {
         if (transaction.type !== "purchase_order") delete data.selfBilled;
@@ -742,6 +749,14 @@ class TransactionService {
         await ReissueLinks.assertMayApprove(transaction, { session });
         // a self-billed document is checked again on the day it counts, and takes its own statutory number
         if (transaction.selfBilled) await SelfBilling.stamp(transaction, { session });
+        // a credit note is issued now: what it records about the invoice it corrects is read as it stands today
+        if (transaction.returnOf?.transactionId) {
+          const original = await Transaction.findById(transaction.returnOf.transactionId).select("date pricing items.taxableAmount items.vatAmount").session(session).lean();
+          if (original) {
+            const snap = await ReturnService.snapshotOf(original, { excludeId: transaction._id, session });
+            for (const [k, v] of Object.entries(snap)) transaction.set(`returnOf.${k}`, v);
+          }
+        }
         const stockUpdates = await this.processTransactionStock(id, transaction, createdBy, session);
         // Accounting entries (receivable/payable, revenue or inventory, VAT, cost of goods sold).
         // A no-op until the company has mapped its accounts and switched ledger posting on.
@@ -1085,7 +1100,7 @@ const logAmount = balanceEffect;
         // `serialNo` is here for the same reason `pricing` and `charges` are: the LISTS PRINT. Download, the
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
-        "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
+        "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf returnReason items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
         "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend lastReminder approvals jobCardRef tradeOrderRef vanTripRef recurringRef reissue vatRegistered gstType placeOfSupply supplierState fx selfBilled selfBilledNo selfBillingRef selfBilledAgainst";
       let docs;
       let total;

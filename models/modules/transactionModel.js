@@ -233,7 +233,16 @@ const transactionSchema = new mongoose.Schema({
   returnOf: {
     transactionId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction", default: null },
     transactionNo: { type: String, default: null },
+    // What a tax credit note must say about the supply it corrects (VAT Executive Regulation Art. 60(1)(e),(g)), kept as
+    // the server read it from the invoice, in the base currency: the invoice's date, its value before tax and its tax, and
+    // what other approved returns had already credited of that value. Written by the server only; absent on older returns.
+    date: { type: Date },
+    value: { type: Number },
+    vat: { type: Number },
+    creditedBefore: { type: Number },
   },
+  // Why the goods came back (Art. 60(1)(f)): printed on the credit note. Absent on older returns.
+  returnReason: { type: String, trim: true, maxlength: 300 },
   attachments: [
     {
       attachmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Attachment" },

@@ -5,6 +5,11 @@
 UAE tax files: what the FTA expects accounting software to produce.
 
 ### Added
+- **Credit and debit notes say what they correct** (VAT Executive Regulation Art. 60(1)). A return records the invoice's
+  date, value and tax and what earlier approved returns had already credited (read again when it is approved), and a
+  reason (`returnReason`; one not given reads "Goods returned by the customer" / "to the supplier"). A ledger note keeps
+  the invoice it is set against with its date and value, may name one it cannot be set against (`originalInvoiceId`),
+  and keeps a `reason`. `/accounting/returnable/:id` also answers the invoice's total, value and tax.
 
 - **The FTA VAT audit file (FAF)** for any period (`GET /vat-return/faf`, `reports.vat`, all branches): company
   details, the purchase and supply listings made from the same lines as the VAT return, and the general ledger, each with
