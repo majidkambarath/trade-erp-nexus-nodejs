@@ -40,6 +40,11 @@ const companySettingsSchema = new mongoose.Schema(
     // Returns (services/orderPurchase/returnService.js).
     returnWindowDays: { type: Number, default: 0, min: 0 }, // 0 = no limit
     requireReturnLink: { type: Boolean, default: false },
+    // How long the books must be kept (UAE: 5 years after the tax period; 15 for records about real estate). Nothing in the
+    // application ever purges business data; this is the rule a purge, an archive or closing an organisation must respect.
+    retention: {
+      years: { type: Number, enum: [5, 15], default: 5 },
+    },
     // Who may approve what (utils/approvalRules.js, services/core/approvalPolicyService.js). Both are off until the organisation sets them.
     approvals: {
       separateApprover: { type: Boolean, default: false }, // the person who prepared a document may not approve it

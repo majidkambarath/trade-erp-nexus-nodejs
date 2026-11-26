@@ -190,6 +190,7 @@ class AccountConfigService {
       // normalisePolicy (mirrored in zarvia-platform, with no concept of a voucher type) only
       // knows separateApprover / secondApprovalAbove; notesNeedApproval is read alongside it here.
       approvals: { ...require("../../utils/approvalRules").normalisePolicy(s.approvals), notesNeedApproval: Boolean(s.approvals?.notesNeedApproval) },
+      retention: { years: s.retention?.years === 15 ? 15 : 5 },
       fiscalYearStartMonth: s.fiscalYearStartMonth,
       amountDecimal: s.amountDecimal,
       quantityDecimal: s.quantityDecimal,
@@ -232,6 +233,13 @@ class AccountConfigService {
         }
       }
       if (notesNeedApproval !== undefined) set["approvals.notesNeedApproval"] = notesNeedApproval === true || notesNeedApproval === "true";
+    }
+    if (data.retention !== undefined) {
+      const raw = data.retention?.years;
+      // (only a number or its digits: Number([15]) is 15, and a list is not a number of years)
+      const years = typeof raw === "number" || (typeof raw === "string" && /^\d+$/.test(raw.trim())) ? Number(raw) : NaN;
+      if (![5, 15].includes(years)) throw new AppError("Records are kept for 5 years, or 15 for real estate", 400, "RETENTION_INVALID");
+      set["retention.years"] = years;
     }
     if (data.fiscalYearStartMonth !== undefined) {
       const n = Number(data.fiscalYearStartMonth);

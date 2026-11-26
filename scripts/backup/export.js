@@ -38,6 +38,8 @@ const { runWithTenant } = require("../../utils/tenantContext");
 
 const Organisation = require("../../models/core/organisationModel");
 
+const sha256Of = (file) => require("crypto").createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+
 function parseArgs(argv) {
   const out = { orgs: [], all: false, outDir: path.resolve(__dirname, "..", "..", "backups") };
   for (let i = 0; i < argv.length; i += 1) {
@@ -45,6 +47,8 @@ function parseArgs(argv) {
     if (a === "--all") out.all = true;
     else if (a === "--org") out.orgs.push(String(argv[(i += 1)] || "").trim());
     else if (a === "--out") out.outDir = path.resolve(String(argv[(i += 1)] || ""));
+    // the database on the cluster MONGO_URI names, when it is not the one in the address (the drill uses this)
+    else if (a === "--db") out.db = String(argv[(i += 1)] || "").trim();
     else throw new Error(`unknown argument ${a}`);
   }
   if (!out.all && out.orgs.length === 0) throw new Error("name an organisation with --org <code>, or --all");
@@ -118,6 +122,9 @@ async function exportOrganisation(code, dir) {
       keys: attachmentKeys,
     },
   };
+  // a fingerprint of every file, so a restore can prove it reads exactly what was written (a copied, truncated or edited
+  // file is refused before a single row is put back)
+  manifest.sha256 = Object.fromEntries(fs.readdirSync(dir).filter((f) => f !== "manifest.json").sort().map((f) => [f, sha256Of(path.join(dir, f))]));
   fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
   return manifest;
 }
@@ -138,7 +145,7 @@ async function exportPlatform(dir) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!process.env.MONGO_URI) throw new Error("MONGO_URI is not set");
-  await mongoose.connect(process.env.MONGO_URI);
+  await mongoose.connect(process.env.MONGO_URI, args.db ? { dbName: args.db } : {});
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const root = path.join(args.outDir, stamp);

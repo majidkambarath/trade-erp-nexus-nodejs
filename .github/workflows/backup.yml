@@ -1,0 +1,74 @@
+# A daily backup of every organisation (scripts/backup/export.js --all), encrypted, kept as a workflow artifact for 35 days.
+#
+# It does NOTHING until two repository secrets exist (Settings > Secrets and variables > Actions):
+#   MONGO_URI          the production connection string (read access is enough)
+#   BACKUP_PASSPHRASE  a long random passphrase. Keep a copy somewhere else: without it a backup cannot be opened.
+#
+# A dump holds every client's books, password hashes and two-factor secrets, so it never leaves the runner unencrypted.
+# To open one: download the artifact, then
+#   openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in backup.tar.gz.enc -out backup.tar.gz -pass env:BACKUP_PASSPHRASE
+#   tar -xzf backup.tar.gz
+# and restore one organisation with scripts/backup/import.js (docs/BACKUP_AND_DR.md).
+#
+# GitHub keeps artifacts only as long as the repository's retention allows (here 35 days). Keep monthly copies somewhere
+# that is not GitHub and not Atlas as well: a backup that lives only beside what it protects is one failure from gone.
+name: backup
+
+on:
+  schedule:
+    - cron: "30 22 * * *" # 02:30 in Dubai
+  workflow_dispatch:
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MONGO_URI: ${{ secrets.MONGO_URI }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+      NODE_ENV: production
+    steps:
+      - name: Stop unless the secrets are set
+        id: ready
+        run: |
+          if [ -z "$MONGO_URI" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "MONGO_URI and BACKUP_PASSPHRASE are not both set: nothing is backed up. See the comment at the top of this file."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.ready.outputs.go == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.ready.outputs.go == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install
+        if: steps.ready.outputs.go == 'true'
+        run: npm ci --omit=dev
+      - name: Export every organisation
+        if: steps.ready.outputs.go == 'true'
+        run: node scripts/backup/export.js --all --out "$RUNNER_TEMP/backup"
+      - name: Encrypt
+        if: steps.ready.outputs.go == 'true'
+        run: |
+          cd "$RUNNER_TEMP"
+          tar -czf backup.tar.gz backup
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in backup.tar.gz -out backup.tar.gz.enc -pass env:BACKUP_PASSPHRASE
+          rm -rf backup backup.tar.gz
+          sha256sum backup.tar.gz.enc
+      - uses: actions/upload-artifact@v4
+        if: steps.ready.outputs.go == 'true'
+        with:
+          name: backup-${{ github.run_id }}
+          path: ${{ runner.temp }}/backup.tar.gz.enc
+          retention-days: 35
+          if-no-files-found: error

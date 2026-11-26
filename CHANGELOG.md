@@ -27,6 +27,16 @@ UAE tax files: what the FTA expects accounting software to produce.
     `UNIT_IN_USE`, `STAFF_IN_USE`).
   - An expense category whose sub-categories are used is kept.
 - The audit log can be filtered by who (`user`).
+- **Record keeping**: `CompanySettings.retention.years` (5, or 15 for real estate; `RETENTION_INVALID` otherwise). Nothing
+  in the application purges business data.
+- **Backups you can trust**: every exported file's SHA-256 is in the manifest and the restore refuses a changed or
+  missing file before writing anything; both scripts take `--db`. `npm run backup:drill -- --org <code>` restores into
+  a throwaway database, proves every collection and every account's debits and credits came back and the books
+  balance, then drops it. `.github/workflows/backup.yml` backs everything up daily, encrypted, kept 35 days (it does
+  nothing until `MONGO_URI` and `BACKUP_PASSPHRASE` are set as repository secrets). `docs/BACKUP_AND_DR.md` has the
+  targets (RPO 24 h, RTO 4 h), the procedure and the drill log.
+- **The user guide on its own screen**: `GET /help/topics` and `/help/topics/:id`, for everyone signed in, from the same
+  client-only corpus as Zarvia AI. A new topic, **A guide for auditors**.
 
 - **The FTA VAT audit file (FAF)** for any period (`GET /vat-return/faf`, `reports.vat`, all branches): company
   details, the purchase and supply listings made from the same lines as the VAT return, and the general ledger, each with

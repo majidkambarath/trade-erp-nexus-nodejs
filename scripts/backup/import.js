@@ -46,6 +46,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === "--confirm") out.confirm = true;
     else if (a === "--from") out.from = path.resolve(String(argv[(i += 1)] || ""));
+    else if (a === "--db") out.db = String(argv[(i += 1)] || "").trim();
     else throw new Error(`unknown argument ${a}`);
   }
   if (!out.from) throw new Error("--from <directory> is required (one organisation's directory of an export)");
@@ -67,8 +68,22 @@ async function main() {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   const organisation = manifest.organisation;
 
+  // Every file is what the export wrote, byte for byte, before anything is touched. An export made before checksums
+  // existed has none, and says so.
+  if (manifest.sha256) {
+    const sha256Of = (file) => require("crypto").createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+    for (const [file, want] of Object.entries(manifest.sha256)) {
+      const full = path.join(args.from, file);
+      if (!fs.existsSync(full)) throw new Error(`${file} is listed in the manifest and missing: do not use this backup`);
+      if (sha256Of(full) !== want) throw new Error(`${file} is not the file the export wrote (its checksum differs): do not use this backup`);
+    }
+    console.log(`all ${Object.keys(manifest.sha256).length} files match their checksums`);
+  } else {
+    console.log("this export has no checksums (taken before they were added): its files cannot be verified");
+  }
+
   if (!process.env.MONGO_URI) throw new Error("MONGO_URI is not set");
-  await mongoose.connect(process.env.MONGO_URI);
+  await mongoose.connect(process.env.MONGO_URI, args.db ? { dbName: args.db } : {});
   console.log(`restoring "${organisation}" into database ${mongoose.connection.name}`);
   console.log(`taken ${manifest.takenAt} from ${manifest.database}, ${manifest.rows} rows`);
 

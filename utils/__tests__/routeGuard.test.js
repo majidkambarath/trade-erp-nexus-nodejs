@@ -129,7 +129,7 @@ test("the routes that need no permission are few, and each says why", () => {
   // 24: the five in-app help routes above, and the sixth that remembers a person confirmed a document Zarvia AI prepared
   // for them (POST /assistant/messages/:id/proposals/:pid/saved). It writes only a label on the person's OWN message; the
   // document itself was saved by the normal route, which carries its own permission.
-  assert.ok(exempt.length - open.length <= 24, "a person's own profile, the status route, their own two-factor, their own notification feed and the nine in-app help routes (the three more list, open and delete the person's OWN earlier chats, matched on their own id) (every signed-in person may ask Zarvia AI a question whatever their role, and no permission key is held by all of them); anything more should be a permission");
+  assert.ok(exempt.length - open.length <= 26, "a person's own profile, the status route, their own two-factor, their own notification feed, the two user-guide routes (the Help screen: every signed-in person may read the guide) and the nine in-app help routes (the three more list, open and delete the person's OWN earlier chats, matched on their own id) (every signed-in person may ask Zarvia AI a question whatever their role, and no permission key is held by all of them); anything more should be a permission");
 });
 
 test("what a person may do to a document is decided by its type, and a stored document by its stored type", async () => {

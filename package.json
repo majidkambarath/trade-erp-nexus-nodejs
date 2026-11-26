@@ -11,6 +11,7 @@
     "dev": "nodemon server.js",
     "backup": "node scripts/backup/export.js",
     "backup:restore": "node scripts/backup/import.js",
+    "backup:drill": "node scripts/backup/drill.js",
     "seed": "node utils/setup.js",
     "seed:accounting": "node utils/seedAccounting.js",
     "seed:platform": "node utils/platformSetup.js",
