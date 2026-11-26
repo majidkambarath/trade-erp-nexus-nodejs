@@ -76,7 +76,7 @@ test("setup: an organisation with van sales, one without, a supervisor, a salesm
   await Org.create({ legalName: "No Vans Trading LLC", code: "novans2", country: "AE", baseCurrency: "AED", timezone: "Asia/Dubai", planCode: "internal" });
   await person(CODE, "owner", { type: "super_admin" });
   await person("novans2", "plain", { type: "super_admin" });
-  for (const [key, permissions] of [["van_salesman", ["vansales.sell"]], ["van_viewer", ["vansales.view"]]]) {
+  for (const [key, permissions] of [["van_viewer", ["vansales.view"]]]) {
     const role = await call("owner", "POST", "/access/roles", { key, name: key, description: key, rank: 30, permissions });
     assert.equal(role.status, 201, JSON.stringify(role.data));
   }

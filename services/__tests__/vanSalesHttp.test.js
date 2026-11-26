@@ -82,9 +82,18 @@ test("setup: an organisation that bought van sales, one that did not, and the pe
   await person(CODE, "owner", { type: "super_admin" });
   await person("novans", "plain", { type: "super_admin" });
 
-  // the salesman's role holds van selling and nothing else of the ERP
-  const role = await call("owner", "POST", "/access/roles", { key: "van_salesman", name: "Van salesman", description: "Sells from a van", rank: 30, permissions: ["vansales.sell"] });
-  assert.equal(role.status, 201, JSON.stringify(role.data));
+  // the ready-made Van salesman role holds van selling and nothing else of the ERP, and is offered only where van sales was sold
+  const listed = await call("owner", "GET", "/access/roles");
+  const vanRole = listed.body.roles.find((r) => r.key === "van_salesman");
+  assert.ok(vanRole?.builtIn, "the organisation that bought van sales is offered the Van salesman role");
+  assert.deepEqual([...vanRole.permissions].sort(), ["lookups.view", "vansales.sell", "vansales.view"]);
+  const elsewhere = await call("plain", "GET", "/access/roles");
+  assert.equal(elsewhere.body.roles.some((r) => r.key === "van_salesman"), false, "an organisation without van sales is not offered it");
+  const handed = await call("plain", "POST", "/access/users", { name: "Nope", email: "nope@novans.test", password: "Abcd12345678", role: "van_salesman" });
+  assert.equal(handed.status, 400, JSON.stringify(handed.data));
+  assert.equal(handed.code, "ROLE_NOT_FOUND");
+  const made = await call("owner", "POST", "/access/users", { name: "Made", email: "made@vanflow.test", password: "Abcd12345678", role: "van_salesman" });
+  assert.equal(made.status, 201, JSON.stringify(made.data));
   ali = await person(CODE, "ali", { type: "viewer", roleKey: "van_salesman" });
   bob = await person(CODE, "bob", { type: "viewer", roleKey: "van_salesman" });
 });

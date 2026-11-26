@@ -37,7 +37,7 @@ const inOrg = async (code, fn) => {
 // out" check; the organisation's own rules still apply once the person is in. Must run inside inOrg.
 async function roleFor(key) {
   const wanted = String(key ?? "").trim().toLowerCase();
-  const role = wanted ? await RoleService.find(wanted) : null;
+  const role = wanted ? await RoleService.offered(wanted) : null;
   if (!role) throw new AppError("Choose a valid role", 400, "ROLE_NOT_FOUND");
   if (role.isActive === false) throw new AppError("That role has been switched off", 400, "ROLE_INACTIVE");
   return role;

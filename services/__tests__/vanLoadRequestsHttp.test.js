@@ -72,8 +72,7 @@ test("setup: an owner, a storekeeper on the ready-made role, two salesmen with t
   await Org.create({ legalName: "Van Load Foods LLC", code: CODE, country: "AE", baseCurrency: "AED", timezone: "Asia/Dubai", planCode: "internal", moduleOverrides: { vansales: true } });
   await person(CODE, "owner", { type: "super_admin" });
   await person(CODE, "sam", { type: "viewer", roleKey: "storekeeper" });
-  const role = await call("owner", "POST", "/access/roles", { key: "van_salesman", name: "Van salesman", description: "Sells from a van", rank: 30, permissions: ["vansales.sell"] });
-  assert.equal(role.status, 201, JSON.stringify(role.data));
+  // the salesmen hold the ready-made Van salesman role (utils/permissions.js)
   const ali = await person(CODE, "ali", { type: "viewer", roleKey: "van_salesman" });
   const omar = await person(CODE, "omar", { type: "viewer", roleKey: "van_salesman" });
   const cat = await call("owner", "POST", "/categories/categories", { name: "Food" });

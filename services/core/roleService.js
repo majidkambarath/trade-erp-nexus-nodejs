@@ -19,6 +19,12 @@ const ceilingOf = async () => {
   }
 };
 
+// A ready-made role built for one VERTICAL module (sold per organisation, in no plan) is offered only where that module
+// was bought: elsewhere it would be a role that grants nothing, and the picker would offer it to every organisation.
+// The value is the permission the role exists for. Ceiling null (the organisation could not be read) offers it.
+const VERTICAL_ROLES = { van_salesman: "vansales.sell" };
+const soldTo = (key, ceiling) => !VERTICAL_ROLES[key] || !ceiling || ceiling.includes(VERTICAL_ROLES[key]);
+
 // The person asking, as the role object the pure rules take: what they hold and where they rank.
 const actorOf = (req) => ({
   key: req.admin?.role?.key,
@@ -54,6 +60,13 @@ class RoleService {
     return row ? roles.resolveRole(row.key, [row]) : null;
   }
 
+  /** A role that may be HANDED OUT here: found, and (a vertical's ready-made role) sold to this organisation. null otherwise. */
+  static async offered(key) {
+    const role = await this.find(key);
+    if (!role) return null;
+    return role.builtIn && VERTICAL_ROLES[role.key] && !soldTo(role.key, await ceilingOf()) ? null : role;
+  }
+
   /** The role an account holds: its own, else the one its type has always meant. null when it names one that is gone. */
   static async ofAccount(account) {
     return this.find(roles.roleKeyOf(account));
@@ -74,7 +87,8 @@ class RoleService {
     return {
       catalogue: roles.catalogue(ceiling),
       roles: [
-        ...roles.BUILT_IN_KEYS.map((k) => present(roles.resolveRole(k), people[k] || 0)),
+        // a role somebody still holds is listed whatever was sold, so it can be seen and taken away
+        ...roles.BUILT_IN_KEYS.filter((k) => soldTo(k, ceiling) || people[k]).map((k) => present(roles.resolveRole(k), people[k] || 0)),
         ...custom.map((r) => present(roles.resolveRole(r.key, [r]), people[r.key] || 0, r.permissions)),
       ],
     };

@@ -89,7 +89,8 @@ test("two organisations, and an owner, an administrator, a manager and a viewer 
 test("the roles are listed with the catalogue the editor draws, and how many people hold each", { skip }, async () => {
   const r = await api("owner", "GET", "/access/roles");
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.deepEqual(r.body.roles.filter((x) => x.builtIn).map((x) => x.key), perms.BUILT_IN_KEYS);
+  // every ready-made role, except the Van salesman: van sales is opt-in and this organisation was not sold it, so it is not offered
+  assert.deepEqual(r.body.roles.filter((x) => x.builtIn).map((x) => x.key), perms.BUILT_IN_KEYS.filter((k) => k !== "van_salesman"));
   // (the garage and van sales modules are opt-in: an organisation that was not sold them is not offered their permissions)
   assert.deepEqual(r.body.catalogue.map((m) => m.key), perms.MODULE_KEYS.filter((k) => !require("../../utils/plans").OPT_IN_MODULES.includes(k)));
   assert.equal(r.body.roles.find((x) => x.key === "super_admin").people, 1);

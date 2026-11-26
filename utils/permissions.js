@@ -342,6 +342,15 @@ const BUILT_IN = {
     description: "Looks after items and stock, including adjustments, and loads the vans. Sees sales and purchase documents but cannot raise them.",
     permissions: only("inventory.create", "inventory.edit", "inventory.adjust", "sales.view", "purchase.view", "reports.view", "vansales.load"),
   },
+  // The salesman on the road, and nothing else. Selling brings the module's view and the pick lists with it (expand);
+  // the server still holds him to the trip that names him. Offered only where van sales was sold (RoleService).
+  van_salesman: {
+    key: "van_salesman",
+    name: "Van salesman",
+    rank: 30,
+    description: "Works his own van trip: sells, collects, takes returns and empties back, asks for a load and prints the slip. Sees nothing else.",
+    permissions: only("vansales.sell"),
+  },
   viewer: {
     key: "viewer",
     name: "Viewer",

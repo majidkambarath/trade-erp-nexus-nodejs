@@ -75,8 +75,7 @@ test("setup: an organisation with banking and one without, a supervisor and a sa
   await Org.create({ legalName: "No Bank Foods LLC", code: "nobank", country: "AE", baseCurrency: "AED", timezone: "Asia/Dubai", planCode: "internal", moduleOverrides: { vansales: true }, featureOverrides: { banking: false } });
   await person(CODE, "owner", { type: "super_admin" });
   await person("nobank", "nbowner", { type: "super_admin" });
-  const role = await call("owner", "POST", "/access/roles", { key: "van_salesman", name: "Van salesman", description: "Sells from a van", rank: 30, permissions: ["vansales.sell"] });
-  assert.equal(role.status, 201, JSON.stringify(role.data));
+  // the salesmen hold the ready-made Van salesman role (utils/permissions.js)
   ali = await person(CODE, "ali", { type: "viewer", roleKey: "van_salesman" });
 
   // a bank account to settle card money into, a card type and the machine, in-process (the same services the screens use)

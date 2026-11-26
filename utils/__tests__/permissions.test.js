@@ -98,6 +98,16 @@ test("ranks run from the owner down, and the three jobs at one level share a ran
   assert.equal(r("sales"), r("storekeeper"));
 });
 
+test("the Van salesman sells on the road and nothing else: no loading, settling, setup or any ERP module", () => {
+  const role = p.resolveRole("van_salesman");
+  assert.ok(role?.builtIn);
+  assert.deepEqual([...role.permissions].sort(), ["lookups.view", "vansales.sell", "vansales.view"]);
+  for (const k of ["vansales.load", "vansales.settle", "vansales.manage", "sales.view", "sales.create", "finance.view", "inventory.view", "users.view"]) {
+    assert.equal(role.permissions.includes(k), false, `holds no ${k}`);
+  }
+  assert.ok(p.BUILT_IN.van_salesman.rank < p.BUILT_IN.storekeeper.rank && p.BUILT_IN.van_salesman.rank > p.BUILT_IN.viewer.rank);
+});
+
 test("the headline cases: who can and cannot do the things that hurt", () => {
   // an operator enters documents, a manager approves them - the sentence the old table was written to say
   assert.ok(lacks("operator", "sales.approve", "purchase.approve", "finance.approve"));

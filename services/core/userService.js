@@ -44,7 +44,7 @@ const guard = (verdict) => {
 
 // the role a request names, which must exist, be switched on, and be one the actor may hand out
 async function targetRole(key) {
-  const role = await RoleService.find(clean(key).toLowerCase());
+  const role = await RoleService.offered(clean(key).toLowerCase());
   if (!role) throw new AppError("That role does not exist in this organisation", 400, "ROLE_NOT_FOUND");
   if (role.isActive === false) throw new AppError("That role has been switched off", 400, "ROLE_INACTIVE");
   return role;
