@@ -53,7 +53,18 @@ const clean = (tenant) => {
 };
 
 // Run `fn` for one organisation. Everything it starts - awaited or not - inherits the scope.
-const runWithTenant = (tenant, fn) => store.run({ tenant: clean(tenant), unscoped: false }, () => settle(fn()));
+// (the person a request is for, when there is one, follows a nested scope: see withActor)
+const runWithTenant = (tenant, fn) => store.run({ tenant: clean(tenant), unscoped: false, actor: store.getStore()?.actor || null }, () => settle(fn()));
+
+// WHO is making a change, carried beside the organisation: the signed-in person a request is for (their account id, name
+// and address). The audit plugin (utils/auditPlugin.js) names them on every change it logs; with no person (a background
+// job, a migration) nothing is logged as theirs. Set once, by authenticateToken.
+const withActor = (actor, fn) => {
+  const scope = store.getStore() || { tenant: null, unscoped: false };
+  const who = actor && actor.id ? Object.freeze({ id: String(actor.id), name: actor.name ? String(actor.name) : null, ip: actor.ip ? String(actor.ip) : null }) : null;
+  return store.run({ ...scope, actor: who }, () => settle(fn()));
+};
+const currentActor = () => store.getStore()?.actor || null;
 
 // The loud escape hatch: run `fn` with NO organisation filter. It exists for the few jobs that really
 // span organisations (the developer console, a migration, the public link reader, which finds its row by
@@ -112,5 +123,5 @@ const tenantForQuery = () => {
 
 module.exports = {
   DEFAULT_TENANT, TenantScopeError, runWithTenant, runUnscoped, unscopedStats, allBranches, runInBranchOf,
-  currentScope, isUnscoped, ambientTenant, tenantForQuery, legacyDefaultEnabled,
+  currentScope, isUnscoped, ambientTenant, tenantForQuery, legacyDefaultEnabled, withActor, currentActor,
 };

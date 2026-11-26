@@ -23,7 +23,7 @@ const ONLY_WHEN_ENROLLING = [["POST", "/api/v1/auth/2fa/setup"], ["POST", "/api/
 const mayEnrol = (req) => requestIs(ONLY_WHEN_ENROLLING, req);
 const Branch = require("../models/core/branchModel");
 const AppError = require("../utils/AppError");
-const { runWithTenant, runUnscoped } = require("../utils/tenantContext");
+const { runWithTenant, runUnscoped, withActor } = require("../utils/tenantContext");
 const { requestRefusal, warningHeaders } = require("../utils/subscriptionGate");
 const SecurityPolicyService = require("../services/core/securityPolicyService");
 const AuthSession = require("../models/core/authSessionModel");
@@ -174,7 +174,8 @@ const makeAuthenticator = ({ allowBlocked = false } = {}) => async (req, res, ne
     }
 
     // Everything downstream - the route, the services, every query - runs as this organisation, in this branch.
-    return runWithTenant(req.tenant, next);
+    // ... and as this person, whom the audit log names on every change they make (utils/auditPlugin.js)
+    return runWithTenant(req.tenant, () => withActor({ id: req.admin.id || admin._id, name: admin.email || admin.name, ip: req.ip }, next));
   } catch (error) {
     // A token problem we raised ourselves (expired, malformed, wrong kind) is told by its code. Anything else - a database error, a bug - is
     // logged here and told to nobody: the answer used to carry the error's own text (a cast error naming the query it choked on).

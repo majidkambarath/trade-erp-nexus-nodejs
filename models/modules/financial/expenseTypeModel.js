@@ -81,4 +81,6 @@ expenseCategorySchema.index(
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
 expenseCategorySchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+expenseCategorySchema.plugin(require("../../../utils/auditPlugin"), { entity: "ExpenseCategory" });
 module.exports = mongoose.model("ExpenseCategory", expenseCategorySchema);

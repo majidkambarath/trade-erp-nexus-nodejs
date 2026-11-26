@@ -329,7 +329,8 @@ test("an expense voucher or a note refuses a reverse-charge code instead of book
 
 let scenario = {};
 test("the VAT return: every box, with reverse charge in 3 and 10 and the net payable unchanged by it", { skip }, async () => {
-  assert.equal(await svc.Transaction.countDocuments({}), 0, "every earlier test cleaned up after itself (deleting an approved document reverses it)");
+  // (an approved document "deleted" is cancelled and kept, reversed: only live ones count)
+  assert.equal(await svc.Transaction.countDocuments({ status: { $ne: "CANCELLED" } }), 0, "every earlier test cleaned up after itself (deleting an approved document reverses it)");
 
   await buyApproved([L(rice, 100, 10, STD())]); // standard input 1000 / 50
   const sale = await approve(await sell([L(rice, 10, 20, STD())])); // standard output 200 / 10

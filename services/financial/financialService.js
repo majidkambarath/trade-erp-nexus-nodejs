@@ -697,7 +697,24 @@ class FinancialService {
     await this.reverseLedgerEntries(voucher._id, session);
     await this.reverseAllocations(voucher, session);
     const LogModel = voucher.partyType === "Vendor" ? DebitLog : CreditLog;
-    await LogModel.deleteMany({ ref: voucher.voucherNo }, { session });
+    // the party's statement rows are not removed: each gets its mirror (as a reversed trade document's do), so the history
+    // says what was paid and that it was taken back (FTA: no hard deletes of posted entries)
+    const rows = await LogModel.find({ ref: voucher.voucherNo }).session(session || null).lean();
+    if (rows.length) {
+      await LogModel.insertMany(rows.map((r) => {
+        const { _id, createdAt, updatedAt, __v, ...rest } = r;
+        return {
+          ...rest,
+          type: `${r.type}_reversed`,
+          date: new Date(),
+          amount: -(Number(r.amount) || 0),
+          paid: -(Number(r.paid) || 0),
+          balance: Math.round(((Number(r.balance) || 0) + (Number(r.paid) || 0)) * 100) / 100,
+          ref: `REV-${voucher.voucherNo}`,
+          status: "REVERSED",
+        };
+      }), { session });
+    }
     if (voucher.partyType && voucher.onAccountAmount > 0) {
       await this.adjustPartyCashBalance(voucher.partyId, voucher.partyType, voucher.onAccountAmount, session, onAccountOp(voucher.partyType, true));
     }

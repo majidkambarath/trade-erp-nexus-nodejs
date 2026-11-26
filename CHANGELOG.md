@@ -10,6 +10,23 @@ UAE tax files: what the FTA expects accounting software to produce.
   reason (`returnReason`; one not given reads "Goods returned by the customer" / "to the supplier"). A ledger note keeps
   the invoice it is set against with its date and value, may name one it cannot be set against (`originalInvoiceId`),
   and keeps a `reason`. `/accounting/returnable/:id` also answers the invoice's total, value and tax.
+- **Every change a person makes is in the audit log, field by field.** `utils/auditPlugin.js` on 36 models (parties, items,
+  categories, units, accounts, tax codes, banks and cards, settings, users and roles, branches, HR and van masters):
+  create, update and delete, each with who (`withActor`, set by `authenticateToken`), when, from which address and
+  `changes [{field, from, to}]` (`utils/auditDiff.js`; secrets shown as changed, never with a value). Written in the same
+  transaction as the change. The books' own running figures (balances, quantities, cost) are not logged here: their
+  postings and movements record them. `AuditService.log` also stores `changes` when given before and after.
+- **The audit log is append-only**: any update or delete of a row is refused (`AUDIT_LOG_IMMUTABLE`).
+- **Deleted records** (`GET /accounting/deleted-records`, `audit.view`): a record that is deleted is first kept whole.
+- **No hard deletes of posted records**:
+  - Deleting an APPROVED trade document now CANCELS it: everything is reversed as before, and the document stays,
+    `CANCELLED`, with `cancelled {at, by, reason}` and its number still used (`ALREADY_CANCELLED` after); the
+    `DELETE` answers 200 `{cancelled: true}` and takes an optional `reason`.
+  - A deleted voucher's customer or supplier statement rows are mirrored (`REV-`), not removed.
+  - A customer, supplier, item, unit or staff member with history cannot be deleted (`PARTY_IN_USE`, `ITEM_IN_USE`,
+    `UNIT_IN_USE`, `STAFF_IN_USE`).
+  - An expense category whose sub-categories are used is kept.
+- The audit log can be filtered by who (`user`).
 
 - **The FTA VAT audit file (FAF)** for any period (`GET /vat-return/faf`, `reports.vat`, all branches): company
   details, the purchase and supply listings made from the same lines as the VAT return, and the general ledger, each with

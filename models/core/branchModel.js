@@ -38,4 +38,6 @@ branchSchema.index({ companyId: 1 }, { unique: true, partialFilterExpression: { 
 
 branchSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+branchSchema.plugin(require("../../utils/auditPlugin"), { entity: "Branch" });
 module.exports = mongoose.models.Branch || mongoose.model("Branch", branchSchema);

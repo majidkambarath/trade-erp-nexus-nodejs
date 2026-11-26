@@ -346,8 +346,9 @@ test("delivery note against an order: part by part, never more than ordered, and
   assert.equal(rescue.salesOrder.totalAmount, 105);
   assert.equal(rescue.salesOrder.linkedRef, d1.deliveryNoteNo);
 
-  // an order that is gone, or that was cancelled before it was invoiced, takes no deliveries
-  await assert.rejects(() => svc.D.create({ sourceTransactionId: so._id, items: [{ sourceLineId: riceLine, qty: 1 }] }, "t"), { code: "ORDER_NOT_FOUND" });
+  // an approved order "deleted" above is CANCELLED and kept (no hard deletes of posted records), and one cancelled before it
+  // was invoiced: neither takes deliveries
+  await assert.rejects(() => svc.D.create({ sourceTransactionId: so._id, items: [{ sourceLineId: riceLine, qty: 1 }] }, "t"), { code: "ORDER_NOT_DELIVERABLE" });
   const dead = await order(customer, [L(rice, 3, 20)]);
   const deadLine = dead.items[0]._id;
   const onIt = await svc.D.create({ sourceTransactionId: dead._id, items: [{ sourceLineId: deadLine, qty: 3 }] }, "t");

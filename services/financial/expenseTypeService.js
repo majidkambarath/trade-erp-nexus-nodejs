@@ -210,11 +210,14 @@ class ExpenseCategoryService {
 
       // ---- Check if any voucher references this category ----
       const Voucher = mongoose.model("Voucher");
+      // (its sub-categories go with it, so a voucher naming any of them keeps it)
+      const subs = await ExpenseCategory.find({ parentCategory: id }).select("_id").session(session).lean();
+      const ids = [id, ...subs.map((s) => s._id)];
       const used = await Voucher.countDocuments(
         {
           $or: [
-            { expenseCategoryId: id },
-            { mainExpenseCategoryId: id },
+            { expenseCategoryId: { $in: ids } },
+            { mainExpenseCategoryId: { $in: ids } },
           ],
         },
         { session }

@@ -42,4 +42,6 @@ statutoryRuleSchema.index({ country: 1, key: 1, effectiveFrom: -1 });
 // same reasoning the chart of accounts and tax codes are organisation-wide while documents are per branch.
 statutoryRuleSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+statutoryRuleSchema.plugin(require("../../../utils/auditPlugin"), { entity: "StatutoryRule" });
 module.exports = mongoose.model("StatutoryRule", statutoryRuleSchema);

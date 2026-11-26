@@ -169,8 +169,14 @@ cardTypeSchema.plugin(tenantPlugin);
 cardSchema.plugin(tenantPlugin);
 chequeSchema.plugin(tenantPlugin, { branchScoped: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+bankSchema.plugin(require("../../../utils/auditPlugin"), { entity: "BankMaster" });
 const BankMaster = mongoose.models.BankMaster || mongoose.model("BankMaster", bankSchema);
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+cardTypeSchema.plugin(require("../../../utils/auditPlugin"), { entity: "CardType" });
 const CardType = mongoose.models.CardType || mongoose.model("CardType", cardTypeSchema);
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+cardSchema.plugin(require("../../../utils/auditPlugin"), { entity: "CardMaster" });
 const CardMaster = mongoose.models.CardMaster || mongoose.model("CardMaster", cardSchema);
 const Cheque = mongoose.models.Cheque || mongoose.model("Cheque", chequeSchema);
 

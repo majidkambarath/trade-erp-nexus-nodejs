@@ -108,9 +108,11 @@ test("a return of a self-billed invoice is our credit note; the audit file carri
   assert.ok(file.text.includes(`,${invoice.selfBilledNo},`), "our tax invoice number in the purchase listing");
   assert.ok(file.text.includes(`,${note.selfBilledNo},`));
 
+  // an approved note is cancelled, not deleted: it keeps its number, which is never given again
   await svc.Tx.deleteTransaction(note._id, "tester");
-  const row = await svc.Issued.findOne({ number: note.selfBilledNo }).lean();
-  assert.notEqual(row.status, "issued");
+  const kept = await svc.Transaction.findById(note._id).lean();
+  assert.equal(kept.status, "CANCELLED");
+  assert.equal(kept.selfBilledNo, note.selfBilledNo);
   const again = await approve(await svc.Tx.createTransaction({
     type: "purchase_return", partyId: vendor._id, partyType: "Vendor", partyTypeRef: "Vendor", returnOf: { transactionId: invoice._id, transactionNo: invoice.transactionNo },
     items: [{ itemId: stock._id, description: "Dates", qty: 1, price: 20, rate: 20, vatPercent: 5 }],

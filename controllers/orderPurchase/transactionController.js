@@ -127,18 +127,24 @@ exports.updateTransaction = catchAsync(async (req, res) => {
 
 // Delete transaction
 exports.deleteTransaction = catchAsync(async (req, res) => {
+  // an approved document is cancelled, not deleted, and the reason is kept on it
+  const reason = typeof req.body?.reason === "string" ? req.body.reason : typeof req.query?.reason === "string" ? req.query.reason : undefined;
   const removed = await TransactionService.deleteTransaction(
     req.params.id,
-    resolveCreatedBy(req)
+    resolveCreatedBy(req),
+    { reason, byName: req.admin?.name || req.admin?.email || null }
   );
   await AuditService.log({
     req,
-    action: "TRANSACTION_DELETED",
+    action: removed.cancelled ? "TRANSACTION_CANCELLED" : "TRANSACTION_DELETED",
     entity: "Transaction",
     entityId: req.params.id,
-    summary: `${removed.type.replace(/_/g, " ")} ${removed.transactionNo} deleted`,
+    summary: removed.cancelled
+      ? `${removed.type.replace(/_/g, " ")} ${removed.transactionNo} cancelled: its postings were reversed and it is kept (${removed.reason})`
+      : `${removed.type.replace(/_/g, " ")} ${removed.transactionNo} deleted`,
     before: removed,
   });
+  if (removed.cancelled) return res.status(200).json({ status: "success", data: { cancelled: true, transactionNo: removed.transactionNo } });
   res.status(204).json({ status: "success", data: null });
 });
 

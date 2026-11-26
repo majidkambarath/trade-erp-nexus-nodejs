@@ -39,4 +39,6 @@ const salaryComponentSchema = new mongoose.Schema(
 salaryComponentSchema.index({ country: 1, name: 1 }, { unique: true });
 salaryComponentSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+salaryComponentSchema.plugin(require("../../../utils/auditPlugin"), { entity: "SalaryComponent" });
 module.exports = mongoose.model("SalaryComponent", salaryComponentSchema);

@@ -56,4 +56,6 @@ vanSchema.index({ salesmanId: 1, active: 1 });
 
 vanSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+vanSchema.plugin(require("../../../utils/auditPlugin"), { entity: "Van" });
 module.exports = mongoose.models.Van || mongoose.model("Van", vanSchema);

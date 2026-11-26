@@ -241,6 +241,12 @@ const transactionSchema = new mongoose.Schema({
     vat: { type: Number },
     creditedBefore: { type: Number },
   },
+  // An APPROVED document is never deleted: "Delete" reverses everything it posted and keeps it here, cancelled, with its
+  // number still used (FTA: no hard deletes of posted entries). Absent on every other document.
+  cancelled: {
+    type: new mongoose.Schema({ at: Date, by: String, byName: String, reason: { type: String, trim: true, maxlength: 300 }, wasApproved: Boolean }, { _id: false }),
+    default: undefined,
+  },
   // Why the goods came back (Art. 60(1)(f)): printed on the credit note. Absent on older returns.
   returnReason: { type: String, trim: true, maxlength: 300 },
   attachments: [
@@ -391,4 +397,6 @@ transactionSchema.index({ transactionNo: 1 }, { unique: true }); // unique withi
 // documents belong to a branch: a person working in one branch sees only that branch's (utils/tenantPlugin.js)
 transactionSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+transactionSchema.plugin(require("../../utils/auditPlugin"), { entity: "Transaction", diff: false });
 module.exports = mongoose.model("Transaction", transactionSchema);

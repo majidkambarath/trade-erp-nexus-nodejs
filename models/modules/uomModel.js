@@ -37,4 +37,6 @@ uomSchema.index({ shortCode: 1 }, { unique: true }); // unique within an organis
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
 uomSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+uomSchema.plugin(require("../../utils/auditPlugin"), { entity: "UOM" });
 module.exports = mongoose.model("UOM", uomSchema);

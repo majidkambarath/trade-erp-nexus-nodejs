@@ -155,6 +155,9 @@ settingsSchema.plugin(tenantPlugin);
 sendSchema.plugin(tenantPlugin);
 shareSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+settingsSchema.plugin(require("../../utils/auditPlugin"), { entity: "MessagingSettings", ignore: ["reminders.lastAutoRunDay"] });
+
 module.exports = {
   MessagingSettings: mongoose.model("MessagingSettings", settingsSchema),
   DocumentSend: mongoose.model("DocumentSend", sendSchema),

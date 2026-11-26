@@ -27,6 +27,8 @@ accountGroupSchema.index({ companyId: 1, parentGroup: 1 });
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
 accountGroupSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+accountGroupSchema.plugin(require("../../../utils/auditPlugin"), { entity: "AccountGroup" });
 const AccountGroup = mongoose.model("AccountGroup", accountGroupSchema);
 AccountGroup.CATEGORIES = CATEGORIES;
 module.exports = AccountGroup;

@@ -608,10 +608,18 @@ class TransactionService {
   );
 
   // Delete Transaction
+  // deleteTransaction(id, createdBy[, { reason, byName }]): a draft (or a rejected document) is deleted - and kept whole in
+  // Deleted records (utils/auditPlugin.js); an APPROVED one is cancelled: everything it posted is reversed exactly as a delete
+  // did, and the document stays, CANCELLED, with who, when and why, and its number still used.
   static deleteTransaction = withTransactionSession(
-    async (id, createdBy, session) => {
+    async (id, createdBy, ...rest) => {
+      const session = rest[rest.length - 1];
+      const options = rest.length > 1 ? rest[0] || {} : {};
       const transaction = await Transaction.findById(id).session(session);
       if (!transaction) throw new AppError("Transaction not found", 404);
+      if (transaction.cancelled?.wasApproved) {
+        throw new AppError(`${transaction.transactionNo} is already cancelled. It stays on record as it was.`, 409, "ALREADY_CANCELLED");
+      }
 
       // What the audit log keeps of the document, read before it is gone.
       const removed = {
@@ -659,13 +667,21 @@ class TransactionService {
       }
 
       if (transaction.type === "purchase_order") {
-        await StockPurchaseLog.deleteOne(
-          { transactionNo: transaction.transactionNo },
-          { session }
-        );
+        if (wasApproved) await StockPurchaseLog.updateOne({ transactionNo: transaction.transactionNo }, { $set: { status: "CANCELLED" } }, { session });
+        else await StockPurchaseLog.deleteOne({ transactionNo: transaction.transactionNo }, { session });
       }
 
-      await Transaction.findByIdAndDelete(id).session(session);
+      if (wasApproved) {
+        // kept, cancelled: its postings are reversed above and its number stays used
+        const reason = typeof options.reason === "string" && options.reason.trim() ? options.reason.replace(/\s+/g, " ").trim().slice(0, 300) : "Cancelled";
+        transaction.status = "CANCELLED";
+        transaction.cancelled = { at: new Date(), by: createdBy ? String(createdBy) : null, byName: options.byName || null, reason, wasApproved: true };
+        await transaction.save({ session, validateModifiedOnly: true });
+        removed.cancelled = true;
+        removed.reason = reason;
+      } else {
+        await Transaction.findByIdAndDelete(id).session(session);
+      }
 
       // The number goes on record as deleted. A document the customer has already been SENT keeps its
       // number whatever its type allows: it is in somebody else's hands. There is no e-invoice test
@@ -673,15 +689,18 @@ class TransactionService {
       // by this line there is nothing lodged with the tax authority to protect. Everything else follows
       // the voucher type's own rule, which refuses re-use for sales invoices, returns and notes anyway.
       const sentToCustomer = Boolean(transaction.lastSend);
-      await NumberSeriesService.release({
-        number: transaction.transactionNo,
-        reason: sentToCustomer ? "Document deleted after it had been sent to the customer" : "Document deleted",
-        retire: sentToCustomer,
-        by: createdBy,
-        session,
-      });
+      // (a cancelled document still carries its number, so the number is not released at all)
+      if (!wasApproved) {
+        await NumberSeriesService.release({
+          number: transaction.transactionNo,
+          reason: sentToCustomer ? "Document deleted after it had been sent to the customer" : "Document deleted",
+          retire: sentToCustomer,
+          by: createdBy,
+          session,
+        });
+      }
       // the self-billed number we issued for it stays used: a tax invoice number is never given twice
-      if (transaction.selfBilledNo) {
+      if (transaction.selfBilledNo && !wasApproved) {
         await NumberSeriesService.release({ number: transaction.selfBilledNo, reason: "Self-billed document deleted", retire: true, by: createdBy, session });
       }
 

@@ -246,6 +246,9 @@ class StaffService {
         throw new AppError("Staff member not found", 404);
       }
 
+      // a person paid or contracted stays on record
+      await require("../core/inUseService").assertStaffFree(staff, { session });
+
       // Delete associated files from Cloudinary
       const filesToDelete = [];
       if (staff.idProof) filesToDelete.push(staff.idProof);

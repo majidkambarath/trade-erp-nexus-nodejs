@@ -148,4 +148,6 @@ const companySettingsSchema = new mongoose.Schema(
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
 companySettingsSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+companySettingsSchema.plugin(require("../../../utils/auditPlugin"), { entity: "CompanySettings" });
 module.exports = mongoose.model("CompanySettings", companySettingsSchema);

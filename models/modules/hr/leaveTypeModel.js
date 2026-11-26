@@ -26,4 +26,6 @@ leaveTypeSchema.index({ name: 1 }, { unique: true });
 
 leaveTypeSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+leaveTypeSchema.plugin(require("../../../utils/auditPlugin"), { entity: "LeaveType" });
 module.exports = mongoose.model("LeaveType", leaveTypeSchema);

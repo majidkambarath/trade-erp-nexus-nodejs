@@ -30,4 +30,6 @@ budgetSchema.index({ companyId: 1, fiscalYearId: 1, scopeKey: 1 }, { unique: tru
 
 budgetSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+budgetSchema.plugin(require("../../../utils/auditPlugin"), { entity: "Budget" });
 module.exports = mongoose.models.Budget || mongoose.model("Budget", budgetSchema);

@@ -237,6 +237,10 @@ exports.deleteVendor = async (id) => {
   session.startTransaction();
 
   try {
+    const found = await Vendor.findById(id).session(session).lean();
+    if (!found) throw new AppError("Vendor not found", 404);
+    // a supplier with history is part of the books: it is kept, never deleted
+    await require("../core/inUseService").assertPartyFree("vendor", found, { session });
     const vendor = await Vendor.findByIdAndDelete(id, { session });
     if (!vendor) throw new AppError("Vendor not found", 404);
 

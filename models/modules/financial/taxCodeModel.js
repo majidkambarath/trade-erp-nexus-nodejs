@@ -29,6 +29,8 @@ taxCodeSchema.index({ companyId: 1, name: 1 }, { unique: true });
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
 taxCodeSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+taxCodeSchema.plugin(require("../../../utils/auditPlugin"), { entity: "TaxCode" });
 const TaxCode = mongoose.model("TaxCode", taxCodeSchema);
 TaxCode.KINDS = KINDS;
 module.exports = TaxCode;

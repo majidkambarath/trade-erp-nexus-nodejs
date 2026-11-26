@@ -38,4 +38,6 @@ promotionSchema.index({ active: 1, kind: 1 });
 
 promotionSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+promotionSchema.plugin(require("../../../utils/auditPlugin"), { entity: "Promotion" });
 module.exports = mongoose.models.Promotion || mongoose.model("Promotion", promotionSchema);

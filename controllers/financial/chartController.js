@@ -128,3 +128,4 @@ exports.getReturnable = catchAsync(async (req, res) => ok(res, await ReturnServi
 
 // --- audit log ---
 exports.getAuditLog = catchAsync(async (req, res) => ok(res, await AuditService.list(req, req.query)));
+exports.getDeletedRecords = catchAsync(async (req, res) => ok(res, await AuditService.deletedRecords(req, req.query)));
