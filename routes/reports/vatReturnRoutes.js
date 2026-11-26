@@ -12,6 +12,7 @@ router.use(requireFeature("vatReturn"));
 
 router.get("/return", requirePermission("reports.financial"), c.compute);
 router.get("/detail", requirePermission("reports.financial"), c.detail);
+router.get("/analysis", requirePermission("reports.financial"), c.analysis);
 // the whole books of a period in one file, so it needs the key that prepares the return, not just the one that reads it
 router.get("/faf", requirePermission("reports.vat"), c.auditFile);
 router.get("/returns", requirePermission("reports.financial"), c.list);

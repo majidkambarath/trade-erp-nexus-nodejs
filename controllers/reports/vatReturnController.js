@@ -31,7 +31,8 @@ exports.auditFile = catchAsync(async (req, res) => {
 });
 
 exports.detail = live((req) =>
-  VatReturn.detail({ from: req.query.from, to: req.query.to, direction: req.query.direction, kind: req.query.kind, search: req.query.search, page: req.query.page, limit: req.query.limit }));
+  VatReturn.detail({ from: req.query.from, to: req.query.to, direction: req.query.direction, kind: req.query.kind, search: req.query.search, page: req.query.page, limit: req.query.limit, all: req.query.all === "1" }));
+exports.analysis = live((req) => VatReturn.analysis({ from: req.query.from, to: req.query.to }));
 
 exports.list = catchAsync(async (req, res) => ok(res, await VatReturn.list()));
 exports.get = catchAsync(async (req, res) => ok(res, await VatReturn.get(req.params.id)));

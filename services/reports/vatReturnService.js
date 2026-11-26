@@ -3,6 +3,7 @@ const Transaction = require("../../models/modules/transactionModel");
 const { Voucher, LedgerEntry } = require("../../models/modules/financial/financialModels");
 const TaxCode = require("../../models/modules/financial/taxCodeModel");
 const VATReturn = require("../../models/modules/financial/vatReturnModel");
+const Branch = require("../../models/core/branchModel");
 const AccountConfigService = require("../financial/accountConfigService");
 const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
@@ -47,6 +48,14 @@ const BOX_OF_EMIRATE = Object.fromEntries(EMIRATES.map(([box, name]) => [name.to
 const { DEFAULT_RCM_PERCENT } = require("../../utils/pricing"); // the rate an older reverse-charge line with none is worked out at
 
 const num = (v) => Number(v) || 0;
+
+// "dubai" -> "Dubai"; anything that is not one of the seven -> null
+const emirateName = (text) => EMIRATES.find(([, name]) => name.toLowerCase() === String(text || "").trim().toLowerCase())?.[1] || null;
+// what a line with a tax treatment and no tax code is called in the report by tax code
+const KIND_LABEL = {
+  standard: "Standard rated (no code)", zero_rated: "Zero rated (no code)", exempt: "Exempt (no code)",
+  reverse_charge: "Reverse charge (no code)", out_of_scope: "Out of scope (no code)", unclassified: "No tax treatment",
+};
 
 // The treatment of a document line: the snapshot kind, else inferred from its VAT, else unclassified.
 function treatmentOf(kind, vatPercent, vatAmount) {
@@ -194,15 +203,38 @@ class VatReturnService {
     return (await this.configuredEmirate()) || "Dubai";
   }
 
+  // The emirate each branch (establishment) is in, where it names one of the seven: branch code -> emirate.
+  static async branchEmirates() {
+    const branches = await Branch.find({ emirate: { $exists: true, $ne: "" } }).select("code emirate").lean();
+    const named = branches.map((b) => [b.code, emirateName(b.emirate)]).filter(([, name]) => name);
+    return new Map(named);
+  }
+
+  // Which emirate a supply is reported under: its branch's, else the company's (Dubai when none is set).
+  static async emiratePicker() {
+    const [configured, branches] = await Promise.all([this.configuredEmirate(), this.branchEmirates()]);
+    const known = emirateName(configured);
+    const company = known || configured || "Dubai";
+    return {
+      company,
+      of: (line) => branches.get(line.branchId || "main") || known || "Dubai",
+      // an assumption was made when a supply fell back to a company emirate that is not set or not one of the seven
+      assumed: (lines) => {
+        if (known) return false;
+        const supplies = lines.filter((l) => l.direction === "output" && l.kind === "standard");
+        return supplies.length ? supplies.some((l) => !branches.has(l.branchId || "main")) : branches.size === 0;
+      },
+    };
+  }
+
   // The return for a period, from the documents.
   static async compute({ from, to } = {}) {
     const lines = await this.collect({ from, to });
-    const configured = await this.configuredEmirate();
-    const emirate = configured || "Dubai";
-    const emirateBox = BOX_OF_EMIRATE[String(emirate).toLowerCase()] || "1b";
-    // standard-rated supplies are reported under the emirate of the establishment: when none is set, or the text is not one of the
-    // seven, the return says it assumed Dubai rather than looking as though it knew
-    const emirateAssumed = !configured || !(String(configured).toLowerCase() in BOX_OF_EMIRATE);
+    // standard-rated supplies are reported under the emirate of the establishment (the branch, else the company): when none is
+    // set, or the text is not one of the seven, the return says it assumed Dubai rather than looking as though it knew
+    const picker = await this.emiratePicker();
+    const emirate = picker.company;
+    const emirateAssumed = picker.assumed(lines);
 
     const acc = {};
     const add = (box, label, taxable, vat) => {
@@ -224,7 +256,10 @@ class VatReturnService {
         continue;
       }
       if (l.direction === "output") {
-        if (l.kind === "standard") add(emirateBox, `Standard-rated supplies in ${emirate}`, l.taxable, l.vat);
+        if (l.kind === "standard") {
+          const where = picker.of(l);
+          add(BOX_OF_EMIRATE[where.toLowerCase()], `Standard-rated supplies in ${where}`, l.taxable, l.vat);
+        }
         else if (l.kind === "zero_rated") add("4", "Zero-rated supplies", l.taxable, 0);
         else if (l.kind === "exempt") add("5", "Exempt supplies", l.taxable, 0);
         else if (l.kind === "reverse_charge") {
@@ -328,8 +363,45 @@ class VatReturnService {
     return { rows };
   }
 
+  // The period's tax by tax code (each direction apart) and its supplies by emirate, from the same lines as the return.
+  static async analysis({ from, to } = {}) {
+    const lines = await this.collect({ from, to });
+    const picker = await this.emiratePicker();
+    const ids = [...new Set(lines.map((l) => l.taxCodeId).filter(Boolean).map(String))];
+    const codes = new Map((await TaxCode.find({ _id: { $in: ids } }).select("name").lean()).map((c) => [String(c._id), c.name]));
+
+    const byCode = new Map();
+    const byEmirate = new Map(EMIRATES.map(([box, name]) => [name, { box, emirate: name, standard: 0, standardVat: 0, zeroRated: 0, exempt: 0, other: 0 }]));
+    for (const l of lines) {
+      const id = l.taxCodeId ? String(l.taxCodeId) : null;
+      const key = `${l.direction}|${id || ""}|${l.kind}`;
+      if (!byCode.has(key)) {
+        const code = (id && codes.get(id)) || KIND_LABEL[l.kind] || l.kind;
+        byCode.set(key, { direction: l.direction, taxCodeId: id, code, kind: l.kind, taxable: 0, vat: 0, rcmVat: 0, lines: 0 });
+      }
+      const row = byCode.get(key);
+      row.taxable += l.taxable;
+      row.vat += l.vat;
+      row.rcmVat += l.rcmVat;
+      row.lines += 1;
+      if (l.direction !== "output") continue;
+      const e = byEmirate.get(picker.of(l));
+      if (l.kind === "standard") { e.standard += l.taxable; e.standardVat += l.vat; }
+      else if (l.kind === "zero_rated") e.zeroRated += l.taxable;
+      else if (l.kind === "exempt") e.exempt += l.taxable;
+      else e.other += l.taxable;
+    }
+    const rounded = (o, keys) => ({ ...o, ...Object.fromEntries(keys.map((k) => [k, round2(o[k])])) });
+    const taxCodes = [...byCode.values()]
+      .map((r) => rounded(r, ["taxable", "vat", "rcmVat"]))
+      .sort((a, b) => b.direction.localeCompare(a.direction) || a.code.localeCompare(b.code));
+    const emirates = [...byEmirate.values()].map((r) => rounded(r, ["standard", "standardVat", "zeroRated", "exempt", "other"]));
+    return { from, to, currency: "AED", taxCodes, emirates, emirateAssumed: picker.assumed(lines) };
+  }
+
   // Document-level detail behind the boxes.
-  static async detail({ from, to, direction, kind, search, page = 1, limit = 50 } = {}) {
+  // `all`: every row of the period in one answer, for the export (the screen pages).
+  static async detail({ from, to, direction, kind, search, page = 1, limit = 50, all = false } = {}) {
     const lines = await this.collect({ from, to });
     const byDoc = new Map();
     for (const l of lines) {
@@ -368,11 +440,31 @@ class VatReturnService {
     return {
       from, to, total: rows.length, page: p, limit: size,
       totals: { taxable: round2(rows.reduce((t, r) => t + r.taxable, 0)), vat: round2(rows.reduce((t, r) => t + r.vat, 0)) },
-      rows: rows.slice((p - 1) * size, p * size),
+      rows: all ? rows : rows.slice((p - 1) * size, p * size),
     };
   }
 
   // ---------------------------------------------------------------- saved returns
+
+  // The taxable person as the company profile describes them today.
+  static async taxpayer() {
+    const settings = await AccountConfigService.getSettings({});
+    const p = settings?.profile || {};
+    const address = [p.addressLine1, p.addressLine2, p.city, p.emirate, p.country].map((v) => String(v || "").trim()).filter(Boolean);
+    return {
+      trn: p.trn || "", nameEn: p.legalName || "", nameAr: p.legalNameArabic || "",
+      address: address.filter((v, i) => address.findIndex((w) => w.toLowerCase() === v.toLowerCase()) === i).join(", "),
+    };
+  }
+
+  // The names behind the account ids a saved return keeps (a removed account has none).
+  static async namesOf(ids) {
+    const wanted = [...new Set(ids.filter((id) => mongoose.isValidObjectId(id)).map(String))];
+    if (!wanted.length) return new Map();
+    const Admin = require("../../models/core/adminModel");
+    const rows = await Admin.find({ _id: { $in: wanted } }).select("name email").lean();
+    return new Map(rows.map((a) => [String(a._id), a.name || a.email]));
+  }
 
   static returnNoOf(from, to) {
     return `VAT-${from}..${to}`;
@@ -386,6 +478,10 @@ class VatReturnService {
   static async get(id) {
     const r = await VATReturn.findOne({ _id: id, companyId: getTenant().companyId }).lean();
     if (!r) throw new AppError("VAT return not found", 404);
+    // a return saved before the snapshot was kept shows today's details
+    if (!r.taxpayer?.trn) r.taxpayer = await this.taxpayer();
+    const names = await this.namesOf([r.createdBy, r.finalizedBy, r.filedBy]);
+    Object.assign(r, { createdByName: names.get(r.createdBy) || "", finalizedByName: names.get(r.finalizedBy) || "", filedByName: names.get(r.filedBy) || "" });
     // A finalised or filed return is the figures as they were. Documents and vouchers dated inside its period can still be posted
     // afterwards (a bank fee found on a statement, a card settlement), so what the books say for the period can move: said here,
     // with the amounts, because the tax authority has the old ones.
@@ -407,7 +503,7 @@ class VatReturnService {
     if (clash) throw new AppError(`This period overlaps the ${clash.status === "FILED" ? "filed" : "finalised"} return ${clash.returnNo}`, 409, "PERIOD_OVERLAP");
     const returnNo = this.returnNoOf(from, to);
     const body = {
-      companyId, returnNo, periodFrom: from, periodTo: to, emirate: live.emirate, boxes: live.boxes.map(({ box, label, amount, vat }) => ({ box, label, amount, vat })),
+      companyId, returnNo, periodFrom: from, periodTo: to, emirate: live.emirate, taxpayer: await this.taxpayer(), boxes: live.boxes.map(({ box, label, amount, vat }) => ({ box, label, amount, vat })),
       totals: live.totals, unclassifiedLines: live.unclassified.count, notes: notes || "", status: "DRAFT", createdBy: String(adminId || ""),
     };
     return VATReturn.findOneAndUpdate({ companyId, returnNo }, body, { upsert: true, new: true, setDefaultsOnInsert: true }).lean();
@@ -425,6 +521,8 @@ class VatReturnService {
     }
     r.boxes = live.boxes.map(({ box, label, amount, vat }) => ({ box, label, amount, vat }));
     r.totals = live.totals;
+    r.emirate = live.emirate;
+    r.taxpayer = await this.taxpayer();
     r.unclassifiedLines = live.unclassified.count;
     r.status = "FINALIZED";
     r.finalizedAt = new Date();

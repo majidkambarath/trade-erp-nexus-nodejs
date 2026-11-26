@@ -11,7 +11,7 @@ const fields = (b = {}) => ({
   code: b.code, name: b.name,
   line1: b.addressLine1 ?? b.line1, city: b.city, state: b.state, country: b.country,
   addressLine1: b.addressLine1 ?? b.line1,
-  phone: b.phone, email: b.email, isActive: b.isActive,
+  emirate: b.emirate, phone: b.phone, email: b.email, isActive: b.isActive,
   isHeadOffice: b.isHeadOffice, // never changeable: the service refuses it, in words, rather than the route ignoring it
 });
 const defined = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));

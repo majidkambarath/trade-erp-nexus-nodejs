@@ -9,6 +9,7 @@ const Admin = require("../../models/core/adminModel");
 const AppError = require("../../utils/AppError");
 const { getTenant } = require("../../utils/tenant");
 const plans = require("../../utils/plans");
+const { emirateOf, EMIRATES } = require("../../utils/partyAddress");
 
 const bad = (message, code, details) => new AppError(message, 400, code, details);
 const CODE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
@@ -18,6 +19,17 @@ const organisationOf = async (req) => {
   const org = await Organisation.findOne({ code: companyId });
   if (!org) throw new AppError("That organisation was not found", 404, "ORGANISATION_NOT_FOUND");
   return org;
+};
+
+// The emirate a branch form names, for the organisation's country: one of the seven in the UAE, "" to follow the
+// company's own, and nothing anywhere else.
+const emirateFor = (org, value) => {
+  if (String(org?.country || "AE").toUpperCase() !== "AE") return "";
+  const typed = typeof value === "string" ? value.trim() : value;
+  if (typed === undefined || typed === null || typed === "") return "";
+  const found = emirateOf(typed);
+  if (!found) throw bad(`The emirate must be one of: ${EMIRATES.join(", ")}`, "INVALID_EMIRATE");
+  return found;
 };
 
 // Who can sign in and works from a branch: what switching it off would lock out.
@@ -56,8 +68,9 @@ class BranchService {
     if (!room.ok) throw new AppError(`This organisation is limited to ${room.limit} branches and already has ${room.used}.`, 403, "LIMIT_REACHED", { resource: "branches", ...room });
     if (await Branch.exists({ code })) throw new AppError("That branch code is already used", 409, "BRANCH_CODE_TAKEN");
 
+    const emirate = emirateFor(org, input.emirate);
     return Branch.create({
-      code, name, isHeadOffice: false, createdBy: by,
+      code, name, isHeadOffice: false, createdBy: by, ...(emirate ? { emirate } : {}),
       address: { line1: input.addressLine1, city: input.city, state: input.state, country: input.country || org.country },
       phone: input.phone, email: input.email,
     });
@@ -89,6 +102,7 @@ class BranchService {
     }
     for (const k of ["line1", "city", "state"]) if (patch[k] !== undefined) branch.address[k] = String(patch[k]).trim();
     for (const k of ["phone", "email"]) if (patch[k] !== undefined) branch[k] = String(patch[k]).trim();
+    if (patch.emirate !== undefined) branch.emirate = emirateFor(await organisationOf(req || {}), patch.emirate) || undefined;
     if (patch.isActive !== undefined) branch.isActive = Boolean(patch.isActive);
     await branch.save();
     return branch;
