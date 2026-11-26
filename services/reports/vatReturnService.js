@@ -78,12 +78,15 @@ function taxableOf(item) {
 
 class VatReturnService {
   static EMIRATES = EMIRATES;
+  static assertWholeOrganisation = assertWholeOrganisation;
   static treatmentOf = treatmentOf;
   static boxesOf = boxesOf;
 
   // Every VAT-relevant line of the period as a flat list:
-  // { source, docId, docNo, date, direction: output|input, partyId, partyType, partyName, kind, taxable, vat, rcmVat }
-  // Amounts are signed: returns and notes that reverse a supply carry a minus.
+  // { source, docId, docNo, date, direction: output|input, partyId, partyType, partyName, kind, taxable, vat, rcmVat,
+  //   branchId, lineNo, description, itemId, taxCodeId, supplierRef, fx: { currency, taxable, vat } | null }
+  // Amounts are signed: returns and notes that reverse a supply carry a minus. The fields after rcmVat are what the FTA Audit
+  // File and the reports by tax code and by emirate are made from, so they can never disagree with the return's own boxes.
   static async collect({ from, to }) {
     const start = dayStart(from);
     const end = dayEnd(to);
@@ -92,7 +95,7 @@ class VatReturnService {
     const lines = [];
 
     const docs = await Transaction.find({ status: "APPROVED", isOpening: { $ne: true }, date: { $gte: start, $lte: end } })
-      .select("transactionNo type date partyId partyType items charges vatRegistered")
+      .select("transactionNo type date partyId partyType items charges vatRegistered branchId vendorReference fx.currency")
       .lean();
     const OUT = { sales_order: 1, sales_return: -1 };
     const IN = { purchase_order: 1, purchase_return: -1 };
@@ -102,8 +105,15 @@ class VatReturnService {
       const direction = d.type in OUT ? "output" : d.type in IN ? "input" : null;
       if (!direction) continue;
       const sign = (OUT[d.type] ?? IN[d.type]);
-      const base = { source: "invoice", docId: d._id, docNo: d.transactionNo, docType: d.type, date: d.date, direction, partyId: d.partyId, partyType: d.partyType };
+      const base = {
+        source: "invoice", docId: d._id, docNo: d.transactionNo, docType: d.type, date: d.date, direction, partyId: d.partyId, partyType: d.partyType,
+        branchId: d.branchId, supplierRef: d.vendorReference || "",
+      };
+      // the foreign amounts of a line, when the document was made in a foreign currency (the figures above stay in base)
+      const inForeign = (taxable, vat) => (d.fx?.currency ? { currency: d.fx.currency, taxable: num(taxable) * sign, vat: num(vat) * sign } : null);
+      let lineNo = 0;
       for (const it of d.items || []) {
+        lineNo += 1;
         const kind = treatmentOf(it.taxKind, it.vatPercent, it.vatAmount);
         const taxable = taxableOf(it) * sign;
         const vat = num(it.vatAmount) * sign;
@@ -117,18 +127,26 @@ class VatReturnService {
         if (kind === "reverse_charge" && direction === "input") {
           rcmVat = stored ? num(it.rcmVat) * sign : round2(Math.abs(taxable) * (num(it.vatPercent) || DEFAULT_RCM_PERCENT) / 100) * (taxable < 0 ? -1 : 1);
         }
-        lines.push({ ...base, kind, taxable, vat: kind === "reverse_charge" ? 0 : vat, rcmVat, rcmStored: stored && direction === "input" });
+        lines.push({
+          ...base, kind, taxable, vat: kind === "reverse_charge" ? 0 : vat, rcmVat, rcmStored: stored && direction === "input",
+          lineNo, description: it.description || "", itemId: it.itemId, taxCodeId: it.taxCodeId || null,
+          fx: inForeign(it.fx?.taxableAmount, kind === "reverse_charge" ? it.fx?.rcmVat : it.fx?.vatAmount),
+        });
       }
       for (const c of d.charges || []) {
         const kind = treatmentOf(null, c.vatPercent, c.vatAmount);
-        lines.push({ ...base, kind, taxable: num(c.amount) * sign, vat: num(c.vatAmount) * sign, rcmVat: 0, charge: true });
+        lineNo += 1;
+        lines.push({
+          ...base, kind, taxable: num(c.amount) * sign, vat: num(c.vatAmount) * sign, rcmVat: 0, charge: true,
+          lineNo, description: c.description || c.code || "Charge", taxCodeId: null, fx: inForeign(c.fx?.amount, c.fx?.vatAmount),
+        });
       }
     }
 
     // vouchers that carry VAT: expenses (input) and debit / credit notes
     const vouchers = await Voucher.find({
       voucherType: { $in: ["expense", "debit_note", "credit_note"] }, ledgerBased: true, status: "approved", date: { $gte: start, $lte: end },
-    }).select("voucherNo voucherType date partyId partyType partyName subtotal vatTotal taxCodeId noteLines description expenseAccountName").lean();
+    }).select("voucherNo voucherType date partyId partyType partyName subtotal vatTotal taxCodeId noteLines description expenseAccountName narration branchId referenceNo").lean();
     const codeIds = new Set();
     for (const v of vouchers) {
       if (v.taxCodeId) codeIds.add(String(v.taxCodeId));
@@ -138,7 +156,10 @@ class VatReturnService {
     for (const v of vouchers) {
       if (v.voucherType === "expense") {
         const kind = treatmentOf(v.taxCodeId && codes.get(String(v.taxCodeId)), v.subtotal && v.vatTotal ? (v.vatTotal / v.subtotal) * 100 : 0, v.vatTotal);
-        lines.push({ source: "expense", docId: v._id, docNo: v.voucherNo, docType: "expense", date: v.date, direction: "input", partyId: v.partyId, partyType: v.partyType, partyName: v.partyName, kind, taxable: num(v.subtotal), vat: num(v.vatTotal), rcmVat: 0 });
+        lines.push({
+          source: "expense", docId: v._id, docNo: v.voucherNo, docType: "expense", date: v.date, direction: "input", partyId: v.partyId, partyType: v.partyType, partyName: v.partyName, kind, taxable: num(v.subtotal), vat: num(v.vatTotal), rcmVat: 0,
+          branchId: v.branchId, lineNo: 1, description: v.description || v.expenseAccountName || v.narration || "", taxCodeId: v.taxCodeId || null, supplierRef: v.referenceNo || "", fx: null,
+        });
         continue;
       }
       // a note follows its lines: output VAT for a customer, input VAT for a vendor. A credit note to
@@ -146,9 +167,14 @@ class VatReturnService {
       const vendor = v.partyType === "Vendor";
       const isDebit = v.voucherType === "debit_note";
       const sign = (vendor ? isDebit : !isDebit) ? -1 : 1;
+      let lineNo = 0;
       for (const l of v.noteLines || []) {
+        lineNo += 1;
         const kind = treatmentOf(l.taxCodeId && codes.get(String(l.taxCodeId)), l.vatPercent, l.vatAmount);
-        lines.push({ source: "note", docId: v._id, docNo: v.voucherNo, docType: v.voucherType, date: v.date, direction: vendor ? "input" : "output", partyId: v.partyId, partyType: v.partyType, partyName: v.partyName, kind, taxable: num(l.amount) * sign, vat: num(l.vatAmount) * sign, rcmVat: 0 });
+        lines.push({
+          source: "note", docId: v._id, docNo: v.voucherNo, docType: v.voucherType, date: v.date, direction: vendor ? "input" : "output", partyId: v.partyId, partyType: v.partyType, partyName: v.partyName, kind, taxable: num(l.amount) * sign, vat: num(l.vatAmount) * sign, rcmVat: 0,
+          branchId: v.branchId, lineNo, description: l.description || v.narration || "", taxCodeId: l.taxCodeId || null, supplierRef: v.referenceNo || "", fx: null,
+        });
       }
     }
     return lines;
