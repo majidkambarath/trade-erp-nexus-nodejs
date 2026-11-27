@@ -78,6 +78,8 @@ const returnRecord = new mongoose.Schema(
         stockId: { type: mongoose.Schema.Types.ObjectId, ref: "Stock", required: true },
         qty: { type: Number, required: true, min: 0 },
         condition: { type: String, enum: ["good", "damaged"], default: "good" },
+        // the return document's line these came back on (the item-by-item return); absent on older records
+        docLineId: { type: mongoose.Schema.Types.ObjectId },
         _id: false,
       },
     ],
@@ -87,6 +89,7 @@ const returnRecord = new mongoose.Schema(
     note: String,
     withoutInvoice: Boolean,
     amount: Number,
+    matched: Boolean, // taken item by item, the invoice found for the salesman
   },
   { _id: false }
 );

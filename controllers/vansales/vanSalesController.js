@@ -251,6 +251,26 @@ exports.returnQuote = catchAsync(async (req, res) => {
   await assertMayWork(req);
   ok(res, await VanTripSales.returnQuote(req.params.tripId, req.body || {}, { mayUnderprice: holds(req, "vansales.manage") }));
 });
+// goods taken back item by item: what they bought, what it would credit against which invoices, and doing it
+exports.returnableItems = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanTripSales.returnableItems(req.params.tripId, req.params.customerId, { mayUnderprice: holds(req, "vansales.manage") }));
+});
+exports.returnPlan = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanTripSales.returnPlan(req.params.tripId, req.body || {}, { mayUnderprice: holds(req, "vansales.manage") }));
+});
+exports.returnItems = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const result = await VanTripSales.returnItems(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
+  const said = result.creditNotes.map((n) => `${n.transactionNo}${n.against ? ` against ${n.against}` : " without an invoice"}`).join(", ");
+  await AuditService.log({ req, action: "VAN_RETURN", entity: "VanTrip", entityId: req.params.tripId, summary: `${said} taken back on the van`, after: { returns: result.creditNotes.map((n) => n.transactionNo), amount: result.total } });
+  ok(res, { ...result, trip: await VanTripService.getById(req.params.tripId) }, 201);
+});
+exports.returnSlip = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanSlipService.forReturn(req.params.tripId, req.params.returnId));
+});
 exports.customerPosition = catchAsync(async (req, res) => ok(res, await VanTripSales.customerPosition(req.params.customerId)));
 exports.returnable = catchAsync(async (req, res) => ok(res, await VanTripSales.returnable(req.params.invoiceId)));
 

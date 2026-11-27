@@ -43,6 +43,18 @@ class ReturnService {
     return new Map(rows.map((r) => [String(r._id), { qty: r.qty, value: r.value }]));
   }
 
+  // Quantity already returned per original line, for several originals at once: "originalId:lineId" -> qty.
+  static async returnedByLineOf(originalIds, { session } = {}) {
+    if (!originalIds.length) return new Map();
+    const agg = Transaction.aggregate([
+      { $match: { "returnOf.transactionId": { $in: originalIds }, status: { $nin: DEAD_STATUSES } } },
+      { $unwind: "$items" },
+      { $group: { _id: { doc: "$returnOf.transactionId", line: "$items.returnOfLineId" }, qty: { $sum: "$items.qty" } } },
+    ]);
+    const rows = await (session ? agg.session(session) : agg);
+    return new Map(rows.map((r) => [`${r._id.doc}:${r._id.line}`, r.qty]));
+  }
+
   // The invoice's value before tax and its tax, in the base currency: the priced figures, else the lines.
   static valueOf(doc) {
     const p = doc?.pricing;

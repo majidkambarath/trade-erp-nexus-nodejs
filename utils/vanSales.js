@@ -17,6 +17,9 @@ const SELLING = new Set(["ON_ROUTE"]); // and only this one may sell, collect or
 const EPS = 0.0005;
 
 const round3 = (n) => Math.round((Number(n) + Number.EPSILON) * 1000) / 1000;
+// How goods taken back came back. Damaged goods are credited but never sold again.
+const RETURN_CONDITIONS = Object.freeze(["good", "damaged"]);
+
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const idOf = (v) => (v && typeof v === "object" ? String(v._id || v) : v == null ? "" : String(v));
 const text = (v, max = 200) => String(v ?? "").trim().slice(0, max);
@@ -649,7 +652,7 @@ const isSellerOnly = (grants) => {
 module.exports = {
   isSellerOnly,
   STATUSES, HOLDING, SELLING, MOVES, VanError, NOT_GIVEN, returnsByReason, openRequest, awaitingOf, acceptPlan,
-  round2, round3, idOf,
+  round2, round3, idOf, RETURN_CONDITIONS,
   loadedOf, soldOf, returnedOf, onVan, onVansAll, freeDepot,
   validateLoadLines, shortages, unloadVariance, stockMoves, cashSettlement, missingCheques, routeToday,
   canMove, validateVan, validateRoute, overCashLimit, calls,

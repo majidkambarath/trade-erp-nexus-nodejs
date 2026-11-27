@@ -158,3 +158,26 @@ test("another salesman's trip, and bodies nobody meant to send", { skip }, async
     assert.ok(r.status >= 400 && r.status < 500, `${JSON.stringify(body)} -> ${r.status} ${JSON.stringify(r.data)}`);
   }
 });
+
+test("by item over the real routes: his own trip only, strictly read, the credit slip printed again", { skip }, async () => {
+  const items = (who, trip = tripId) => call(who, "GET", `/van-sales/trips/${trip}/customers/${cust._id}/returnable-items`);
+  const plan = (who, body, trip = tripId) => call(who, "POST", `/van-sales/trips/${trip}/return-plan`, { customerId: String(cust._id), ...body });
+  const take = (who, body, trip = tripId) => call(who, "POST", `/van-sales/trips/${trip}/return-items`, { customerId: String(cust._id), ...body });
+  assert.equal((await items("ali", otherTripId)).status, 403);
+  assert.equal((await plan("ali", { lines: [{ stockId: rice._id, qty: 1 }] }, otherTripId)).status, 403);
+  assert.equal((await take("ali", { reason: "Expired", lines: [{ stockId: rice._id, qty: 1 }] }, otherTripId)).status, 403);
+  assert.equal((await items("ali")).status, 200);
+  for (const body of [{ lines: [{ stockId: { $ne: null }, qty: 1 }] }, { lines: [{ stockId: rice._id, qty: 1, condition: { $ne: "x" } }] }, { lines: "rice" }, { lines: [[1]] }, { customerId: { $ne: null }, lines: [{ stockId: rice._id, qty: 1 }] }]) {
+    const r = await take("ali", { reason: "Expired", ...body });
+    assert.ok(r.status >= 400 && r.status < 500, `${JSON.stringify(body)} -> ${r.status} ${JSON.stringify(r.data)}`);
+  }
+  // nothing of this shop's was sold on the trip, so one unit goes without an invoice (switched on above, within the limit)
+  const done = await take("ali", { reason: "Damaged", lines: [{ stockId: rice._id, qty: 1, condition: "damaged" }] });
+  assert.equal(done.status, 201, JSON.stringify(done.data));
+  const note = done.body.creditNotes[0];
+  const slip = await call("ali", "GET", `/van-sales/trips/${tripId}/returns/${note._id}/slip`);
+  assert.equal(slip.status, 200, JSON.stringify(slip.data));
+  assert.deepEqual([slip.body.kind, slip.body.invoice.number], ["credit", note.transactionNo]);
+  assert.equal((await call("omar", "GET", `/van-sales/trips/${tripId}/returns/${note._id}/slip`)).status, 403);
+  assert.equal((await call("omar", "GET", `/van-sales/trips/${otherTripId}/returns/${note._id}/slip`)).status, 404, "a note of another trip is not found on this one");
+});

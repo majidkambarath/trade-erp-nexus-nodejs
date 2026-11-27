@@ -100,6 +100,11 @@ router.post("/trips/:tripId/sync", requirePermission("vansales.sell"), c.sync);
 // the trip's invoices and the slip of each, to print it again (the salesman's own trip: the controller checks)
 router.get("/trips/:tripId/invoices", requirePermission("vansales.sell"), c.tripInvoices);
 router.get("/trips/:tripId/invoices/:invoiceId/slip", requirePermission("vansales.sell"), c.invoiceSlip);
+router.get("/trips/:tripId/returns/:returnId/slip", requirePermission("vansales.sell"), c.returnSlip);
+// goods taken back item by item, the invoices found for the salesman
+router.get("/trips/:tripId/customers/:customerId/returnable-items", requirePermission("vansales.sell"), c.returnableItems);
+router.post("/trips/:tripId/return-plan", requirePermission("vansales.sell"), c.returnPlan);
+router.post("/trips/:tripId/return-items", requirePermission("vansales.sell"), c.returnItems);
 router.post("/trips/:tripId/invoices/:invoiceId/whatsapp", requirePermission("vansales.sell"), requireFeature("messaging"), sendLimit, c.whatsappInvoice);
 router.post("/trips/:tripId/collect", requirePermission("vansales.sell"), c.collect);
 router.get("/trips/:tripId/expenses", requirePermission("vansales.view"), c.tripExpenses);
