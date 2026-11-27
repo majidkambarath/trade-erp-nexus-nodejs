@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.8.0.0 — 27 November 2026
+
+Archive and restore a closed year, and the simplified tax invoice on office invoices.
+
+### Added
+
+- **Archive a closed fiscal year** (`GET /accounting/fiscal-years/:id/archive`, `accounts.close`): every record of the year
+  (invoices and returns, vouchers, ledger entries, stock movements, cheques, quotations, delivery notes, orders, goods
+  received, productions, job work, opening balances, VAT returns) in one gzip file, each collection with its SHA-256 and the
+  whole sealed with a signature only this installation can make. Nothing is removed from the books. Audited
+  `FISCAL_YEAR_ARCHIVED`.
+- **Check and restore an archive** (`POST /accounting/year-archives/check` and `/restore`, `accounts.close`, all-branches
+  view): a file is refused if it was changed (`ARCHIVE_TAMPERED`), is not an archive (`ARCHIVE_UNREADABLE`), belongs to
+  another organisation or its year is open or gone; otherwise it is compared with the books record by record (missing,
+  changed since, added since). Restore puts back only the missing records, exactly as archived and with their own ids, all
+  together or not at all (`RESTORE_CONFLICT` when a number was taken since). Audited `FISCAL_YEAR_RESTORED`.
+- **Simplified tax invoices** (`CompanySettings.simplifiedInvoices`, off by default; Business rules): the UAE sales invoice
+  prints "Simplified tax invoice" where the law allows one. `GET /company/profile` carries the setting.
+
 ## 4.7.0.0 — 27 November 2026
 
 The last audit gaps: every record a person keeps is audited, bulk changes are logged record by record, and a deleted master can be put back.

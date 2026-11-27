@@ -191,6 +191,7 @@ class AccountConfigService {
       // knows separateApprover / secondApprovalAbove; notesNeedApproval is read alongside it here.
       approvals: { ...require("../../utils/approvalRules").normalisePolicy(s.approvals), notesNeedApproval: Boolean(s.approvals?.notesNeedApproval) },
       retention: { years: s.retention?.years === 15 ? 15 : 5 },
+      simplifiedInvoices: s.simplifiedInvoices === true,
       fiscalYearStartMonth: s.fiscalYearStartMonth,
       amountDecimal: s.amountDecimal,
       quantityDecimal: s.quantityDecimal,
@@ -240,6 +241,10 @@ class AccountConfigService {
       const years = typeof raw === "number" || (typeof raw === "string" && /^\d+$/.test(raw.trim())) ? Number(raw) : NaN;
       if (![5, 15].includes(years)) throw new AppError("Records are kept for 5 years, or 15 for real estate", 400, "RETENTION_INVALID");
       set["retention.years"] = years;
+    }
+    if (data.simplifiedInvoices !== undefined) {
+      if (typeof data.simplifiedInvoices !== "boolean") throw new AppError("Simplified invoices is on or off", 400, "SIMPLIFIED_INVOICES_INVALID");
+      set.simplifiedInvoices = data.simplifiedInvoices;
     }
     if (data.fiscalYearStartMonth !== undefined) {
       const n = Number(data.fiscalYearStartMonth);

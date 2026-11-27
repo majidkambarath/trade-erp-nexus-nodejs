@@ -6,6 +6,17 @@ const ledgerReports = require("../../controllers/reports/ledgerReportsController
 const multer = require("multer");
 const AppError = require("../../utils/AppError");
 const AttachmentService = require("../../services/core/attachmentService");
+const yearArchive = require("../../controllers/financial/yearArchiveController");
+const YearArchiveService = require("../../services/financial/yearArchiveService");
+
+// A year archive is one compressed file, held in memory only while it is read.
+const archiveMulter = multer({ storage: multer.memoryStorage(), limits: { fileSize: YearArchiveService.MAX_BYTES, files: 1 } });
+const archiveUpload = (req, res, next) =>
+  archiveMulter.single("file")(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === "LIMIT_FILE_SIZE") return next(new AppError("The file is too large", 413, "ARCHIVE_TOO_LARGE"));
+    return next(new AppError("Choose one archive file", 400, "ARCHIVE_FILE_REQUIRED"));
+  });
 
 // Files are held in memory, validated (extension + content), then written by AttachmentService.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: AttachmentService.MAX_BYTES, files: 1 } });
@@ -36,6 +47,10 @@ router.post("/fiscal-years", requirePermission("accounts.manage"), c.createFisca
 router.get("/fiscal-years/:id/year-end", requirePermission("accounts.close"), c.yearEnd);
 router.post("/fiscal-years/:id/close", requirePermission("accounts.close"), c.closeFiscalYear);
 router.post("/fiscal-years/:id/reopen", requirePermission("accounts.close"), c.reopenFiscalYear);
+// a closed year written to one sealed file, and a file checked against the books or its missing records put back
+router.get("/fiscal-years/:id/archive", requirePermission("accounts.close"), yearArchive.download);
+router.post("/year-archives/check", requirePermission("accounts.close"), archiveUpload, yearArchive.check);
+router.post("/year-archives/restore", requirePermission("accounts.close"), archiveUpload, yearArchive.restore);
 // months inside an open year: the list is as open as the years themselves; reading what closing would do, closing and reopening are accounts.close
 router.get("/fiscal-years/:id/months", requirePermission(["accounts.view","lookups.view"]), c.fiscalYearMonths);
 router.get("/fiscal-years/:id/months/:month", requirePermission("accounts.close"), c.monthEnd);

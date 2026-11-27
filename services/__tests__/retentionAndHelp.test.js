@@ -35,6 +35,20 @@ test("records are kept 5 years unless the organisation says 15, and nothing else
   assert.equal((await Config.getSettings({})).retention.years, 15);
 });
 
+test("simplified tax invoices are off until chosen, on or off only, and reach the printed letterhead", { skip }, async () => {
+  const Config = require("../financial/accountConfigService");
+  const Profile = require("../core/companyProfileService");
+  assert.equal((await Config.getSettings({})).simplifiedInvoices, false);
+  assert.equal((await Profile.get()).simplifiedInvoices, false);
+  await Config.updateSettings({ simplifiedInvoices: true });
+  assert.equal((await Config.getSettings({})).simplifiedInvoices, true);
+  assert.equal((await Profile.get()).simplifiedInvoices, true);
+  for (const bad of ["true", 1, null, [true], { on: true }]) {
+    await assert.rejects(Config.updateSettings({ simplifiedInvoices: bad }), (e) => e.code === "SIMPLIFIED_INVOICES_INVALID");
+  }
+  assert.equal((await Config.getSettings({})).simplifiedInvoices, true);
+});
+
 test("the Help screen lists the client topics, opens one, and refuses anything else", async () => {
   const c = require("../../controllers/core/helpController");
   const call = (fn, req) => new Promise((resolve, reject) => {
