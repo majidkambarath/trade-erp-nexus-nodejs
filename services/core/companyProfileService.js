@@ -100,7 +100,8 @@ class CompanyProfileService {
 
   static async get() {
     const row = await this.adopt(await this.row());
-    return toApi(row.profile, row.baseCurrency || orgLocale.baseCurrency());
+    // the printed sales invoice reads whether to say "Simplified tax invoice" (Business rules > Invoices)
+    return { ...toApi(row.profile, row.baseCurrency || orgLocale.baseCurrency()), simplifiedInvoices: row.simplifiedInvoices === true };
   }
 
   /**

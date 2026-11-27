@@ -90,3 +90,40 @@ test("ids that are not ids are a plain 404, never a 500", { skip }, async () => 
   const none = await call("POST", "/accounting/deleted-records/64b64b64b64b64b64b64b64b/restore");
   assert.equal(none.status, 401);
 });
+
+test("a closed year's archive is downloaded and checked over HTTP, only by someone who may close years", { skip }, async () => {
+  const FiscalYear = require("../../models/modules/financial/fiscalYearModel");
+  const fy = await stack.as("rsta", () => FiscalYear.create({ code: "2024", startDate: new Date("2024-01-01T00:00:00Z"), endDate: new Date("2024-12-31T00:00:00Z"), status: "closed" }));
+  const url = `/accounting/fiscal-years/${fy._id}/archive`;
+  assert.equal((await call("GET", url, { token: tokens.auditor })).status, 403);
+  assert.equal((await call("GET", url, { token: tokens.rstb })).status, 404, "another organisation's year is not found");
+
+  const res = await fetch(`${stack.base}${url}`, { headers: { Authorization: `Bearer ${tokens.rsta}` } });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-disposition") || "", /rsta-2024-archive\.json\.gz/);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  assert.ok(bytes.length > 20);
+
+  const form = new FormData();
+  form.append("file", new Blob([bytes], { type: "application/gzip" }), "rsta-2024-archive.json.gz");
+  const checked = await call("POST", "/accounting/year-archives/check", { token: tokens.rsta, form });
+  assert.equal(checked.status, 200, checked.text);
+  assert.equal(checked.body.fiscalYear.code, "2024");
+  assert.equal(checked.body.missing, 0);
+
+  // B's books are not A's: the same file is refused there
+  const formB = new FormData();
+  formB.append("file", new Blob([bytes]), "x.gz");
+  const other = await call("POST", "/accounting/year-archives/check", { token: tokens.rstb, form: formB });
+  assert.equal(other.status, 409, other.text);
+  assert.equal(other.code, "ARCHIVE_OTHER_ORGANISATION");
+
+  const junk = new FormData();
+  junk.append("file", new Blob(["not an archive"]), "x.gz");
+  const bad = await call("POST", "/accounting/year-archives/check", { token: tokens.rsta, form: junk });
+  assert.equal(bad.status, 400, bad.text);
+  assert.equal(bad.code, "ARCHIVE_UNREADABLE");
+  const none = await call("POST", "/accounting/year-archives/restore", { token: tokens.rsta, body: {} });
+  assert.equal(none.status, 400, none.text);
+  assert.equal(none.code, "ARCHIVE_FILE_REQUIRED");
+});

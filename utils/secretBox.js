@@ -37,4 +37,8 @@ const safeEqual = (a, b) => {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
 
-module.exports = { encrypt, decrypt, hmac, safeEqual };
+// A signature only this installation can make: HMAC-SHA-256 under a key derived from the secret box key for one named
+// purpose (a year archive's seal), so a file edited and re-hashed by anyone else no longer matches.
+const sign = (purpose, raw) => crypto.createHmac("sha256", crypto.createHmac("sha256", key()).update(String(purpose)).digest()).update(raw).digest("hex");
+
+module.exports = { encrypt, decrypt, hmac, safeEqual, sign };

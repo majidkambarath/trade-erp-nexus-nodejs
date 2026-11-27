@@ -45,6 +45,9 @@ const companySettingsSchema = new mongoose.Schema(
     retention: {
       years: { type: Number, enum: [5, 15], default: 5 },
     },
+    // UAE: print "Simplified tax invoice" where the law allows one (Executive Regulation Art. 59(6)-(7): not to a registered
+    // buyer over AED 10,000). Off: every invoice prints as a full tax invoice, which the law always accepts in its place.
+    simplifiedInvoices: { type: Boolean, default: false },
     // Who may approve what (utils/approvalRules.js, services/core/approvalPolicyService.js). Both are off until the organisation sets them.
     approvals: {
       separateApprover: { type: Boolean, default: false }, // the person who prepared a document may not approve it
