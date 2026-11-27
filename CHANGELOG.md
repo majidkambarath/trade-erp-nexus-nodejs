@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.9.3.0 — 27 November 2026
+
+No server changes: released with a dark-mode fix in the salesman's app.
+
 ## 4.9.2.0 — 27 November 2026
 
 No server changes: released with the salesman's app's cleaner cards, saving loader and done animation.
