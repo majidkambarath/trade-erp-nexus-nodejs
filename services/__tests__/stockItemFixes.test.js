@@ -143,3 +143,63 @@ test("a barcode the caller names is kept, the SKU stands in when none is given, 
   assert.deepEqual((await StockService.getAllStock({ search: "62910415" })).map((s) => s.sku), ["SC0001"], "found by part of its barcode");
   assert.deepEqual((await StockService.getAllStock({ search: "SC0002" })).map((s) => s.sku), ["SC0002"], "and by SKU, as before");
 });
+
+// A barcode now belongs to one item: a scanner that read a shared code would have to guess which item was meant. Checked by the
+// service, not a unique index, because an organisation's older items may already share one (and an index that cannot be built
+// guards nothing): such an item can still be saved for any change that does not touch its barcode.
+test("a barcode is one item's: a taken barcode or another item's SKU is refused, on create and on edit", { skip }, async () => {
+  const first = await StockService.createStock(item("Water 19L", { sku: "WA0001", barcodeQrCode: "6291000000019" }), "tester");
+  await assert.rejects(
+    StockService.createStock(item("Water 19L copy", { sku: "WA0002", barcodeQrCode: "6291000000019" }), "tester"),
+    (e) => e.code === "BARCODE_TAKEN" && e.statusCode === 409 && /Water 19L \(WA0001\)/.test(e.message),
+  );
+  await assert.rejects(
+    StockService.createStock(item("Water 5L", { sku: "WA0003", barcodeQrCode: "WA0001" }), "tester"),
+    (e) => e.code === "BARCODE_TAKEN",
+    "another item's SKU is what a scanner finds it by",
+  );
+  const second = await StockService.createStock(item("Water 5L", { sku: "WA0004", barcodeQrCode: "6291000000005" }), "tester");
+  await assert.rejects(StockService.updateStock(second._id, { barcodeQrCode: "6291000000019" }, "tester"), (e) => e.code === "BARCODE_TAKEN");
+
+  // saving an item with its own barcode unchanged is never refused, and a blank goes back to the SKU
+  const same = await StockService.updateStock(first._id, { barcodeQrCode: "6291000000019", salesPrice: 7 }, "tester");
+  assert.equal(same.barcodeQrCode, "6291000000019");
+  const cleared = await StockService.updateStock(second._id, { barcodeQrCode: "  " }, "tester");
+  assert.equal(cleared.barcodeQrCode, "WA0004");
+  const changed = await StockService.updateStock(second._id, { barcodeQrCode: "6291000000777" }, "tester");
+  assert.equal(changed.barcodeQrCode, "6291000000777");
+});
+
+test("an item that already shares a barcode (from before the rule) can still be saved, until its barcode is changed to a taken one", { skip }, async () => {
+  const Stock = require("../../models/modules/stockModel");
+  const a = await StockService.createStock(item("Old A", { sku: "OL0001", barcodeQrCode: "OLDSHARED" }), "tester");
+  const b = await StockService.createStock(item("Old B", { sku: "OL0002" }), "tester");
+  await Stock.updateOne({ _id: b._id }, { $set: { barcodeQrCode: "OLDSHARED" } }); // what an older version could leave behind
+  const saved = await StockService.updateStock(b._id, { barcodeQrCode: "OLDSHARED", salesPrice: 3 }, "tester"); // the form sends it back
+  assert.equal(saved.salesPrice, 3);
+  assert.equal(String(a._id) !== String(b._id), true);
+});
+
+test("a barcode never gets in the SKU's way: a typed twin SKU is still the SKU's refusal, and the automatic SKU passes over a number used as a barcode", { skip }, async () => {
+  const cat = await require("../../models/modules/categoryModel").create({ name: "Oil" });
+  await StockService.createStock(item("Holder", { sku: "OI0001", categoryId: cat._id, barcodeQrCode: "OI0002" }), "tester");
+  await assert.rejects(StockService.createStock(item("Twin SKU", { sku: "OI0001", categoryId: cat._id }), "tester"), (e) => e.code === "DUPLICATE_SKU");
+  // a typed SKU that is another item's barcode says so, on the SKU box
+  await assert.rejects(
+    StockService.createStock(item("Clash", { sku: "OI0002", categoryId: cat._id }), "tester"),
+    (e) => e.code === "BARCODE_TAKEN" && e.details.fields[0] === "sku" && /SKU is the barcode of Holder/.test(e.message),
+  );
+  const auto = await StockService.createStock(item("Auto", { sku: "OI0001", categoryId: cat._id, autoSku: true }), "tester");
+  assert.equal(auto.sku, "OI0003", "OI0002 is already a barcode");
+  await assert.rejects(StockService.updateStock(auto._id, { sku: "OI0002" }, "tester"), (e) => e.code === "BARCODE_TAKEN" && e.details.fields[0] === "sku");
+});
+
+test("a barcode that is not plain text is refused; a service still takes none", { skip }, async () => {
+  for (const bad of ["x".repeat(65), "line\nbreak", { $ne: "x" }, ["123"]]) {
+    await assert.rejects(StockService.createStock(item("Bad barcode", { sku: `BB${String(Math.random()).slice(2, 8)}`, barcodeQrCode: bad }), "tester"), (e) => e.code === "INVALID_BARCODE", JSON.stringify(bad));
+  }
+  await assert.rejects(
+    StockService.createStock(item("Delivery", { sku: "SV0001", itemType: "service", origin: undefined, brand: undefined, barcodeQrCode: "SV-1" }), "tester"),
+    (e) => e.code === "SERVICE_HAS_NO_STOCK",
+  );
+});

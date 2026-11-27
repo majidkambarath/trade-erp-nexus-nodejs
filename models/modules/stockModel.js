@@ -28,7 +28,7 @@ const stockSchema = new mongoose.Schema({
     set: v => (v === "" ? null : v),
   },
   unitOfMeasure: { type: mongoose.Schema.Types.ObjectId, ref: "UOM" },
-  barcodeQrCode: { type: String },
+  barcodeQrCode: { type: String }, // what a scanner reads; the SKU when none is given (stockService)
   origin: { type: String },
   brand: { type: String },
   reorderLevel: { type: Number, default: 0 },
@@ -64,6 +64,9 @@ stockSchema.pre("findOneAndUpdate", function (next) {
 
 stockSchema.index({ itemId: 1 }, { unique: true }); // unique within an organisation
 stockSchema.index({ sku: 1 }, { unique: true }); // unique within an organisation
+// a scanned code is looked up by barcode; NOT unique at the database (older items may share one), the item service refuses
+// a new or changed barcode that another item already uses (services/stock/stockService.js assertBarcodeFree)
+stockSchema.index({ barcodeQrCode: 1 });
 
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
 stockSchema.plugin(tenantPlugin, { leadIndexes: true });

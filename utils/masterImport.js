@@ -13,6 +13,7 @@
 //
 // ADD ONLY. A row for a record we already hold is reported as a duplicate and left alone: nothing existing is ever updated by an import.
 const { text } = require("./crm");
+const { cleanBarcode } = require("./barcodes");
 const R = require("./importRules");
 const { resolveVat, resolveTerms, cleanWebsite, VAT_STATUSES, STANDARD_TERMS } = require("./partyMaster");
 const { resolveAddress, emirateOf } = require("./partyAddress");
@@ -309,7 +310,7 @@ const planVendorImport = (rows, options) => planPartyImport("vendor", rows, opti
 
 /**
  * Decide each item row (goods or service).
- *   existing        { skus: Set (lower-case), names: Set (`same`) } of the items we hold
+ *   existing        { skus: Set (lower-case), names: Set (`same`), codes: Set (exact: every barcode and SKU) } of the items we hold
  *   categories      [{ id, name }] we hold; units [{ id, unitName, shortCode }]; vendors [{ id, name }]
  *   addCategories   a category the file names that we do not hold is made (listed in `newCategories`); else the row is refused
  *   canSeeCost      false leaves the Purchase price column out: a person who may not see what items cost may not set it either
@@ -331,6 +332,7 @@ function planItemImport(rows, { existing = {}, categories = [], units = [], vend
   const missingUnits = new Map();
   const seenSku = new Map();
   const seenName = new Map();
+  const seenBarcode = new Map();
   let costIgnored = false;
 
   const planned = rows.map((raw, i) => {
@@ -374,6 +376,17 @@ function planItemImport(rows, { existing = {}, categories = [], units = [], vend
     const sku = text(r.sku, 40);
     if (sku) fields.sku = sku;
     else fields.autoSku = true; // the server numbers it, as the item form's automatic SKU does
+
+    // a barcode: goods only, matched exactly. Two items cannot share one (a scanner would find both), so a barcode
+    // repeated in the file, or one an item we hold already answers to, refuses the row rather than calling it a duplicate
+    const barcode = cleanBarcode(text(r.barcode, 200)); // text(): a number keeps its digits, anything else reads as blank
+    if (barcode.error) errors.push(issue("barcode", "INVALID_BARCODE", barcode.error));
+    else if (barcode.value && service) warnings.push(issue("barcode", "SERVICE_NO_BARCODE", "A service has no barcode: it was left out"));
+    else if (barcode.value) {
+      if (seenBarcode.has(barcode.value)) errors.push(issue("barcode", "BARCODE_REPEATED", `Line ${seenBarcode.get(barcode.value)} has the same barcode`));
+      else if (existing?.codes?.has?.(barcode.value)) errors.push(issue("barcode", "BARCODE_TAKEN", "Another item already has this barcode"));
+      else fields.barcodeQrCode = barcode.value;
+    }
 
     const sales = R.moneyFrom(r.salesPrice);
     if (!sales.ok) errors.push(issue("salesPrice", "INVALID_AMOUNT", "That is not an amount"));
@@ -429,6 +442,7 @@ function planItemImport(rows, { existing = {}, categories = [], units = [], vend
     if (duplicateOf) return { line, status: "duplicate", fields, errors: [], warnings, duplicateOf };
 
     if (sku) seenSku.set(skuKey, line);
+    if (fields.barcodeQrCode) seenBarcode.set(fields.barcodeQrCode, line);
     seenName.set(nameKey, line);
     if (fields.categoryName && !newCategories.has(R.norm(fields.categoryName))) newCategories.set(R.norm(fields.categoryName), fields.categoryName);
     return { line, status: "create", fields, errors: [], warnings };

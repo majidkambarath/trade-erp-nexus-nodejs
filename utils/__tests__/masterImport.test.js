@@ -292,3 +292,22 @@ test("an item file has the same caps and the same distrust of its input", () => 
   const hostile = items([{ name: { $ne: "x" }, category: ["Rice"], unit: { $gt: "" } }]).rows[0];
   assert.deepEqual(codes(hostile).sort(), ["CATEGORY_REQUIRED", "NAME_REQUIRED", "UNIT_REQUIRED"]);
 });
+
+test("items: a barcode is kept for goods, refused when repeated or already an item's code, and left out of a service", () => {
+  const units = [{ id: "u1", unitName: "Kilogram", shortCode: "Kg" }];
+  const row = (line, extra) => ({ line, name: `Item ${line}`, category: "Rice", unit: "Kg", ...extra });
+  const plan = m.planItemImport(
+    [row(2, { barcode: "6291000000019" }), row(3, { barcode: "6291000000019" }), row(4, { barcode: "RI0001" }), row(5, { type: "service", barcode: "SV-1" }), row(6, { barcode: 6291000000050 }), row(7, { barcode: "x".repeat(65) })],
+    { units, existing: { codes: new Set(["RI0001"]) } },
+  );
+  const by = Object.fromEntries(plan.rows.map((r) => [r.line, r]));
+  assert.equal(by[2].status, "create");
+  assert.equal(by[2].fields.barcodeQrCode, "6291000000019");
+  assert.deepEqual(by[3].errors.map((e) => e.code), ["BARCODE_REPEATED"], "two items cannot share one");
+  assert.deepEqual(by[4].errors.map((e) => e.code), ["BARCODE_TAKEN"], "another item's SKU counts");
+  assert.equal(by[5].status, "create");
+  assert.equal(by[5].fields.barcodeQrCode, undefined);
+  assert.deepEqual(by[5].warnings.map((e) => e.code), ["SERVICE_NO_BARCODE"]);
+  assert.equal(by[6].fields.barcodeQrCode, "6291000000050", "a number from a spreadsheet keeps its digits");
+  assert.deepEqual(by[7].errors.map((e) => e.code), ["INVALID_BARCODE"]);
+});
