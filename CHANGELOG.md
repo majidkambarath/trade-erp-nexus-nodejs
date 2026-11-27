@@ -1,8 +1,8 @@
 # Changelog
 
-## Not yet released
+## 4.6.0.0 — 27 November 2026
 
-Barcodes on items, used when invoicing in the ERP and on the van.
+The FTA software checklist: the VAT audit file (FAF), totals by tax code and emirate, self-billing, credit notes that say what they correct, a complete audit trail with no hard deletes, verified backups, record keeping, the user guide and barcodes on items. Frontend and backend both at 4.6.0.0.
 
 ### Added
 
@@ -12,10 +12,6 @@ Barcodes on items, used when invoicing in the ERP and on the van.
   A lookup index on the barcode (not unique, because older items may share one).
 - **A barcode column in the item import**, refused when repeated in the file or already another item's code.
 - **The van's items carry their SKU and barcode**, in the trip and in the offline pack.
-
-UAE tax files: what the FTA expects accounting software to produce.
-
-### Added
 - **Credit and debit notes say what they correct** (VAT Executive Regulation Art. 60(1)). A return records the invoice's
   date, value and tax and what earlier approved returns had already credited (read again when it is approved), and a
   reason (`returnReason`; one not given reads "Goods returned by the customer" / "to the supplier"). A ledger note keeps
@@ -48,7 +44,6 @@ UAE tax files: what the FTA expects accounting software to produce.
   targets (RPO 24 h, RTO 4 h), the procedure and the drill log.
 - **The user guide on its own screen**: `GET /help/topics` and `/help/topics/:id`, for everyone signed in, from the same
   client-only corpus as Zarvia AI. A new topic, **A guide for auditors**.
-
 - **The FTA VAT audit file (FAF)** for any period (`GET /vat-return/faf`, `reports.vat`, all branches): company
   details, the purchase and supply listings made from the same lines as the VAT return, and the general ledger, each with
   its totals. Generated on request, nothing in it can be edited, and each download is in the audit log.
