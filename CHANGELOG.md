@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.9.5.0 — 27 November 2026
+
+Closing a van's day.
+
+### Changed
+
+- Settling a trip needs the cash handed in: a request without it is refused (400 `CASH_REQUIRED`). The preview still
+  works without it.
+
+### Added
+
+- `POST /van-sales/trips/:tripId/recount`: a person who may settle or manage van sales counts a counted-in van again
+  before it is settled. The earlier counts (the last five) are kept on the trip and the change is audited.
+
 ## 4.9.4.0 — 27 November 2026
 
 A salesman reads only their own van.
