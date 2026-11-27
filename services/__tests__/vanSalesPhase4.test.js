@@ -134,7 +134,7 @@ test("the first trip is settled", { skip }, async () => {
   const t = await svc.Trip.getById(trip1._id);
   await svc.Settle.unload(trip1._id, { counts: t.sellable.map((l) => ({ stockId: l.stockId, good: l.qty, damaged: 0 })) }, by());
   const plan = await svc.Settle.preview(trip1._id, {});
-  await svc.Settle.settle(trip1._id, { acknowledge: plan.warnings.map((w) => w.code) }, by());
+  await svc.Settle.settle(trip1._id, { cashHanded: plan.cash.expected, acknowledge: plan.warnings.map((w) => w.code) }, by());
 });
 
 test("the next load is suggested from the route's history and its pre-orders, each figure with its reason", { skip }, async () => {

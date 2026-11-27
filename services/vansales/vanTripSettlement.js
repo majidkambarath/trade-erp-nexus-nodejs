@@ -54,6 +54,50 @@ function countedContainers(raw) {
   return counted;
 }
 
+/** What was found on the van, as the trip keeps it: each item against what should be there, and the containers. */
+async function countRecord(trip, stock, input, by, session) {
+  let rows;
+  try {
+    rows = rules.unloadVariance(stock, Array.isArray(input?.counts) ? input.counts : []);
+  } catch (err) {
+    if (err instanceof rules.VanError) throw fail(err.message, 400, err.code, err.details);
+    throw err;
+  }
+  const names = new Map();
+  for (const load of trip.loads) for (const l of load.lines) names.set(String(l.stockId), l.itemName);
+  require("./vanFleetService").applyOdometer(trip, "in", input?.odometer);
+  const containers = await containerRows(trip, stock, countedContainers(input?.containers), { session });
+  return {
+    at: new Date(), by: String(by), byName: input?.byName || "",
+    lines: rows.map((r) => ({ ...r, itemName: names.get(r.stockId) || "" })),
+    ...(containers.length ? { containers: containers.map((c) => ({ typeId: c.typeId, name: c.name, expected: c.expected, counted: c.counted, difference: c.difference })) } : {}),
+  };
+}
+
+/** What a second count changed, in words for the audit log. */
+function countChanges(before, after) {
+  const changed = [];
+  const was = new Map((before.lines || []).map((l) => [String(l.stockId), l]));
+  for (const l of after.lines) {
+    const old = was.get(String(l.stockId));
+    const good = Number(old?.countedGood || 0);
+    const damaged = Number(old?.countedDamaged || 0);
+    const parts = [];
+    if (good !== l.countedGood) parts.push(`sellable ${good} to ${l.countedGood}`);
+    if (damaged !== l.countedDamaged) parts.push(`damaged ${damaged} to ${l.countedDamaged}`);
+    if (parts.length) changed.push(`${l.itemName || old?.itemName || "item"}: ${parts.join(", ")}`);
+  }
+  const crates = new Map((before.containers || []).map((c) => [String(c.typeId), c.counted]));
+  for (const c of after.containers || []) {
+    const old = crates.get(String(c.typeId));
+    if (old !== c.counted) changed.push(`${c.name}: ${old ?? 0} to ${c.counted}`);
+  }
+  return changed;
+}
+
+/** A cash figure somebody typed: a number, or text with something in it. Number(null) and Number([]) are 0, not an answer. */
+const isTyped = (v) => typeof v === "number" || (typeof v === "string" && v.trim() !== "");
+
 /** The two posting keys settlement uses, topped up for a company whose map predates them. Outside the transaction: the top-up commits on its own. */
 async function ensureKeys(req) {
   for (const key of ["salesman-shortages", "cash-over-short"]) {
@@ -94,22 +138,7 @@ class VanTripSettlement {
     if (!rules.canMove(trip.status, "UNLOADED")) throw fail("Only a van that is out can be counted back in", 409, "TRIP_NOT_ON_ROUTE");
     require("./vanTripService").assertNoOpenRequest(trip, "be counted back in");
     const stock = await stockOf(trip, { session });
-    let rows;
-    try {
-      rows = rules.unloadVariance(stock, Array.isArray(input?.counts) ? input.counts : []);
-    } catch (err) {
-      if (err instanceof rules.VanError) throw fail(err.message, 400, err.code, err.details);
-      throw err;
-    }
-    const names = new Map();
-    for (const load of trip.loads) for (const l of load.lines) names.set(String(l.stockId), l.itemName);
-    require("./vanFleetService").applyOdometer(trip, "in", input?.odometer);
-    const containers = await containerRows(trip, stock, countedContainers(input?.containers), { session });
-    trip.unload = {
-      at: new Date(), by: String(by), byName: input?.byName || "",
-      lines: rows.map((r) => ({ ...r, itemName: names.get(r.stockId) || "" })),
-      ...(containers.length ? { containers: containers.map((c) => ({ typeId: c.typeId, name: c.name, expected: c.expected, counted: c.counted, difference: c.difference })) } : {}),
-    };
+    trip.unload = await countRecord(trip, stock, input, by, session);
     trip.status = "UNLOADED";
     trip.updatedBy = String(by);
     if (trip.numberBlock?.length && !trip.numbersRetiredAt) {
@@ -123,6 +152,24 @@ class VanTripSettlement {
     }
     await trip.save({ session });
     return trip;
+  });
+
+  /**
+   * Count a counted-in van again, before it is settled: a mistake would otherwise go straight into the books, and a
+   * settled trip is not reopened. Stock and money do not move at count-in, so the count is simply replaced; the earlier
+   * ones are kept on the trip (the last five). The trip keeps its status and its retired numbers.
+   */
+  static recount = withTransactionSession(async (id, input, by, ...rest) => {
+    const session = rest[rest.length - 1];
+    const trip = await loadTrip(id, session);
+    if (trip.status !== "UNLOADED" || !trip.unload) throw fail("Only a van that is counted in and not yet settled can be counted again", 409, "TRIP_NOT_UNLOADED");
+    const stock = await stockOf(trip, { session, asOut: true });
+    const { previous, ...earlier } = trip.unload.toObject();
+    const record = await countRecord(trip, stock, input, by, session);
+    trip.unload = { ...record, previous: [...(previous || []), earlier].slice(-5) };
+    trip.updatedBy = String(by);
+    await trip.save({ session });
+    return { trip, changed: countChanges(earlier, record) };
   });
 
   /**
@@ -162,7 +209,8 @@ class VanTripSettlement {
     const transferTotal = sumOf(live.filter((v) => v.paymentMode === "transfer"));
     const transfersWaiting = sumOf(waitingTransfers);
 
-    const handed = input.cashHanded === undefined || input.cashHanded === "" ? expected : Number(input.cashHanded);
+    // only the preview may leave the cash out: it then shows the day as it looks if all of it is handed in
+    const handed = input.cashHanded === undefined || input.cashHanded === "" ? expected : isTyped(input.cashHanded) ? Number(input.cashHanded) : NaN;
     if (!Number.isFinite(handed)) throw fail("Enter the cash handed in", 400, "CASH_REQUIRED");
     let cash;
     try {
@@ -243,6 +291,8 @@ class VanTripSettlement {
     const opts = rest.length > 1 ? rest[0] || {} : {};
     const trip = await loadTrip(id, session);
     const plan = await this.plan(trip, input, { session, req: opts.req });
+    // the cash is counted and typed: a day is never settled on the figure the system expected
+    if (!isTyped(input.cashHanded)) throw fail("Enter the cash handed in", 400, "CASH_REQUIRED");
     if (plan.blockers.length) throw fail(plan.blockers[0].message, 409, "VAN_SETTLE_BLOCKED", { blockers: plan.blockers });
     const given = new Set((input.acknowledge || []).map(String));
     const open = plan.warnings.filter((w) => !given.has(w.code));

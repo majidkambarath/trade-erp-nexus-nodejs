@@ -209,6 +209,39 @@ test("counting the van back in: one good unit and one damaged are found; the van
   await assert.rejects(() => svc.Sales.sell(trip._id, { customerId: custA._id, items: [line(oil, 1, 30)] }, by()), { code: "TRIP_NOT_SELLING" });
 });
 
+test("a counted-in van can be counted again: the count is replaced, the earlier ones kept, nothing moves", { skip }, async () => {
+  const entries = await svc.LedgerEntry.countDocuments({});
+  const moves = await svc.Movement.countDocuments({});
+  const counts = (rice30, damaged) => ({ counts: [{ stockId: String(rice._id), good: rice30, damaged }, { stockId: String(oil._id), good: 16, damaged: 0 }] });
+  const first = await svc.Settle.recount(trip._id, counts(31, 1), by());
+  assert.equal(first.trip.status, "UNLOADED");
+  // judged against what the van held while it was out, though a counted-in van holds nothing now
+  const rice1 = first.trip.unload.lines.find((l) => l.itemName === "Rice 5kg");
+  assert.deepEqual([rice1.expectedGood, rice1.expectedDamaged, rice1.countedGood, rice1.difference], [31, 1, 31, 0]);
+  assert.deepEqual(first.changed, ["Rice 5kg: sellable 30 to 31"]);
+  assert.equal(first.trip.unload.previous.length, 1);
+  assert.equal(first.trip.unload.previous[0].lines.find((l) => l.itemName === "Rice 5kg").countedGood, 30);
+
+  await assert.rejects(() => svc.Settle.recount(trip._id, counts(-1, 0), by()), { code: "COUNT_NEGATIVE" });
+  for (let i = 0; i < 5; i += 1) await svc.Settle.recount(trip._id, counts(31, 1), by());
+  // back to the first figures for the settlement below; only the last five earlier counts are kept
+  const last = await svc.Settle.recount(trip._id, counts(30, 1), by());
+  assert.equal(last.trip.unload.previous.length, 5);
+  assert.equal(last.trip.unload.previous[4].lines.find((l) => l.itemName === "Rice 5kg").countedGood, 31);
+  assert.equal(await svc.LedgerEntry.countDocuments({}), entries);
+  assert.equal(await svc.Movement.countDocuments({}), moves);
+});
+
+test("a day is not settled until the cash handed in is given", { skip }, async () => {
+  const ticked = ["CASH_SHORT", "STOCK_DIFFERENCE"];
+  for (const cashHanded of [undefined, "", "  ", null, []]) {
+    await assert.rejects(() => svc.Settle.settle(trip._id, { cashHanded, acknowledge: ticked }, by()), { code: "CASH_REQUIRED" }, JSON.stringify(cashHanded));
+  }
+  assert.equal((await svc.Trip.getById(trip._id)).status, "UNLOADED");
+  // the preview still works with none typed: it shows the day with all of it handed in
+  assert.equal((await svc.Settle.preview(trip._id, {})).cash.handed, 210);
+});
+
 test("settlement preview names every difference and what it will post", { skip }, async () => {
   const plan = await svc.Settle.preview(trip._id, { cashHanded: 200 });
   assert.equal(plan.cash.expected, 210);
@@ -243,6 +276,7 @@ test("settling needs every difference acknowledged by code, and then books it al
 
 test("a settled trip cannot be settled again, loaded, or sold on - not even by approving a draft", { skip }, async () => {
   await assert.rejects(() => svc.Settle.settle(trip._id, { cashHanded: 200, acknowledge: ["CASH_SHORT"] }, by()), { code: "TRIP_NOT_UNLOADED" });
+  await assert.rejects(() => svc.Settle.recount(trip._id, { counts: [] }, by()), { code: "TRIP_NOT_UNLOADED" });
   await assert.rejects(() => svc.Trip.load(trip._id, { lines: [{ stockId: String(rice._id), qty: 1 }] }, "tester"), { code: "TRIP_NOT_LOADABLE" });
   const draft = await svc.Tx.createTransaction(
     { type: "sales_order", partyId: custB._id, partyType: "Customer", partyTypeRef: "Customer", date: new Date(), status: "DRAFT",

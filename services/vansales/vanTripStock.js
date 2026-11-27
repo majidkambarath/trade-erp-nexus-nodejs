@@ -29,8 +29,11 @@ async function documentsOf(trip, { session } = {}) {
   return { invoices, returns };
 }
 
-/** The trip's stock figures: { loaded, sold, returned, sellable, physical, damaged, invoices, returns }. */
-async function stockOf(trip, { session } = {}) {
+/**
+ * The trip's stock figures: { loaded, sold, returned, sellable, physical, damaged, invoices, returns }.
+ * `asOut` works out what the van held while it was still out, for a trip already counted in (a second count).
+ */
+async function stockOf(trip, { session, asOut = false } = {}) {
   const { invoices, returns } = await documentsOf(trip, { session });
   const approved = new Set(returns.map((r) => String(r._id)));
   // whether a returned line came back sellable or damaged is the trip's own record of it
@@ -40,7 +43,7 @@ async function stockOf(trip, { session } = {}) {
   );
   const loaded = rules.loadedOf(trip);
   const sold = rules.soldOf(invoices);
-  const shelf = rules.onVan({ status: trip.status, loaded, sold, returned });
+  const shelf = rules.onVan({ status: asOut ? "ON_ROUTE" : trip.status, loaded, sold, returned });
   // loaded from a request and not yet accepted: off the depot's shelf, not yet the salesman's to sell
   const awaiting = rules.awaitingOf(trip);
   return { loaded, sold, returned, ...shelf, awaiting, invoices, returns };

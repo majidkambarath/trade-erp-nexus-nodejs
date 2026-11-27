@@ -229,12 +229,33 @@ test("count in, then only a person who may settle can; the history says so", { s
   const preview = await call("owner", "GET", `/van-sales/trips/${tripId}/settlement`);
   assert.equal(preview.status, 200, JSON.stringify(preview.data));
   assert.deepEqual(preview.body.warnings, [], "the count matches and the cash is all there: nothing to tick");
-  const settled = await call("owner", "POST", `/van-sales/trips/${tripId}/settle`, {});
+  // a second count is the supervisor's, never the salesman's own
+  const own = await call("ali", "POST", `/van-sales/trips/${tripId}/recount`, { counts: [{ stockId: rice._id, good: 30, damaged: 0 }] });
+  assert.equal(own.status, 403);
+  assert.equal(own.code, "PERMISSION_DENIED");
+  const wrong = await call("owner", "POST", `/van-sales/trips/${tripId}/recount`, { counts: [{ stockId: rice._id, good: 29, damaged: 0 }] });
+  assert.equal(wrong.status, 200, JSON.stringify(wrong.data));
+  assert.equal(wrong.body.status, "UNLOADED");
+  assert.equal(wrong.body.unload.lines[0].difference, -1);
+  assert.equal(wrong.body.unload.previous[0].lines[0].countedGood, 30);
+  assert.equal((await call("owner", "POST", `/van-sales/trips/${tripId}/recount`, { counts: [{ stockId: rice._id, good: 30, damaged: 0 }] })).status, 200);
+
+  // the cash is typed: nothing, an empty box, null and a list are all refused and nothing is settled
+  for (const body of [{}, { cashHanded: "" }, { cashHanded: null }, { cashHanded: [] }]) {
+    const none = await call("owner", "POST", `/van-sales/trips/${tripId}/settle`, body);
+    assert.equal(none.status, 400, JSON.stringify(body));
+    assert.equal(none.code, "CASH_REQUIRED", JSON.stringify(body));
+  }
+  const settled = await call("owner", "POST", `/van-sales/trips/${tripId}/settle`, { cashHanded: preview.body.cash.expected });
   assert.equal(settled.status, 200, JSON.stringify(settled.data));
   assert.equal(settled.body.trip.status, "SETTLED");
+  const late = await call("owner", "POST", `/van-sales/trips/${tripId}/recount`, { counts: [] });
+  assert.equal(late.status, 409);
+  assert.equal(late.code, "TRIP_NOT_UNLOADED");
 
   const history = await call("owner", "GET", `/van-sales/trips/${tripId}/activity`);
   const words = JSON.stringify(history.body);
+  assert.match(words, /counted again on [^"]*sellable 30 to 29/i);
   for (const action of ["opened", "loaded", "sold on the van", "settled"]) assert.ok(words.toLowerCase().includes(action), `the history mentions ${action}: ${words.slice(0, 300)}`);
 });
 
@@ -276,7 +297,7 @@ test("a salesman reads his own van, trips and figures, never another salesman's;
 
   // figures: settle bob's day too, then each salesman's reports hold only his trip
   assert.equal((await call("owner", "POST", `/van-sales/trips/${his}/unload`, { counts: [{ stockId: rice._id, good: 5, damaged: 0 }] })).status, 200);
-  assert.equal((await call("owner", "POST", `/van-sales/trips/${his}/settle`, {})).status, 200);
+  assert.equal((await call("owner", "POST", `/van-sales/trips/${his}/settle`, { cashHanded: 0 })).status, 200);
   const summary = await call("ali", "GET", `/van-sales/reports/summary?onlySalesman=${bob._id}`);
   assert.equal(summary.status, 200, JSON.stringify(summary.data));
   assert.deepEqual(summary.body.bySalesman.map((s) => s.name), ["ali"]);

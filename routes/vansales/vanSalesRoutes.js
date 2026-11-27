@@ -106,6 +106,8 @@ router.post("/trips/:tripId/customers/:customerId/location", requirePermission("
 router.post("/trips/:tripId/return", requirePermission("vansales.sell"), c.returnGoods);
 router.post("/trips/:tripId/return-quote", requirePermission("vansales.sell"), c.returnQuote);
 router.post("/trips/:tripId/unload", requirePermission(["vansales.load", "vansales.sell"]), c.unload);
+// a second count before settling is the supervisor's, never the salesman's own
+router.post("/trips/:tripId/recount", requirePermission(["vansales.settle", "vansales.manage"]), c.recount);
 router.get("/trips/:tripId/settlement", requirePermission("vansales.settle"), c.settlementPreview);
 router.post("/trips/:tripId/settle", requirePermission("vansales.settle"), c.settle);
 

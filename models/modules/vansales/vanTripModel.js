@@ -91,8 +91,8 @@ const returnRecord = new mongoose.Schema(
   { _id: false }
 );
 
-const unloadSchema = new mongoose.Schema(
-  {
+// One count of the van at count-in: who, when, each item against what should have been there, and the containers.
+const countFields = {
     at: Date,
     by: String,
     byName: String,
@@ -110,6 +110,13 @@ const unloadSchema = new mongoose.Schema(
     ],
     // returnable containers counted on the van (crates, bottles): what should be there and what was (no default)
     containers: [{ typeId: { type: mongoose.Schema.Types.ObjectId, ref: "ContainerType" }, name: String, expected: Number, counted: Number, difference: Number, _id: false }],
+};
+
+const unloadSchema = new mongoose.Schema(
+  {
+    ...countFields,
+    // earlier counts, when the van was counted again before settling (the last five; absent where it was counted once)
+    previous: { type: [new mongoose.Schema(countFields, { _id: false })], default: undefined },
   },
   { _id: false }
 );

@@ -259,6 +259,11 @@ exports.unload = catchAsync(async (req, res) => {
   await log(req, "VAN_UNLOADED", trip, `Van ${trip.vanCode} counted back in on ${trip.tripNo}`);
   ok(res, await VanTripService.getById(trip._id));
 });
+exports.recount = catchAsync(async (req, res) => {
+  const { trip, changed } = await VanTripSettlement.recount(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req));
+  await log(req, "VAN_RECOUNTED", trip, `Van ${trip.vanCode} counted again on ${trip.tripNo}: ${changed.length ? changed.join("; ") : "no change"}`, { changed });
+  ok(res, await VanTripService.getById(trip._id));
+});
 exports.settlementPreview = catchAsync(async (req, res) => ok(res, await VanTripSettlement.preview(req.params.tripId, { ...req.query, chequesHanded: req.query.chequesHanded !== undefined ? String(req.query.chequesHanded).split(",").filter(Boolean) : undefined }, { req })));
 exports.settle = catchAsync(async (req, res) => {
   const { trip, plan } = await VanTripSettlement.settle(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req), { req });

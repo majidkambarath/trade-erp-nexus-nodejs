@@ -143,7 +143,7 @@ test("once the van is counted in, nothing done on the trip can be taken back", {
   await assert.rejects(() => svc.Tx.deleteTransaction(invoiceA._id, by()), { code: "VAN_TRIP_SETTLED" });
   await assert.rejects(() => svc.Fin.deleteVoucher(receiptA._id, by()), { code: "VAN_TRIP_SETTLED" });
   const plan = await svc.Settle.preview(trip._id, {});
-  await svc.Settle.settle(trip._id, { acknowledge: plan.warnings.map((w) => w.code) }, by());
+  await svc.Settle.settle(trip._id, { cashHanded: plan.cash.expected, acknowledge: plan.warnings.map((w) => w.code) }, by());
   await assert.rejects(() => svc.Tx.deleteTransaction(invoiceA._id, by()), { code: "VAN_TRIP_SETTLED" });
   assert.equal((await svc.Transaction.findById(invoiceA._id)).status, "APPROVED");
 });
