@@ -68,5 +68,6 @@ leadSchema.index({ email: 1 });
 leadSchema.index({ createdAt: -1 });
 
 leadSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+leadSchema.plugin(require("../../../utils/auditPlugin"), { entity: "Lead", ignore: ["contactCount", "lastActivityAt", "lastActivityDay", "nextActionAt", "score", "band"] });
 
 module.exports = mongoose.models.Lead || mongoose.model("Lead", leadSchema);

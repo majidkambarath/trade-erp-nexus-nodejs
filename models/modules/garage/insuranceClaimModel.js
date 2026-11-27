@@ -98,5 +98,6 @@ insuranceClaimSchema.index({ createdAt: -1 });
 
 // Branch scoped: a claim belongs to the branch that took the job in, like the job card itself.
 insuranceClaimSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+insuranceClaimSchema.plugin(require("../../../utils/auditPlugin"), { entity: "InsuranceClaim" });
 
 module.exports = mongoose.models.InsuranceClaim || mongoose.model("InsuranceClaim", insuranceClaimSchema);

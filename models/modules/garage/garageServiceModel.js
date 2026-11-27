@@ -47,5 +47,6 @@ garageServiceSchema.index({ active: 1 });
 garageServiceSchema.index({ name: 1 });
 
 garageServiceSchema.plugin(tenantPlugin, { leadIndexes: true });
+garageServiceSchema.plugin(require("../../../utils/auditPlugin"), { entity: "GarageService" });
 
 module.exports = mongoose.models.GarageService || mongoose.model("GarageService", garageServiceSchema);

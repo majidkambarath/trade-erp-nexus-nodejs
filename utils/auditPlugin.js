@@ -12,7 +12,8 @@
 //   - a write that only touches `ignore` fields - the figures the books keep for themselves (a party's running balance,
 //     an item's quantity and cost, an account's balance), each already recorded by the posting, movement or ledger entry
 //     that changed it, with its document and its author;
-//   - updateMany: a bulk change made by the system. A person's edits are single.
+//   - a bulk change (updateMany) of more than 500 records: one row says so, with the fields it touched, rather than
+//     reading half a collection twice.
 // A failure to write the log never fails the change it describes (as AuditService.log).
 
 const { changes, updatedPaths, ignored } = require("./auditDiff");
@@ -52,7 +53,7 @@ async function writeLog(entity, action, { doc, before, after, ignore, session, s
   if (!actor) return;
   try {
     const diff = changes(before, after, { ignore });
-    if (action.endsWith("_UPDATED") && !diff.length) return; // nothing a person changed
+    if (action.endsWith("_UPDATED") && !diff.length && !summary) return; // nothing a person changed (a bulk summary row has no diff)
     const label = labelOf(after || before || doc);
     const fields = diff.map((c) => c.field);
     const text = summary || `${entity} ${label} ${action.endsWith("_CREATED") ? "created" : action.endsWith("_DELETED") ? "deleted" : `changed: ${fields.slice(0, 8).join(", ")}${fields.length > 8 ? ` and ${fields.length - 8} more` : ""}`}`;
@@ -100,7 +101,12 @@ function auditPlugin(schema, { entity, ignore = [], diff = true, keep = true } =
     });
     schema.post("save", async function auditAfterSave(doc) {
       if (doc.$locals.auditNew) {
-        await writeLog(entity, action("CREATED"), { after: doc.toObject(), ignore, session: doc.$session() });
+        // a record put back from DeletedRecord says so, rather than reading as a new one
+        const restored = doc.$locals.auditAction === "RESTORED";
+        await writeLog(entity, action(restored ? "RESTORED" : "CREATED"), {
+          after: doc.toObject(), ignore, session: doc.$session(),
+          ...(restored ? { summary: `${entity} ${labelOf(doc)} restored from the deleted records` } : {}),
+        });
       } else if (doc.$locals.auditBefore) {
         await writeLog(entity, action("UPDATED"), { before: doc.$locals.auditBefore, after: doc.toObject(), ignore, session: doc.$session() });
       }
@@ -126,6 +132,39 @@ function auditPlugin(schema, { entity, ignore = [], diff = true, keep = true } =
         : await withSession(this.model.findOne(this.getFilter()).lean(), session); // an upsert made it
       if (!after) return;
       await writeLog(entity, action(before ? "UPDATED" : "CREATED"), { before, after, ignore, session });
+    });
+
+    // ---- many records updated by one query: each one's old and new values, up to MAX_BULK_COPY
+    schema.pre("updateMany", { document: false, query: true }, async function auditBeforeMany() {
+      if (!currentActor()) return;
+      const update = this.getUpdate();
+      if (onlyIgnored(updatedPaths(update)) || systemOnly(update)) return;
+      const docs = await withSession(this.model.find(this.getFilter()).limit(MAX_BULK_COPY + 1).lean(), sessionOf(this));
+      if (!docs.length) return;
+      this._auditMany = docs.length > MAX_BULK_COPY ? { tooMany: true, fields: updatedPaths(update), sample: docs[0] } : { docs };
+    });
+    schema.post("updateMany", { document: false, query: true }, async function auditAfterMany() {
+      const many = this._auditMany;
+      if (!many) return;
+      const session = sessionOf(this);
+      try {
+        if (many.tooMany) {
+          const fields = many.fields.filter((f) => !CLOCK.has(f));
+          await writeLog(entity, action("UPDATED"), {
+            doc: many.sample, ignore, session,
+            summary: `More than ${MAX_BULK_COPY} ${entity} records changed at once${fields.length ? `: ${fields.slice(0, 8).join(", ")}` : ""}`,
+          });
+          return;
+        }
+        const after = await withSession(this.model.find({ _id: { $in: many.docs.map((d) => d._id) } }).lean(), session);
+        const byId = new Map(after.map((d) => [String(d._id), d]));
+        for (const before of many.docs) {
+          const now = byId.get(String(before._id));
+          if (now) await writeLog(entity, action("UPDATED"), { before, after: now, ignore, session });
+        }
+      } catch (err) {
+        console.error(`[audit] could not log a bulk change of ${entity}:`, err.message);
+      }
     });
   }
 

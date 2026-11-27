@@ -19,5 +19,6 @@ const holidaySchema = new mongoose.Schema(
 holidaySchema.index({ day: 1 }, { unique: true }); // one holiday per day, per organisation
 
 holidaySchema.plugin(tenantPlugin, { leadIndexes: true });
+holidaySchema.plugin(require("../../../utils/auditPlugin"), { entity: "HolidayCalendar" });
 
 module.exports = mongoose.model("HolidayCalendar", holidaySchema);

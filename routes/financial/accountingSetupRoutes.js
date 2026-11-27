@@ -107,6 +107,7 @@ router.get("/reports/party-balances", requirePermission(["reports.financial","fi
 router.get("/returnable/:id", requirePermission(["sales.view","purchase.view"]), chart.getReturnable);
 router.get("/audit-log", requirePermission("audit.view"), chart.getAuditLog);
 router.get("/deleted-records", requirePermission("audit.view"), chart.getDeletedRecords);
+router.post("/deleted-records/:id/restore", requirePermission("audit.view"), chart.restoreDeletedRecord);
 
 // tax codes
 router.get("/tax-codes", requirePermission(["accounts.view","lookups.view"]), chart.listTaxCodes);

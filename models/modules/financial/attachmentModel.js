@@ -40,5 +40,6 @@ attachmentSchema.index({ companyId: 1, ownerType: 1, ownerId: 1 });
 
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
 attachmentSchema.plugin(tenantPlugin);
+attachmentSchema.plugin(require("../../../utils/auditPlugin"), { entity: "Attachment", diff: false });
 
 module.exports = mongoose.model("Attachment", attachmentSchema);

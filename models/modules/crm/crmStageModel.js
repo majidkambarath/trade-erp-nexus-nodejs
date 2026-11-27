@@ -30,5 +30,6 @@ crmStageSchema.index({ key: 1 }, { unique: true });
 crmStageSchema.index({ order: 1 });
 
 crmStageSchema.plugin(tenantPlugin, { leadIndexes: true });
+crmStageSchema.plugin(require("../../../utils/auditPlugin"), { entity: "CrmStage" });
 
 module.exports = mongoose.models.CrmStage || mongoose.model("CrmStage", crmStageSchema);

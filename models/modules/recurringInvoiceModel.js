@@ -63,5 +63,6 @@ recurringInvoiceSchema.index({ companyId: 1, status: 1, nextRunDay: 1 });
 recurringInvoiceSchema.index({ companyId: 1, partyId: 1 });
 
 recurringInvoiceSchema.plugin(tenantPlugin, { branchScoped: true });
+recurringInvoiceSchema.plugin(require("../../utils/auditPlugin"), { entity: "RecurringInvoice", ignore: ["cursor", "made", "nextRunDay", "runs", "lastError", "retryAfter"] });
 
 module.exports = mongoose.models.RecurringInvoice || mongoose.model("RecurringInvoice", recurringInvoiceSchema);

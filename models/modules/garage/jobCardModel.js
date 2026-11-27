@@ -294,5 +294,6 @@ jobCardSchema.index({ createdAt: -1 });
 
 // Branch scoped: a job card belongs to the branch that took the car in, like every other trade document.
 jobCardSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+jobCardSchema.plugin(require("../../../utils/auditPlugin"), { entity: "JobCard", ignore: ["estimateHistory"] });
 
 module.exports = mongoose.models.JobCard || mongoose.model("JobCard", jobCardSchema);

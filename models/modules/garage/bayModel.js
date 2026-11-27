@@ -25,5 +25,6 @@ baySchema.index({ name: 1 });
 baySchema.index({ active: 1 });
 
 baySchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+baySchema.plugin(require("../../../utils/auditPlugin"), { entity: "Bay" });
 
 module.exports = mongoose.models.Bay || mongoose.model("Bay", baySchema);

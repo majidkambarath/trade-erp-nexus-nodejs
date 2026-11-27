@@ -69,5 +69,6 @@ tradeOrderSchema.index({ companyId: 1, "source.routeId": 1, status: 1 }, { parti
 
 // Scope every query and write to the organisation in scope; an order belongs to a branch (utils/tenantPlugin.js).
 tradeOrderSchema.plugin(tenantPlugin, { branchScoped: true });
+tradeOrderSchema.plugin(require("../../utils/auditPlugin"), { entity: "TradeOrder" });
 
 module.exports = mongoose.model("TradeOrder", tradeOrderSchema);

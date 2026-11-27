@@ -63,5 +63,6 @@ goodsReceiptSchema.index({ companyId: 1, "invoice.id": 1 }, { sparse: true });
 goodsReceiptSchema.index({ companyId: 1, createdAt: -1 });
 
 goodsReceiptSchema.plugin(tenantPlugin, { branchScoped: true });
+goodsReceiptSchema.plugin(require("../../utils/auditPlugin"), { entity: "GoodsReceipt" });
 
 module.exports = mongoose.model("GoodsReceipt", goodsReceiptSchema);

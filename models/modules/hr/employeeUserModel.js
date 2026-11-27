@@ -101,5 +101,6 @@ employeeUserSchema.methods.toJSON = function () {
 };
 
 employeeUserSchema.plugin(tenantPlugin);
+employeeUserSchema.plugin(require("../../../utils/auditPlugin"), { entity: "EmployeeUser", ignore: ["loginAttempts", "lockUntil", "currentRefreshJti", "sessionsRevokedAt", "passwordChangedAt", "lastLogin"] });
 
 module.exports = mongoose.model("EmployeeUser", employeeUserSchema);

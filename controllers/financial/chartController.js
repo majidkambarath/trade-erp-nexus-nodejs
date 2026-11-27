@@ -129,3 +129,5 @@ exports.getReturnable = catchAsync(async (req, res) => ok(res, await ReturnServi
 // --- audit log ---
 exports.getAuditLog = catchAsync(async (req, res) => ok(res, await AuditService.list(req, req.query)));
 exports.getDeletedRecords = catchAsync(async (req, res) => ok(res, await AuditService.deletedRecords(req, req.query)));
+// the record's own permission is asked for inside (adding a customer back needs what adding one needs)
+exports.restoreDeletedRecord = catchAsync(async (req, res) => ok(res, await require("../../services/core/restoreService").restore(req, req.params.id)));

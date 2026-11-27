@@ -77,5 +77,6 @@ jobWorkOrderSchema.index({ jobWorkerId: 1, date: -1 });
 jobWorkOrderSchema.index({ createdAt: -1 });
 
 jobWorkOrderSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+jobWorkOrderSchema.plugin(require("../../utils/auditPlugin"), { entity: "JobWorkOrder" });
 
 module.exports = mongoose.models.JobWorkOrder || mongoose.model("JobWorkOrder", jobWorkOrderSchema);

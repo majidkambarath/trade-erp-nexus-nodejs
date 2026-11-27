@@ -66,5 +66,6 @@ employeeContractSchema.index({ staffId: 1, effectiveFrom: 1 }, { unique: true })
 employeeContractSchema.index({ staffId: 1, effectiveFrom: -1 });
 
 employeeContractSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+employeeContractSchema.plugin(require("../../../utils/auditPlugin"), { entity: "EmployeeContract" });
 
 module.exports = mongoose.model("EmployeeContract", employeeContractSchema);

@@ -76,5 +76,6 @@ recurringVoucherSchema.index({ companyId: 1, status: 1, nextRunDay: 1 });
 recurringVoucherSchema.index({ companyId: 1, kind: 1 });
 
 recurringVoucherSchema.plugin(tenantPlugin, { branchScoped: true });
+recurringVoucherSchema.plugin(require("../../../utils/auditPlugin"), { entity: "RecurringVoucher", ignore: ["cursor", "made", "nextRunDay", "runs", "lastError", "retryAfter"] });
 
 module.exports = mongoose.models.RecurringVoucher || mongoose.model("RecurringVoucher", recurringVoucherSchema);

@@ -42,5 +42,6 @@ payrollRunSchema.index({ period: 1 }, { unique: true, partialFilterExpression: {
 // NOT branchScoped: one run pays every branch's employees at once (D14), per-employee detail is the
 // Payslip rows below, which ARE branch scoped.
 payrollRunSchema.plugin(tenantPlugin, { leadIndexes: true });
+payrollRunSchema.plugin(require("../../../utils/auditPlugin"), { entity: "PayrollRun" });
 
 module.exports = mongoose.model("PayrollRun", payrollRunSchema);
