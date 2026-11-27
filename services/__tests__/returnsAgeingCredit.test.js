@@ -189,6 +189,19 @@ test("ageing: invoices fall into buckets by due date and the buckets sum to the 
   assert.ok(payable.rows.some((x) => x.partyName === "Vend"));
 });
 
+test("ageing: an invoice dated today is open from the first hour of the organisation's day", { skip }, async (t) => {
+  const orgLocale = require("../../utils/orgLocale");
+  const c = await svc.Customer.create({ customerId: "C-EARLY", customerName: "Early", contactPerson: "x" });
+  const today = orgLocale.today();
+  const sale = await make("sales_order", c, "Customer", [line(1, 100, { vatPercent: 0 })], { date: today });
+  // 1 am in Dubai is 9 pm the day before in UTC: the date, stored at today's UTC midnight, has not come yet
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse(`${today}T00:00:00Z`) - 3 * 3600000 });
+  assert.equal(orgLocale.today(), today);
+  const open = await svc.Ageing.openInvoices({ type: "receivable", partyId: c._id });
+  t.mock.timers.reset();
+  assert.deepEqual(open.map((o) => o.transactionNo), [sale.transactionNo]);
+});
+
 // ---- credit control ----
 test("credit control: off passes, warn needs an acknowledgement, block refuses, returns are never gated", { skip }, async () => {
   const c = await svc.Customer.create({ customerId: "C6", customerName: "Limited", contactPerson: "x", creditLimit: 500 });
