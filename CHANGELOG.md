@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.9.2.0 — 27 November 2026
+
+No server changes: released with the salesman's app's cleaner cards, saving loader and done animation.
+
 ## 4.9.1.0 — 27 November 2026
 
 No server changes: released with the salesman's app's light look, tablet layouts and theme switch.
