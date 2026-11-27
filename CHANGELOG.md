@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.9.0.0 — 27 November 2026
+
+No server changes: released with the new design of the salesman's app.
+
 ## 4.8.0.0 — 27 November 2026
 
 Archive and restore a closed year, and the simplified tax invoice on office invoices.
