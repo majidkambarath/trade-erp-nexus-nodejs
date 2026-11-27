@@ -109,5 +109,6 @@ opportunitySchema.index({ "links.quotationNo": 1 });
 opportunitySchema.index({ createdAt: -1 });
 
 opportunitySchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+opportunitySchema.plugin(require("../../../utils/auditPlugin"), { entity: "Opportunity", ignore: ["autoMoves", "lastActivityAt", "lastActivityDay", "nextActionAt"] });
 
 module.exports = mongoose.models.Opportunity || mongoose.model("Opportunity", opportunitySchema);

@@ -29,5 +29,6 @@ const appraisalSchema = new mongoose.Schema(
 // and a head-office reviewer appraising a branch employee should not need the branch switcher to do it.
 appraisalSchema.index({ staffId: 1, reviewDate: -1 });
 appraisalSchema.plugin(tenantPlugin, { leadIndexes: true });
+appraisalSchema.plugin(require("../../../utils/auditPlugin"), { entity: "Appraisal" });
 
 module.exports = mongoose.model("Appraisal", appraisalSchema);

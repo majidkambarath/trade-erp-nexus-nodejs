@@ -71,5 +71,6 @@ fiscalYearSchema.pre("validate", function (next) {
 
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
 fiscalYearSchema.plugin(tenantPlugin);
+fiscalYearSchema.plugin(require("../../../utils/auditPlugin"), { entity: "FiscalYear" });
 
 module.exports = mongoose.model("FiscalYear", fiscalYearSchema);

@@ -28,5 +28,6 @@ const employeeDocumentSchema = new mongoose.Schema(
 employeeDocumentSchema.index({ staffId: 1 });
 employeeDocumentSchema.index({ expiryDate: 1 });
 employeeDocumentSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+employeeDocumentSchema.plugin(require("../../../utils/auditPlugin"), { entity: "EmployeeDocument" });
 
 module.exports = mongoose.model("EmployeeDocument", employeeDocumentSchema);

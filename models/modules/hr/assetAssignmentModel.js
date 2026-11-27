@@ -25,5 +25,6 @@ const assetAssignmentSchema = new mongoose.Schema(
 
 assetAssignmentSchema.index({ staffId: 1, returnedDate: 1 });
 assetAssignmentSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+assetAssignmentSchema.plugin(require("../../../utils/auditPlugin"), { entity: "AssetAssignment" });
 
 module.exports = mongoose.model("AssetAssignment", assetAssignmentSchema);

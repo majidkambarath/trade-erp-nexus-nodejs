@@ -139,7 +139,8 @@ test("a comeback is offered from the vehicle's own closed jobs, and accepted onl
   );
   await svc.JobCard.sendEstimate(first._id, "tester");
   await svc.JobCard.recordApproval(first._id, { method: "counter" }, "tester");
-  await svc.JobCard.releaseVehicle(first._id, { warrantyMonths: 3 }, "tester");
+  // released on account: the job is not invoiced or paid yet, and a gate pass for money still owed has to say so
+  await svc.JobCard.releaseVehicle(first._id, { warrantyMonths: 3, onAccount: true }, "tester");
 
   const candidates = await svc.JobCard.comebackCandidates({ vehicleId: vehicle._id });
   assert.equal(candidates.length, 1);

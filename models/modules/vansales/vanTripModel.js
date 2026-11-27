@@ -204,5 +204,6 @@ vanTripSchema.index({ date: -1 });
 
 // Branch scoped: a trip belongs to the branch it was opened in, like every other trade document.
 vanTripSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+vanTripSchema.plugin(require("../../../utils/auditPlugin"), { entity: "VanTrip", ignore: ["pings", "numbersRetiredAt"] });
 
 module.exports = mongoose.models.VanTrip || mongoose.model("VanTrip", vanTripSchema);

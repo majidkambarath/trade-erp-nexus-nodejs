@@ -140,5 +140,6 @@ crmActivitySchema.index({ createdAt: -1 });
 crmActivitySchema.index({ "meeting.startAt": 1, status: 1 });
 
 crmActivitySchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+crmActivitySchema.plugin(require("../../../utils/auditPlugin"), { entity: "CrmActivity", ignore: ["meeting.invite", "meeting.google", "email.error", "email.provider"] });
 
 module.exports = mongoose.models.CrmActivity || mongoose.model("CrmActivity", crmActivitySchema);

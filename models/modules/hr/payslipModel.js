@@ -27,5 +27,6 @@ const payslipSchema = new mongoose.Schema(
 payslipSchema.index({ runId: 1, staffId: 1 }, { unique: true });
 payslipSchema.index({ staffId: 1, period: 1 });
 payslipSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+payslipSchema.plugin(require("../../../utils/auditPlugin"), { entity: "Payslip" });
 
 module.exports = mongoose.model("Payslip", payslipSchema);

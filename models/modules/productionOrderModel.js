@@ -77,5 +77,6 @@ productionOrderSchema.index({ "materials.stockId": 1 });
 productionOrderSchema.index({ createdAt: -1 });
 
 productionOrderSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+productionOrderSchema.plugin(require("../../utils/auditPlugin"), { entity: "ProductionOrder" });
 
 module.exports = mongoose.models.ProductionOrder || mongoose.model("ProductionOrder", productionOrderSchema);

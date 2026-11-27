@@ -58,7 +58,9 @@ class AuditService {
       DeletedRecord.find(q).sort({ deletedAt: -1, _id: -1 }).skip(skip).limit(lim).lean(),
       DeletedRecord.countDocuments(q),
     ]);
-    return { rows: rows.map((r) => ({ ...r, data: scrub(r.data) })), total, page: Number(page) || 1, pages: Math.ceil(total / lim) };
+    // each row says whether it can be put back and whether it is back already (services/core/restoreService.js)
+    const annotated = await require("./restoreService").annotate(rows);
+    return { rows: annotated.map((r) => ({ ...r, data: scrub(r.data) })), total, page: Number(page) || 1, pages: Math.ceil(total / lim) };
   }
 
   static async list(req, { entity, entityId, action, user, from, to, page = 1, limit = 50 } = {}) {

@@ -26,5 +26,6 @@ const shiftSchema = new mongoose.Schema(
 shiftSchema.index({ name: 1 }, { unique: true });
 
 shiftSchema.plugin(tenantPlugin, { leadIndexes: true });
+shiftSchema.plugin(require("../../../utils/auditPlugin"), { entity: "Shift" });
 
 module.exports = mongoose.model("Shift", shiftSchema);

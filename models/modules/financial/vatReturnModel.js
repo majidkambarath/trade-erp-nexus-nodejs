@@ -46,5 +46,6 @@ vatReturnSchema.index({ companyId: 1, periodFrom: 1, periodTo: 1 });
 
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
 vatReturnSchema.plugin(tenantPlugin);
+vatReturnSchema.plugin(require("../../../utils/auditPlugin"), { entity: "VATReturn" });
 
 module.exports = mongoose.model("VATReturn", vatReturnSchema);

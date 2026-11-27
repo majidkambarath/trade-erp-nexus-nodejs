@@ -111,5 +111,6 @@ processOrderSchema.index({ completedAt: 1 });
 processOrderSchema.index({ "steps.doneAt": 1 });
 
 processOrderSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+processOrderSchema.plugin(require("../../utils/auditPlugin"), { entity: "ProcessOrder" });
 
 module.exports = mongoose.models.ProcessOrder || mongoose.model("ProcessOrder", processOrderSchema);

@@ -89,5 +89,6 @@ vehicleSchema.index({ registrationExpiry: 1 });
 
 // Organisation-wide: no branchScoped. Declared indexes only, so leadIndexes puts companyId in front of each.
 vehicleSchema.plugin(tenantPlugin, { leadIndexes: true });
+vehicleSchema.plugin(require("../../../utils/auditPlugin"), { entity: "Vehicle" });
 
 module.exports = mongoose.models.Vehicle || mongoose.model("Vehicle", vehicleSchema);

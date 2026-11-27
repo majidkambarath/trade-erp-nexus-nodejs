@@ -38,5 +38,6 @@ processRouteSchema.index({ "finished.stockId": 1 }, { unique: true });
 processRouteSchema.index({ "materials.stockId": 1 });
 
 processRouteSchema.plugin(tenantPlugin, { leadIndexes: true });
+processRouteSchema.plugin(require("../../utils/auditPlugin"), { entity: "ProcessRoute" });
 
 module.exports = mongoose.models.ProcessRoute || mongoose.model("ProcessRoute", processRouteSchema);

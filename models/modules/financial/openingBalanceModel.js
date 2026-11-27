@@ -66,5 +66,6 @@ openingBalanceSchema.index({ companyId: 1, voucherNo: 1 }, { unique: true }); //
 
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
 openingBalanceSchema.plugin(tenantPlugin);
+openingBalanceSchema.plugin(require("../../../utils/auditPlugin"), { entity: "OpeningBalanceVoucher" });
 
 module.exports = mongoose.model("OpeningBalanceVoucher", openingBalanceSchema);

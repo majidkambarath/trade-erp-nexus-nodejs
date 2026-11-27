@@ -34,5 +34,6 @@ const staffChecklistSchema = new mongoose.Schema(
 staffChecklistSchema.index({ staffId: 1, listType: 1, status: 1 });
 staffChecklistSchema.index({ status: 1, dueAt: 1 });
 staffChecklistSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+staffChecklistSchema.plugin(require("../../../utils/auditPlugin"), { entity: "StaffChecklistItem" });
 
 module.exports = mongoose.model("StaffChecklistItem", staffChecklistSchema);

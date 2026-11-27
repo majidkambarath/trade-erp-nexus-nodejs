@@ -55,5 +55,6 @@ contactSchema.index({ name: 1 });
 contactSchema.index({ createdAt: -1 });
 
 contactSchema.plugin(tenantPlugin, { leadIndexes: true });
+contactSchema.plugin(require("../../../utils/auditPlugin"), { entity: "Contact", ignore: ["lastActivityAt", "lastActivityDay", "nextActionAt"] });
 
 module.exports = mongoose.models.Contact || mongoose.model("Contact", contactSchema);

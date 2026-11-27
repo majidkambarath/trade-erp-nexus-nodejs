@@ -40,5 +40,6 @@ leaveRequestSchema.index({ staffId: 1, status: 1 });
 leaveRequestSchema.index({ status: 1, createdAt: 1 }); // the approvals queue's own listing
 
 leaveRequestSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
+leaveRequestSchema.plugin(require("../../../utils/auditPlugin"), { entity: "LeaveRequest" });
 
 module.exports = mongoose.model("LeaveRequest", leaveRequestSchema);

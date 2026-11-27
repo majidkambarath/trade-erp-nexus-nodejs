@@ -1,5 +1,26 @@
 # Changelog
 
+## 4.7.0.0 — 27 November 2026
+
+The last audit gaps: every record a person keeps is audited, bulk changes are logged record by record, and a deleted master can be put back.
+
+### Added
+
+- **Restore a deleted record.** `POST /accounting/deleted-records/:id/restore` puts a deleted master back with its own id,
+  in one transaction, logged as `<ENTITY>_RESTORED`. It needs `audit.view` and the permission that adds such a record. A
+  customer or vendor takes its number back and its ledger account is switched on again. Documents, vouchers, accounts,
+  people, roles, branches and contacts are not restorable (`NOT_RESTORABLE`, with the reason); `ALREADY_RESTORED` and
+  `RESTORE_CONFLICT` (a name or code taken since) refuse cleanly. The deleted-records list says which rows can come back
+  and which already have.
+- **The audit trail covers the CRM, garage, production, HR, the recurring templates and the non-posting documents**
+  (quotations, delivery notes, orders, goods received), fiscal years, opening balances, saved VAT returns, van trips and
+  attachments: each create, change and delete with its old and new values.
+
+### Changed
+
+- **A bulk change is logged record by record** with each record's old and new values (up to 500 records; more is one row
+  that says so and names the fields).
+
 ## 4.6.0.0 — 27 November 2026
 
 The FTA software checklist: the VAT audit file (FAF), totals by tax code and emirate, self-billing, credit notes that say what they correct, a complete audit trail with no hard deletes, verified backups, record keeping, the user guide and barcodes on items. Frontend and backend both at 4.6.0.0.
