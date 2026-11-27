@@ -228,3 +228,12 @@ test("the limit for goods taken back without an invoice is a positive amount, an
   assert.equal(v.normaliseSettings({ maxReturnWithoutInvoice: -5 }).maxReturnWithoutInvoice, 500);
   assert.equal(v.PER_VAN_KEYS.includes("returnsWithoutInvoice"), false, "the organisation's rule alone");
 });
+
+test("a customer's van payment mode: nothing said, cleared, a known way, or refused", () => {
+  assert.deepEqual(v.customerPayMode(undefined), { value: undefined });
+  assert.deepEqual(v.customerPayMode(null), { value: null });
+  assert.deepEqual(v.customerPayMode(""), { value: null });
+  assert.deepEqual(v.customerPayMode(" Credit "), { value: "credit" });
+  for (const mode of ["cash", "credit", "cheque", "card", "transfer"]) assert.deepEqual(v.customerPayMode(mode), { value: mode });
+  for (const bad of ["none", "bitcoin", 0, true, ["cash"], { $ne: "x" }]) assert.match(v.customerPayMode(bad).error, /payment mode/, JSON.stringify(bad));
+});

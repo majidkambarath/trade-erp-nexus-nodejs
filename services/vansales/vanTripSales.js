@@ -498,7 +498,8 @@ class VanTripSales {
     if (!isId(customerId)) throw fail("Choose a customer", 400, "CUSTOMER_REQUIRED");
     const stock = await stockOf(trip);
     const onVan = new Map([...stock.sellable].map(([k, v]) => [String(k), Number(v) || 0]));
-    return { ...(await this.history(customerId, onVan)), position: await this.customerPosition(customerId) };
+    const customer = await Customer.findById(customerId).select("vanPaymentMode").lean();
+    return { ...(await this.history(customerId, onVan)), position: await this.customerPosition(customerId), payMode: customer?.vanPaymentMode || "" };
   }
 
   /** The history half of the insight (no money owed): the last order, usual items and what they stopped buying, cut to `onVan` (a Map). */
@@ -533,7 +534,7 @@ class VanTripSales {
     const shown = await VanTripService.present(trip);
     const route = trip.routeId ? await require("../../models/modules/vansales/vanRouteModel").findById(trip.routeId).lean() : null;
     const ids = [...new Set([...(route?.customers || []).map((c) => String(c.customerId)), ...extraCustomerIds.map(String)])].filter(isId).slice(0, 300);
-    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status paymentTerms billingAddress city emirate").lean();
+    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status paymentTerms vanPaymentMode billingAddress city emirate").lean();
     const stock = await stockOf(trip);
     const items = await Stock.find({ _id: { $in: [...stock.sellable.keys()] } }).select("salesPrice category").lean();
     const prices = {};
@@ -549,7 +550,7 @@ class VanTripSales {
     return {
       at: new Date().toISOString(),
       trip: shown,
-      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "", terms: c.paymentTerms || "", address: addressOf(c) })),
+      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "", terms: c.paymentTerms || "", payMode: c.vanPaymentMode || "", address: addressOf(c) })),
       prices,
       insight,
       freeNumbers: (trip.numberBlock || []).filter((n) => !used.has(n)),

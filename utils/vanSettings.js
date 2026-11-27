@@ -10,6 +10,24 @@
 // office to see it in the bank (financialService.createVoucher, holdFor "van_transfer").
 const SUPPORTED_MODES = ["cash", "cheque", "card", "transfer"];
 
+// How a customer usually pays the van (Customer.vanPaymentMode). It only pre-selects the van's sale and collect screens:
+// the rules above still decide what is possible, and the salesman may change it. "credit" means pay later.
+const CUSTOMER_PAY_MODES = ["cash", "credit", "cheque", "card", "transfer"];
+
+/**
+ * A customer's usual way of paying, as typed on the customer form or imported: undefined when the request says nothing,
+ * null to clear it ("" or null), else one of CUSTOMER_PAY_MODES. -> { value } or { error }.
+ */
+function customerPayMode(raw) {
+  if (raw === undefined) return { value: undefined };
+  if (raw === null || raw === "") return { value: null };
+  const text = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (!CUSTOMER_PAY_MODES.includes(text)) {
+    return { error: `The van payment mode is one of: ${CUSTOMER_PAY_MODES.join(", ")}` };
+  }
+  return { value: text };
+}
+
 const CUSTOMERS = ["any", "route"];
 const CREDIT_SALES = ["allowed", "cashTerms", "never"];
 const PRICE_CHANGE = ["up_only", "locked", "free"];
@@ -256,7 +274,7 @@ function matchReason(rules, raw) {
 const forPhone = (eff) => ({ ...eff });
 
 module.exports = {
-  SUPPORTED_MODES, RETURN_REASONS, CUSTOMERS, CREDIT_SALES, PRICE_CHANGE, EXPIRY_CHECK, PAPER, DEFAULTS, PER_VAN_KEYS,
+  SUPPORTED_MODES, CUSTOMER_PAY_MODES, customerPayMode, RETURN_REASONS, CUSTOMERS, CREDIT_SALES, PRICE_CHANGE, EXPIRY_CHECK, PAPER, DEFAULTS, PER_VAN_KEYS,
   checkValue, validateSettings, normaliseSettings, cleanVanRules, effective,
   isCashTerms, mustPayNow, checkLine, checkMode, checkPayment, checkCustomer, matchReason, forPhone,
 };

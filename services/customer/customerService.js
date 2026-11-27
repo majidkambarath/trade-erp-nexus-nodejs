@@ -6,6 +6,7 @@ const PartyAccounts = require("../financial/partyAccounts");
 const PartyMaster = require("../masters/partyMasterService");
 const { searchRegex } = require("../../utils/regex");
 const { isValidTerms, STANDARD_TERMS } = require("../../utils/partyMaster");
+const { customerPayMode } = require("../../utils/vanSettings");
 const { retryTransientTransaction, isTransient } = require("../../utils/withTransactionSession");
 
 // Customer-only fields the model has always had; the create path used to drop them.
@@ -37,6 +38,12 @@ const cleanShelfLife = (v) => {
   const n = Number(v);
   if (!Number.isInteger(n) || n < 0) throw new AppError("minShelfLifeDays must be a whole number of days, 0 or more", 400, "INVALID_SHELF_LIFE");
   return n;
+};
+// undefined = the request says nothing, null = clear it, else the mode
+const cleanPayMode = (v) => {
+  const r = customerPayMode(v);
+  if (r.error) throw new AppError(r.error, 400, "INVALID_VAN_PAYMENT_MODE");
+  return r.value;
 };
 const tidyName = (v) => (v ? v.toString().trim().replace(/\s+/g, " ") : null); // "Sara  Khan" -> "Sara Khan"
 
@@ -127,6 +134,7 @@ exports.createCustomer = retryTransientTransaction(async (data, { groupId } = {}
     salesPerson, // <- ADDED
     isInsurer, // D10: the field already existed on the model (customerModel.js) with nowhere to arrive from
     remindersOff, // no payment reminders to this customer (services/messaging/paymentReminderService.js)
+    vanPaymentMode, // how they usually pay the van salesman (utils/vanSettings.js)
     eInvoice,
     minShelfLifeDays,
   } = data;
@@ -134,6 +142,7 @@ exports.createCustomer = retryTransientTransaction(async (data, { groupId } = {}
   // Validate terms, VAT/TRN, contacts, bank accounts and documents early to avoid sequence allocation
   const master = await PartyMaster.prepare("customer", data);
   const shelfLife = cleanShelfLife(minShelfLifeDays);
+  const payMode = cleanPayMode(vanPaymentMode);
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -165,6 +174,7 @@ exports.createCustomer = retryTransientTransaction(async (data, { groupId } = {}
           salesPerson: trimmedSalesPerson, // <-- ADDED
           isInsurer: Boolean(isInsurer),
           ...(remindersOff === true || remindersOff === "true" ? { remindersOff: true } : {}),
+          ...(payMode ? { vanPaymentMode: payMode } : {}),
           status,
           eInvoice: withAddress(cleanEInvoice(eInvoice), master),
           country: master.country,
@@ -267,11 +277,15 @@ exports.getCustomerByCustomerId = async (customerId) => {
   if (data.salesPerson !== undefined) {
     data.salesPerson = tidyName(data.salesPerson);
   }
+  // a cleared van payment mode is removed from the record (the schema has no "none"), a bad one is refused
+  const payMode = cleanPayMode(data.vanPaymentMode);
+  delete data.vanPaymentMode;
+  if (payMode) data.vanPaymentMode = payMode;
 
   const before = data.customerName !== undefined ? { customerName: existing.customerName } : null;
   const customer = await Customer.findByIdAndUpdate(
     id,
-    { ...data, updatedAt: Date.now() },
+    { ...data, updatedAt: Date.now(), ...(payMode === null ? { $unset: { vanPaymentMode: 1 } } : {}) },
     { new: true, runValidators: true }
   );
 
