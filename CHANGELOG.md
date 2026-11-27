@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.9.4.0 — 27 November 2026
+
+A salesman reads only their own van.
+
+### Changed
+
+- Someone who sells from a van and holds no other van sales right reads only their own van, trips and figures: another
+  salesman's trip or van answers as if it did not exist, trip and van lists and the two reports hold only theirs, and
+  Zarvia AI's van lookups no longer name another van for them. Supervisors, storekeepers and owners are unchanged.
+
 ## 4.9.3.0 — 27 November 2026
 
 No server changes: released with a dark-mode fix in the salesman's app.
