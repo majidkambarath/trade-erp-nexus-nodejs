@@ -13,12 +13,12 @@ const round2 = rules.round2;
 // What the vans did over a period, from the documents themselves: sales and returns approved on each trip, what was
 // collected, and how the day settled. One row per trip, rolled up by van and by salesman. Read-only.
 class VanSalesReportService {
-  static async summary({ from, to } = {}) {
+  static async summary({ from, to, onlySalesman = null } = {}) {
     const end = validDay(to) ? String(to).slice(0, 10) : todayInOrg();
     const start = validDay(from) ? String(from).slice(0, 10) : addDays(end, -29);
     if (start > end) throw new AppError("The period starts after it ends", 400, "INVALID_RANGE");
 
-    const trips = await VanTrip.find({ date: { $gte: asDay(start), $lte: asDay(end) }, status: { $ne: "CANCELLED" } }).sort({ date: -1, _id: -1 }).lean();
+    const trips = await VanTrip.find({ date: { $gte: asDay(start), $lte: asDay(end) }, status: { $ne: "CANCELLED" }, ...(onlySalesman ? { salesmanId: String(onlySalesman) } : {}) }).sort({ date: -1, _id: -1 }).lean();
     const ids = trips.map((t) => t._id);
     const [buyerRows, visitRows] = ids.length
       ? await Promise.all([
@@ -145,12 +145,12 @@ class VanSalesReportService {
    * settlement, the road expenses, the cash short or over, and the km run. A trip not yet settled is left out: its
    * figures can still change. `by`: route (default) | salesman | van.
    */
-  static async routeProfit({ from, to, by = "route" } = {}) {
+  static async routeProfit({ from, to, by = "route", onlySalesman = null } = {}) {
     const end = validDay(to) ? String(to).slice(0, 10) : todayInOrg();
     const start = validDay(from) ? String(from).slice(0, 10) : addDays(end, -29);
     if (start > end) throw new AppError("The period starts after it ends", 400, "INVALID_RANGE");
     const InventoryMovement = require("../../models/modules/inventoryMovementModel");
-    const trips = await VanTrip.find({ date: { $gte: asDay(start), $lte: asDay(end) }, status: "SETTLED" }).lean();
+    const trips = await VanTrip.find({ date: { $gte: asDay(start), $lte: asDay(end) }, status: "SETTLED", ...(onlySalesman ? { salesmanId: String(onlySalesman) } : {}) }).lean();
     const ids = trips.map((t) => t._id);
     const docs = ids.length ? await Transaction.find({ "vanTripRef.tripId": { $in: ids }, status: "APPROVED", type: { $in: ["sales_order", "sales_return"] } }).select("type totalAmount pricing vanTripRef").lean() : [];
     const moves = docs.length ? await InventoryMovement.find({ referenceId: { $in: docs.map((d) => d._id) } }).select("referenceId cogsAmount totalValue quantity").lean() : [];

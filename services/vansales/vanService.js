@@ -29,8 +29,9 @@ const wrap = (fn) => {
 class VanService {
   // ---- vans ---------------------------------------------------------------------------------------------------
 
-  static async list({ includeInactive = false } = {}) {
+  static async list({ includeInactive = false, onlySalesman = null } = {}) {
     const q = includeInactive ? {} : { active: true };
+    if (onlySalesman) q.salesmanId = String(onlySalesman); // a salesman's list holds the van he drives
     const vans = await Van.find(q).sort({ code: 1 }).lean();
     // who is out right now: a van with a trip that is still holding stock
     const open = await VanTrip.find({ vanId: { $in: vans.map((v) => v._id) }, status: { $in: ["LOADING", "ON_ROUTE", "UNLOADED"] } })

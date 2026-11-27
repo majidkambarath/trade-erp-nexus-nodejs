@@ -87,6 +87,12 @@ test("Zarvia AI on the van: what is on it, who owes on the route, who is left, a
   assert.deepEqual(left.data.table.rows.map((r) => r.label), ["Bin Zayed Market"]);
   const nobody = await svc.vanTools.runLookup("van_stock", {}, { req: { admin: { id: String(new mongoose.Types.ObjectId()), grants: ["vansales.sell"] } } });
   assert.match(nobody.data.reply, /No van trip is open for you/);
+  // a salesman's role holds view with selling: naming another's van answers nothing, a supervisor is answered
+  const other = { req: { admin: { id: String(new mongoose.Types.ObjectId()), grants: ["vansales.sell", "vansales.view", "lookups.view"] } } };
+  const peek = await svc.vanTools.runLookup("van_stock", { van: "VAN-1" }, other);
+  assert.doesNotMatch(peek.data.reply, /Rice|item to sell/, "another salesman is not told what is on VAN-1");
+  const boss = await svc.vanTools.runLookup("van_stock", { van: "VAN-1" }, { req: { admin: { id: String(new mongoose.Types.ObjectId()), grants: ["vansales.view", "vansales.settle"] } } });
+  assert.match(boss.data.reply, /VAN-1 has 1 item to sell/);
   const refused = await svc.vanTools.runLookup("van_stock", {}, { req: { admin: { id: by(), grants: ["sales.view"] } } });
   assert.equal(refused.ok, false, "no van key, no van lookup");
   assert.equal(svc.vanTools.lookupDefinitions({ admin: { grants: ["sales.view"] } }).length, 0);

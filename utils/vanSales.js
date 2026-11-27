@@ -637,7 +637,17 @@ function returnsByReason(trips, amountOf = () => 0) {
   return [...by.values()].sort((a, b) => b.amount - a.amount || b.count - a.count || a.reason.localeCompare(b.reason));
 }
 
+/**
+ * A person who sells from a van and does nothing else in van sales - no loading, settling or managing: the salesman.
+ * He reads his OWN van, trips and figures, never another salesman's. Anyone holding more (or only looking) is not one.
+ */
+const isSellerOnly = (grants) => {
+  const held = Array.isArray(grants) ? grants : [];
+  return held.includes("vansales.sell") && !["vansales.load", "vansales.settle", "vansales.manage"].some((k) => held.includes(k));
+};
+
 module.exports = {
+  isSellerOnly,
   STATUSES, HOLDING, SELLING, MOVES, VanError, NOT_GIVEN, returnsByReason, openRequest, awaitingOf, acceptPlan,
   round2, round3, idOf,
   loadedOf, soldOf, returnedOf, onVan, onVansAll, freeDepot,

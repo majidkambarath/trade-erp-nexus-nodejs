@@ -93,7 +93,8 @@ const isPrepare = (name) => PREPARE.some((d) => d.name === name);
 async function tripFor(req, vanCode) {
   const VanTripService = require("../vansales/vanTripService");
   const me = String(req?.admin?.id || "");
-  const supervises = roles.canAny(grantsOf(req), ["vansales.manage", "vansales.settle", "vansales.view"]) && !!vanCode;
+  // (a salesman holds view with selling, so view alone does not supervise: utils/vanSales.js isSellerOnly)
+  const supervises = !require("../../utils/vanSales").isSellerOnly(grantsOf(req)) && roles.canAny(grantsOf(req), ["vansales.manage", "vansales.settle", "vansales.view"]) && !!vanCode;
   const q = { status: { $in: ["LOADING", "ON_ROUTE", "UNLOADED"] } };
   if (vanCode) q.vanCode = String(vanCode).trim().toUpperCase();
   if (!supervises) q.salesmanId = me;

@@ -14,6 +14,7 @@ const VanCrmService = require("../../services/vansales/vanCrmService");
 const VanSettingsService = require("../../services/vansales/vanSettingsService");
 const VanSlipService = require("../../services/vansales/vanSlipService");
 const logger = require("../../utils/logger");
+const vanRules = require("../../utils/vanSales");
 
 const by = (req) => req.admin?.id || "system";
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
@@ -32,6 +33,16 @@ async function assertMayWork(req, { loaderToo = false } = {}) {
   }
 }
 
+// A salesman (sells, and holds nothing else in van sales) reads only his own: another salesman's trip or van answers as
+// if it did not exist, the way another organisation's record does, and lists and reports hold only his.
+const sellerOnly = (req) => vanRules.isSellerOnly(req.admin?.grants);
+const ownerFilter = (req) => (sellerOnly(req) ? String(req.admin?.id) : null);
+async function assertOwnTripIfSeller(req) {
+  if (!sellerOnly(req)) return;
+  const trip = await loadTrip(req.params.tripId);
+  if (String(trip.salesmanId) !== String(req.admin?.id)) throw new AppError("That van trip does not exist", 404, "TRIP_NOT_FOUND");
+}
+
 // Pressing on past a credit warning is its own right, as it is on the invoice screen (transactionController.js).
 function assertMayAcknowledge(req) {
   if (req.body?.acknowledged && !holds(req, "sales.creditOverride") && !holds(req, "vansales.manage")) {
@@ -40,8 +51,12 @@ function assertMayAcknowledge(req) {
 }
 
 // ---- vans and routes -----------------------------------------------------------------------------------------
-exports.listVans = catchAsync(async (req, res) => ok(res, await VanService.list({ includeInactive: req.query.all === "1" })));
-exports.getVan = catchAsync(async (req, res) => ok(res, await VanService.get(req.params.vanId)));
+exports.listVans = catchAsync(async (req, res) => ok(res, await VanService.list({ includeInactive: req.query.all === "1", onlySalesman: ownerFilter(req) })));
+exports.getVan = catchAsync(async (req, res) => {
+  const van = await VanService.get(req.params.vanId);
+  if (sellerOnly(req) && String(van.salesmanId) !== String(req.admin?.id)) throw new AppError("That van does not exist", 404, "VAN_NOT_FOUND");
+  ok(res, van);
+});
 exports.createVan = catchAsync(async (req, res) => {
   const v = await VanService.create(req.body || {}, by(req), req);
   await AuditService.log({ req, action: "VAN_CREATED", entity: "Van", entityId: v.id, summary: `Van ${v.code} ${v.name} added` });
@@ -79,10 +94,16 @@ exports.saveSettings = catchAsync(async (req, res) => {
 });
 
 // ---- trips ---------------------------------------------------------------------------------------------------
-exports.listTrips = catchAsync(async (req, res) => ok(res, await VanTripService.list(req.query)));
+exports.listTrips = catchAsync(async (req, res) => ok(res, await VanTripService.list(sellerOnly(req) ? { ...req.query, salesmanId: ownerFilter(req) } : req.query)));
 exports.mine = catchAsync(async (req, res) => ok(res, await VanTripService.mine(by(req))));
-exports.getTrip = catchAsync(async (req, res) => ok(res, await VanTripService.getById(req.params.tripId)));
-exports.activity = catchAsync(async (req, res) => ok(res, await AuditService.list(req, { entity: "VanTrip", entityId: req.params.tripId, limit: 100 })));
+exports.getTrip = catchAsync(async (req, res) => {
+  await assertOwnTripIfSeller(req);
+  ok(res, await VanTripService.getById(req.params.tripId));
+});
+exports.activity = catchAsync(async (req, res) => {
+  await assertOwnTripIfSeller(req);
+  ok(res, await AuditService.list(req, { entity: "VanTrip", entityId: req.params.tripId, limit: 100 }));
+});
 
 // Where loads go through a request, a salesman opens his OWN van's trip to ask for his load; nobody else's, and only then.
 async function assertMayOpen(req) {
@@ -252,12 +273,18 @@ exports.recordVisit = catchAsync(async (req, res) => {
   await VanCrmService.record("visit", { tripId: req.params.tripId, customerId: v.customerId, refId: v._id, reason: v.reason, note: v.note, by: by(req) });
   ok(res, { visit: v, trip: await VanTripService.getById(req.params.tripId) }, 201);
 });
-exports.visits = catchAsync(async (req, res) => ok(res, await VanVisitService.forTrip(req.params.tripId)));
+exports.visits = catchAsync(async (req, res) => {
+  await assertOwnTripIfSeller(req);
+  ok(res, await VanVisitService.forTrip(req.params.tripId));
+});
 exports.insight = catchAsync(async (req, res) => {
   await assertMayWork(req);
   ok(res, await VanTripSales.insight(req.params.tripId, req.params.customerId));
 });
-exports.prices = catchAsync(async (req, res) => ok(res, await VanTripSales.prices(req.params.tripId, req.query.customerId)));
+exports.prices = catchAsync(async (req, res) => {
+  await assertOwnTripIfSeller(req);
+  ok(res, await VanTripSales.prices(req.params.tripId, req.query.customerId));
+});
 exports.transfer = catchAsync(async (req, res) => {
   const { from, to } = await VanTripService.transfer(req.params.tripId, req.body || {}, by(req));
   const units = (req.body?.lines || []).reduce((n, l) => n + (Number(l.qty) || 0), 0);
@@ -316,7 +343,7 @@ exports.sync = catchAsync(async (req, res) => {
   ok(res, { ...out, trip: await VanTripService.getById(req.params.tripId) });
 });
 
-exports.summary = catchAsync(async (req, res) => ok(res, await VanSalesReportService.summary(req.query)));
+exports.summary = catchAsync(async (req, res) => ok(res, await VanSalesReportService.summary({ from: req.query.from, to: req.query.to, onlySalesman: ownerFilter(req) })));
 
 // ---- selling more (phase 4): promotions, pre-orders, the suggested load ----------------------------------------
 const PromotionService = require("../../services/vansales/promotionService");
@@ -342,8 +369,18 @@ exports.createPreorder = catchAsync(async (req, res) => {
   await AuditService.log({ req, action: "VAN_PREORDER", entity: "VanTrip", entityId: req.params.tripId, summary: `${order.orderNo} taken on the van for the next visit` });
   ok(res, order, 201);
 });
-exports.tripPreorders = catchAsync(async (req, res) => ok(res, await VanPlanningService.preordersForTrip(req.params.tripId)));
-exports.routePreorders = catchAsync(async (req, res) => ok(res, await VanPlanningService.preordersForRoute(req.params.routeId, { customerId: req.query.customerId })));
+exports.tripPreorders = catchAsync(async (req, res) => {
+  await assertOwnTripIfSeller(req);
+  ok(res, await VanPlanningService.preordersForTrip(req.params.tripId));
+});
+exports.routePreorders = catchAsync(async (req, res) => {
+  // a salesman sees the orders of a route he is out on, not another's
+  if (sellerOnly(req)) {
+    const mine = await VanTripService.mine(String(req.admin?.id));
+    if (!mine.some((t) => String(t.routeId) === String(req.params.routeId))) throw new AppError("That route does not exist", 404, "ROUTE_NOT_FOUND");
+  }
+  ok(res, await VanPlanningService.preordersForRoute(req.params.routeId, { customerId: req.query.customerId }));
+});
 // a salesman asking for his load may start from the suggestion, for his own van only
 exports.suggestedLoad = catchAsync(async (req, res) => {
   if (!holds(req, "vansales.load")) await assertMayWork(req);
@@ -355,7 +392,10 @@ exports.loadCheck = catchAsync(async (req, res) => ok(res, await VanPlanningServ
 const VanFleetService = require("../../services/vansales/vanFleetService");
 
 exports.board = catchAsync(async (req, res) => ok(res, await VanFleetService.board()));
-exports.tripExpenses = catchAsync(async (req, res) => ok(res, await VanFleetService.tripExpenses(req.params.tripId)));
+exports.tripExpenses = catchAsync(async (req, res) => {
+  await assertOwnTripIfSeller(req);
+  ok(res, await VanFleetService.tripExpenses(req.params.tripId));
+});
 exports.expense = catchAsync(async (req, res) => {
   await assertMayWork(req);
   const v = await VanFleetService.expense(req.params.tripId, req.body || {}, by(req), { req });
@@ -368,4 +408,4 @@ exports.pinCustomer = catchAsync(async (req, res) => {
   await AuditService.log({ req, action: "VAN_CUSTOMER_PINNED", entity: "Customer", entityId: r.customerId, summary: `${r.customerName} pinned on the map from the van` });
   ok(res, r);
 });
-exports.routeProfit = catchAsync(async (req, res) => ok(res, await VanSalesReportService.routeProfit(req.query)));
+exports.routeProfit = catchAsync(async (req, res) => ok(res, await VanSalesReportService.routeProfit({ from: req.query.from, to: req.query.to, by: req.query.by, onlySalesman: ownerFilter(req) })));

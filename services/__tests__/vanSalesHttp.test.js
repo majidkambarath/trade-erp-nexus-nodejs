@@ -237,3 +237,51 @@ test("count in, then only a person who may settle can; the history says so", { s
   const words = JSON.stringify(history.body);
   for (const action of ["opened", "loaded", "sold on the van", "settled"]) assert.ok(words.toLowerCase().includes(action), `the history mentions ${action}: ${words.slice(0, 300)}`);
 });
+
+test("a salesman reads his own van, trips and figures, never another salesman's; a supervisor reads them all", { skip }, async () => {
+  const route = await call("owner", "POST", "/van-sales/routes", { name: "Bob's round", customers: [{ customerId: String(cust._id) }] });
+  assert.equal(route.status, 201, JSON.stringify(route.data));
+  const van2 = await call("owner", "POST", "/van-sales/vans", { code: "van-2", name: "Van Two", salesmanId: String(bob._id), defaultRouteId: route.body.id });
+  assert.equal(van2.status, 201, JSON.stringify(van2.data));
+  const opened = await call("owner", "POST", "/van-sales/trips", { vanId: van2.body.id });
+  assert.equal(opened.status, 201, JSON.stringify(opened.data));
+  const his = opened.body.id;
+  assert.equal((await call("owner", "POST", `/van-sales/trips/${his}/load`, { lines: [{ stockId: rice._id, qty: 5 }] })).status, 200);
+  assert.equal((await call("owner", "POST", `/van-sales/trips/${his}/depart`)).status, 200);
+
+  const parts = (id) => ["", "/activity", "/preorders", `/prices?customerId=${cust._id}`, "/visits", "/expenses"].map((p) => `/van-sales/trips/${id}${p}`);
+  for (const url of parts(his)) {
+    const peek = await call("ali", "GET", url);
+    assert.equal(peek.status, 404, `ali ${url} ${JSON.stringify(peek.data)}`);
+    assert.equal(peek.code, "TRIP_NOT_FOUND", url);
+    assert.equal((await call("bob", "GET", url)).status, 200, `bob ${url}`);
+    assert.equal((await call("owner", "GET", url)).status, 200, `owner ${url}`);
+  }
+  for (const url of parts(tripId)) assert.equal((await call("ali", "GET", url)).status, 200, `ali's own ${url}`);
+  const orders = await call("ali", "GET", `/van-sales/routes/${route.body.id}/preorders`);
+  assert.equal(orders.status, 404, JSON.stringify(orders.data));
+  assert.equal((await call("bob", "GET", `/van-sales/routes/${route.body.id}/preorders`)).status, 200);
+  assert.equal((await call("owner", "GET", `/van-sales/routes/${route.body.id}/preorders`)).status, 200);
+
+  // lists: his own only, whatever the address asks for
+  for (const url of ["/van-sales/trips", `/van-sales/trips?salesmanId=${bob._id}`]) {
+    const r = await call("ali", "GET", url);
+    assert.deepEqual(r.body.map((t) => t.id), [tripId], url);
+  }
+  assert.equal((await call("owner", "GET", "/van-sales/trips")).body.length, 2);
+  assert.deepEqual((await call("ali", "GET", "/van-sales/vans")).body.map((v) => v.code), ["VAN-1"]);
+  assert.deepEqual((await call("owner", "GET", "/van-sales/vans")).body.map((v) => v.code), ["VAN-1", "VAN-2"]);
+  assert.equal((await call("ali", "GET", `/van-sales/vans/${van2.body.id}`)).status, 404);
+  assert.equal((await call("ali", "GET", `/van-sales/vans/${vanId}`)).status, 200);
+
+  // figures: settle bob's day too, then each salesman's reports hold only his trip
+  assert.equal((await call("owner", "POST", `/van-sales/trips/${his}/unload`, { counts: [{ stockId: rice._id, good: 5, damaged: 0 }] })).status, 200);
+  assert.equal((await call("owner", "POST", `/van-sales/trips/${his}/settle`, {})).status, 200);
+  const summary = await call("ali", "GET", `/van-sales/reports/summary?onlySalesman=${bob._id}`);
+  assert.equal(summary.status, 200, JSON.stringify(summary.data));
+  assert.deepEqual(summary.body.bySalesman.map((s) => s.name), ["ali"]);
+  assert.deepEqual((await call("owner", "GET", "/van-sales/reports/summary")).body.bySalesman.map((s) => s.name).sort(), ["ali", "bob"]);
+  const profit = await call("ali", "GET", "/van-sales/reports/route-profit?by=salesman");
+  assert.equal(profit.body.trips, 1);
+  assert.equal((await call("owner", "GET", "/van-sales/reports/route-profit?by=salesman")).body.trips, 2);
+});
