@@ -377,6 +377,8 @@ adminSchema.methods.toJSON = function () {
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
 adminSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+adminSchema.plugin(require("../../utils/auditPlugin"), { entity: "Admin", ignore: ["lastLogin", "loginAttempts", "lockUntil", "passwordChangedAt", "sessionsRevokedAt", "twoFactor.lastStep"] });
 const Admin = mongoose.model("Admin", adminSchema);
 
 module.exports = Admin;

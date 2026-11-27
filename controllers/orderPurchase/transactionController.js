@@ -54,7 +54,7 @@ exports.createTransaction = catchAsync(async (req, res) => {
   // voucher type has to allow (`auto_override`) or the service refuses it - so it is a deliberate
   // setting, not an open door. `isOpening` is the go-live load's flag (it also switches off the plan's
   // monthly document limit), `quoteRef` / `linkedRef` / `jobCardRef` are the links the conversions write.
-  const { transactionNo: _chosenNumber, isOpening: _opening, quoteRef: _quote, linkedRef: _linked, jobCardRef: _jobCardRef, tradeOrderRef: _tradeOrderRef, vanTripRef: _vanTripRef, recurringRef: _recurringRef, reissue: _reissue, reservedNumber: _reserved, ...body } = req.body || {};
+  const { transactionNo: _chosenNumber, isOpening: _opening, quoteRef: _quote, linkedRef: _linked, jobCardRef: _jobCardRef, tradeOrderRef: _tradeOrderRef, vanTripRef: _vanTripRef, recurringRef: _recurringRef, reissue: _reissue, reservedNumber: _reserved, selfBilledNo: _selfBilledNo, ...body } = req.body || {};
   const transaction = await TransactionService.createTransaction(
     body,
     resolveCreatedBy(req)
@@ -127,18 +127,24 @@ exports.updateTransaction = catchAsync(async (req, res) => {
 
 // Delete transaction
 exports.deleteTransaction = catchAsync(async (req, res) => {
+  // an approved document is cancelled, not deleted, and the reason is kept on it
+  const reason = typeof req.body?.reason === "string" ? req.body.reason : typeof req.query?.reason === "string" ? req.query.reason : undefined;
   const removed = await TransactionService.deleteTransaction(
     req.params.id,
-    resolveCreatedBy(req)
+    resolveCreatedBy(req),
+    { reason, byName: req.admin?.name || req.admin?.email || null }
   );
   await AuditService.log({
     req,
-    action: "TRANSACTION_DELETED",
+    action: removed.cancelled ? "TRANSACTION_CANCELLED" : "TRANSACTION_DELETED",
     entity: "Transaction",
     entityId: req.params.id,
-    summary: `${removed.type.replace(/_/g, " ")} ${removed.transactionNo} deleted`,
+    summary: removed.cancelled
+      ? `${removed.type.replace(/_/g, " ")} ${removed.transactionNo} cancelled: its postings were reversed and it is kept (${removed.reason})`
+      : `${removed.type.replace(/_/g, " ")} ${removed.transactionNo} deleted`,
     before: removed,
   });
+  if (removed.cancelled) return res.status(200).json({ status: "success", data: { cancelled: true, transactionNo: removed.transactionNo } });
   res.status(204).json({ status: "success", data: null });
 });
 

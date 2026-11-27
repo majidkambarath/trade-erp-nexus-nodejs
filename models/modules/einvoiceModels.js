@@ -127,6 +127,9 @@ settingsSchema.plugin(tenantPlugin);
 submissionSchema.plugin(tenantPlugin);
 inboundSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+settingsSchema.plugin(require("../../utils/auditPlugin"), { entity: "EInvoiceSettings", ignore: ["inboundPulledAt", "wafeq.lastWebhookAt", "wafeq.lastError", "wafeqPending"] });
+
 module.exports = {
   EInvoiceSettings: mongoose.model("EInvoiceSettings", settingsSchema),
   EInvoiceSubmission: mongoose.model("EInvoiceSubmission", submissionSchema),

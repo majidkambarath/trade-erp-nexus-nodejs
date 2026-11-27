@@ -45,7 +45,11 @@ exchangeRateSchema.index({ companyId: 1, code: 1, effectiveDate: 1 }, { unique: 
 currencySchema.plugin(tenantPlugin);
 exchangeRateSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+currencySchema.plugin(require("../../../utils/auditPlugin"), { entity: "Currency" });
 const Currency = mongoose.models.Currency || mongoose.model("Currency", currencySchema);
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+exchangeRateSchema.plugin(require("../../../utils/auditPlugin"), { entity: "ExchangeRate" });
 const ExchangeRate = mongoose.models.ExchangeRate || mongoose.model("ExchangeRate", exchangeRateSchema);
 
 module.exports = { Currency, ExchangeRate };

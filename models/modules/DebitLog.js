@@ -10,7 +10,7 @@ const debitLogSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ["purchase_order", "purchase_return", "payment_received", "adjustment", "purchase_order_reversed", "purchase_return_reversed"],
+    enum: ["purchase_order", "purchase_return", "payment_received", "adjustment", "purchase_order_reversed", "purchase_return_reversed", "payment_received_reversed", "adjustment_reversed"],
     required: true,
   },
   date: { type: Date, default: Date.now },

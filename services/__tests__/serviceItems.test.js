@@ -267,7 +267,7 @@ test("deleting an approved service invoice reverses everything and moves no stoc
   assert.ok(grossBefore.debit > 0);
 
   await svc.Tx.deleteTransaction(serviceSale._id, "tester");
-  assert.equal(await svc.Transaction.countDocuments({ _id: serviceSale._id }), 0);
+  assert.equal((await svc.Transaction.findById(serviceSale._id).lean()).status, "CANCELLED", "an approved invoice is cancelled and kept, never removed");
   assert.equal(await svc.Movement.countDocuments({}), movesBefore, "no reversal movement either: there was none to reverse");
   assert.equal(await onHand(rice), riceBefore);
   assert.equal((await svc.Customer.findById(customer._id)).cashBalance, balanceBefore + 420000);

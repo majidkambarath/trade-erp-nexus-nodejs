@@ -23,4 +23,6 @@ costCentreSchema.index({ companyId: 1, name: 1 }, { unique: true, collation: { l
 
 costCentreSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+costCentreSchema.plugin(require("../../../utils/auditPlugin"), { entity: "CostCentre" });
 module.exports = mongoose.models.CostCentre || mongoose.model("CostCentre", costCentreSchema);

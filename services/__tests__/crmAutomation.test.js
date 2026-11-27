@@ -21,6 +21,7 @@ test.before(async () => {
   svc = {
     seed: require("../../utils/seedAccounting").seedAccounting,
     Tx: require("../orderPurchase/transactionService"),
+    Transaction: require("../../models/modules/transactionModel"),
     Quote: require("../orderPurchase/quotationService"),
     Opp: require("../crm/opportunityService"),
     Act: require("../crm/activityService"),
@@ -404,7 +405,8 @@ test("refusals are unchanged: the CRM added no new way for a document to fail", 
   // path, with the hook making no difference to it.
   await fails(() => svc.Quote.transition(pipelineDeal.quote._id, "send", {}, String(asif._id)), "QUOTATION_STATE");
   await fails(() => svc.Quote.remove(pipelineDeal.quote._id, String(asif._id)), "QUOTATION_NOT_DELETABLE");
-  // And the invoice that was deleted in an earlier case really is gone (that refusal carries no errorCode, so its
-  // words are what there is to check)
-  await assert.rejects(() => svc.Tx.processTransaction(pipelineDeal.invoice._id, "approve", "tester"), /Transaction not found/);
+  // And the APPROVED invoice deleted in an earlier case was cancelled, not removed (no hard deletes of posted records): it
+  // is kept, and cannot be approved again
+  assert.equal((await svc.Transaction.findById(pipelineDeal.invoice._id).lean()).status, "CANCELLED");
+  await assert.rejects(() => svc.Tx.processTransaction(pipelineDeal.invoice._id, "approve", "tester"));
 });

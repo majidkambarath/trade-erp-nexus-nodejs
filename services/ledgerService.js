@@ -48,7 +48,7 @@ class LedgerService {
             }
           },
           totalPaid: {
-            $sum: { $cond: [{ $eq: ["$type", "payment_received"] }, "$paid", 0] }
+            $sum: { $cond: [{ $in: ["$type", ["payment_received", "payment_received_reversed"]] }, "$paid", 0] }
           },
         },
       },
@@ -106,7 +106,7 @@ class LedgerService {
             }
           },
           totalPaid: {
-            $sum: { $cond: [{ $eq: ["$type", "payment_made"] }, "$paid", 0] }
+            $sum: { $cond: [{ $in: ["$type", ["payment_made", "payment_made_reversed"]] }, "$paid", 0] }
           },
         },
       },

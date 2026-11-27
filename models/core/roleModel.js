@@ -46,4 +46,6 @@ const roleSchema = new mongoose.Schema(
 roleSchema.index({ companyId: 1, key: 1 }, { unique: true });
 roleSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+roleSchema.plugin(require("../../utils/auditPlugin"), { entity: "Role" });
 module.exports = mongoose.models.Role || mongoose.model("Role", roleSchema);

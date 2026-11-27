@@ -22,6 +22,9 @@ const branchSchema = new mongoose.Schema(
       state: { type: String, trim: true },
       country: { type: String, trim: true, uppercase: true },
     },
+    // UAE only: the emirate of this establishment. The VAT return reports a standard-rated supply under the emirate of the
+    // establishment that made it (VAT Executive Regulation Art. 72); absent = the company's own emirate.
+    emirate: { type: String, trim: true },
     phone: { type: String, trim: true },
     email: { type: String, trim: true, lowercase: true },
     createdBy: { type: String, default: null },
@@ -35,4 +38,6 @@ branchSchema.index({ companyId: 1 }, { unique: true, partialFilterExpression: { 
 
 branchSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+branchSchema.plugin(require("../../utils/auditPlugin"), { entity: "Branch" });
 module.exports = mongoose.models.Branch || mongoose.model("Branch", branchSchema);

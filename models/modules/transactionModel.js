@@ -163,6 +163,13 @@ const transactionSchema = new mongoose.Schema({
   creditedAmount: { type: Number, default: 0, min: 0 },
   appliedToInvoice: { type: Number, default: 0, min: 0 },
   items: [itemSchema],
+  // Self-billing (utils/selfBilling.js): we raise the tax invoice for the supplier. `selfBilledNo` is that invoice's (or
+  // credit note's) own number, taken on approval; a request body can never set it. Absent on every other document.
+  selfBilled: { type: Boolean },
+  selfBilledNo: { type: String, trim: true },
+  // what its paper prints, kept as on the day it was approved: the agreement, and for a credit note the invoice credited
+  selfBillingRef: { type: String, trim: true },
+  selfBilledAgainst: { type: String, trim: true },
   // Header charges (freight, handling, ...): each has its own tax and posts to its own account.
   charges: [
     {
@@ -226,7 +233,22 @@ const transactionSchema = new mongoose.Schema({
   returnOf: {
     transactionId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction", default: null },
     transactionNo: { type: String, default: null },
+    // What a tax credit note must say about the supply it corrects (VAT Executive Regulation Art. 60(1)(e),(g)), kept as
+    // the server read it from the invoice, in the base currency: the invoice's date, its value before tax and its tax, and
+    // what other approved returns had already credited of that value. Written by the server only; absent on older returns.
+    date: { type: Date },
+    value: { type: Number },
+    vat: { type: Number },
+    creditedBefore: { type: Number },
   },
+  // An APPROVED document is never deleted: "Delete" reverses everything it posted and keeps it here, cancelled, with its
+  // number still used (FTA: no hard deletes of posted entries). Absent on every other document.
+  cancelled: {
+    type: new mongoose.Schema({ at: Date, by: String, byName: String, reason: { type: String, trim: true, maxlength: 300 }, wasApproved: Boolean }, { _id: false }),
+    default: undefined,
+  },
+  // Why the goods came back (Art. 60(1)(f)): printed on the credit note. Absent on older returns.
+  returnReason: { type: String, trim: true, maxlength: 300 },
   attachments: [
     {
       attachmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Attachment" },
@@ -375,4 +397,6 @@ transactionSchema.index({ transactionNo: 1 }, { unique: true }); // unique withi
 // documents belong to a branch: a person working in one branch sees only that branch's (utils/tenantPlugin.js)
 transactionSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+transactionSchema.plugin(require("../../utils/auditPlugin"), { entity: "Transaction", diff: false });
 module.exports = mongoose.model("Transaction", transactionSchema);

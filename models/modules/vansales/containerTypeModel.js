@@ -33,4 +33,6 @@ containerTypeSchema.index({ code: 1 }, { unique: true });
 
 containerTypeSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+containerTypeSchema.plugin(require("../../../utils/auditPlugin"), { entity: "ContainerType" });
 module.exports = mongoose.models.ContainerType || mongoose.model("ContainerType", containerTypeSchema);

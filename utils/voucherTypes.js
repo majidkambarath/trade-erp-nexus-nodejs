@@ -33,6 +33,10 @@ const SEED = [
   { key: "PO",   name: "Purchase invoice",       kind: "trade",     postsAs: "purchase_order",   prefix: "PO",   statutory: false },
   { key: "SR",   name: "Sales return",           kind: "trade",     postsAs: "sales_return",     prefix: "SR",   statutory: true  },
   { key: "PR",   name: "Purchase return",        kind: "trade",     postsAs: "purchase_return",  prefix: "PR",   statutory: false },
+  // A tax invoice and a tax credit note WE raise for a supplier under a written agreement (self-billing): our own
+  // sequence, never re-used.
+  { key: "SBI",  name: "Self-billed tax invoice",   kind: "trade",     postsAs: null,               prefix: "SBI",  statutory: true  },
+  { key: "SBC",  name: "Self-billed credit note",   kind: "trade",     postsAs: null,               prefix: "SBC",  statutory: true  },
   { key: "SORD", name: "Sales order",            kind: "trade",     postsAs: null,               prefix: "SORD", statutory: false },
   { key: "PORD", name: "Purchase order",         kind: "trade",     postsAs: null,               prefix: "PORD", statutory: false },
   { key: "QT",   name: "Quotation",              kind: "trade",     postsAs: null,               prefix: "QT",   statutory: false },

@@ -16,6 +16,8 @@ const vatReturnSchema = new mongoose.Schema(
     periodFrom: { type: String, required: true }, // Dubai calendar day, YYYY-MM-DD
     periodTo: { type: String, required: true },
     emirate: { type: String, default: "" },
+    // who the return is of, as they were when it was saved: the downloaded return file prints these, not today's
+    taxpayer: { trn: String, nameEn: String, nameAr: String, address: String },
     boxes: [boxSchema],
     totals: {
       outputVat: { type: Number, default: 0 }, // box 12

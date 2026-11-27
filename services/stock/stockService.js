@@ -807,16 +807,8 @@ class StockService {
       const stock = await Stock.findById(id).session(session);
       if (!stock) throw new AppError("Stock item not found", 404);
 
-      const movements = await InventoryMovement.find({
-        stockId: stock.itemId,
-      }).session(session);
-
-      // if (movements.length > 0) {
-      //   throw new AppError(
-      //     "Cannot delete stock item with existing inventory movements",
-      //     400
-      //   );
-      // }
+      // an item that has moved, been bought, sold or quoted is part of the books: it is switched off, never deleted
+      await require("../core/inUseService").assertItemFree(stock, { session });
 
       await Stock.findByIdAndDelete(id).session(session);
 

@@ -4,6 +4,14 @@ const AppError = require("../../utils/AppError");
 const Sequence = require("../../models/modules/sequenceModel");
 const PartyAccounts = require("../financial/partyAccounts");
 const PartyMaster = require("../masters/partyMasterService");
+const { cleanAgreement } = require("../../utils/selfBilling");
+
+// The self-billing agreement a request names, checked; undefined when it names none.
+function agreementOf(data) {
+  const cleaned = cleanAgreement(data?.selfBilling);
+  if (cleaned?.error) throw new AppError(cleaned.error, 400, "INVALID_SELF_BILLING", { fields: ["selfBilling"] });
+  return cleaned?.value;
+}
 const { searchRegex } = require("../../utils/regex");
 const { retryTransientTransaction, isTransient } = require("../../utils/withTransactionSession");
 
@@ -107,6 +115,7 @@ exports.createVendor = retryTransientTransaction(async (data, { groupId } = {}) 
 
   // Validate terms, VAT/TRN, contacts, bank accounts and documents early to avoid sequence allocation
   const master = await PartyMaster.prepare("vendor", data);
+  const selfBilling = agreementOf(data);
 
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -152,6 +161,7 @@ exports.createVendor = retryTransientTransaction(async (data, { groupId } = {}) 
           contacts: master.contacts,
           bankAccounts: master.bankAccounts,
           documents: master.documents,
+          ...(selfBilling ? { selfBilling } : {}),
         },
       ],
       { session }
@@ -205,6 +215,9 @@ exports.updateVendor = async (id, data) => {
   delete data.vat;
   delete data.credit;
   Object.assign(data, master);
+  const selfBilling = agreementOf(data);
+  if (selfBilling) data.selfBilling = selfBilling;
+  else delete data.selfBilling;
 
   const before = data.vendorName !== undefined ? { vendorName: existing.vendorName } : null;
   const vendor = await Vendor.findByIdAndUpdate(id, data, {
@@ -224,6 +237,10 @@ exports.deleteVendor = async (id) => {
   session.startTransaction();
 
   try {
+    const found = await Vendor.findById(id).session(session).lean();
+    if (!found) throw new AppError("Vendor not found", 404);
+    // a supplier with history is part of the books: it is kept, never deleted
+    await require("../core/inUseService").assertPartyFree("vendor", found, { session });
     const vendor = await Vendor.findByIdAndDelete(id, { session });
     if (!vendor) throw new AppError("Vendor not found", 404);
 

@@ -4,6 +4,7 @@ const TaxCode = require("../../models/modules/financial/taxCodeModel");
 const Transaction = require("../../models/modules/transactionModel");
 const TaxCodeService = require("./taxCodeService");
 const VatRegistrationService = require("./vatRegistrationService");
+const ReturnService = require("../orderPurchase/returnService");
 const AccountConfigService = require("./accountConfigService");
 const { ensurePartyAccount } = require("./partyAccounts");
 const AppError = require("../../utils/AppError");
@@ -244,12 +245,27 @@ class LedgerVoucherService {
     const reduces = (partyType === "Customer" && !isDebit) || (partyType === "Vendor" && isDebit);
     let linkedInvoices = [];
     let reference = {};
+    const wantType = partyType === "Vendor" ? "purchase_order" : "sales_order";
+    // what the note records about an invoice: its number, date, value and tax (base currency)
+    const recordOf = (invoice) => {
+      const { value, vat } = ReturnService.valueOf(invoice);
+      return { referenceInvoiceId: invoice._id, referenceInvoiceNo: invoice.transactionNo, referenceInvoiceDate: invoice.date, referenceInvoiceValue: value, referenceInvoiceVat: vat };
+    };
+    // Any note may NAME the invoice it corrects without being set against it (a debit note to a customer adds to what they
+    // owe, so it can only name it): the credit or debit note then identifies the supply, as Art. 60(1)(g) asks.
+    if (data.originalInvoiceId && !data.referenceInvoiceId) {
+      if (!mongoose.isValidObjectId(data.originalInvoiceId)) throw new AppError("Choose the invoice this note corrects", 400, "INVALID_INVOICE");
+      const invoice = await Transaction.findById(data.originalInvoiceId).select("type partyId status transactionNo date pricing items.taxableAmount items.vatAmount").session(session || null).lean();
+      if (!invoice || invoice.type !== wantType || String(invoice.partyId) !== String(partyId) || invoice.status !== "APPROVED") {
+        throw new AppError(`Choose an approved ${partyType === "Vendor" ? "purchase" : "sales"} invoice of ${partyName}`, 400, "INVALID_INVOICE");
+      }
+      reference = recordOf(invoice);
+    }
     if (data.referenceInvoiceId) {
       if (!reduces) {
         throw new AppError(`A ${label.toLowerCase()} to a ${partyType.toLowerCase()} adds to what they owe, so it cannot be set against an invoice`, 400, "NOTE_CANNOT_SETTLE");
       }
       const invoice = await Transaction.findById(data.referenceInvoiceId).session(session || null);
-      const wantType = partyType === "Vendor" ? "purchase_order" : "sales_order";
       if (!invoice || invoice.type !== wantType || String(invoice.partyId) !== String(partyId) || invoice.status !== "APPROVED") {
         throw new AppError(`Choose an approved ${partyType === "Vendor" ? "purchase" : "sales"} invoice of ${partyName}`, 400, "INVALID_INVOICE");
       }
@@ -265,12 +281,14 @@ class LedgerVoucherService {
       const before = round2(invoice.outstandingAmount);
       const after = round2(Math.max(0, before - total));
       linkedInvoices = [{ invoiceId: invoice._id, allocatedAmount: total, previousBalance: before, newBalance: after }];
-      reference = { referenceInvoiceId: invoice._id, referenceInvoiceNo: invoice.transactionNo };
+      reference = recordOf(invoice);
     }
 
     return {
       date, partyId: party._id, partyType, partyName, totalAmount: total, subtotal, vatTotal,
       narration: narration || `${label} - ${partyName}`, noteLines, entries, linkedInvoices, ...reference,
+      // why it was issued: the reason given, else the narration a person typed (a default narration explains nothing)
+      ...(typeof data.reason === "string" && data.reason.trim() ? { reason: data.reason.replace(/\s+/g, " ").trim().slice(0, 300) } : narration ? { reason: String(narration).trim().slice(0, 300) } : {}),
       status: "approved", ledgerBased: true,
     };
   }

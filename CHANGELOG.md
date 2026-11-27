@@ -13,6 +13,54 @@ Barcodes on items, used when invoicing in the ERP and on the van.
 - **A barcode column in the item import**, refused when repeated in the file or already another item's code.
 - **The van's items carry their SKU and barcode**, in the trip and in the offline pack.
 
+UAE tax files: what the FTA expects accounting software to produce.
+
+### Added
+- **Credit and debit notes say what they correct** (VAT Executive Regulation Art. 60(1)). A return records the invoice's
+  date, value and tax and what earlier approved returns had already credited (read again when it is approved), and a
+  reason (`returnReason`; one not given reads "Goods returned by the customer" / "to the supplier"). A ledger note keeps
+  the invoice it is set against with its date and value, may name one it cannot be set against (`originalInvoiceId`),
+  and keeps a `reason`. `/accounting/returnable/:id` also answers the invoice's total, value and tax.
+- **Every change a person makes is in the audit log, field by field.** `utils/auditPlugin.js` on 36 models (parties, items,
+  categories, units, accounts, tax codes, banks and cards, settings, users and roles, branches, HR and van masters):
+  create, update and delete, each with who (`withActor`, set by `authenticateToken`), when, from which address and
+  `changes [{field, from, to}]` (`utils/auditDiff.js`; secrets shown as changed, never with a value). Written in the same
+  transaction as the change. The books' own running figures (balances, quantities, cost) are not logged here: their
+  postings and movements record them. `AuditService.log` also stores `changes` when given before and after.
+- **The audit log is append-only**: any update or delete of a row is refused (`AUDIT_LOG_IMMUTABLE`).
+- **Deleted records** (`GET /accounting/deleted-records`, `audit.view`): a record that is deleted is first kept whole.
+- **No hard deletes of posted records**:
+  - Deleting an APPROVED trade document now CANCELS it: everything is reversed as before, and the document stays,
+    `CANCELLED`, with `cancelled {at, by, reason}` and its number still used (`ALREADY_CANCELLED` after); the
+    `DELETE` answers 200 `{cancelled: true}` and takes an optional `reason`.
+  - A deleted voucher's customer or supplier statement rows are mirrored (`REV-`), not removed.
+  - A customer, supplier, item, unit or staff member with history cannot be deleted (`PARTY_IN_USE`, `ITEM_IN_USE`,
+    `UNIT_IN_USE`, `STAFF_IN_USE`).
+  - An expense category whose sub-categories are used is kept.
+- The audit log can be filtered by who (`user`).
+- **Record keeping**: `CompanySettings.retention.years` (5, or 15 for real estate; `RETENTION_INVALID` otherwise). Nothing
+  in the application purges business data.
+- **Backups you can trust**: every exported file's SHA-256 is in the manifest and the restore refuses a changed or
+  missing file before writing anything; both scripts take `--db`. `npm run backup:drill -- --org <code>` restores into
+  a throwaway database, proves every collection and every account's debits and credits came back and the books
+  balance, then drops it. `.github/workflows/backup.yml` backs everything up daily, encrypted, kept 35 days (it does
+  nothing until `MONGO_URI` and `BACKUP_PASSPHRASE` are set as repository secrets). `docs/BACKUP_AND_DR.md` has the
+  targets (RPO 24 h, RTO 4 h), the procedure and the drill log.
+- **The user guide on its own screen**: `GET /help/topics` and `/help/topics/:id`, for everyone signed in, from the same
+  client-only corpus as Zarvia AI. A new topic, **A guide for auditors**.
+
+- **The FTA VAT audit file (FAF)** for any period (`GET /vat-return/faf`, `reports.vat`, all branches): company
+  details, the purchase and supply listings made from the same lines as the VAT return, and the general ledger, each with
+  its totals. Generated on request, nothing in it can be edited, and each download is in the audit log.
+- **Standard-rated supplies by emirate**: a branch may name its own emirate; its sales go under that box of the return,
+  every other sale under the company's.
+- **Totals by tax code and by emirate** (`GET /vat-return/analysis`).
+- **A saved VAT return keeps who it was for** (tax number, names, address) and shows who prepared, finalised and filed it.
+- **Self-billed tax invoices.** A supplier may carry a written self-billing agreement (reference and starting day). A
+  purchase invoice ticked self-billed takes its own number on approval (`SBI-`), and the credit note of its return
+  `SBC-`; refused without our tax number, the agreement or the supplier's, and before the agreement starts. The audit file
+  carries our number. A return made after the agreement ends is booked as an ordinary return.
+
 ## 4.5.1.0 — 26 November 2026
 
 No backend change: released with the frontend's Install button in the salesman's app. Frontend and backend both at 4.5.1.0.

@@ -10,7 +10,7 @@ const creditLogSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ["sales_order", "sales_return", "payment_made", "adjustment", "sales_order_reversed", "sales_return_reversed"],
+    enum: ["sales_order", "sales_return", "payment_made", "adjustment", "sales_order_reversed", "sales_return_reversed", "payment_made_reversed", "adjustment_reversed"],
     required: true,
   },
   date: { type: Date, default: Date.now },

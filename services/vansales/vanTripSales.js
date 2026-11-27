@@ -424,6 +424,7 @@ class VanTripSales {
       {
         type: "sales_return", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", date: day, items,
         ...(original ? { returnOf: { transactionId: original._id } } : {}), status: "DRAFT", vanTripRef: refOf(trip),
+        ...(said ? { returnReason: said } : {}),
         notes: input.notes ? String(input.notes).slice(0, 500) : `Returned on van ${trip.vanCode} ${trip.tripNo}${said ? `: ${said}` : ""}`,
       },
       by, session

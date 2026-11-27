@@ -33,4 +33,6 @@ priceListSchema.index({ customerIds: 1, active: 1 });
 
 priceListSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+priceListSchema.plugin(require("../../../utils/auditPlugin"), { entity: "PriceList" });
 module.exports = mongoose.models.PriceList || mongoose.model("PriceList", priceListSchema);

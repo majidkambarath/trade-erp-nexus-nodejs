@@ -1,6 +1,8 @@
 const catchAsync = require("../../utils/catchAsync");
 const VatReturn = require("../../services/reports/vatReturnService");
+const FtaAuditFile = require("../../services/reports/ftaAuditFileService");
 const DefaultChartService = require("../../services/financial/defaultChartService");
+const AuditService = require("../../services/core/auditService");
 
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
 const admin = (req) => req.admin?._id || req.admin?.id || "";
@@ -14,8 +16,23 @@ const live = (fn) =>
 
 exports.compute = live((req) => VatReturn.compute({ from: req.query.from, to: req.query.to }));
 
+// The FTA Audit File (FAF): generated on request, downloaded as it is, and who took it is recorded.
+exports.auditFile = catchAsync(async (req, res) => {
+  await DefaultChartService.onOpenThrottled(req);
+  const { from, to } = req.query;
+  const file = await FtaAuditFile.generate({ from, to });
+  await AuditService.log({
+    req, action: "FAF_GENERATED", entity: "VATReturn",
+    summary: `FTA audit file for ${from} to ${to}: ${file.totals.supplies.count} supply, ${file.totals.purchases.count} purchase and ${file.totals.ledger.count} ledger line(s)`,
+  });
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${file.fileName}"`);
+  res.status(200).send(file.text);
+});
+
 exports.detail = live((req) =>
-  VatReturn.detail({ from: req.query.from, to: req.query.to, direction: req.query.direction, kind: req.query.kind, search: req.query.search, page: req.query.page, limit: req.query.limit }));
+  VatReturn.detail({ from: req.query.from, to: req.query.to, direction: req.query.direction, kind: req.query.kind, search: req.query.search, page: req.query.page, limit: req.query.limit, all: req.query.all === "1" }));
+exports.analysis = live((req) => VatReturn.analysis({ from: req.query.from, to: req.query.to }));
 
 exports.list = catchAsync(async (req, res) => ok(res, await VatReturn.list()));
 exports.get = catchAsync(async (req, res) => ok(res, await VatReturn.get(req.params.id)));

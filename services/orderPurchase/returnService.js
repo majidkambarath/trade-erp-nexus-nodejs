@@ -43,6 +43,42 @@ class ReturnService {
     return new Map(rows.map((r) => [String(r._id), { qty: r.qty, value: r.value }]));
   }
 
+  // The invoice's value before tax and its tax, in the base currency: the priced figures, else the lines.
+  static valueOf(doc) {
+    const p = doc?.pricing;
+    if (p && Number.isFinite(Number(p.net))) {
+      return { value: round2((Number(p.net) || 0) + (Number(p.chargesNet) || 0)), vat: round2((Number(p.lineVat) || 0) + (Number(p.chargesVat) || 0)) };
+    }
+    const lines = doc?.items || [];
+    return {
+      value: round2(lines.reduce((t, l) => t + (Number(l.taxableAmount) || 0), 0)),
+      vat: round2(lines.reduce((t, l) => t + (Number(l.vatAmount) || 0), 0)),
+    };
+  }
+
+  // What a credit note records about the invoice it corrects (Art. 60(1)(e),(g)): its date, value and tax, and what the
+  // other APPROVED returns against it had already credited. Read again when the return is approved, which is when it is issued.
+  static async snapshotOf(original, { excludeId, session } = {}) {
+    const match = { "returnOf.transactionId": original._id, status: "APPROVED" };
+    if (excludeId) match._id = { $ne: excludeId };
+    const q = Transaction.find(match).select("pricing items.taxableAmount").lean();
+    const others = await (session ? q.session(session) : q);
+    const { value, vat } = this.valueOf(original);
+    return {
+      date: original.date,
+      value,
+      vat,
+      creditedBefore: round2(others.reduce((t, r) => t + this.valueOf(r).value, 0)),
+    };
+  }
+
+  // A return's explanation: the one given, else what a return of its kind is.
+  static reasonOf(input, type) {
+    const text = typeof input === "string" ? input.replace(/\s+/g, " ").trim().slice(0, 300) : "";
+    if (text) return text;
+    return type === "purchase_return" ? "Goods returned to the supplier" : "Goods returned by the customer";
+  }
+
   // Original lines with how much of each can still be returned (feeds the return form's picker).
   static async returnable(originalId, { excludeId, session } = {}) {
     const q = Transaction.findById(originalId);
@@ -57,6 +93,9 @@ class ReturnService {
       status: original.status,
       date: original.date,
       partyId: original.partyId,
+      // what the invoice came to, so the form can say what is being corrected
+      totalAmount: original.totalAmount,
+      ...this.valueOf(original),
       // an invoice made in a foreign currency is returned in that currency, at its rate: the form shows the lines in it
       ...(original.fx?.currency ? { currency: original.fx.currency, exchangeRate: original.fx.rate } : {}),
       lines: original.items.map((l) => {

@@ -11,6 +11,7 @@ const vendorRouter = require("./routes/vendor/vendorRouter");
 const customerRouter = require("./routes/customer/customerRouter"); // Add customer router
 const adminRouter = require("./routes/core/adminRouter");
 const assistantRouter = require("./routes/assistant/assistantRoutes");
+const helpRouter = require("./routes/core/helpRoutes");
 const stockRouter = require("./routes/stock/stockRouter");
 const uomRouter = require("./routes/unit/uomRouter");
 const transactionRouter = require("./routes/orderPurchase/transactionRouter");
@@ -81,7 +82,7 @@ const corsOptions = {
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "x-secret-key", "Authorization", "Idempotency-Key", "X-Branch", "X-Prepared-By"],
   // The subscription warning headers (grace period, ending soon) are for the app to read.
-  exposedHeaders: ["X-Subscription-State", "X-Subscription-Days-Left", "X-Subscription-Ends"],
+  exposedHeaders: ["X-Subscription-State", "X-Subscription-Days-Left", "X-Subscription-Ends", "Content-Disposition"],
   credentials: true,
   preflightContinue: false,
   optionsSuccessStatus: 204,
@@ -153,6 +154,7 @@ app.get("/api/v1/health", (req, res) => {
 app.use("/api/v1/accounting", accountingSetupRouter);
 app.use("/api/v1/accounting", require("./routes/financial/partyAccountRoutes"));
 app.use("/api/v1/assistant", assistantRouter); // before adminRouter, whose bare GET /:id would capture it
+app.use("/api/v1/help", helpRouter); // the user guide (Help screen); before adminRouter too
 app.use("/api/v1/banking", bankingRouter); // before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/einvoice", einvoiceRouter);
 app.use("/api/v1/batches", batchRouter); // before adminRouter, whose bare GET /:id would capture it

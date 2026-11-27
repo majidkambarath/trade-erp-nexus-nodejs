@@ -172,6 +172,12 @@ const voucherSchema = new mongoose.Schema({
   ],
   referenceInvoiceId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction" },
   referenceInvoiceNo: { type: String, trim: true },
+  // the supply a note corrects, as the note records it (Art. 60(1)(e),(g)); a note may name it without settling it
+  referenceInvoiceDate: { type: Date },
+  referenceInvoiceValue: { type: Number },
+  referenceInvoiceVat: { type: Number },
+  // why the note was issued (Art. 60(1)(f)); absent on older notes, which print their narration
+  reason: { type: String, trim: true, maxlength: 300 },
 
   expenseTypeName: { type: String, trim: true },
   transactorName: { type: String, trim: true },
@@ -442,6 +448,8 @@ ledgerAccountSchema.index({ groupId: 1, accountCode: 1 });
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
 ledgerAccountSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+ledgerAccountSchema.plugin(require("../../../utils/auditPlugin"), { entity: "LedgerAccount", ignore: ["currentBalance"] });
 const LedgerAccount = mongoose.model("LedgerAccount", ledgerAccountSchema);
 
 // Ledger Entry Schema

@@ -291,6 +291,10 @@ exports.deleteCustomer = async (id) => {
   session.startTransaction();
 
   try {
+    const found = await Customer.findById(id).session(session).lean();
+    if (!found) throw new AppError("Customer not found", 404);
+    // a customer with history is part of the books: it is switched off, never deleted
+    await require("../core/inUseService").assertPartyFree("customer", found, { session });
     const customer = await Customer.findByIdAndDelete(id, { session });
     if (!customer) {
       throw new AppError("Customer not found", 404);

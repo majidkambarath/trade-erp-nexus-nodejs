@@ -44,4 +44,6 @@ uomConversionSchema.pre('save', function(next) {
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
 uomConversionSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+uomConversionSchema.plugin(require("../../utils/auditPlugin"), { entity: "UOMConversion" });
 module.exports = mongoose.model("UOMConversion", uomConversionSchema);

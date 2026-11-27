@@ -65,4 +65,6 @@ voucherTypeSchema.index({ companyId: 1, parentKey: 1 });
 
 voucherTypeSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+voucherTypeSchema.plugin(require("../../../utils/auditPlugin"), { entity: "VoucherType" });
 module.exports = mongoose.models.VoucherType || mongoose.model("VoucherType", voucherTypeSchema);

@@ -131,6 +131,10 @@ exports.deleteUOM = async (id) => {
     throw new AppError("Cannot delete UOM as it's used in conversions", 400);
   }
 
+  const found = await UOM.findById(id).lean();
+  if (!found) throw new AppError("UOM not found", 404);
+  // a unit an item is counted in stays
+  await require("../core/inUseService").assertUnitFree(found);
   const uom = await UOM.findByIdAndDelete(id);
   if (!uom) throw new AppError("UOM not found", 404);
 };

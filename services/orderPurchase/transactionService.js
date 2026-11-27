@@ -34,6 +34,7 @@ const DocumentLinks = require("./deliveryNoteLinks");
 const ReceiptLinks = require("./receiptLinks");
 const CrmHooks = require("../crm/crmHooks");
 const ReissueLinks = require("./reissueLinks");
+const SelfBilling = require("../financial/selfBillingService");
 const JobCardLinks = require("../garage/jobCardLinks");
 const ShareService = require("../messaging/shareService");
 const ItemKindService = require("../stock/itemKindService");
@@ -288,6 +289,8 @@ class TransactionService {
       await FiscalYearService.assertPostingAllowed(date || new Date(), { session });
       if (!items?.length) throw new AppError("Items are required", 400);
       await assertCentres(data, session);
+      // a purchase invoice we raise for the supplier (and the credit note of its return): checked before a number is used
+      const selfBilled = await SelfBilling.forNew(data, { session });
 
       // The number: the one a person typed where this document's type allows that, else the next from
       // the counter. It goes through NumberSeriesService.numberFor, as every other document kind does,
@@ -350,8 +353,10 @@ class TransactionService {
       const processedItems = checked.items;
       const finalTotalAmount = built.totalAmount;
       const returnOf = checked.original
-        ? { transactionId: checked.original._id, transactionNo: checked.original.transactionNo }
+        ? { transactionId: checked.original._id, transactionNo: checked.original.transactionNo, ...(await ReturnService.snapshotOf(checked.original, { session })) }
         : undefined;
+      // a return says why the goods came back (the credit note prints it); one not given reads as what a return is
+      const returnReason = ["sales_return", "purchase_return"].includes(type) ? ReturnService.reasonOf(data.returnReason, type) : undefined;
       logger.debug(
         "Service: Final totalAmount (incoming/calculated):",
         finalTotalAmount
@@ -374,6 +379,7 @@ class TransactionService {
         // company's own state is not on file
         ...(built.gstType ? { gstType: built.gstType, placeOfSupply: built.placeOfSupply, supplierState: built.supplierState } : {}),
         returnOf,
+        ...(returnReason ? { returnReason } : {}),
         attachments: data.attachments || [],
         vendorReference,
         status: status || "DRAFT", // USE: Incoming or default
@@ -407,6 +413,7 @@ class TransactionService {
         // Set only by EInvoiceService.reissue (an invoice credited and issued again); stripped from a request body. The new invoice keeps the
         // old one's due date, which a body can never set.
         ...(data.reissue?.role ? { reissue: data.reissue } : {}),
+        ...(selfBilled ? { selfBilled: true } : {}),
         ...(data.reissue?.role === "invoice" && data.reissue.dueDate ? { dueDate: data.reissue.dueDate } : {}),
         // Set only by TradeOrderService.createInvoice (an order converted straight to its invoice); stripped
         // from a request body like jobCardRef.
@@ -474,7 +481,19 @@ class TransactionService {
       // ...and the rest of what the SERVER owns. An edit changes what the form is for (the party, dates, lines, charges, notes); it cannot
       // change what the document IS (its type, number, branch, author, opening flag, payment figures, return link or generated flags), so
       // a person who may edit a draft cannot, for example, mark it "opening" to dodge stock and VAT, or call it paid.
-      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "recurringRef", "reissue", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx"]) delete data[key];
+      for (const key of ["_id", "__v", "companyId", "branchId", "type", "transactionNo", "manualNumber", "createdBy", "createdAt", "isOpening", "dueDate", "paidAmount", "outstandingAmount", "creditedAmount", "appliedToInvoice", "grnGenerated", "invoiceGenerated", "creditNoteIssued", "returnOf", "quoteRef", "linkedRef", "jobCardRef", "tradeOrderRef", "vanTripRef", "recurringRef", "reissue", "reservedNumber", "gstType", "placeOfSupply", "supplierState", "fx", "selfBilledNo", "selfBillingRef", "selfBilledAgainst"]) delete data[key];
+      if (data.returnReason !== undefined) {
+        if (["sales_return", "purchase_return"].includes(transaction.type)) data.returnReason = ReturnService.reasonOf(data.returnReason, transaction.type);
+        else delete data.returnReason;
+      }
+      // self-billing is chosen on a purchase invoice only; a return follows its invoice
+      if (data.selfBilled !== undefined) {
+        if (transaction.type !== "purchase_order") delete data.selfBilled;
+        else {
+          data.selfBilled = data.selfBilled === true;
+          if (data.selfBilled) await SelfBilling.assertAllowed({ partyId: data.partyId || transaction.partyId, date: data.date || transaction.date, session });
+        }
+      }
       await assertCentres(data, session, transaction);
       if (data.costCentreId === null) {
         transaction.set("costCentreId", undefined);
@@ -589,10 +608,18 @@ class TransactionService {
   );
 
   // Delete Transaction
+  // deleteTransaction(id, createdBy[, { reason, byName }]): a draft (or a rejected document) is deleted - and kept whole in
+  // Deleted records (utils/auditPlugin.js); an APPROVED one is cancelled: everything it posted is reversed exactly as a delete
+  // did, and the document stays, CANCELLED, with who, when and why, and its number still used.
   static deleteTransaction = withTransactionSession(
-    async (id, createdBy, session) => {
+    async (id, createdBy, ...rest) => {
+      const session = rest[rest.length - 1];
+      const options = rest.length > 1 ? rest[0] || {} : {};
       const transaction = await Transaction.findById(id).session(session);
       if (!transaction) throw new AppError("Transaction not found", 404);
+      if (transaction.cancelled?.wasApproved) {
+        throw new AppError(`${transaction.transactionNo} is already cancelled. It stays on record as it was.`, 409, "ALREADY_CANCELLED");
+      }
 
       // What the audit log keeps of the document, read before it is gone.
       const removed = {
@@ -640,13 +667,21 @@ class TransactionService {
       }
 
       if (transaction.type === "purchase_order") {
-        await StockPurchaseLog.deleteOne(
-          { transactionNo: transaction.transactionNo },
-          { session }
-        );
+        if (wasApproved) await StockPurchaseLog.updateOne({ transactionNo: transaction.transactionNo }, { $set: { status: "CANCELLED" } }, { session });
+        else await StockPurchaseLog.deleteOne({ transactionNo: transaction.transactionNo }, { session });
       }
 
-      await Transaction.findByIdAndDelete(id).session(session);
+      if (wasApproved) {
+        // kept, cancelled: its postings are reversed above and its number stays used
+        const reason = typeof options.reason === "string" && options.reason.trim() ? options.reason.replace(/\s+/g, " ").trim().slice(0, 300) : "Cancelled";
+        transaction.status = "CANCELLED";
+        transaction.cancelled = { at: new Date(), by: createdBy ? String(createdBy) : null, byName: options.byName || null, reason, wasApproved: true };
+        await transaction.save({ session, validateModifiedOnly: true });
+        removed.cancelled = true;
+        removed.reason = reason;
+      } else {
+        await Transaction.findByIdAndDelete(id).session(session);
+      }
 
       // The number goes on record as deleted. A document the customer has already been SENT keeps its
       // number whatever its type allows: it is in somebody else's hands. There is no e-invoice test
@@ -654,13 +689,20 @@ class TransactionService {
       // by this line there is nothing lodged with the tax authority to protect. Everything else follows
       // the voucher type's own rule, which refuses re-use for sales invoices, returns and notes anyway.
       const sentToCustomer = Boolean(transaction.lastSend);
-      await NumberSeriesService.release({
-        number: transaction.transactionNo,
-        reason: sentToCustomer ? "Document deleted after it had been sent to the customer" : "Document deleted",
-        retire: sentToCustomer,
-        by: createdBy,
-        session,
-      });
+      // (a cancelled document still carries its number, so the number is not released at all)
+      if (!wasApproved) {
+        await NumberSeriesService.release({
+          number: transaction.transactionNo,
+          reason: sentToCustomer ? "Document deleted after it had been sent to the customer" : "Document deleted",
+          retire: sentToCustomer,
+          by: createdBy,
+          session,
+        });
+      }
+      // the self-billed number we issued for it stays used: a tax invoice number is never given twice
+      if (transaction.selfBilledNo && !wasApproved) {
+        await NumberSeriesService.release({ number: transaction.selfBilledNo, reason: "Self-billed document deleted", retire: true, by: createdBy, session });
+      }
 
       // Delivery notes and quotations that pointed at this order are released.
       await DocumentLinks.onSalesOrderChanged(transaction, { session, deleted: true });
@@ -724,6 +766,16 @@ class TransactionService {
         await require("../vansales/vanTripGuard").assertTripAllows(transaction, { session });
         // the new invoice of a credit and re-issue waits for its credit note
         await ReissueLinks.assertMayApprove(transaction, { session });
+        // a self-billed document is checked again on the day it counts, and takes its own statutory number
+        if (transaction.selfBilled) await SelfBilling.stamp(transaction, { session });
+        // a credit note is issued now: what it records about the invoice it corrects is read as it stands today
+        if (transaction.returnOf?.transactionId) {
+          const original = await Transaction.findById(transaction.returnOf.transactionId).select("date pricing items.taxableAmount items.vatAmount").session(session).lean();
+          if (original) {
+            const snap = await ReturnService.snapshotOf(original, { excludeId: transaction._id, session });
+            for (const [k, v] of Object.entries(snap)) transaction.set(`returnOf.${k}`, v);
+          }
+        }
         const stockUpdates = await this.processTransactionStock(id, transaction, createdBy, session);
         // Accounting entries (receivable/payable, revenue or inventory, VAT, cost of goods sold).
         // A no-op until the company has mapped its accounts and switched ledger posting on.
@@ -1067,8 +1119,8 @@ const logAmount = balanceEffect;
         // `serialNo` is here for the same reason `pricing` and `charges` are: the LISTS PRINT. Download, the
         // Send attachment and the invoice opened from a row all build the sheet from the row, so a reference
         // left out here is simply missing from the paper while the screen beside it shows it.
-        "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
-        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend lastReminder approvals jobCardRef tradeOrderRef vanTripRef recurringRef reissue vatRegistered gstType placeOfSupply supplierState fx";
+        "docno lpono serialNo discount paidAmount outstandingAmount creditedAmount returnOf returnReason items charges pricing terms notes quoteRef linkedRef creditNoteIssued " +
+        "createdBy createdAt updatedAt priority grnGenerated invoiceGenerated isOpening dueDate costCentreId closedShort lastSend lastReminder approvals jobCardRef tradeOrderRef vanTripRef recurringRef reissue vatRegistered gstType placeOfSupply supplierState fx selfBilled selfBilledNo selfBillingRef selfBilledAgainst";
       let docs;
       let total;
       if (sortKey === "party") {

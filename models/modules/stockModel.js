@@ -71,4 +71,6 @@ stockSchema.index({ barcodeQrCode: 1 });
 // Scope every query and write to the organisation in scope, and make every declared index per-organisation.
 stockSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+stockSchema.plugin(require("../../utils/auditPlugin"), { entity: "Stock", ignore: ["currentStock", "costValue", "purchasePrice"] });
 module.exports = mongoose.model("Stock", stockSchema);

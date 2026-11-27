@@ -83,4 +83,6 @@ staffSchema.index({ status: 1, name: 1 }); // the directory's own listing
 // branchScoped: an employee is a person at a branch, so a branch user sees their own.
 staffSchema.plugin(tenantPlugin, { leadIndexes: true, branchScoped: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+staffSchema.plugin(require("../../utils/auditPlugin"), { entity: "Staff" });
 module.exports = mongoose.model("Staff", staffSchema);

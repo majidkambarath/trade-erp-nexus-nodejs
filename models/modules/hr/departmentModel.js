@@ -18,4 +18,6 @@ const departmentSchema = new mongoose.Schema(
 departmentSchema.index({ name: 1 }, { unique: true });
 departmentSchema.plugin(tenantPlugin, { leadIndexes: true });
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+departmentSchema.plugin(require("../../../utils/auditPlugin"), { entity: "Department" });
 module.exports = mongoose.model("Department", departmentSchema);

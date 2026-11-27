@@ -52,9 +52,10 @@ test("the seed is lazy, idempotent, and numbers exactly as the hardcoded table d
   assert.equal(await S.Numbers.allocate("SO"), `SO-${Y}-0002`);
 
   const made = await S.Types.ensureDefaults();
-  assert.equal(made, 29);
+  const seeded = require("../../utils/voucherTypes").seedRows().length;
+  assert.equal(made, seeded);
   assert.equal(await S.Types.ensureDefaults(), 0, "a second read seeds nothing");
-  assert.equal(await S.VoucherType.countDocuments({}), 29);
+  assert.equal(await S.VoucherType.countDocuments({}), seeded);
   assert.equal(await S.Numbers.allocate("SO"), `SO-${Y}-0003`, "and the count carries on across the seeding");
 
   const rows = await S.Types.list({}, {});

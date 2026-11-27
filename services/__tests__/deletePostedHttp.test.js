@@ -150,10 +150,12 @@ test("an APPROVED trade document needs deletePosted: Delete alone is refused and
   assert.equal(await stock(), 44, "stock was not put back");
 });
 
-test("someone who holds deletePosted reverses it: the document goes and the stock comes back", { skip }, async () => {
-  const gone = await api("reverser", "DELETE", `/transactions/transactions/${S.so1}`);
-  assert.ok(gone.status === 204 || gone.status === 200, `${gone.status} ${JSON.stringify(gone.data)}`);
-  assert.equal(await orderRow(S.so1), null);
+test("someone who holds deletePosted reverses it: the document is CANCELLED and kept, and the stock comes back", { skip }, async () => {
+  const gone = await api("reverser", "DELETE", `/transactions/transactions/${S.so1}?reason=Raised%20twice`);
+  assert.equal(gone.status, 200, `${gone.status} ${JSON.stringify(gone.data)}`);
+  const kept = await orderRow(S.so1);
+  assert.equal(kept.status, "CANCELLED", "an approved document is never deleted (FTA: no hard deletes of posted entries)");
+  assert.equal(kept.cancelled.reason, "Raised twice");
   assert.equal(await stock(), 50, "the 6 are back on the shelf");
 });
 

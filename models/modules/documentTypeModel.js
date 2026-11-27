@@ -26,4 +26,6 @@ documentTypeSchema.index({ companyId: 1, code: 1 }, { unique: true });
 // Scope every query and write to the organisation in scope (utils/tenantPlugin.js).
 documentTypeSchema.plugin(tenantPlugin);
 
+// every change a person makes is logged with its old and new values, and a deleted record is kept (utils/auditPlugin.js)
+documentTypeSchema.plugin(require("../../utils/auditPlugin"), { entity: "DocumentType" });
 module.exports = mongoose.models.DocumentType || mongoose.model("DocumentType", documentTypeSchema);
