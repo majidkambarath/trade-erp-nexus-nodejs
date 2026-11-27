@@ -71,9 +71,11 @@ is working. A drill that fails means the backup cannot be trusted until it passe
 | Date | Organisation | What was checked | Ledger (debits / credits) | Result | Took |
 | --- | --- | --- | --- | --- | --- |
 | 2026-11-27 | test organisation (throwaway database) | every collection, files checked against their checksums | balanced | passed (automated test `backupDrill.test.js`) | ~1 min |
+| 2026-11-27 | brivox-production (live, shared cluster) | 729 rows, 37 files checked against their checksums | 54,799.59 / 54,799.59 | passed | 125 s |
+| 2026-11-27 | golden-arrow (live, its own cluster, via `.env.golden-arrow`) | 226 rows, 29 files checked against their checksums | 0 / 0 (no ledger entries yet) | passed | 135 s |
 
-The first drill against production is owed: it needs someone with the production `MONGO_URI` to run
-`npm run backup:drill -- --org <code>` for each client and add the line here.
+The first drill against production was run on 27 Nov 2026 for both live clients (above). Next: once a quarter.
+A client on its own cluster is drilled with that cluster's env file loaded (its `MONGO_URI` must win over `.env`).
 
 ## When something is lost
 
