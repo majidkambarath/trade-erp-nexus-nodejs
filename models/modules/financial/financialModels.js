@@ -142,6 +142,11 @@ const voucherSchema = new mongoose.Schema({
     tripId: { type: mongoose.Schema.Types.ObjectId },
     tripNo: { type: String, trim: true },
   },
+  // Which van an expense was spent on and what for (services/vansales): the van module writes it for a road expense, the office form's Van box
+  // for any other (vanExpenseTagService). A tag only: nothing is posted from it. The label is the type's name on the day.
+  vanRef: { type: new mongoose.Schema({ vanId: { type: mongoose.Schema.Types.ObjectId }, vanCode: { type: String, trim: true } }, { _id: false }), default: undefined },
+  vanExpenseKind: { type: String, trim: true },
+  vanExpenseLabel: { type: String, trim: true },
   // The recurring template that made this voucher (services/financial/recurringVoucherService.js). Written only by that service after
   // the voucher is created; absent on every other voucher and never read from a body (see vanTripRef above).
   recurringRef: {

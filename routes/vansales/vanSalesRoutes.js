@@ -21,6 +21,8 @@ router.use(authenticateToken);
 router.param("tripId", branchOfDocument(VanTrip));
 
 // Masters and the module's own narrow pick lists.
+// the vans and expense types an office expense voucher may name: whoever enters expenses reads them, with or without a van permission
+router.get("/vans/choices", requirePermission(["vansales.view", "vansales.manage", "finance.view", "finance.create"]), c.vanChoices);
 router.get("/vans", requirePermission("vansales.view"), c.listVans);
 router.get("/vans/:vanId", requirePermission("vansales.view"), c.getVan);
 router.post("/vans", requirePermission("vansales.manage"), c.createVan);

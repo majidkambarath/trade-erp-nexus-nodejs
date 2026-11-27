@@ -83,6 +83,7 @@ exports.assignees = catchAsync(async (req, res) => ok(res, await VanService.assi
 exports.paymentChoices = catchAsync(async (req, res) => ok(res, await VanService.paymentChoices(req)));
 exports.cardMachines = catchAsync(async (req, res) => ok(res, await VanService.cardMachines(req)));
 exports.customers = catchAsync(async (req, res) => ok(res, await VanService.customerChoices(req.query)));
+exports.vanChoices = catchAsync(async (req, res) => ok(res, await require("../../services/vansales/vanExpenseTagService").choices()));
 
 // ---- the organisation's rules for its vans ---------------------------------------------------------------------
 exports.getSettings = catchAsync(async (req, res) => ok(res, await VanSettingsService.settings()));

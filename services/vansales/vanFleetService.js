@@ -15,18 +15,16 @@ const { todayInOrg } = require("../../utils/documentExpiry");
 const { cleanLocation } = require("./vanVisitService");
 const { loadTrip } = require("./vanTripStock");
 const VanSettingsService = require("./vanSettingsService");
+const { EXPENSE_KIND_DEFAULTS, findExpenseKind } = require("../../utils/vanSettings");
 
 const isId = (v) => mongoose.isValidObjectId(v);
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
 const withSession = (q, session) => (session ? q.session(session) : q);
-const EXPENSE_KINDS = { fuel: "Fuel", toll: "Toll", parking: "Parking", other: "Road expense" };
 
 // Running the fleet (phase 5): where each sale and visit happened against the shop's pinned place, the odometer, the
 // money a van spends on the road from its own cash, and the supervisor's board. A location is a FLAG and never a
 // refusal: a phone's reading can be poor, and a sale at the door must never fail over it.
 class VanFleetService {
-  static EXPENSE_KINDS = EXPENSE_KINDS;
-
   /**
    * Note where the phone was when something was done for a customer. Joins the caller's session. Writes nothing, and
    * never throws, when the phone gave no usable location.
@@ -102,13 +100,14 @@ class VanFleetService {
     const opts = rest.length > 1 ? rest[0] || {} : {};
     const trip = await loadTrip(tripId, session);
     if (trip.status !== "ON_ROUTE") throw fail("Road expenses are entered while the van is out", 409, "TRIP_NOT_ON_ROUTE");
-    const kind = EXPENSE_KINDS[input.kind] ? input.kind : null;
+    // one of the organisation's own expense types, read live; each may post to its own account
+    const kind = typeof input.kind === "string" ? findExpenseKind(await VanSettingsService.forTrip(trip, { session }), input.kind) : null;
     if (!kind) throw fail("Say what the money was spent on", 400, "EXPENSE_KIND_REQUIRED");
     const amount = rules.round2(input.amount);
     if (!(amount > 0)) throw fail("Enter the amount paid", 400, "AMOUNT_REQUIRED");
-    const account = await AccountConfigService.resolveAccount("van-expenses", { session });
+    const account = kind.accountId || (await AccountConfigService.resolveAccount("van-expenses", { session }));
     const note = String(input.note || "").trim().slice(0, 200);
-    const description = `${EXPENSE_KINDS[kind]} - van ${trip.vanCode} ${trip.tripNo}${note ? ` (${note})` : ""}`;
+    const description = `${kind.label} - van ${trip.vanCode} ${trip.tripNo}${note ? ` (${note})` : ""}`;
     const voucher = await FinancialService.createVoucher(
       {
         voucherType: "expense", ledgerBased: true, expenseAccountId: account, amount, description,
@@ -118,14 +117,22 @@ class VanFleetService {
       },
       by, session, { req: opts.req }
     );
-    await Voucher.updateOne({ _id: voucher._id }, { $set: { vanTripRef: { tripId: trip._id, tripNo: trip.tripNo }, vanExpenseKind: kind } }, { session, strict: false });
+    await Voucher.updateOne(
+      { _id: voucher._id },
+      { $set: { vanTripRef: { tripId: trip._id, tripNo: trip.tripNo }, vanRef: { vanId: trip.vanId, vanCode: trip.vanCode }, vanExpenseKind: kind.key, vanExpenseLabel: kind.label } },
+      { session }
+    );
     return Voucher.findById(voucher._id).session(session);
   });
 
   /** The road expenses of a trip: [{ id, voucherNo, kind, amount, status, description }]. */
   static async expensesOf(trip, { session } = {}) {
-    const rows = await withSession(Voucher.find({ "vanTripRef.tripId": trip._id, voucherType: "expense" }).select("voucherNo status totalAmount narration description vanExpenseKind createdAt").lean({ strict: false }), session);
-    return rows.map((v) => ({ id: String(v._id), voucherNo: v.voucherNo, kind: v.vanExpenseKind || "other", amount: rules.round2(v.totalAmount), status: v.status, description: v.description || v.narration || "", at: v.createdAt }));
+    const rows = await withSession(Voucher.find({ "vanTripRef.tripId": trip._id, voucherType: "expense" }).select("voucherNo status totalAmount narration description vanExpenseKind vanExpenseLabel createdAt").lean(), session);
+    return rows.map((v) => ({
+      id: String(v._id), voucherNo: v.voucherNo, kind: v.vanExpenseKind || "other",
+      label: v.vanExpenseLabel || EXPENSE_KIND_DEFAULTS.find((k) => k.key === (v.vanExpenseKind || "other"))?.label || v.vanExpenseKind,
+      amount: rules.round2(v.totalAmount), status: v.status, description: v.description || v.narration || "", at: v.createdAt,
+    }));
   }
 
   static async tripExpenses(tripId) {

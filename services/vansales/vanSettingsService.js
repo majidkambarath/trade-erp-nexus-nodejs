@@ -1,6 +1,7 @@
 const AppError = require("../../utils/AppError");
 const CompanySettings = require("../../models/modules/financial/companySettingsModel");
 const Van = require("../../models/modules/vansales/vanModel");
+const { LedgerAccount } = require("../../models/modules/financial/financialModels");
 const rules = require("../../utils/vanSettings");
 const { getTenant } = require("../../utils/tenant");
 
@@ -21,6 +22,7 @@ class VanSettingsService {
     if (errors.length) throw fail(errors[0].message, 400, errors[0].code, { errors });
     const current = await this.settings();
     const next = rules.normaliseSettings({ ...current, ...input });
+    if (input.expenseKinds !== undefined) await this.assertExpenseAccounts(next.expenseKinds, current.expenseKinds);
     const { companyId } = getTenant();
     await CompanySettings.updateOne(
       {},
@@ -28,6 +30,21 @@ class VanSettingsService {
       { upsert: true }
     );
     return next;
+  }
+
+  /** An account newly named for a van expense must be an active expense account that takes postings (one kept as it was is left). */
+  static async assertExpenseAccounts(kinds, before = []) {
+    const had = new Map(before.map((k) => [k.key, k.accountId || ""]));
+    const named = kinds.filter((k) => k.accountId && had.get(k.key) !== k.accountId);
+    if (!named.length) return;
+    const found = await LedgerAccount.find({ _id: { $in: named.map((k) => k.accountId) } }).select("accountType isActive allowDirectPosting").lean();
+    const byId = new Map(found.map((a) => [String(a._id), a]));
+    for (const k of named) {
+      const a = byId.get(String(k.accountId));
+      if (!a || a.accountType !== "expense" || a.isActive === false || a.allowDirectPosting === false) {
+        throw fail(`${k.label}: choose an active expense account`, 400, "INVALID_EXPENSE_ACCOUNT", { field: "expenseKinds" });
+      }
+    }
   }
 
   /** The rules in force for one van (a Van document or its plain object): the organisation's with the van's own laid over them. */

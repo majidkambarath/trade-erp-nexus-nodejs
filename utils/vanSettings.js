@@ -41,6 +41,21 @@ const MAX_REASONS = 20;
 const REASON_LENGTH = 40;
 const tidyReason = (r) => (typeof r === "string" ? r.trim().replace(/\s+/g, " ") : "");
 
+// What a van spends money on: chosen by the salesman on the road and by the office on an expense voucher. A kind keeps its
+// key for ever (vouchers record it); its name may change and an expense account may be named for it (else the usual Van
+// Running Expenses account). fuel, toll, parking and other are what road expenses recorded before this list existed.
+const EXPENSE_KIND_DEFAULTS = Object.freeze([
+  Object.freeze({ key: "fuel", label: "Fuel" }),
+  Object.freeze({ key: "toll", label: "Toll" }),
+  Object.freeze({ key: "parking", label: "Parking" }),
+  Object.freeze({ key: "mechanical", label: "Mechanical / repairs" }),
+  Object.freeze({ key: "other", label: "Other road expense" }),
+]);
+const MAX_KINDS = 20;
+const KIND_LABEL = 40;
+const KIND_KEY = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const slugOf = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 36) || "expense";
+
 const DEFAULTS = Object.freeze({
   // selling
   customers: "any", // any active customer, or only the ones on the trip's route
@@ -71,6 +86,8 @@ const DEFAULTS = Object.freeze({
   // the customer's own link
   customerOrdering: true,
   maxOpenRequests: 3,
+  // road and office expenses
+  expenseKinds: EXPENSE_KIND_DEFAULTS,
 });
 
 /** The settings a van may override for itself (Van.rules). Everything else is the organisation's alone. */
@@ -128,9 +145,51 @@ function checkValue(key, raw) {
     case "slipFooter": return typeof raw === "string" && raw.length <= 120 ? { ok: true, value: raw.trim() } : { ok: false, message: "The slip footer must be text of 120 characters or fewer" };
     case "customerOrdering": return bool("Orders from the customer's link");
     case "maxOpenRequests": return range(1, 10, "The requests a customer may have waiting", true);
+    case "expenseKinds": return checkExpenseKinds(raw);
     default: return { ok: false, message: "Unknown setting" };
   }
 }
+
+/** A list of van expenses: names kept in order, each with a lasting key (made from the name when new) and an optional account. */
+function checkExpenseKinds(raw) {
+  const bad = (message) => ({ ok: false, message });
+  if (!Array.isArray(raw) || !raw.length) return bad("Keep at least one van expense");
+  if (raw.length > MAX_KINDS) return bad(`At most ${MAX_KINDS} van expenses`);
+  const rows = [];
+  const names = new Set();
+  const keys = new Set();
+  for (const k of raw) {
+    if (!isObject(k)) return bad("Each van expense needs a name");
+    const label = tidyReason(own(k, "label"));
+    if (!label || label.length > KIND_LABEL) return bad(`Each van expense is text of 1 to ${KIND_LABEL} characters`);
+    if (names.has(label.toLowerCase())) return bad(`"${label}" is in the list twice`);
+    names.add(label.toLowerCase());
+    const key = own(k, "key");
+    if (key !== undefined && key !== null && key !== "") {
+      if (typeof key !== "string" || !KIND_KEY.test(key)) return bad(`"${label}" has a bad key`);
+      if (keys.has(key)) return bad(`"${label}" repeats another expense's key`);
+      keys.add(key);
+    }
+    const accountId = own(k, "accountId");
+    if (accountId !== undefined && accountId !== null && accountId !== "" && !(typeof accountId === "string" && /^[a-f0-9]{24}$/i.test(accountId))) return bad(`"${label}": choose an expense account`);
+    rows.push({ key: key || "", label, accountId: accountId || "" });
+  }
+  // a new kind gets a key from its name that no other kind has
+  for (const r of rows) {
+    if (r.key) continue;
+    let key = slugOf(r.label);
+    for (let n = 2; keys.has(key); n += 1) key = `${slugOf(r.label)}-${n}`;
+    keys.add(key);
+    r.key = key;
+  }
+  return { ok: true, value: rows.map((r) => ({ key: r.key, label: r.label, ...(r.accountId ? { accountId: String(r.accountId) } : {}) })) };
+}
+
+/** The expense with this key in a set of rules, or null. */
+const findExpenseKind = (settings, key) => (settings?.expenseKinds || []).find((k) => k.key === key) || null;
+
+// a list is copied, and so is each entry of a list of things, so nothing that edits a result changes the defaults
+const copyOf = (v) => (Array.isArray(v) ? v.map((x) => (isObject(x) ? { ...x } : x)) : v);
 
 /** The problems with a settings request: [{ field, code, message }], empty when fine. Unknown keys are ignored. */
 function validateSettings(input) {
@@ -150,7 +209,7 @@ function normaliseSettings(stored) {
   const out = {};
   for (const key of Object.keys(DEFAULTS)) {
     const r = own(src, key) === undefined ? { ok: false } : checkValue(key, own(src, key));
-    out[key] = r.ok ? r.value : Array.isArray(DEFAULTS[key]) ? [...DEFAULTS[key]] : DEFAULTS[key];
+    out[key] = r.ok ? r.value : copyOf(DEFAULTS[key]);
   }
   return out;
 }
@@ -274,7 +333,7 @@ function matchReason(rules, raw) {
 const forPhone = (eff) => ({ ...eff });
 
 module.exports = {
-  SUPPORTED_MODES, CUSTOMER_PAY_MODES, customerPayMode, RETURN_REASONS, CUSTOMERS, CREDIT_SALES, PRICE_CHANGE, EXPIRY_CHECK, PAPER, DEFAULTS, PER_VAN_KEYS,
+  SUPPORTED_MODES, CUSTOMER_PAY_MODES, customerPayMode, EXPENSE_KIND_DEFAULTS, findExpenseKind, RETURN_REASONS, CUSTOMERS, CREDIT_SALES, PRICE_CHANGE, EXPIRY_CHECK, PAPER, DEFAULTS, PER_VAN_KEYS,
   checkValue, validateSettings, normaliseSettings, cleanVanRules, effective,
   isCashTerms, mustPayNow, checkLine, checkMode, checkPayment, checkCustomer, matchReason, forPhone,
 };
