@@ -679,6 +679,30 @@ class VanTripSales {
     await assertCustomerAllowed(trip, await VanSettingsService.forTrip(trip), customerId, { mayOverride });
   }
 
+  /**
+   * The shops a salesman picks from on this trip. With no search: the trip's own shops - the route's in its order, then
+   * the van's recent ones (all a van with no route has). With a search: every customer of the organisation that matches
+   * the name, code or phone, the van's own shops first. Each row says whether it is the van's (`mine`, with `lastAt`)
+   * and on the route (`onRoute`). The van's rule about who may be sold to is applied where the sale is made, not here.
+   */
+  static async shops(tripId, { search = "", limit } = {}) {
+    const VanService = require("./vanService");
+    const { vanCustomers, tripCustomerIds } = require("./vanCustomers");
+    const trip = await loadTrip(tripId);
+    const recent = new Map((await vanCustomers(trip.vanId)).map((r) => [r.customerId, r.lastAt]));
+    const route = trip.routeId ? await VanRoute.findById(trip.routeId).select("customers").lean() : null;
+    const onRoute = new Set((route?.customers || []).map((c) => String(c.customerId)));
+    const typed = String(search || "").trim().slice(0, 80);
+    const max = Math.min(typed ? 100 : 300, Math.max(1, Math.round(Number(limit)) || (typed ? 40 : 100)));
+    const rows = typed
+      ? await VanService.customerChoices({ search: typed, limit: max })
+      : await VanService.customersByIds(await tripCustomerIds(trip, { limit: max }));
+    const shaped = rows.map((r) => ({ ...r, mine: recent.has(r.id), lastAt: recent.get(r.id) || null, onRoute: onRoute.has(r.id) }));
+    // a search lists the van's own shops first (most recent first), then the rest by name as the server found them
+    if (typed) shaped.sort((a, b) => Number(b.mine) - Number(a.mine) || String(b.lastAt || "").localeCompare(String(a.lastAt || "")));
+    return { search: typed, shops: shaped };
+  }
+
   /** What each item on the van costs THIS customer (their price list, else the route's, else the item's own price). */
   static async prices(tripId, customerId) {
     const trip = await loadTrip(tripId);
@@ -726,7 +750,8 @@ class VanTripSales {
 
   /**
    * Everything the phone keeps for working with no signal, read in one go while it still has some: the trip and what is
-   * on the van, the customers it may sell to (the route's, plus any the salesman searched for), each one's prices for
+   * on the van, the customers it may sell to (the route's, any the salesman searched for, and the van's own recent
+   * shops - all a van with no route has), each one's prices for
    * what is on the van, and the reserved invoice numbers not used yet. Stamped with the time it was read, which the
    * screen shows: a figure from this pack is "as of" that time, never passed off as live.
    */
@@ -734,16 +759,18 @@ class VanTripSales {
     const VanTripService = require("./vanTripService");
     const trip = await loadTrip(tripId);
     const shown = await VanTripService.present(trip);
-    const route = trip.routeId ? await require("../../models/modules/vansales/vanRouteModel").findById(trip.routeId).lean() : null;
-    const ids = [...new Set([...(route?.customers || []).map((c) => String(c.customerId)), ...extraCustomerIds.map(String)])].filter(isId).slice(0, 300);
-    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status paymentTerms vanPaymentMode billingAddress city emirate").lean();
+    // the route's shops in its order, then the ones the salesman asked for by name, then the van's own recent shops (all
+    // a van with no route has): a van that works without a route still carries the shops it actually serves
+    const ids = await require("./vanCustomers").tripCustomerIds(trip, { extra: extraCustomerIds, limit: 300 });
+    const found = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status paymentTerms vanPaymentMode billingAddress city emirate location.lat").lean();
+    const order = new Map(ids.map((id, i) => [id, i]));
+    const customers = found.sort((a, b) => order.get(String(a._id)) - order.get(String(b._id)));
     const stock = await stockOf(trip);
     const items = await Stock.find({ _id: { $in: [...stock.sellable.keys()] } }).select("salesPrice category").lean();
     const prices = {};
-    for (const c of customers) {
-      const map = await PriceListService.pricesFor({ customerId: c._id, routeId: trip.routeId, items: items.map((s) => ({ stockId: s._id, qty: 1, itemPrice: Number(s.salesPrice) || 0 })) });
-      prices[String(c._id)] = Object.fromEntries([...map].map(([k, p]) => [k, p.price]));
-    }
+    // one read of the price lists for every shop in the pack, not one per shop
+    const priced = await PriceListService.pricesForCustomers({ customerIds: customers.map((c) => c._id), routeId: trip.routeId, items: items.map((s) => ({ stockId: s._id, qty: 1, itemPrice: Number(s.salesPrice) || 0 })) });
+    for (const [customerId, map] of priced) prices[customerId] = Object.fromEntries([...map].map(([k, p]) => [k, p.price]));
     // what each of the route's customers usually buys, for the Sell dialog with no signal (as of the time the pack was read)
     const held = new Map([...stock.sellable].map(([k, v]) => [String(k), Number(v) || 0]));
     const insight = {};
@@ -752,7 +779,7 @@ class VanTripSales {
     return {
       at: new Date().toISOString(),
       trip: shown,
-      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "", terms: c.paymentTerms || "", payMode: c.vanPaymentMode || "", address: addressOf(c) })),
+      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "", terms: c.paymentTerms || "", payMode: c.vanPaymentMode || "", address: addressOf(c), pinned: c.location?.lat != null })),
       prices,
       insight,
       freeNumbers: (trip.numberBlock || []).filter((n) => !used.has(n)),

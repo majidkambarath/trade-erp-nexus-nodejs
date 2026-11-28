@@ -352,6 +352,13 @@ exports.whatsappInvoice = catchAsync(async (req, res) => {
   ok(res, r);
 });
 
+// The shops a salesman picks from on his own trip: the van's own (route and recent) with no search, every customer that
+// matches with one. Names and codes only, like the module's other pick lists.
+exports.shops = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanTripSales.shops(req.params.tripId, { search: typeof req.query.search === "string" ? req.query.search : "", limit: req.query.limit }));
+});
+
 // ---- working with no signal (phase 3) -----------------------------------------------------------------------
 exports.offlinePack = catchAsync(async (req, res) => {
   await assertMayWork(req);
@@ -403,7 +410,7 @@ exports.createPreorder = catchAsync(async (req, res) => {
 });
 exports.tripPreorders = catchAsync(async (req, res) => {
   await assertOwnTripIfSeller(req);
-  ok(res, await VanPlanningService.preordersForTrip(req.params.tripId));
+  ok(res, await VanPlanningService.preordersForTrip(req.params.tripId, { customerId: req.query.customerId }));
 });
 exports.routePreorders = catchAsync(async (req, res) => {
   // a salesman sees the orders of a route he is out on, not another's

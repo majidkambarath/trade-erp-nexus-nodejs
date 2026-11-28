@@ -509,8 +509,30 @@ function boardRow({ status, stops = [], lastAt = null, departedAt = null, now = 
   return {
     done, total: stops.length, next: next ? { customerId: next.customerId, name: next.name } : null,
     lastAt: lastAt || null, quietMinutes,
-    quiet: status === "ON_ROUTE" && quietMinutes !== null && quietMinutes >= quietHours * 60 && done < stops.length,
+    // a van with no route has no stops to finish: it is quiet whenever nothing has been done for the hours set; a van
+    // with a route is done for the day once every stop is served
+    quiet: status === "ON_ROUTE" && quietMinutes !== null && quietMinutes >= quietHours * 60 && (!stops.length || done < stops.length),
   };
+}
+
+/**
+ * A van's own shops, for a van that works with no route: the customers it sold to, took money from, took goods back
+ * from or called on, the most recent first, each once. events: [{ customerId, at }] (at: a Date or text). Pure.
+ * -> [{ customerId, lastAt }] (lastAt an ISO string), at most `limit`.
+ */
+function recentCustomers(events = [], { limit = 300 } = {}) {
+  const last = new Map();
+  for (const e of events || []) {
+    const id = idOf(e?.customerId);
+    if (!id) continue;
+    const t = new Date(e?.at).getTime();
+    if (!Number.isFinite(t)) continue;
+    if (!last.has(id) || t > last.get(id)) last.set(id, t);
+  }
+  return [...last]
+    .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
+    .slice(0, Math.max(0, Number(limit) || 0))
+    .map(([customerId, t]) => ({ customerId, lastAt: new Date(t).toISOString() }));
 }
 
 /**
@@ -667,6 +689,6 @@ module.exports = {
   validateLoadLines, shortages, unloadVariance, stockMoves, cashSettlement, missingCheques, routeToday,
   canMove, validateVan, validateRoute, overCashLimit, calls,
   suggestLoad, expiringOnLoad, addDays, nextRunDay,
-  FAR_METRES, QUIET_HOURS, distanceM, farFrom, odometerOf, kmRun, boardRow, routeProfit,
+  FAR_METRES, QUIET_HOURS, distanceM, farFrom, odometerOf, kmRun, boardRow, routeProfit, recentCustomers,
   targetsOf, targetProgress, customerInsight, kpis, salesByDay,
 };
