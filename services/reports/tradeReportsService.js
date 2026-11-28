@@ -68,7 +68,15 @@ const monthsBetween = (a, b) => {
 
 class TradeReportsService {
   // ------------------------------------------------------------------ the lines of a period, one row per party x item x month x kind
-  static async grain({ direction, from, to, partyId, itemIds }) {
+  // the trips of one van (the Van box of the sales analysis), as ids to match a document's trip by; null when not chosen
+  static async vanTrips(direction, vanId) {
+    const van = objectId(vanId, "vanId");
+    if (!van || direction !== "sales") return null;
+    const VanTrip = require("../../models/modules/vansales/vanTripModel");
+    return (await VanTrip.find({ vanId: van }).select("_id").lean()).map((t) => t._id);
+  }
+
+  static async grain({ direction, from, to, partyId, itemIds, vanId }) {
     const kind = KINDS[direction];
     if (!kind) throw new AppError("direction must be sales or purchases", 400, "INVALID_DIRECTION");
     const w = span({ from, to });
@@ -77,6 +85,8 @@ class TradeReportsService {
     };
     const party = objectId(partyId, "partyId");
     if (party) match.partyId = party;
+    const trips = await this.vanTrips(direction, vanId);
+    if (trips) match["vanTripRef.tripId"] = { $in: trips };
     const tz = orgLocale.timezone();
 
     const pipeline = [{ $match: match }, { $unwind: "$items" }];
@@ -146,7 +156,7 @@ class TradeReportsService {
    * groupBy: party | item | party_item | month
    * monthly: true adds `monthly` to each row ({ "2026-09": { quantity, net } }) and a `months` list
    */
-  static async summary({ direction = "sales", from, to, groupBy = "party", partyId, itemId, categoryId, search, monthly = false } = {}) {
+  static async summary({ direction = "sales", from, to, groupBy = "party", partyId, itemId, categoryId, search, monthly = false, vanId } = {}) {
     if (!GROUPS.includes(groupBy)) throw new AppError(`groupBy must be one of ${GROUPS.join(", ")}`, 400, "INVALID_GROUP");
     const needle = String(search || "").trim();
 
@@ -156,7 +166,7 @@ class TradeReportsService {
     const only = objectId(itemId, "itemId");
     if (only) itemIds = itemIds ? itemIds.filter((i) => String(i) === String(only)) : [only];
 
-    const { window: w, kind, rows: every, returnType } = await this.grain({ direction, from, to, partyId, itemIds });
+    const { window: w, kind, rows: every, returnType } = await this.grain({ direction, from, to, partyId, itemIds, vanId });
     const partyIds = [...new Set(every.map((g) => String(g._id.party)))].map((id) => new mongoose.Types.ObjectId(id));
     const itemIdText = [...new Set(every.map((g) => String(g._id.item)))];
     const names = await this.names({ direction, partyIds, itemIdStrings: itemIdText.filter(isObjectIdText) });
@@ -271,7 +281,7 @@ class TradeReportsService {
   }
 
   // ------------------------------------------------------------------ 2. register (line by line)
-  static async register({ direction = "sales", from, to, partyId, itemId, categoryId, search, page = 1, limit = 100 } = {}) {
+  static async register({ direction = "sales", from, to, partyId, itemId, categoryId, search, page = 1, limit = 100, vanId } = {}) {
     const kind = KINDS[direction];
     if (!kind) throw new AppError("direction must be sales or purchases", 400, "INVALID_DIRECTION");
     const w = span({ from, to });
@@ -284,6 +294,8 @@ class TradeReportsService {
     const match = { type: { $in: kind.types }, status: { $in: APPROVED }, isOpening: { $ne: true }, date: { $gte: w.start, $lte: w.end } };
     const party = objectId(partyId, "partyId");
     if (party) match.partyId = party;
+    const trips = await this.vanTrips(direction, vanId);
+    if (trips) match["vanTripRef.tripId"] = { $in: trips };
     const pipeline = [{ $match: match }, { $unwind: "$items" }];
     if (itemIds) pipeline.push({ $match: { "items.itemId": { $in: itemIds } } });
     pipeline.push(

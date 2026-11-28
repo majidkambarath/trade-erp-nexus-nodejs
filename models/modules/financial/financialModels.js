@@ -142,6 +142,11 @@ const voucherSchema = new mongoose.Schema({
     tripId: { type: mongoose.Schema.Types.ObjectId },
     tripNo: { type: String, trim: true },
   },
+  // Which van an expense was spent on and what for (services/vansales): the van module writes it for a road expense, the office form's Van box
+  // for any other (vanExpenseTagService). A tag only: nothing is posted from it. The label is the type's name on the day.
+  vanRef: { type: new mongoose.Schema({ vanId: { type: mongoose.Schema.Types.ObjectId }, vanCode: { type: String, trim: true } }, { _id: false }), default: undefined },
+  vanExpenseKind: { type: String, trim: true },
+  vanExpenseLabel: { type: String, trim: true },
   // The recurring template that made this voucher (services/financial/recurringVoucherService.js). Written only by that service after
   // the voucher is created; absent on every other voucher and never read from a body (see vanTripRef above).
   recurringRef: {
@@ -313,6 +318,8 @@ voucherSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
 
 // Indexes (removed duplicate voucherNo index)
 voucherSchema.index({ voucherType: 1, date: -1 }); // For FinancialService.getAllVouchers
+voucherSchema.index({ "vanTripRef.tripId": 1 }); // a van trip's receipts and road expenses
+voucherSchema.index({ "vanRef.vanId": 1, date: 1 }); // a van's expenses over a period (van analysis)
 voucherSchema.index({ partyId: 1, partyType: 1, status: 1 }); // For FinancialService.getPartyStatement
 voucherSchema.index({ status: 1, approvalStatus: 1 }); // For FinancialService.getAllVouchers
 voucherSchema.index({ financialYear: 1, month: 1 }); // For FinancialService.getFinancialReports

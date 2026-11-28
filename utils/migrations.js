@@ -40,7 +40,33 @@ async function runMigrations() {
   if (issued) out.einvoiceIssueDatesBackfilled = issued;
   const moved = await moveReissueCreditsToRevenue();
   if (moved) out.reissueCreditsMovedToRevenue = moved;
+  const vanTagged = await stampVanOnRoadExpenses();
+  if (vanTagged) out.roadExpensesGivenTheirVan = vanTagged;
   return out;
+}
+
+// Road expenses recorded before an expense could name a van carry only their trip: copy the trip's van onto them, with the
+// expense type's name, so the van reports read every expense the same way. Idempotent: a voucher with a van is left alone.
+async function stampVanOnRoadExpenses() {
+  const { Voucher } = require("../models/modules/financial/financialModels");
+  const VanTrip = require("../models/modules/vansales/vanTripModel");
+  const { EXPENSE_KIND_DEFAULTS } = require("./vanSettings");
+  const why = "migration: road expenses gain their van, across every organisation";
+  const missing = { voucherType: "expense", "vanTripRef.tripId": { $exists: true }, vanRef: { $exists: false } };
+  const rows = await runUnscoped(why, () => Voucher.find(missing).select("companyId vanTripRef vanExpenseKind").lean());
+  if (!rows.length) return 0;
+  const trips = await runUnscoped(why, () => VanTrip.find({ _id: { $in: rows.map((r) => r.vanTripRef.tripId) } }).select("companyId vanId vanCode").lean());
+  const byId = new Map(trips.map((t) => [String(t._id), t]));
+  let done = 0;
+  for (const r of rows) {
+    const t = byId.get(String(r.vanTripRef.tripId));
+    if (!t?.vanId || t.companyId !== r.companyId) continue;
+    const kind = r.vanExpenseKind || "other";
+    const label = EXPENSE_KIND_DEFAULTS.find((k) => k.key === kind)?.label || kind;
+    const x = await runUnscoped(why, () => Voucher.updateOne({ _id: r._id, vanRef: { $exists: false } }, { $set: { vanRef: { vanId: t.vanId, vanCode: t.vanCode }, vanExpenseKind: kind, vanExpenseLabel: label } }));
+    done += x.modifiedCount || 0;
+  }
+  return done;
 }
 
 // A contact used to be a line inside the party form and nothing else. The CRM gives a person their own record
@@ -326,4 +352,5 @@ module.exports = {
   markVoucherNumbersHeld,
   backfillChequeBranches,
   backfillVehicleCustomerNames,
+  stampVanOnRoadExpenses,
 };

@@ -8,14 +8,14 @@ exports.summary = catchAsync(async (req, res) =>
   ok(res, await TradeReports.summary({
     direction: req.query.direction, from: req.query.from, to: req.query.to, groupBy: req.query.groupBy,
     partyId: req.query.partyId, itemId: req.query.itemId, categoryId: req.query.categoryId, search: req.query.search,
-    monthly: flag(req.query.monthly),
+    monthly: flag(req.query.monthly), vanId: req.query.vanId,
   })));
 
 exports.register = catchAsync(async (req, res) =>
   ok(res, await TradeReports.register({
     direction: req.query.direction, from: req.query.from, to: req.query.to,
     partyId: req.query.partyId, itemId: req.query.itemId, categoryId: req.query.categoryId, search: req.query.search,
-    page: req.query.page, limit: req.query.limit,
+    page: req.query.page, limit: req.query.limit, vanId: req.query.vanId,
   })));
 
 exports.partyMovement = catchAsync(async (req, res) =>
