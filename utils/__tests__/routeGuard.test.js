@@ -105,6 +105,15 @@ test("the routes that need no permission are few, and each says why", () => {
     "routes/core/authRoutes.js  POST /forgot-password",
     "routes/core/authRoutes.js  POST /login/2fa",
     "routes/core/authRoutes.js  POST /reset-password",
+    // A new client's onboarding form (services/platform/clientOnboardingService.js): the client has no account yet - the
+    // form is how one gets made - so the secret link is the credential. Each route reads or changes only the form that
+    // link names, the writes stop once it is sent, withdrawn, out of date or made into an organisation, a file is never
+    // read back through it, and all of it is rate-limited per address and per link.
+    "routes/core/clientOnboardingRoutes.js  DELETE /:token/files/:fileId",
+    "routes/core/clientOnboardingRoutes.js  GET /:token",
+    "routes/core/clientOnboardingRoutes.js  POST /:token/files",
+    "routes/core/clientOnboardingRoutes.js  POST /:token/submit",
+    "routes/core/clientOnboardingRoutes.js  PUT /:token",
     "routes/einvoice/einvoiceRoutes.js  POST /inbound/webhook",
     "routes/einvoice/einvoiceRoutes.js  POST /inbound/webhook/:org",
     "routes/einvoice/einvoiceRoutes.js  POST /wafeq/webhook/:mode",

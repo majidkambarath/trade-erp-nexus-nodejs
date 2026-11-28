@@ -32,6 +32,7 @@ const GLOBAL_UNIQUE = {
   PlatformUser: { email: "the developer console's own people belong to no organisation at all: their own collection, their own sign-in" },
   WafeqEvent: { eventId: "a webhook delivery id from Wafeq, which names a Wafeq taxpayer and not one of our organisations: the log is installation level" },
   ShareLink: { publicId: "the public selector of a link: the public reader finds its row by it, with no organisation known" },
+  OnboardingRequest: { publicId: "a new client's onboarding link: the organisation does not exist yet, and the public form finds its row by this selector" },
 };
 
 const tenanted = () => mongoose.modelNames().map((n) => mongoose.model(n)).filter((m) => m.schema.path("companyId"));

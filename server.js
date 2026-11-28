@@ -195,6 +195,7 @@ app.use("/api/v1/crm", require("./routes/crm/crmRoutes")); // leads, the pipelin
 app.use("/api/v1/auth", require("./routes/core/authRoutes")); // forgot / reset password, the second sign-in step, two-factor; before adminRouter, whose bare GET /:id would capture it
 app.use("/api/v1/platform", require("./routes/platform/platformRoutes")); // the developer console: its own people and its own tokens, never a customer's
 app.use("/api/v1/share", require("./routes/messaging/shareRoutes")); // PUBLIC (no login): the document link a customer opens
+app.use("/api/v1/client-onboarding", require("./routes/core/clientOnboardingRoutes")); // PUBLIC (no login): the onboarding form a new client fills in before their organisation exists
 app.use("/api/v1", adminRouter);
 app.use("/api/v1/vendors", vendorRouter);
 app.use("/api/v1/customers", customerRouter);

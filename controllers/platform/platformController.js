@@ -100,3 +100,41 @@ exports.updateSupportRequest = catchAsync(async (req, res) => {
   const data = await SupportQueueService.update(req.params.id, req.body || {}, req.platformUser?.email || "");
   res.status(200).json({ success: true, data });
 });
+
+// ---- new clients' onboarding forms (services/platform/clientOnboardingService.js) ---------------
+// A link, and the passwords of the accounts made from a form, ride only on the answer that shows them: never cached.
+const Onboarding = require("../../services/platform/clientOnboardingService");
+
+exports.onboardingList = catchAsync(async (req, res) => ok(res, await Onboarding.list({ status: req.query.status })));
+exports.onboardingCreate = catchAsync(async (req, res) => {
+  const out = await Onboarding.createInvite(req.body || {}, ctx(req), req);
+  noStore(res);
+  ok(res, out, 201);
+});
+exports.onboardingDetail = catchAsync(async (req, res) => ok(res, await Onboarding.detail(req.params.id)));
+exports.onboardingNewLink = catchAsync(async (req, res) => {
+  const out = await Onboarding.newLink(req.params.id, req.body || {}, ctx(req), req);
+  noStore(res);
+  ok(res, out);
+});
+exports.onboardingRevoke = catchAsync(async (req, res) => ok(res, await Onboarding.revoke(req.params.id, ctx(req))));
+exports.onboardingReopen = catchAsync(async (req, res) => ok(res, await Onboarding.reopen(req.params.id, ctx(req))));
+exports.onboardingExtend = catchAsync(async (req, res) => ok(res, await Onboarding.extend(req.params.id, req.body || {}, ctx(req))));
+exports.onboardingFile = catchAsync(async (req, res) => {
+  const file = await Onboarding.file(req.params.id, req.params.fileId);
+  // a download, never shown in the console's own page: the client chose these bytes
+  res.set({
+    "Content-Type": file.mimeType,
+    "Content-Length": String(file.data.length),
+    "Content-Disposition": `attachment; filename="${file.name.replace(/"/g, "")}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+  });
+  res.status(200).end(file.data);
+});
+exports.onboardingDeleteFile = catchAsync(async (req, res) => ok(res, await Onboarding.deleteFile(req.params.id, req.params.fileId, ctx(req))));
+exports.onboardingUsers = catchAsync(async (req, res) => {
+  const out = await Onboarding.createUsers(req.params.id, ctx(req));
+  noStore(res);
+  ok(res, out);
+});
