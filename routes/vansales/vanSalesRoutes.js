@@ -21,6 +21,8 @@ router.use(authenticateToken);
 router.param("tripId", branchOfDocument(VanTrip));
 
 // Masters and the module's own narrow pick lists.
+// the vans and expense types an office expense voucher may name: whoever enters expenses reads them, with or without a van permission
+router.get("/vans/choices", requirePermission(["vansales.view", "vansales.manage", "finance.view", "finance.create"]), c.vanChoices);
 router.get("/vans", requirePermission("vansales.view"), c.listVans);
 router.get("/vans/:vanId", requirePermission("vansales.view"), c.getVan);
 router.post("/vans", requirePermission("vansales.manage"), c.createVan);
@@ -51,6 +53,10 @@ router.put("/settings", requirePermission("vansales.manage"), c.saveSettings);
 // Reports: fixed paths before the :tripId ones, as every router here orders them.
 router.get("/reports/summary", requirePermission("vansales.view"), c.summary);
 router.get("/reports/route-profit", requirePermission("vansales.view"), c.routeProfit);
+router.get("/analysis/choices", requirePermission("vansales.view"), c.analysisChoices);
+for (const report of ["vans", "expenses", "returns", "trend", "items", "load", "collections", "coverage"]) {
+  router.get(`/analysis/${report}`, requirePermission("vansales.view"), c.analysis(report));
+}
 // the supervisor's live board: who may settle or manage the vans
 router.get("/board", requirePermission(["vansales.settle", "vansales.manage"]), c.board);
 
@@ -98,6 +104,11 @@ router.post("/trips/:tripId/sync", requirePermission("vansales.sell"), c.sync);
 // the trip's invoices and the slip of each, to print it again (the salesman's own trip: the controller checks)
 router.get("/trips/:tripId/invoices", requirePermission("vansales.sell"), c.tripInvoices);
 router.get("/trips/:tripId/invoices/:invoiceId/slip", requirePermission("vansales.sell"), c.invoiceSlip);
+router.get("/trips/:tripId/returns/:returnId/slip", requirePermission("vansales.sell"), c.returnSlip);
+// goods taken back item by item, the invoices found for the salesman
+router.get("/trips/:tripId/customers/:customerId/returnable-items", requirePermission("vansales.sell"), c.returnableItems);
+router.post("/trips/:tripId/return-plan", requirePermission("vansales.sell"), c.returnPlan);
+router.post("/trips/:tripId/return-items", requirePermission("vansales.sell"), c.returnItems);
 router.post("/trips/:tripId/invoices/:invoiceId/whatsapp", requirePermission("vansales.sell"), requireFeature("messaging"), sendLimit, c.whatsappInvoice);
 router.post("/trips/:tripId/collect", requirePermission("vansales.sell"), c.collect);
 router.get("/trips/:tripId/expenses", requirePermission("vansales.view"), c.tripExpenses);

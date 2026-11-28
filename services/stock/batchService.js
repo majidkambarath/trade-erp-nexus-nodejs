@@ -75,14 +75,46 @@ class BatchService {
     );
   }
 
-  // Take `qty` first-expiry-first-out. Each decrement is guarded (qtyOnHand >= take), so two
-  // concurrent sales cannot both take the same units.
-  static async allocate({ stockId, qty, orderDate, minShelfLifeDays = 0, onlyFromTransactionId }, { session } = {}) {
+  // Pure: the order a write-off takes batches in. The named ones first, each up to the quantity named (an expired batch
+  // included: it is what is being written off), then first-expiry-first-out; with `includeExpired` that second part
+  // takes the expired batches too, soonest first.
+  static preferred(batches, qty, { prefer = [], includeExpired = false, orderDate = new Date(), minShelfLifeDays = 0 } = {}) {
+    const open = batches.filter((b) => b.qtyOnHand > EPS && b.status === "active");
+    const byId = new Map(open.map((b) => [String(b._id), b]));
+    const takes = [];
+    const taken = new Map();
+    let left = qty;
+    for (const p of prefer) {
+      if (left <= EPS) break;
+      const b = byId.get(String(p.batchId));
+      if (!b) continue;
+      const take = round3(Math.min(left, b.qtyOnHand - (taken.get(String(b._id)) || 0), p.qty > 0 ? p.qty : left));
+      if (take <= EPS) continue;
+      taken.set(String(b._id), round3((taken.get(String(b._id)) || 0) + take));
+      takes.push({ batch: b, qty: take });
+      left = round3(left - take);
+    }
+    const rest = open.map((b) => ({ ...b, qtyOnHand: round3(b.qtyOnHand - (taken.get(String(b._id)) || 0)) }));
+    const ordered = this.eligibleInOrder(rest, includeExpired ? { orderDate: new Date(0) } : { orderDate, minShelfLifeDays });
+    const after = this.plan(ordered, Math.max(0, left));
+    for (const t of after.takes) {
+      const same = takes.find((x) => String(x.batch._id) === String(t.batch._id));
+      if (same) same.qty = round3(same.qty + t.qty);
+      else takes.push({ batch: byId.get(String(t.batch._id)), qty: t.qty });
+    }
+    return { takes, unallocated: after.unallocated };
+  }
+
+  // Take `qty` first-expiry-first-out (or the named batches first, see `preferred`). Each decrement is guarded
+  // (qtyOnHand >= take), so two concurrent sales cannot both take the same units.
+  static async allocate({ stockId, qty, orderDate, minShelfLifeDays = 0, onlyFromTransactionId, prefer, includeExpired }, { session } = {}) {
     const { companyId } = getTenant();
     const filter = { companyId, stockId, status: "active", qtyOnHand: { $gt: 0 } };
     if (onlyFromTransactionId) filter.sourceTransactionId = onlyFromTransactionId;
     const batches = await withSession(StockBatch.find(filter).lean(), session);
-    const { takes, unallocated } = this.plan(this.eligibleInOrder(batches, { orderDate, minShelfLifeDays }), qty);
+    const { takes, unallocated } = prefer?.length || includeExpired
+      ? this.preferred(batches, qty, { prefer, includeExpired, orderDate, minShelfLifeDays })
+      : this.plan(this.eligibleInOrder(batches, { orderDate, minShelfLifeDays }), qty);
 
     const allocations = [];
     let short = unallocated;

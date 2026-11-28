@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Transaction = require("../../models/modules/transactionModel");
 const AppError = require("../../utils/AppError");
 const { round2 } = require("../../utils/accounting");
+const orgLocale = require("../../utils/orgLocale");
 
 const DAY = 86400000;
 const BUCKETS = [
@@ -37,9 +38,13 @@ class AgeingService {
     // only today's, so for a past day it is rebuilt: the invoice's total less what vouchers (receipts, payments, notes set against
     // it) dated up to that day settled. A day that is not past keeps the stored figure, which is the same thing and cheaper.
     const past = asOfDate.getTime() < Date.now() - 60 * 1000;
+    // A document's date is a DAY in the organisation's calendar, stored at that day's UTC midnight. East of UTC that day begins
+    // before UTC's does, so "now" as an instant would leave today's invoices out for the first hours of every day (midnight to
+    // 4 am in Dubai) and money taken for them would be left on account. "As at now" therefore reaches the end of today.
+    const upTo = past ? asOfDate : new Date(Math.max(asOfDate.getTime(), Date.parse(`${orgLocale.today()}T23:59:59.999Z`)));
     const match = past
-      ? { type: docType, status: "APPROVED", date: { $lte: asOfDate } }
-      : { type: docType, status: "APPROVED", outstandingAmount: { $gt: 0.005 }, date: { $lte: asOfDate } };
+      ? { type: docType, status: "APPROVED", date: { $lte: upTo } }
+      : { type: docType, status: "APPROVED", outstandingAmount: { $gt: 0.005 }, date: { $lte: upTo } };
     if (partyId) match.partyId = new mongoose.Types.ObjectId(partyId);
 
     const q = Transaction.find(match)

@@ -15,6 +15,8 @@ const VanSettingsService = require("../../services/vansales/vanSettingsService")
 const VanSlipService = require("../../services/vansales/vanSlipService");
 const logger = require("../../utils/logger");
 const vanRules = require("../../utils/vanSales");
+const VanAnalysisService = require("../../services/vansales/vanAnalysisService");
+const { mayViewCost } = require("../../utils/costVisibility");
 
 const by = (req) => req.admin?.id || "system";
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
@@ -83,6 +85,7 @@ exports.assignees = catchAsync(async (req, res) => ok(res, await VanService.assi
 exports.paymentChoices = catchAsync(async (req, res) => ok(res, await VanService.paymentChoices(req)));
 exports.cardMachines = catchAsync(async (req, res) => ok(res, await VanService.cardMachines(req)));
 exports.customers = catchAsync(async (req, res) => ok(res, await VanService.customerChoices(req.query)));
+exports.vanChoices = catchAsync(async (req, res) => ok(res, await require("../../services/vansales/vanExpenseTagService").choices()));
 
 // ---- the organisation's rules for its vans ---------------------------------------------------------------------
 exports.getSettings = catchAsync(async (req, res) => ok(res, await VanSettingsService.settings()));
@@ -250,6 +253,26 @@ exports.returnQuote = catchAsync(async (req, res) => {
   await assertMayWork(req);
   ok(res, await VanTripSales.returnQuote(req.params.tripId, req.body || {}, { mayUnderprice: holds(req, "vansales.manage") }));
 });
+// goods taken back item by item: what they bought, what it would credit against which invoices, and doing it
+exports.returnableItems = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanTripSales.returnableItems(req.params.tripId, req.params.customerId, { mayUnderprice: holds(req, "vansales.manage") }));
+});
+exports.returnPlan = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanTripSales.returnPlan(req.params.tripId, req.body || {}, { mayUnderprice: holds(req, "vansales.manage") }));
+});
+exports.returnItems = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  const result = await VanTripSales.returnItems(req.params.tripId, req.body || {}, by(req), { req, mayUnderprice: holds(req, "vansales.manage") });
+  const said = result.creditNotes.map((n) => `${n.transactionNo}${n.against ? ` against ${n.against}` : " without an invoice"}`).join(", ");
+  await AuditService.log({ req, action: "VAN_RETURN", entity: "VanTrip", entityId: req.params.tripId, summary: `${said} taken back on the van`, after: { returns: result.creditNotes.map((n) => n.transactionNo), amount: result.total } });
+  ok(res, { ...result, trip: await VanTripService.getById(req.params.tripId) }, 201);
+});
+exports.returnSlip = catchAsync(async (req, res) => {
+  await assertMayWork(req);
+  ok(res, await VanSlipService.forReturn(req.params.tripId, req.params.returnId));
+});
 exports.customerPosition = catchAsync(async (req, res) => ok(res, await VanTripSales.customerPosition(req.params.customerId)));
 exports.returnable = catchAsync(async (req, res) => ok(res, await VanTripSales.returnable(req.params.invoiceId)));
 
@@ -267,7 +290,11 @@ exports.recount = catchAsync(async (req, res) => {
 exports.settlementPreview = catchAsync(async (req, res) => ok(res, await VanTripSettlement.preview(req.params.tripId, { ...req.query, chequesHanded: req.query.chequesHanded !== undefined ? String(req.query.chequesHanded).split(",").filter(Boolean) : undefined }, { req })));
 exports.settle = catchAsync(async (req, res) => {
   const { trip, plan } = await VanTripSettlement.settle(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req), { req });
-  await log(req, "VAN_SETTLED", trip, `Van trip ${trip.tripNo} settled: cash ${plan.cash.handed.toFixed(2)} of ${plan.cash.expected.toFixed(2)}`, { cashVariance: plan.cash.variance, stockVarianceValue: plan.stockVarianceValue });
+  const { cash } = plan;
+  const money = cash.expected < 0 && cash.handed <= 0
+    ? `${(-cash.handed).toFixed(2)} paid back to the salesman of ${(-cash.expected).toFixed(2)} spent beyond the cash taken`
+    : `cash ${cash.handed.toFixed(2)} of ${cash.expected.toFixed(2)}`;
+  await log(req, "VAN_SETTLED", trip, `Van trip ${trip.tripNo} settled: ${money}`, { cashVariance: cash.variance, stockVarianceValue: plan.stockVarianceValue });
   ok(res, { trip: await VanTripService.getById(trip._id), plan });
 });
 
@@ -414,3 +441,8 @@ exports.pinCustomer = catchAsync(async (req, res) => {
   ok(res, r);
 });
 exports.routeProfit = catchAsync(async (req, res) => ok(res, await VanSalesReportService.routeProfit({ from: req.query.from, to: req.query.to, by: req.query.by, onlySalesman: ownerFilter(req) })));
+
+// ---- the analysis reports: a salesman reads his own trips (no office bills), and costs only with inventory.viewCost ----
+const analysisViewer = (req) => ({ onlySalesman: ownerFilter(req), showCost: mayViewCost(req.admin) });
+exports.analysisChoices = catchAsync(async (req, res) => ok(res, await VanAnalysisService.choices(analysisViewer(req))));
+exports.analysis = (report) => catchAsync(async (req, res) => ok(res, await VanAnalysisService[report](req.query, analysisViewer(req))));

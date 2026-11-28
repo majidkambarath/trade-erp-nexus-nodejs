@@ -100,6 +100,22 @@ function vatStatusFrom(raw) {
   return { given: true, value: null };
 }
 
+// A "van payment" cell: how the customer usually pays the van salesman (utils/vanSettings.js), in the words a sheet uses.
+const VAN_PAY_WORDS = {
+  cash: ["cash"],
+  credit: ["credit", "pay later", "on credit", "on account", "later"],
+  cheque: ["cheque", "check", "chq"],
+  card: ["card", "credit card", "debit card"],
+  transfer: ["transfer", "bank transfer", "bank", "online", "online transfer"],
+};
+function vanPaymentFrom(raw) {
+  const t = text(raw, 40);
+  if (!t) return { given: false, value: undefined };
+  const key = R.norm(t);
+  for (const [mode, words] of Object.entries(VAN_PAY_WORDS)) if (words.some((w) => R.norm(w) === key)) return { given: true, value: mode };
+  return { given: true, value: null };
+}
+
 /**
  * A payment-terms cell, spelt the way the books spell it: "net 30", "30", "30 days" and "Net30" are "Net 30"; "cod" is "Cash on Delivery"
  * for a customer and "COD" for a vendor. Anything else is handed on as typed, so resolveTerms refuses it with the list of what is allowed.
@@ -204,6 +220,9 @@ function planPartyImport(kind, rows, { existing = {}, country = "AE" } = {}) {
       else if (limit.value > 0) fields.creditLimit = limit.value;
       const salesPerson = text(r.salesPerson, 80);
       if (salesPerson) fields.salesPerson = salesPerson;
+      const pays = vanPaymentFrom(r.vanPaymentMode);
+      if (pays.given && pays.value === null) errors.push(issue("vanPaymentMode", "INVALID_VAN_PAYMENT_MODE", `"${text(r.vanPaymentMode, 30)}" is not a way of paying: use cash, credit, cheque, card or bank transfer`));
+      else if (pays.value) fields.vanPaymentMode = pays.value;
     } else if (!address) {
       errors.push(issue("address", "ADDRESS_REQUIRED", "Enter the vendor's address"));
     } else {

@@ -12,6 +12,10 @@ test("with nothing stored every rule is what van sales did before it had setting
     suggestRuns: 4, suggestExtraPercent: 0, expiryCheck: "warn", transfersAllowed: true, loadRequests: false,
     captureLocation: true, farMetres: 300, quietHours: 2, cashTolerance: 0,
     slipPaper: "80mm", alwaysFullTaxInvoice: false, slipFooter: "Thank you", customerOrdering: true, maxOpenRequests: 3,
+    expenseKinds: [
+      { key: "fuel", label: "Fuel" }, { key: "toll", label: "Toll" }, { key: "parking", label: "Parking" },
+      { key: "mechanical", label: "Mechanical / repairs" }, { key: "other", label: "Other road expense" },
+    ],
   });
   assert.deepEqual(v.normaliseSettings(null), s);
   assert.deepEqual(v.normaliseSettings([]), s, "an array is not a settings document");
@@ -227,4 +231,30 @@ test("the limit for goods taken back without an invoice is a positive amount, an
   assert.deepEqual(v.validateSettings({ returnsWithoutInvoice: true, maxReturnWithoutInvoice: "250.50" }), []);
   assert.equal(v.normaliseSettings({ maxReturnWithoutInvoice: -5 }).maxReturnWithoutInvoice, 500);
   assert.equal(v.PER_VAN_KEYS.includes("returnsWithoutInvoice"), false, "the organisation's rule alone");
+});
+
+test("a customer's van payment mode: nothing said, cleared, a known way, or refused", () => {
+  assert.deepEqual(v.customerPayMode(undefined), { value: undefined });
+  assert.deepEqual(v.customerPayMode(null), { value: null });
+  assert.deepEqual(v.customerPayMode(""), { value: null });
+  assert.deepEqual(v.customerPayMode(" Credit "), { value: "credit" });
+  for (const mode of ["cash", "credit", "cheque", "card", "transfer"]) assert.deepEqual(v.customerPayMode(mode), { value: mode });
+  for (const bad of ["none", "bitcoin", 0, true, ["cash"], { $ne: "x" }]) assert.match(v.customerPayMode(bad).error, /payment mode/, JSON.stringify(bad));
+});
+
+test("van expense types: names in order with lasting keys, a new one keyed from its name, an account kept, and the bad ones refused", () => {
+  const ok = v.checkValue("expenseKinds", [{ key: "fuel", label: "  Diesel " }, { label: "Tyres & tubes" }, { label: "tyres tubes!" }, { label: "دبي" }, { key: "salik", label: "Salik", accountId: "a".repeat(24) }]);
+  assert.deepEqual(ok, { ok: true, value: [
+    { key: "fuel", label: "Diesel" }, { key: "tyres-tubes", label: "Tyres & tubes" }, { key: "tyres-tubes-2", label: "tyres tubes!" },
+    { key: "expense", label: "دبي" }, { key: "salik", label: "Salik", accountId: "a".repeat(24) },
+  ] });
+  for (const bad of [[], "Fuel", [{ label: "" }], [{ label: "x".repeat(41) }], [{ label: "Fuel" }, { label: "fuel" }], [{ key: "a b", label: "X" }], [{ key: "x", label: "X" }, { key: "x", label: "Y" }], [{ label: "X", accountId: "nope" }], [["Fuel"]], Array.from({ length: 21 }, (_, i) => ({ label: `K${i}` }))]) {
+    assert.equal(v.checkValue("expenseKinds", bad).ok, false, JSON.stringify(bad));
+  }
+  // a copy, never the defaults themselves
+  const s = v.normaliseSettings(undefined);
+  s.expenseKinds[0].label = "changed";
+  assert.equal(v.normaliseSettings(undefined).expenseKinds[0].label, "Fuel");
+  assert.equal(v.findExpenseKind(s, "mechanical").label, "Mechanical / repairs");
+  assert.equal(v.findExpenseKind(s, "constructor"), null);
 });

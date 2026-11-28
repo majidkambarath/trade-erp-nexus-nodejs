@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const tenantPlugin = require("../../utils/tenantPlugin");
 const { vatFields, creditFields, contactSchema, bankAccountSchema, documentSchema, jsonTransform, keepTrnInStep } = require("./partyMasterSchemas");
 const { isValidTerms } = require("../../utils/partyMaster");
+const { CUSTOMER_PAY_MODES } = require("../../utils/vanSettings");
 
 const customerSchema = new mongoose.Schema({
   companyId: { type: String, required: true }, // the organisation (utils/tenantPlugin.js)
@@ -34,6 +35,9 @@ const customerSchema = new mongoose.Schema({
   isInsurer: { type: Boolean, default: false },
   // No payment reminders to this customer (a dispute, a customer who pays through a portal). No default: absent reads as "send them".
   remindersOff: { type: Boolean },
+  // How they usually pay the van salesman (utils/vanSettings.js): pre-selects the van's sale screen, nothing more. No default: absent = no
+  // preference, and only an organisation with van sales is shown the field.
+  vanPaymentMode: { type: String, enum: CUSTOMER_PAY_MODES },
   billingAddress: { type: String, default: null, trim: true },
   // The address's country (ISO 3166 alpha-2) and, for the UAE, its emirate. Absent on a record saved before they existed, which stays valid:
   // nothing is stamped on it until somebody edits the address (utils/partyAddress.js).

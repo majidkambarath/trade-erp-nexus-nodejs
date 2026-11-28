@@ -23,12 +23,14 @@ const { withTransactionSession } = require("../../utils/withTransactionSession")
 const { todayInOrg } = require("../../utils/documentExpiry");
 const { loadTrip, stockOf } = require("./vanTripStock");
 const { addressOf } = require("../../utils/vanSlip");
+const { matchReturnLines } = require("../../utils/vanReturnMatch");
 
 const isId = (v) => mongoose.isValidObjectId(v);
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
 const round2 = rules.round2;
 const refOf = (trip) => ({ tripId: trip._id, tripNo: trip.tripNo, vanCode: trip.vanCode });
 const orgDay = (d) => String(d || todayInOrg()).slice(0, 10);
+const round3 = (n) => Math.round((Number(n) + Number.EPSILON) * 1000) / 1000;
 
 // Selling, taking money and taking goods back, all ON a trip. Each is the product's own path - the same
 // createTransaction, processTransaction, createVoucher and ReturnService every screen uses - so credit control,
@@ -194,9 +196,141 @@ async function looseLines(trip, customer, wanted, date, opts, session = null) {
     if (!(price >= 0) || !Number.isFinite(price)) throw fail(`Line ${i + 1}: enter a price of zero or more`, 400, "PRICE_INVALID");
     if (!typed && !(price > 0)) throw fail(`${s.itemName} has no price for this customer, so it cannot be credited. A supervisor can enter one.`, 400, "RETURN_NO_PRICE", { stockId: String(s._id) });
     items.push({ itemId: s._id, itemCode: s.itemId, description: s.itemName, qty, price, discountPercent: 0 });
-    record.push({ stockId: s._id, qty, condition: w.condition === "damaged" ? "damaged" : "good" });
+    record.push({ stockId: s._id, qty, condition: conditionOf(w.condition) });
   }
   return { items, record };
+}
+
+const conditionOf = (c) => (rules.RETURN_CONDITIONS.includes(c) ? c : "good");
+
+// ---- goods taken back item by item: the invoices are found for the salesman --------------------------------------
+
+/** May this trip take goods back from this customer now? -> the trip, its rules and the customer. */
+async function returnDoor(tripId, customerId, opts, session) {
+  const trip = await loadTrip(tripId, session);
+  assertSelling(trip);
+  const active = await VanSettingsService.forTrip(trip, { session });
+  if (!active.returnsAllowed) throw fail("This business does not take goods back on the van. Bring them to the depot.", 403, "VAN_RETURNS_OFF");
+  const customer = await customerOf(customerId, session);
+  await assertCustomerAllowed(trip, active, customer._id, { mayOverride: opts.mayUnderprice, session });
+  return { trip, active, customer };
+}
+
+/** The rows of an item-by-item return, one per item and condition, strictly read. */
+function requestedReturn(input) {
+  const wanted = Array.isArray(input?.lines) ? input.lines : [];
+  if (!wanted.length) throw fail("Add at least one item being returned", 400, "ITEMS_REQUIRED");
+  if (wanted.length > 100) throw fail("At most 100 lines on one return", 400, "TOO_MANY_LINES");
+  const seen = new Set();
+  return wanted.map((w, i) => {
+    if (!isId(w?.stockId)) throw fail("An item being returned is not valid", 400, "ITEM_INVALID");
+    const qty = typeof w.qty === "number" || typeof w.qty === "string" ? round3(w.qty) : NaN;
+    if (!(qty > 0)) throw fail(`Line ${i + 1}: enter a quantity above zero`, 400, "QTY_INVALID");
+    const condition = w.condition === undefined || w.condition === null || w.condition === "" ? "good" : w.condition;
+    if (!rules.RETURN_CONDITIONS.includes(condition)) throw fail(`Line ${i + 1}: say in what condition it came back`, 400, "CONDITION_INVALID");
+    const key = `${w.stockId}|${condition}`;
+    if (seen.has(key)) throw fail("Each item is listed once for each condition; add up its quantity on one line", 400, "ITEM_REPEATED");
+    seen.add(key);
+    return { stockId: String(w.stockId), qty, condition };
+  });
+}
+
+/**
+ * The customer's invoices goods can come back against, newest first, with what can still come back on each goods line:
+ * approved sales in the base currency (not opening, not an invoice replaced by a re-issue), inside the business's return
+ * window, the rest as ReturnService counts it, so nothing is offered that the return itself would refuse.
+ */
+async function boughtInvoices(customerId, { stockIds, day, session } = {}) {
+  const { returnWindowDays = 0 } = await ReturnService.settings(session);
+  const q = {
+    partyId: customerId, type: "sales_order", status: "APPROVED", isOpening: { $ne: true },
+    "fx.currency": { $exists: false }, "reissue.role": { $ne: "original" },
+    ...(stockIds ? { "items.itemId": { $in: stockIds } } : {}),
+    ...(returnWindowDays > 0 ? { date: { $gte: new Date(new Date(day).getTime() - returnWindowDays * 86400000) } } : {}),
+  };
+  const query = Transaction.find(q).sort({ date: -1, createdAt: -1, _id: -1 }).limit(200).select("transactionNo date createdAt items");
+  const docs = await (session ? query.session(session) : query).lean();
+  const returned = await ReturnService.returnedByLineOf(docs.map((d) => d._id), { session });
+  const only = stockIds ? new Set(stockIds.map(String)) : null;
+  return docs
+    .map((doc) => ({
+      id: String(doc._id), number: doc.transactionNo, date: doc.date, createdAt: doc.createdAt, doc,
+      lines: (doc.items || [])
+        .filter((l) => !kinds.isService(l) && (!only || only.has(String(l.itemId))))
+        .map((l) => ({ lineId: String(l._id), stockId: String(l.itemId), price: Number(l.price) || 0, remaining: round3((Number(l.qty) || 0) - (returned.get(`${doc._id}:${l._id}`) || 0)) })),
+    }))
+    .filter((i) => i.lines.some((l) => l.remaining > 0));
+}
+
+/** One document line per invoice line (or per item): the quantities added up, the conditions kept for the trip's record. */
+function mergeBy(entries, keyOf) {
+  const out = new Map();
+  for (const e of entries) {
+    const key = keyOf(e);
+    const row = out.get(key) || { key, qty: 0, parts: [] };
+    row.qty = round3(row.qty + e.qty);
+    row.parts.push({ stockId: e.stockId, qty: e.qty, condition: e.condition });
+    out.set(key, row);
+  }
+  return [...out.values()];
+}
+
+/**
+ * What an item-by-item return would make: a credit note against each invoice used (newest first), priced from the
+ * invoice's own line, and what no invoice covers, to be taken back without one where that is allowed.
+ */
+async function planReturn({ customer, active }, requested, opts, day, session) {
+  const invoices = await boughtInvoices(customer._id, { stockIds: [...new Set(requested.map((r) => r.stockId))], day, session });
+  const matched = matchReturnLines(requested, invoices);
+  const docs = new Map(invoices.map((i) => [i.id, i.doc]));
+  const groups = matched.groups.map((g) => {
+    const doc = docs.get(g.invoiceId);
+    const merged = mergeBy(g.lines, (l) => l.lineId);
+    const items = merged.map((m) => {
+      const line = doc.items.find((l) => String(l._id) === m.key);
+      return { ...S.toPricingInput(line, m.qty, line.qty), returnOfLineId: line._id };
+    });
+    return { invoiceId: g.invoiceId, number: g.number, date: g.date, original: doc, items, parts: merged.map((m) => m.parts) };
+  });
+  const rest = mergeBy(matched.rest, (r) => r.stockId);
+  const linkRequired = rest.length ? Boolean((await ReturnService.settings(session)).requireReturnLink) : false;
+  return { groups, rest, linkRequired, looseAllowed: !linkRequired && Boolean(active.returnsWithoutInvoice || opts.mayUnderprice) };
+}
+
+/** A priced document line's total shared over the conditions it came back in (the last takes what rounding leaves). */
+function sharesOf(processed, parts, names) {
+  return processed.flatMap((line, i) => {
+    let left = round2(line.lineTotal);
+    return parts[i].map((p, j) => {
+      const total = j === parts[i].length - 1 ? left : round2((line.lineTotal * p.qty) / line.qty);
+      left = round2(left - total);
+      return { stockId: p.stockId, name: names.get(p.stockId) || line.description || "", qty: p.qty, condition: p.condition, total };
+    });
+  });
+}
+
+/**
+ * One credit note made and approved on the trip, in the caller's transaction. Without an invoice behind it, past the
+ * organisation's limit it is a supervisor's, judged on the priced total (tax included); refusing rolls it all back.
+ */
+async function creditOnTrip(trip, customer, { items, original, day, reason, note, notes }, active, opts, by, session) {
+  const said = [reason, note].filter(Boolean).join(". ");
+  const draft = await TransactionService.createTransaction(
+    {
+      type: "sales_return", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", date: day, items,
+      ...(original ? { returnOf: { transactionId: original._id } } : {}), status: "DRAFT", vanTripRef: refOf(trip),
+      ...(said ? { returnReason: said } : {}),
+      notes: notes ? String(notes).slice(0, 500) : `Returned on van ${trip.vanCode} ${trip.tripNo}${said ? `: ${said}` : ""}`,
+    },
+    by, session
+  );
+  if (!original && !opts.mayUnderprice && round2(draft.totalAmount) > Number(active.maxReturnWithoutInvoice) + 0.005) {
+    throw fail(`This return comes to ${round2(draft.totalAmount).toFixed(2)}. Without an invoice a salesman may take back up to ${Number(active.maxReturnWithoutInvoice).toFixed(2)}; a supervisor must do this one.`, 403, "VAN_RETURN_OVER_LIMIT", { amount: round2(draft.totalAmount), limit: Number(active.maxReturnWithoutInvoice) });
+  }
+  await TransactionService.processTransaction(draft._id, "approve", by, { req: opts.req }, session);
+  const approved = await Transaction.findById(draft._id).session(session);
+  if (approved.status !== "APPROVED") throw fail("This return needs a second approval, so it cannot be taken on the van", 409, "VAN_SALE_NEEDS_APPROVAL");
+  return approved;
 }
 
 /**
@@ -379,8 +513,8 @@ class VanTripSales {
   /**
    * Take goods back from a customer. Against one of their approved invoices (the invoice's prices), or - where the
    * organisation allows it, or for a supervisor - with no invoice at all, at the customer's own list price and up to the
-   * organisation's limit. Each line says whether it came back sellable (it goes back on the van) or damaged (it does
-   * not). The return is approved at once, like a sale, and carries the reason it came back.
+   * organisation's limit. Each line says whether it came back sellable (it goes back on the van), damaged or expired
+   * (credited, never sold again). The return is approved at once, like a sale, and carries the reason it came back.
    */
   static returnGoods = withTransactionSession(async (id, input, by, ...rest) => {
     const session = rest[rest.length - 1];
@@ -414,29 +548,11 @@ class VanTripSales {
         if (!line) throw fail(`Line ${i + 1} is not on ${original.transactionNo}`, 400, "LINE_NOT_IN_ORIGINAL");
         if (kinds.isService(line)) throw fail("A service cannot be returned to a van", 400, "VAN_GOODS_ONLY");
         items.push({ ...S.toPricingInput(line, qty, line.qty), returnOfLineId: line._id });
-        record.push({ stockId: line.itemId, qty, condition: w.condition === "damaged" ? "damaged" : "good" });
+        record.push({ stockId: line.itemId, qty, condition: conditionOf(w.condition) });
       }
     }
 
-    const day = orgDay(input.date);
-    const said = [reason, note].filter(Boolean).join(". ");
-    const ret = await TransactionService.createTransaction(
-      {
-        type: "sales_return", partyId: customer._id, partyType: "Customer", partyTypeRef: "Customer", date: day, items,
-        ...(original ? { returnOf: { transactionId: original._id } } : {}), status: "DRAFT", vanTripRef: refOf(trip),
-        ...(said ? { returnReason: said } : {}),
-        notes: input.notes ? String(input.notes).slice(0, 500) : `Returned on van ${trip.vanCode} ${trip.tripNo}${said ? `: ${said}` : ""}`,
-      },
-      by, session
-    );
-    // a return with no invoice behind it is a credit nobody has checked: past the organisation's limit it is a
-    // supervisor's. Judged on the priced total (tax included); refusing here rolls the draft back with everything else.
-    if (withoutInvoice && !opts.mayUnderprice && round2(ret.totalAmount) > Number(active.maxReturnWithoutInvoice) + 0.005) {
-      throw fail(`This return comes to ${round2(ret.totalAmount).toFixed(2)}. Without an invoice a salesman may take back up to ${Number(active.maxReturnWithoutInvoice).toFixed(2)}; a supervisor must do this one.`, 403, "VAN_RETURN_OVER_LIMIT", { amount: round2(ret.totalAmount), limit: Number(active.maxReturnWithoutInvoice) });
-    }
-    await TransactionService.processTransaction(ret._id, "approve", by, { req: opts.req }, session);
-    const approved = await Transaction.findById(ret._id).session(session);
-    if (approved.status !== "APPROVED") throw fail("This return needs a second approval, so it cannot be taken on the van", 409, "VAN_SALE_NEEDS_APPROVAL");
+    const approved = await creditOnTrip(trip, customer, { items, original, day: orgDay(input.date), reason, note, notes: input.notes }, active, opts, by, session);
     trip.returns.push({
       transactionId: approved._id, no: approved.transactionNo, at: new Date(), lines: record,
       ...(reason ? { reason } : {}), ...(note ? { note } : {}), withoutInvoice, amount: round2(approved.totalAmount),
@@ -471,6 +587,92 @@ class VanTripSales {
     };
   }
 
+  /** What this customer bought that can still come back, newest first, and whether anything else may. */
+  static async returnableItems(tripId, customerId, opts = {}) {
+    const { active, customer } = await returnDoor(tripId, customerId, opts);
+    const invoices = await boughtInvoices(customer._id, { day: orgDay() });
+    const by = new Map();
+    for (const inv of invoices) {
+      for (const l of inv.lines) {
+        if (!(l.remaining > 0)) continue;
+        const row = by.get(l.stockId) || { returnable: 0, lastDate: inv.date };
+        row.returnable = round3(row.returnable + l.remaining);
+        by.set(l.stockId, row);
+      }
+    }
+    const stocks = await Stock.find({ _id: { $in: [...by.keys()] } }).select("itemId itemName sku barcodeQrCode unitOfMeasure").populate("unitOfMeasure", "shortCode unitName").lean();
+    const items = stocks
+      .map((s) => ({
+        stockId: String(s._id), name: s.itemName, code: s.itemId || "", sku: s.sku || "", barcode: s.barcodeQrCode || "",
+        unit: s.unitOfMeasure?.shortCode || s.unitOfMeasure?.unitName || "", ...by.get(String(s._id)),
+      }))
+      .sort((a, b) => new Date(b.lastDate) - new Date(a.lastDate) || a.name.localeCompare(b.name));
+    return { items, looseAllowed: Boolean(active.returnsWithoutInvoice || opts.mayUnderprice), limit: Number(active.maxReturnWithoutInvoice) };
+  }
+
+  /** An item-by-item return before anything is saved: priced by the same plan and the same pricing the return uses. */
+  static async returnPlan(tripId, input = {}, opts = {}) {
+    const door = await returnDoor(tripId, input.customerId, opts);
+    const day = orgDay(input.date);
+    const requested = requestedReturn(input);
+    const plan = await planReturn(door, requested, opts, day);
+    const names = new Map((await Stock.find({ _id: { $in: requested.map((r) => r.stockId) } }).select("itemName").lean()).map((s) => [String(s._id), s.itemName]));
+    const price = (items) => TransactionService.buildPricing({ items, date: day, side: "sales" });
+    const groups = [];
+    for (const g of plan.groups) {
+      const priced = await price(g.items);
+      groups.push({ invoiceId: g.invoiceId, number: g.number, date: g.date, total: round2(priced.totalAmount), lines: sharesOf(priced.processedItems, g.parts, names) });
+    }
+    const limit = Number(door.active.maxReturnWithoutInvoice);
+    const rest = { lines: [], total: 0, allowed: plan.looseAllowed, why: "", limit, overLimit: false };
+    if (plan.rest.length && !plan.looseAllowed) {
+      rest.lines = plan.rest.flatMap((m) => m.parts.map((p) => ({ stockId: p.stockId, name: names.get(p.stockId) || "", qty: p.qty, condition: p.condition, total: 0 })));
+      const listed = plan.rest.map((m) => `${m.qty} x ${names.get(m.key) || "an item"}`).join(", ");
+      rest.why = plan.linkRequired ? `Not on their invoices: ${listed}. This business needs an invoice for every return.` : `Not on their invoices: ${listed}. A supervisor must take these back.`;
+    } else if (plan.rest.length) {
+      const { items } = await looseLines(door.trip, door.customer, plan.rest.map((m) => ({ stockId: m.key, qty: m.qty })), day, opts);
+      const priced = await price(items);
+      Object.assign(rest, { lines: sharesOf(priced.processedItems, plan.rest.map((m) => m.parts), names), total: round2(priced.totalAmount), overLimit: !opts.mayUnderprice && priced.totalAmount > limit + 0.005 });
+    }
+    return { groups, rest, total: round2(groups.reduce((t, g) => t + g.total, 0) + rest.total) };
+  }
+
+  /**
+   * Take goods back item by item: the invoices are found again inside the transaction, a credit note is made against
+   * each (and one without an invoice for what none covers), every one approved, or nothing at all is written.
+   */
+  static returnItems = withTransactionSession(async (id, input, by, ...rest) => {
+    const session = rest[rest.length - 1];
+    const opts = rest.length > 1 ? rest[0] || {} : {};
+    const door = await returnDoor(id, input?.customerId, opts, session);
+    const { trip, active, customer } = door;
+    const { reason, note } = reasonOf(active, input, { required: true });
+    const day = orgDay(input.date);
+    const plan = await planReturn(door, requestedReturn(input), opts, day, session);
+    if (plan.rest.length && !plan.looseAllowed) {
+      if (plan.linkRequired) throw fail("This business needs an invoice for every return, and some of these are on none of theirs", 400, "RETURN_LINK_REQUIRED");
+      throw fail("Some of these are on none of their invoices. A supervisor must take them back.", 403, "VAN_RETURN_NOT_ON_INVOICE");
+    }
+    const documents = plan.groups.map((g) => ({ original: g.original, items: g.items, parts: g.parts }));
+    if (plan.rest.length) {
+      const { items } = await looseLines(trip, customer, plan.rest.map((m) => ({ stockId: m.key, qty: m.qty })), day, opts, session);
+      documents.push({ original: null, items, parts: plan.rest.map((m) => m.parts) });
+    }
+    const creditNotes = [];
+    for (const doc of documents) {
+      const approved = await creditOnTrip(trip, customer, { items: doc.items, original: doc.original, day, reason, note }, active, opts, by, session);
+      trip.returns.push({
+        transactionId: approved._id, no: approved.transactionNo, at: new Date(), matched: true,
+        lines: doc.parts.flatMap((parts, i) => parts.map((p) => ({ ...p, docLineId: approved.items[i]._id }))),
+        reason, ...(note ? { note } : {}), withoutInvoice: !doc.original, amount: round2(approved.totalAmount),
+      });
+      creditNotes.push({ _id: approved._id, transactionNo: approved.transactionNo, totalAmount: approved.totalAmount, against: doc.original?.transactionNo || "" });
+    }
+    trip.updatedBy = String(by);
+    await trip.save({ session });
+    return { creditNotes, total: round2(creditNotes.reduce((t, n) => t + n.totalAmount, 0)) };
+  });
+
   /** The route rule for a door that does not sell itself (a pre-order): refuses a customer this van may not serve. */
   static async assertCustomerAllowed(tripId, customerId, { mayOverride = false } = {}) {
     const trip = await loadTrip(tripId);
@@ -498,7 +700,8 @@ class VanTripSales {
     if (!isId(customerId)) throw fail("Choose a customer", 400, "CUSTOMER_REQUIRED");
     const stock = await stockOf(trip);
     const onVan = new Map([...stock.sellable].map(([k, v]) => [String(k), Number(v) || 0]));
-    return { ...(await this.history(customerId, onVan)), position: await this.customerPosition(customerId) };
+    const customer = await Customer.findById(customerId).select("vanPaymentMode").lean();
+    return { ...(await this.history(customerId, onVan)), position: await this.customerPosition(customerId), payMode: customer?.vanPaymentMode || "" };
   }
 
   /** The history half of the insight (no money owed): the last order, usual items and what they stopped buying, cut to `onVan` (a Map). */
@@ -533,7 +736,7 @@ class VanTripSales {
     const shown = await VanTripService.present(trip);
     const route = trip.routeId ? await require("../../models/modules/vansales/vanRouteModel").findById(trip.routeId).lean() : null;
     const ids = [...new Set([...(route?.customers || []).map((c) => String(c.customerId)), ...extraCustomerIds.map(String)])].filter(isId).slice(0, 300);
-    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status paymentTerms billingAddress city emirate").lean();
+    const customers = await Customer.find({ _id: { $in: ids } }).select("customerName customerId phone trnNumber vat.trn status paymentTerms vanPaymentMode billingAddress city emirate").lean();
     const stock = await stockOf(trip);
     const items = await Stock.find({ _id: { $in: [...stock.sellable.keys()] } }).select("salesPrice category").lean();
     const prices = {};
@@ -549,7 +752,7 @@ class VanTripSales {
     return {
       at: new Date().toISOString(),
       trip: shown,
-      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "", terms: c.paymentTerms || "", address: addressOf(c) })),
+      customers: customers.filter((c) => c.status !== "Inactive").map((c) => ({ id: String(c._id), name: c.customerName, code: c.customerId || "", phone: c.phone || "", trn: c.vat?.trn || c.trnNumber || "", terms: c.paymentTerms || "", payMode: c.vanPaymentMode || "", address: addressOf(c) })),
       prices,
       insight,
       freeNumbers: (trip.numberBlock || []).filter((n) => !used.has(n)),

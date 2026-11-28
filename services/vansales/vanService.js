@@ -180,11 +180,18 @@ class VanService {
     }
     if (String(query.status || "") !== "all") q.status = { $ne: "Inactive" };
     const limit = Math.min(500, Math.max(1, Math.round(Number(query.limit)) || 200));
-    const rows = await Customer.find(q).select("customerName customerId phone status paymentTerms trnNumber trnNO vat.trn billingAddress city emirate").sort({ customerName: 1, _id: 1 }).limit(limit).lean();
+    const FIELDS = "customerName customerId phone status paymentTerms vanPaymentMode trnNumber trnNO vat.trn billingAddress city emirate";
+    const rows = await Customer.find(q).select(FIELDS).sort({ customerName: 1, _id: 1 }).limit(limit).lean();
+    // `ids` names customers who must be in the answer whatever the page holds: the shop being sold to is past the limit
+    // in a long list, and without it the screen would not know their terms or usual way of paying
+    const wanted = String(query.ids || "").split(",").map((x) => x.trim()).filter((x) => /^[a-f0-9]{24}$/i.test(x)).slice(0, 50);
+    const missing = wanted.filter((id) => !rows.some((r) => String(r._id) === id));
+    if (missing.length) rows.push(...(await Customer.find({ _id: { $in: missing }, ...(q.status ? { status: q.status } : {}) }).select(FIELDS).lean()));
     return rows.map((r) => ({
       id: String(r._id), name: r.customerName || "", code: r.customerId || "", phone: r.phone || "",
       terms: r.paymentTerms || "", active: r.status !== "Inactive", trn: r.vat?.trn || r.trnNumber || r.trnNO || "",
       address: addressOf(r), // printed on the slip: the street and the place, nothing else of the record
+      payMode: r.vanPaymentMode || "", // how they usually pay: only pre-selects the van's sale screen
     }));
   }
 

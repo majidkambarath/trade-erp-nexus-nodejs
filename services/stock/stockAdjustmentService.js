@@ -17,10 +17,11 @@ const { getTenant } = require("../../utils/tenant");
 //   - the cost pool (Stock.currentStock / costValue / purchasePrice) and the movement carry the
 //     before / after rate, so the stock ledger can be audited without replaying anything;
 //   - when ledger posting is on: gain = Dr Inventory / Cr Stock adjustment, loss = the reverse.
-// Runs inside the caller's session.
+// A caller writing goods off (the van's damaged and expired returns) names the loss account, the voucher type and
+// series, and the batches to take first. Runs inside the caller's session.
 class StockAdjustmentService {
   static async apply(
-    { stock, newQuantity, unitCost, eventType = "STOCK_ADJUSTMENT", referenceNumber, notes, batchNumber, expiryDate, location, createdBy, date = new Date() },
+    { stock, newQuantity, unitCost, eventType = "STOCK_ADJUSTMENT", referenceNumber, notes, batchNumber, expiryDate, location, createdBy, date = new Date(), lossKey = "stock-adjustment", voucherType = "stock_adjustment", series = "SA", prefer, includeExpired },
     { session }
   ) {
     // a service has no quantity: refuse before the "no change" shortcut, so nothing slips through as a no-op
@@ -42,7 +43,7 @@ class StockAdjustmentService {
       result = costing.applyMovement(pool, "purchase", { qty, cost: qty * rate }); // in at the cost given
     }
 
-    const number = await NumberSeriesService.allocate("SA", date, { session });
+    const number = await NumberSeriesService.allocate(series, date, { session });
     await Stock.updateOne(
       { _id: stock._id },
       { currentStock: result.pool.quantity, costValue: result.pool.costValue, purchasePrice: result.pool.avgRate },
@@ -51,7 +52,7 @@ class StockAdjustmentService {
 
     const decrease = Number(newQuantity) < Number(stock.currentStock);
     if (decrease) {
-      await BatchService.allocate({ stockId: stock._id, qty, orderDate: date }, { session }); // a shortfall is tolerated: older stock may carry no batch
+      await BatchService.allocate({ stockId: stock._id, qty, orderDate: date, prefer, includeExpired }, { session }); // a shortfall is tolerated: older stock may carry no batch
     } else if (batchNumber) {
       const { companyId } = getTenant();
       await StockBatch.create(
@@ -81,9 +82,9 @@ class StockAdjustmentService {
     if (result.cost > 0 && (await AccountConfigService.isPostingEnabled({ session }))) {
       await PostingService.postSimple(
         {
-          debitKey: decrease ? "stock-adjustment" : "inventory-asset",
-          creditKey: decrease ? "inventory-asset" : "stock-adjustment",
-          amount: result.cost, date, voucherId: movement._id, voucherNo: number, voucherType: "stock_adjustment",
+          debitKey: decrease ? lossKey : "inventory-asset",
+          creditKey: decrease ? "inventory-asset" : lossKey,
+          amount: result.cost, date, voucherId: movement._id, voucherNo: number, voucherType,
           narration: `Stock ${decrease ? "loss" : "gain"}: ${stock.itemName} (${decrease ? "-" : "+"}${qty})${referenceNumber ? ` ref ${referenceNumber}` : ""}`,
           adminId: createdBy,
         },

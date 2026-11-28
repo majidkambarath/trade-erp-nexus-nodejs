@@ -12,15 +12,18 @@ function vanStockTable(trip) {
   if (!trip) return { reply: "No van trip is open for you today.", table: null };
   const rows = (trip.sellable || []).slice().sort((a, b) => b.qty - a.qty);
   const damaged = trip.damaged || [];
-  if (!rows.length && !damaged.length) return { reply: `Nothing is left on ${trip.vanCode} (${trip.tripNo}).`, table: null };
+  const expired = trip.expired || [];
+  if (!rows.length && !damaged.length && !expired.length) return { reply: `Nothing is left on ${trip.vanCode} (${trip.tripNo}).`, table: null };
   const shown = rows.slice(0, MAX_ROWS);
+  const back = [damaged.length ? plural(damaged.length, "damaged item") : "", expired.length ? plural(expired.length, "expired item") : ""].filter(Boolean).join(" and ");
   return {
-    reply: `${trip.vanCode} has ${plural(rows.length, "item")} to sell${damaged.length ? ` and ${plural(damaged.length, "damaged item")} brought back` : ""}.`,
+    reply: `${trip.vanCode} has ${plural(rows.length, "item")} to sell${back ? ` and ${back} brought back` : ""}.`,
     table: {
       title: `On ${trip.vanCode}`,
       rows: [
         ...shown.map((l) => ({ label: l.itemName, sub: "", value: String(l.qty), tone: "" })),
         ...damaged.slice(0, 5).map((l) => ({ label: l.itemName, sub: "Damaged", value: String(l.qty), tone: "danger" })),
+        ...expired.slice(0, 5).map((l) => ({ label: l.itemName, sub: "Expired", value: String(l.qty), tone: "danger" })),
       ],
       total: null,
       more: rows.length - shown.length,

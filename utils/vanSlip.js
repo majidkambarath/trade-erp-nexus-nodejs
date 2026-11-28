@@ -45,7 +45,8 @@ function paymentOf(receipts, invoiceId) {
     if (!mine.length) continue;
     // a receipt for this invoice alone counts whole (what it took beyond the invoice - a container deposit - was paid with
     // it); one that settled several invoices counts only what it set against this one
-    const amount = links.length === mine.length ? num(r.totalAmount) : mine.reduce((t, l) => t + num(l.amount), 0);
+    // a stored receipt keeps what it set against an invoice as allocatedAmount
+    const amount = links.length === mine.length ? num(r.totalAmount) : mine.reduce((t, l) => t + num(l.allocatedAmount ?? l.amount), 0);
     const mode = MODES.includes(str(r.paymentMode)) ? str(r.paymentMode) : str(r.paymentMode) === "online" ? "transfer" : "cash";
     rows.push({ number: str(r.voucherNo), mode, amount: round2(amount), waiting: status !== "approved" });
   }

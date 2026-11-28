@@ -55,7 +55,8 @@ test("payment: nothing taken is a credit sale; an approved receipt is money; a t
 });
 
 test("a receipt for several invoices counts only what it set against this one; cancelled and rejected count nothing", () => {
-  const many = { voucherNo: "RV-3", status: "approved", paymentMode: "cheque", totalAmount: 2000, linkedInvoices: [{ invoiceId: INV, amount: 300 }, { invoiceId: "other", amount: 1700 }] };
+  // as a stored voucher reads: what went against each invoice is allocatedAmount
+  const many = { voucherNo: "RV-3", status: "approved", paymentMode: "cheque", totalAmount: 2000, linkedInvoices: [{ invoiceId: INV, allocatedAmount: 300 }, { invoiceId: "other", allocatedAmount: 1700 }] };
   const gone = { voucherNo: "RV-4", status: "cancelled", paymentMode: "cash", totalAmount: 100, linkedInvoices: [{ invoiceId: INV, amount: 100 }] };
   const refused = { voucherNo: "RV-5", status: "rejected", paymentMode: "cash", totalAmount: 100, linkedInvoices: [{ invoiceId: INV, amount: 100 }] };
   const elsewhere = { voucherNo: "RV-6", status: "approved", paymentMode: "cash", totalAmount: 50, linkedInvoices: [{ invoiceId: "other", amount: 50 }] };

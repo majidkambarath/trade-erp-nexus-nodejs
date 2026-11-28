@@ -115,7 +115,7 @@ test("the owner's figures tie to the invoices: drop size before VAT, sold lines 
   await svc.Promos.create({ name: "Free rice with 5", kind: "bxgy", stockIds: [String(rice._id)], buyQty: 5, freeQty: 1 }, "tester");
   await svc.Sales.sell(trip._id, { customerId: B._id, items: [{ itemId: rice._id, qty: 5, vatPercent: 5 }] }, by());
   await svc.Settle.unload(trip._id, { lines: [{ stockId: String(rice._id), countedGood: 19, countedDamaged: 0 }, { stockId: String(sugar._id), countedGood: 8, countedDamaged: 0 }] }, "tester");
-  const day = new Date().toISOString().slice(0, 10);
+  const day = require("../../utils/documentExpiry").todayInOrg(); // the trip's day is the organisation's, not UTC's
   const r = await svc.Report.summary({ from: day, to: day });
   assert.deepEqual([r.total.invoices, r.total.lines, r.total.sales, r.total.netSales], [4, 5, 525, 520], "the free line is not counted, and 105 less its 5 VAT is 100");
   assert.equal(r.total.dropSize, 130, "520 before VAT over 4 invoices, not 525");

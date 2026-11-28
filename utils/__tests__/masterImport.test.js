@@ -311,3 +311,13 @@ test("items: a barcode is kept for goods, refused when repeated or already an it
   assert.equal(by[6].fields.barcodeQrCode, "6291000000050", "a number from a spreadsheet keeps its digits");
   assert.deepEqual(by[7].errors.map((e) => e.code), ["INVALID_BARCODE"]);
 });
+
+test("customers: the van payment column is read in a sheet's own words, and a word it does not know is refused", () => {
+  const p = m.planCustomerImport(
+    [{ line: 2, name: "A", vanPaymentMode: "Pay Later" }, { line: 3, name: "B", vanPaymentMode: "Bank Transfer" }, { line: 4, name: "C", vanPaymentMode: "bitcoin" }, { line: 5, name: "D" }],
+    {}
+  );
+  assert.deepEqual(p.rows.map((r) => [r.status, r.fields.vanPaymentMode]), [["create", "credit"], ["create", "transfer"], ["invalid", undefined], ["create", undefined]]);
+  assert.equal(p.rows[2].errors[0].code, "INVALID_VAN_PAYMENT_MODE");
+  assert.equal(m.planVendorImport([{ line: 2, name: "V", address: "x", vanPaymentMode: "cash" }], {}).rows[0].fields.vanPaymentMode, undefined, "a vendor has no van payment");
+});
