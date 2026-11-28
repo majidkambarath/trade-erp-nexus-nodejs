@@ -9,7 +9,6 @@ const { Voucher } = require("../../models/modules/financial/financialModels");
 const rules = require("../../utils/vanSales");
 const kinds = require("../../utils/itemKinds");
 const NumberSeriesService = require("../core/numberSeriesService");
-const JobWorkService = require("../stock/jobWorkService");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { getTenant } = require("../../utils/tenant");
 const { allBranches, runInBranchOf } = require("../../utils/tenantContext");
@@ -53,6 +52,20 @@ class VanTripService {
       const per = [];
       for (const t of trips) per.push(await stockOf(t, { session }));
       return rules.onVansAll(per);
+    });
+  }
+
+  /**
+   * What vans counted back in but not yet settled still keep off the depot's shelf (their damaged, expired and missing
+   * units: utils/vanSales.js countedInReserve), in every branch. Map(stockId -> qty).
+   */
+  static async countedIn({ session } = {}) {
+    return allBranches(async () => {
+      const q = VanTrip.find({ status: "UNLOADED" }).select("status unload.lines").lean();
+      const trips = await (session ? q.session(session) : q);
+      const out = new Map();
+      for (const t of trips) for (const [id, qty] of rules.countedInReserve(t)) out.set(id, rules.round3((out.get(id) || 0) + qty));
+      return out;
     });
   }
 
@@ -239,28 +252,23 @@ class VanTripService {
   static async assertDepotCanSpare(lines, { session } = {}) {
     if (lines.some((l) => !isId(l.stockId))) throw fail("An item on the load is not valid", 400, "ITEM_INVALID");
     const ids = lines.map((l) => String(l.stockId));
-    const stocks = await Stock.find({ _id: { $in: ids } }).select("itemName itemType currentStock").session(session).lean();
-    const byId = new Map(stocks.map((x) => [String(x._id), x]));
+    // Two people loading the same item at once must not both pass the free-stock check below: touching the item
+    // makes the second transaction conflict, retry on a fresh read, and see what the first one took.
+    const free = await require("../stock/reservationService").free(ids, { session, touch: true });
     for (const l of lines) {
-      const st = byId.get(String(l.stockId));
+      const st = free.get(String(l.stockId));
       if (!st) throw fail("An item on the load does not exist", 404, "ITEM_NOT_FOUND");
       if (kinds.isService(st)) throw fail(`${st.itemName} is a service and cannot be loaded on a van`, 400, "VAN_ITEM_NOT_STOCKED");
       l.itemName = st.itemName;
     }
-    // Two people loading the same item at once must not both pass the free-stock check below: touching the item
-    // makes the second transaction conflict, retry on a fresh read, and see what the first one took.
-    await Stock.updateMany({ _id: { $in: ids } }, { $currentDate: { updatedAt: true } }, { session });
-    const away = await JobWorkService.withJobWorker({ session });
-    const onVans = await this.withOnVans({ session });
     for (const l of lines) {
       if (!(l.qty > 0)) continue;
       const id = String(l.stockId);
-      const st = byId.get(id);
-      const free = rules.freeDepot({ currentStock: st.currentStock, withJobWorker: away.get(id) || 0, onVans: onVans.get(id) || 0 });
-      if (l.qty > free + 1e-9) {
+      const st = free.get(id);
+      if (l.qty > st.free + 1e-9) {
         throw fail(
-          `Only ${free} of ${st.itemName} is free to load (${st.currentStock} on hand, ${away.get(id) || 0} with job workers, ${onVans.get(id) || 0} already on vans); this load takes ${l.qty}`,
-          409, "INSUFFICIENT_STOCK", { stockId: id, free, needed: l.qty }
+          `Only ${st.free} of ${st.itemName} is free to load (${require("../stock/reservationService").why(st)}); this load takes ${l.qty}`,
+          409, "INSUFFICIENT_STOCK", { stockId: id, free: st.free, needed: l.qty }
         );
       }
     }

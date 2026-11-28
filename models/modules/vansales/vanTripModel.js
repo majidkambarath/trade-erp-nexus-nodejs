@@ -150,8 +150,12 @@ const settlementSchema = new mongoose.Schema(
     // containers missing from the van at count-in, and the deposit they were worth (charged to the salesman's shortage)
     containersMissing: Number,
     containersMissingValue: Number,
+    // goods missing at the count charged to the salesman (at cost) where the organisation chose so (absent otherwise)
+    missingCharged: Number,
     acknowledged: [String],
     voucherIds: [{ type: mongoose.Schema.Types.ObjectId }],
+    // the stock documents settling wrote: each write-off and count difference, by number (absent on earlier trips)
+    stockDocs: [{ number: String, kind: { type: String, enum: ["expired", "damaged", "difference"] }, stockId: mongoose.Schema.Types.ObjectId, itemName: String, qty: Number, value: Number, _id: false }],
     notes: { type: String, trim: true, maxlength: 500 },
   },
   { _id: false }

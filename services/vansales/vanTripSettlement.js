@@ -59,19 +59,28 @@ function countedContainers(raw) {
 
 /** What was found on the van, as the trip keeps it: each item against what should be there, and the containers. */
 async function countRecord(trip, stock, input, by, session) {
+  const counts = Array.isArray(input?.counts) ? input.counts : [];
   let rows;
   try {
-    rows = rules.unloadVariance(stock, Array.isArray(input?.counts) ? input.counts : []);
+    rows = rules.unloadVariance(stock, counts);
   } catch (err) {
     if (err instanceof rules.VanError) throw fail(err.message, 400, err.code, err.details);
     throw err;
   }
   const names = new Map();
   for (const load of trip.loads) for (const l of load.lines) names.set(String(l.stockId), l.itemName);
+  require("./vanFleetService").applyOdometer(trip, "in", input?.odometer);
+  // every item the van should hold is counted, even when the answer is none: an item left out is not a count of nothing
+  const missing = rules.uncounted(stock, counts);
+  if (missing.length) {
+    const unnamedMissing = missing.filter((id) => !names.get(id) && isId(id));
+    if (unnamedMissing.length) for (const s of await Stock.find({ _id: { $in: unnamedMissing } }).select("itemName").session(session).lean()) names.set(String(s._id), s.itemName);
+    const said = missing.slice(0, 5).map((id) => names.get(id) || "an item").join(", ");
+    throw fail(`Count every item on the van, even when none is left: ${said}${missing.length > 5 ? ` and ${missing.length - 5} more` : ""} not counted`, 400, "COUNT_INCOMPLETE", { stockIds: missing });
+  }
   // goods taken back that this van never carried are named from the item master
   const unnamed = rows.map((r) => r.stockId).filter((id) => !names.get(id) && isId(id));
   if (unnamed.length) for (const s of await Stock.find({ _id: { $in: unnamed } }).select("itemName").session(session).lean()) names.set(String(s._id), s.itemName);
-  require("./vanFleetService").applyOdometer(trip, "in", input?.odometer);
   const containers = await containerRows(trip, stock, countedContainers(input?.containers), { session });
   return {
     at: new Date(), by: String(by), byName: input?.byName || "",
@@ -124,15 +133,46 @@ async function returnedBatches(trip, { session }) {
     for (const line of record.lines) {
       if (line.condition !== "damaged" && line.condition !== "expired") continue;
       const mine = (doc.items || []).filter((l) => (line.docLineId ? String(l._id) === String(line.docLineId) : String(l.itemId) === String(line.stockId)));
-      const prefer = [
-        ...mine.flatMap((l) => (l.allocations || []).map((a) => ({ batchId: String(a.batchId), qty: Math.min(Number(a.qty) || 0, line.qty) }))),
+      const named = [
+        ...mine.flatMap((l) => (l.allocations || []).map((a) => ({ batchId: String(a.batchId), qty: Number(a.qty) || 0 }))),
         ...own.filter((b) => String(b.sourceTransactionId) === String(doc._id) && String(b.stockId) === String(line.stockId))
-          .map((b) => ({ batchId: String(b._id), qty: Math.min(Number(b.receivedQty) || 0, line.qty) })),
-      ].filter((p) => p.qty > 0);
+          .map((b) => ({ batchId: String(b._id), qty: Number(b.receivedQty) || 0 })),
+      ];
+      // a returned line names at most its own quantity of batches, in the order they were taken
+      const prefer = [];
+      let left = Number(line.qty) || 0;
+      for (const p of named) {
+        if (left <= 0) break;
+        const take = rules.round3(Math.min(p.qty, left));
+        if (take > 0) prefer.push({ batchId: p.batchId, qty: take });
+        left = rules.round3(left - take);
+      }
       const entry = out.get(String(line.stockId)) || { damaged: [], expired: [] };
       entry[line.condition].push(...prefer);
       out.set(String(line.stockId), entry);
     }
+  }
+  return out;
+}
+
+/**
+ * The batches every van not yet settled holds its damaged and expired returns in, for one item: Map(batchId -> qty).
+ * Those units are in the books until the van is settled and written off from these very batches, so no other sale may
+ * be handed them in the meantime (BatchService.allocate takes them out of what it plans with). Read in every branch.
+ */
+async function heldReturnBatches(stockId, { session } = {}) {
+  const VanTrip = require("../../models/modules/vansales/vanTripModel");
+  const { allBranches } = require("../../utils/tenantContext");
+  const out = new Map();
+  if (!isId(stockId)) return out;
+  const q = VanTrip.find({
+    status: { $in: ["LOADING", "ON_ROUTE", "UNLOADED"] },
+    returns: { $elemMatch: { lines: { $elemMatch: { stockId, condition: { $in: ["damaged", "expired"] } } } } },
+  }).select("returns");
+  const trips = await allBranches(() => (session ? q.session(session) : q));
+  for (const trip of trips) {
+    const per = (await allBranches(() => returnedBatches(trip, { session }))).get(String(stockId));
+    for (const p of [...(per?.damaged || []), ...(per?.expired || [])]) out.set(p.batchId, rules.round3((out.get(p.batchId) || 0) + p.qty));
   }
   return out;
 }
@@ -308,7 +348,10 @@ class VanTripSettlement {
       ? `${cash.over.toFixed(2)} less is paid to the salesman than is owed. It is booked to cash over and short, so nothing is owed afterwards.`
       : `${cash.over.toFixed(2)} more cash was handed in than the van took. It is booked to cash over and short.` });
     const off = rows.filter((r) => Math.abs(r.difference) > 0.0005);
-    if (off.length) warnings.push({ code: "STOCK_DIFFERENCE", message: `${off.length} item${off.length === 1 ? "" : "s"} counted differently from what the van should hold (${round2(varianceValue).toFixed(2)} at cost). It is booked as a stock adjustment.` });
+    // goods missing at the count: a stock loss, or - the organisation's choice - the salesman's to make good, at cost
+    const active = await VanSettingsService.forTrip(trip, { session });
+    const missingCharged = active.chargeMissingStock ? round2(rows.filter((r) => r.difference < 0).reduce((t, r) => t - r.varianceValue, 0)) : 0;
+    if (off.length) warnings.push({ code: "STOCK_DIFFERENCE", message: `${off.length} item${off.length === 1 ? "" : "s"} counted differently from what the van should hold (${round2(varianceValue).toFixed(2)} at cost). ${missingCharged > 0 ? `The missing goods, ${missingCharged.toFixed(2)} at cost, are charged to the salesman's shortage account; anything over is booked as a stock adjustment.` : "It is booked as a stock adjustment."}` });
     const containersOff = containers.filter((c) => c.difference !== 0);
     if (containersOff.length) {
       const said = containersOff.map((c) => (c.difference < 0 ? `${-c.difference} ${c.name} missing` : `${c.difference} ${c.name} more`)).join(", ");
@@ -319,7 +362,7 @@ class VanTripSettlement {
     return {
       trip: { id: String(trip._id), tripNo: trip.tripNo, vanCode: trip.vanCode },
       cash, expenses, cheques, missingCheques: missing, cards, transfers, cardTotal, transferTotal, transfersWaiting, rows,
-      stockVarianceValue: round2(varianceValue), damagedValue: round2(damagedValue), expiredValue: round2(expiredValue),
+      stockVarianceValue: round2(varianceValue), damagedValue: round2(damagedValue), expiredValue: round2(expiredValue), missingCharged,
       containers, containersMissing, containersMissingValue,
       blockers, warnings,
     };
@@ -382,19 +425,23 @@ class VanTripSettlement {
     // ---- stock: the expired and damaged goods are written off, then the units short or over are put right --------
     const back = await returnedBatches(trip, { session });
     const writeOff = (lossKey, prefer, includeExpired) => ({ lossKey, voucherType: "stock_writeoff", series: "WO", prefer, includeExpired });
+    // goods short at the count go to the salesman's shortage account where the organisation chose so (never goods over)
+    const charge = plan.missingCharged > 0;
+    const stockDocs = [];
     for (const row of plan.rows) {
       const m = rules.stockMoves(row);
       const from = back.get(row.stockId) || {};
-      for (const [qty, eventType, notes, how] of [
-        [m.expiry, "DAMAGED_STOCK", `Expired goods brought back on van trip ${trip.tripNo}`, writeOff("write-off-expiry", from.expired, true)],
-        [m.damage, "DAMAGED_STOCK", `Damaged goods brought back on van trip ${trip.tripNo}`, writeOff("damage-loss", from.damaged, false)],
-        [m.variance, "STOCK_ADJUSTMENT", `Count difference on van trip ${trip.tripNo} (${trip.salesmanName})`, {}],
+      for (const [qty, eventType, notes, how, kind] of [
+        [m.expiry, "DAMAGED_STOCK", `Expired goods brought back on van trip ${trip.tripNo}`, writeOff("write-off-expiry", from.expired, true), "expired"],
+        [m.damage, "DAMAGED_STOCK", `Damaged goods brought back on van trip ${trip.tripNo}`, writeOff("damage-loss", from.damaged, false), "damaged"],
+        [m.variance, "STOCK_ADJUSTMENT", `Count difference on van trip ${trip.tripNo} (${trip.salesmanName})`, charge && m.variance < 0 ? { lossKey: "salesman-shortages" } : {}, "difference"],
       ]) {
         if (!qty) continue;
         const stock = await Stock.findById(row.stockId).session(session); // re-read: the move before changed it
         const target = rules.round3(Number(stock.currentStock) + qty);
         if (target < -1e-9) throw fail(`${stock.itemName} would go below zero; check the count`, 409, "STOCK_WOULD_GO_NEGATIVE", { stockId: row.stockId });
-        await StockAdjustmentService.apply({ stock, newQuantity: target, eventType, referenceNumber: trip.tripNo, notes, createdBy: by, date: countDate, ...how }, { session });
+        const done = await StockAdjustmentService.apply({ stock, newQuantity: target, eventType, referenceNumber: trip.tripNo, notes, createdBy: by, date: countDate, ...how }, { session });
+        if (done) stockDocs.push({ number: done.number, kind, stockId: row.stockId, itemName: row.itemName, qty, value: round2(qty < 0 ? -done.cost : done.cost) });
       }
     }
     // each counted line keeps what a unit cost on the day, for the loss reports
@@ -408,7 +455,8 @@ class VanTripSettlement {
       cardTotal: plan.cardTotal, transferTotal: plan.transferTotal, transfersWaiting: plan.transfersWaiting,
       stockVarianceValue: plan.stockVarianceValue, damagedValue: plan.damagedValue, expiredValue: plan.expiredValue,
       ...(plan.containers.length ? { containersMissing: plan.containersMissing, containersMissingValue: plan.containersMissingValue } : {}),
-      acknowledged: [...given].filter((c) => WARNING_CODES.includes(c)), voucherIds,
+      ...(plan.missingCharged > 0 ? { missingCharged: plan.missingCharged } : {}),
+      acknowledged: [...given].filter((c) => WARNING_CODES.includes(c)), voucherIds, stockDocs,
       notes: String(input.notes || "").slice(0, 500),
     };
     trip.status = "SETTLED";
@@ -419,3 +467,4 @@ class VanTripSettlement {
 }
 
 module.exports = VanTripSettlement;
+module.exports.heldReturnBatches = heldReturnBatches;

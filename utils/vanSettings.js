@@ -33,6 +33,9 @@ const CREDIT_SALES = ["allowed", "cashTerms", "never"];
 const PRICE_CHANGE = ["up_only", "locked", "free"];
 const EXPIRY_CHECK = ["warn", "off", "block"];
 const PAPER = ["80mm", "58mm"];
+// who counts a van back in at the warehouse: the salesman himself (as before), or the storekeeper (a sell-only salesman
+// is then refused, and the storekeeper counts without seeing what the van should hold until the count is saved)
+const COUNT_IN = ["salesman", "storekeeper"];
 
 // Why goods come back. An organisation edits the list; a return stores the reason in the list's own wording at the time,
 // so renaming one later never rewrites what was recorded.
@@ -77,7 +80,9 @@ const DEFAULTS = Object.freeze({
   captureLocation: true,
   farMetres: 300,
   quietHours: 2,
-  // settlement
+  // counting in and settlement
+  countIn: "salesman",
+  chargeMissingStock: false, // on: goods short at the count are the salesman's to make good (at cost), not a stock loss
   cashTolerance: 0,
   // the printed slip
   slipPaper: "80mm",
@@ -139,6 +144,8 @@ function checkValue(key, raw) {
     case "captureLocation": return bool("Reading the phone's location");
     case "farMetres": return range(50, 5000, "The 'far from the shop' distance", true);
     case "quietHours": return range(1, 12, "The 'quiet' time", true);
+    case "countIn": return oneOf(COUNT_IN, "Who counts the van back in");
+    case "chargeMissingStock": return bool("Charging missing goods to the salesman");
     case "cashTolerance": return range(0, 1000000, "The cash difference that needs no tick");
     case "slipPaper": return oneOf(PAPER, "The slip paper");
     case "alwaysFullTaxInvoice": return bool("Always printing the full tax invoice");
@@ -333,7 +340,7 @@ function matchReason(rules, raw) {
 const forPhone = (eff) => ({ ...eff });
 
 module.exports = {
-  SUPPORTED_MODES, CUSTOMER_PAY_MODES, customerPayMode, EXPENSE_KIND_DEFAULTS, findExpenseKind, RETURN_REASONS, CUSTOMERS, CREDIT_SALES, PRICE_CHANGE, EXPIRY_CHECK, PAPER, DEFAULTS, PER_VAN_KEYS,
+  SUPPORTED_MODES, CUSTOMER_PAY_MODES, customerPayMode, EXPENSE_KIND_DEFAULTS, findExpenseKind, RETURN_REASONS, CUSTOMERS, CREDIT_SALES, PRICE_CHANGE, EXPIRY_CHECK, PAPER, COUNT_IN, DEFAULTS, PER_VAN_KEYS,
   checkValue, validateSettings, normaliseSettings, cleanVanRules, effective,
   isCashTerms, mustPayNow, checkLine, checkMode, checkPayment, checkCustomer, matchReason, forPhone,
 };

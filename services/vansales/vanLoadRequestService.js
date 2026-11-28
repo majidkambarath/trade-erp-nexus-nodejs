@@ -6,7 +6,6 @@ const kinds = require("../../utils/itemKinds");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { loadTrip } = require("./vanTripStock");
 const VanSettingsService = require("./vanSettingsService");
-const JobWorkService = require("../stock/jobWorkService");
 
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
 const round3 = rules.round3;
@@ -174,14 +173,8 @@ class VanLoadRequestService {
     rows.sort((a, b) => new Date(a.requestedAt) - new Date(b.requestedAt));
     const ids = [...new Set(rows.flatMap((r) => r.lines.map((l) => l.stockId)))];
     if (ids.length) {
-      const VanTripService = require("./vanTripService");
-      const [stocks, away, onVans] = await Promise.all([
-        Stock.find({ _id: { $in: ids } }).select("currentStock").lean(),
-        JobWorkService.withJobWorker(),
-        VanTripService.withOnVans(),
-      ]);
-      const onHand = new Map(stocks.map((s) => [String(s._id), Number(s.currentStock) || 0]));
-      for (const r of rows) for (const l of r.lines) l.free = rules.freeDepot({ currentStock: onHand.get(l.stockId) || 0, withJobWorker: away.get(l.stockId) || 0, onVans: onVans.get(l.stockId) || 0 });
+      const free = await require("../stock/reservationService").free(ids);
+      for (const r of rows) for (const l of r.lines) l.free = free.get(l.stockId)?.free ?? 0;
     }
     return rows;
   }
