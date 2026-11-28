@@ -290,7 +290,11 @@ exports.recount = catchAsync(async (req, res) => {
 exports.settlementPreview = catchAsync(async (req, res) => ok(res, await VanTripSettlement.preview(req.params.tripId, { ...req.query, chequesHanded: req.query.chequesHanded !== undefined ? String(req.query.chequesHanded).split(",").filter(Boolean) : undefined }, { req })));
 exports.settle = catchAsync(async (req, res) => {
   const { trip, plan } = await VanTripSettlement.settle(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req), { req });
-  await log(req, "VAN_SETTLED", trip, `Van trip ${trip.tripNo} settled: cash ${plan.cash.handed.toFixed(2)} of ${plan.cash.expected.toFixed(2)}`, { cashVariance: plan.cash.variance, stockVarianceValue: plan.stockVarianceValue });
+  const { cash } = plan;
+  const money = cash.expected < 0 && cash.handed <= 0
+    ? `${(-cash.handed).toFixed(2)} paid back to the salesman of ${(-cash.expected).toFixed(2)} spent beyond the cash taken`
+    : `cash ${cash.handed.toFixed(2)} of ${cash.expected.toFixed(2)}`;
+  await log(req, "VAN_SETTLED", trip, `Van trip ${trip.tripNo} settled: ${money}`, { cashVariance: cash.variance, stockVarianceValue: plan.stockVarianceValue });
   ok(res, { trip: await VanTripService.getById(trip._id), plan });
 });
 

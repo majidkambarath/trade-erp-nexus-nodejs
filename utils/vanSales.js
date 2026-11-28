@@ -256,14 +256,16 @@ function stockMoves(row) {
 }
 
 /**
- * The cash side of a settlement. The van's cash account holds what the salesman took; they hand some amount over.
- * ONE journal carries it, and it always balances:
- *   Dr main cash (handed) + Dr salesman shortages (short)  =  Cr van cash (expected) + Cr cash over/short (over)
+ * The cash side of a settlement. The van's cash account holds what the salesman took, less what was spent on the road;
+ * they hand some amount over. Where more was spent than taken (expected below zero) the office pays the salesman back,
+ * and `handed` is then negative: money paid to them. ONE journal carries it, and it always balances:
+ *   Dr main cash (handed; Cr when paid to them) + Dr salesman shortages (short)
+ *     = Cr van cash (expected; Dr when below zero) + Cr cash over/short (over)
  */
 function cashSettlement({ expected, handed }) {
   const e = round2(expected);
   const h = round2(handed);
-  if (h < 0) throw new VanError("The cash handed in cannot be negative", "CASH_NEGATIVE");
+  if (h < 0 && !(e < 0)) throw new VanError("The cash handed in cannot be negative", "CASH_NEGATIVE");
   const short = h < e ? round2(e - h) : 0;
   const over = h > e ? round2(h - e) : 0;
   return { expected: e, handed: h, short, over, variance: round2(h - e), balanced: short === 0 && over === 0 };

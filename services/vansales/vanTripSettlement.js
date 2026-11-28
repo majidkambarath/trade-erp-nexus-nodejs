@@ -23,7 +23,8 @@ const round2 = rules.round2;
 // Counting the van back in and settling the day. UNLOADED records what was found in the van; SETTLED is the one act
 // that touches the books:
 //   - cash: ONE journal. Dr main cash (what was handed in) + Dr Salesman Shortages (what was not) =
-//           Cr the van's cash account (what it took) + Cr Cash over and short (what came in extra);
+//           Cr the van's cash account (what it took) + Cr Cash over and short (what came in extra). Where more was spent
+//           on the road than taken, the salesman is paid back from the main cash, on the same journal;
 //   - stock: the expired and damaged goods are written off to their own loss accounts, and the units found against the
 //            units that should be there put right, each at average cost (movement, ledger entry, period lock and all).
 // Cheques are not moved: they sit in Cheques in Hand until deposited; settlement only checks they were handed over.
@@ -247,7 +248,8 @@ class VanTripSettlement {
     const transferTotal = sumOf(live.filter((v) => v.paymentMode === "transfer"));
     const transfersWaiting = sumOf(waitingTransfers);
 
-    // only the preview may leave the cash out: it then shows the day as it looks if all of it is handed in
+    // only the preview may leave the cash out: it then shows the day as it looks if all of it is handed in (or, where
+    // more was spent than taken, if all of it is paid back)
     const handed = input.cashHanded === undefined || input.cashHanded === "" ? expected : isTyped(input.cashHanded) ? Number(input.cashHanded) : NaN;
     if (!Number.isFinite(handed)) throw fail("Enter the cash handed in", 400, "CASH_REQUIRED");
     let cash;
@@ -297,8 +299,14 @@ class VanTripSettlement {
     const warnings = [];
     // a difference at or below the organisation's tolerance still posts to the shortage / over account; it just needs no tick
     const tolerance = (await VanSettingsService.forTrip(trip, { session })).cashTolerance;
-    if (cash.short > tolerance + 1e-9) warnings.push({ code: "CASH_SHORT", message: `${cash.short.toFixed(2)} less cash was handed in than the van took. It is charged to the salesman's shortage account.` });
-    if (cash.over > tolerance + 1e-9) warnings.push({ code: "CASH_OVER", message: `${cash.over.toFixed(2)} more cash was handed in than the van took. It is booked to cash over and short.` });
+    // more spent than taken: the figures are about what is paid back to the salesman, and say so
+    const payingBack = cash.expected < 0 && cash.handed <= 0;
+    if (cash.short > tolerance + 1e-9) warnings.push({ code: "CASH_SHORT", message: payingBack
+      ? `${cash.short.toFixed(2)} more is paid to the salesman than is owed. It is charged to the salesman's shortage account.`
+      : `${cash.short.toFixed(2)} less cash was handed in than the van took. It is charged to the salesman's shortage account.` });
+    if (cash.over > tolerance + 1e-9) warnings.push({ code: "CASH_OVER", message: payingBack
+      ? `${cash.over.toFixed(2)} less is paid to the salesman than is owed. It is booked to cash over and short, so nothing is owed afterwards.`
+      : `${cash.over.toFixed(2)} more cash was handed in than the van took. It is booked to cash over and short.` });
     const off = rows.filter((r) => Math.abs(r.difference) > 0.0005);
     if (off.length) warnings.push({ code: "STOCK_DIFFERENCE", message: `${off.length} item${off.length === 1 ? "" : "s"} counted differently from what the van should hold (${round2(varianceValue).toFixed(2)} at cost). It is booked as a stock adjustment.` });
     const containersOff = containers.filter((c) => c.difference !== 0);
@@ -349,15 +357,17 @@ class VanTripSettlement {
     // ---- cash: one journal -----------------------------------------------------------------------------------
     const { cash } = plan;
     const lostValue = plan.containersMissingValue || 0;
-    if (cash.expected > 0 || cash.handed > 0 || lostValue > 0) {
+    if (cash.expected !== 0 || cash.handed !== 0 || lostValue > 0) {
       const main = await mainCash(opts.req, input.toAccountId, session);
       const shortAccount = await AccountConfigService.resolveAccount("salesman-shortages", { session });
       const overAccount = await AccountConfigService.resolveAccount("cash-over-short", { session });
       const note = `Van ${trip.vanCode} ${trip.tripNo} settlement`;
       const lines = [];
       if (cash.handed > 0) lines.push({ accountId: main._id, debit: cash.handed, narration: `${note}: cash handed in` });
+      if (cash.handed < 0) lines.push({ accountId: main._id, credit: -cash.handed, narration: `${note}: paid back to ${trip.salesmanName}` });
       if (cash.short > 0) lines.push({ accountId: shortAccount, debit: cash.short, narration: `${note}: cash short, owed by ${trip.salesmanName}` });
       if (cash.expected > 0) lines.push({ accountId: trip.cashAccountId, credit: cash.expected, narration: `${note}: cash taken on the road` });
+      if (cash.expected < 0) lines.push({ accountId: trip.cashAccountId, debit: -cash.expected, narration: `${note}: road spending beyond the cash taken` });
       if (cash.over > 0) lines.push({ accountId: overAccount, credit: cash.over, narration: `${note}: cash over` });
       // containers that did not come back: their deposit is the salesman's to make good (they have no book value of their own)
       if (lostValue > 0) {

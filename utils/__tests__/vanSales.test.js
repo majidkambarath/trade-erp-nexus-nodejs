@@ -118,7 +118,7 @@ test("settling moves the books by exactly counted good - expected good - expecte
 });
 
 test("cash settlement always balances: handed + short = expected + over", () => {
-  for (const [expected, handed] of [[1000, 1000], [1000, 900.5], [1000, 1010], [0, 0], [250.25, 0], [0, 40]]) {
+  for (const [expected, handed] of [[1000, 1000], [1000, 900.5], [1000, 1010], [0, 0], [250.25, 0], [0, 40], [-25, -25], [-25, -30], [-25, 0]]) {
     const c = v.cashSettlement({ expected, handed });
     assert.equal(Math.round((c.handed + c.short) * 100), Math.round((c.expected + c.over) * 100), `${expected}/${handed}`);
     assert.ok(c.short === 0 || c.over === 0, "never both");
@@ -127,6 +127,11 @@ test("cash settlement always balances: handed + short = expected + over", () => 
   assert.equal(v.cashSettlement({ expected: 100, handed: 90 }).variance, -10);
   assert.equal(v.cashSettlement({ expected: 100, handed: 130 }).over, 30);
   assert.throws(() => v.cashSettlement({ expected: 1, handed: -1 }), (e) => e.code === "CASH_NEGATIVE");
+  assert.throws(() => v.cashSettlement({ expected: 0, handed: -1 }), (e) => e.code === "CASH_NEGATIVE");
+  // more spent than taken: paid back in full it balances; paid too much is a shortage, too little goes over
+  assert.deepEqual(v.cashSettlement({ expected: -25, handed: -25 }), { expected: -25, handed: -25, short: 0, over: 0, variance: 0, balanced: true });
+  assert.equal(v.cashSettlement({ expected: -25, handed: -30 }).short, 5);
+  assert.equal(v.cashSettlement({ expected: -25, handed: 0 }).over, 25);
 });
 
 test("cheques taken but not handed in are named, whatever the case of the number", () => {
