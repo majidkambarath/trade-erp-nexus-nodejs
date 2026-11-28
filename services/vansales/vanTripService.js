@@ -21,6 +21,8 @@ const isId = (v) => mongoose.isValidObjectId(v);
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
 const asDay = (day) => new Date(`${String(day).slice(0, 10)}T00:00:00.000Z`);
 const named = (map, names) => [...map].map(([stockId, qty]) => ({ stockId, itemName: names.get(stockId) || "", qty }));
+// the unit cost a settled count keeps is for the loss reports, not for the van screens
+const countWithoutCost = (unload) => (unload ? { ...unload, lines: (unload.lines || []).map(({ unitCost: _cost, ...line }) => line) } : unload);
 
 /** A request still waiting for the storekeeper or the salesman stops the van going out or being counted back in. */
 function assertNoOpenRequest(trip, act) {
@@ -56,16 +58,19 @@ class VanTripService {
 
   // ---- reading ----------------------------------------------------------------------------------------------
 
-  static async #names(trip) {
+  // names from the loads, and from the item master for goods taken back that the van never carried
+  static async #names(trip, ids = []) {
     const names = new Map();
     for (const load of trip.loads || []) for (const l of load.lines || []) if (l.itemName) names.set(String(l.stockId), l.itemName);
+    const missing = [...new Set(ids)].filter((id) => !names.has(id) && isId(id));
+    if (missing.length) for (const s of await Stock.find({ _id: { $in: missing } }).select("itemName").lean()) names.set(String(s._id), s.itemName);
     return names;
   }
 
   /** The trip with its figures: what was loaded, sold and returned, and what is on the van. */
   static async present(trip, { stock } = {}) {
     const s = stock || (await stockOf(trip));
-    const names = await this.#names(trip);
+    const names = await this.#names(trip, [...s.sellable.keys(), ...s.damaged.keys(), ...s.expired.keys()]);
     // the price, and the codes a scanner reads (barcode, else the SKU), so the phone finds an item by scanning it, signal or not
     const masters = await Stock.find({ _id: { $in: [...s.sellable.keys()] } }).select("salesPrice sku barcodeQrCode").lean();
     const prices = new Map(masters.map((x) => [String(x._id), Number(x.salesPrice) || 0]));
@@ -116,6 +121,8 @@ class VanTripService {
       sold: named(s.sold, names),
       sellable: named(s.sellable, names).map((l) => ({ ...l, salesPrice: prices.get(l.stockId) || 0, ...(codes.get(l.stockId) || { sku: "", barcode: "" }) })),
       damaged: named(s.damaged, names),
+      expired: named(s.expired, names),
+      ...(plain.unload ? { unload: countWithoutCost(plain.unload) } : {}),
       route,
       totals: {
         invoices: s.invoices.length,
@@ -163,6 +170,7 @@ class VanTripService {
     const rows = await VanTrip.find(q).sort({ date: -1, createdAt: -1, _id: -1 }).limit(limit).lean();
     return rows.map((t) => ({
       ...t,
+      ...(t.unload ? { unload: countWithoutCost(t.unload) } : {}),
       id: String(t._id),
       loadedUnits: rules.round3((t.loads || []).reduce((n, l) => n + (l.lines || []).reduce((m, x) => m + (Number(x.qty) || 0), 0), 0)),
     }));

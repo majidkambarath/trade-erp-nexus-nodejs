@@ -1,6 +1,8 @@
 const mongoose = require("mongoose");
 const AppError = require("../../utils/AppError");
 const Stock = require("../../models/modules/stockModel");
+const StockBatch = require("../../models/modules/stockBatchModel");
+const Transaction = require("../../models/modules/transactionModel");
 const Van = require("../../models/modules/vansales/vanModel");
 const { Voucher, LedgerAccount } = require("../../models/modules/financial/financialModels");
 const rules = require("../../utils/vanSales");
@@ -22,8 +24,8 @@ const round2 = rules.round2;
 // that touches the books:
 //   - cash: ONE journal. Dr main cash (what was handed in) + Dr Salesman Shortages (what was not) =
 //           Cr the van's cash account (what it took) + Cr Cash over and short (what came in extra);
-//   - stock: the units found against the units that should be there, and the damaged goods, each as a normal stock
-//            adjustment at average cost (movement, ledger entry, period lock and all).
+//   - stock: the expired and damaged goods are written off to their own loss accounts, and the units found against the
+//            units that should be there put right, each at average cost (movement, ledger entry, period lock and all).
 // Cheques are not moved: they sit in Cheques in Hand until deposited; settlement only checks they were handed over.
 
 const WARNING_CODES = ["CASH_SHORT", "CASH_OVER", "STOCK_DIFFERENCE", "CHEQUES_MISSING", "CONTAINER_DIFFERENCE"];
@@ -65,6 +67,9 @@ async function countRecord(trip, stock, input, by, session) {
   }
   const names = new Map();
   for (const load of trip.loads) for (const l of load.lines) names.set(String(l.stockId), l.itemName);
+  // goods taken back that this van never carried are named from the item master
+  const unnamed = rows.map((r) => r.stockId).filter((id) => !names.get(id) && isId(id));
+  if (unnamed.length) for (const s of await Stock.find({ _id: { $in: unnamed } }).select("itemName").session(session).lean()) names.set(String(s._id), s.itemName);
   require("./vanFleetService").applyOdometer(trip, "in", input?.odometer);
   const containers = await containerRows(trip, stock, countedContainers(input?.containers), { session });
   return {
@@ -82,9 +87,11 @@ function countChanges(before, after) {
     const old = was.get(String(l.stockId));
     const good = Number(old?.countedGood || 0);
     const damaged = Number(old?.countedDamaged || 0);
+    const expired = Number(old?.countedExpired || 0);
     const parts = [];
     if (good !== l.countedGood) parts.push(`sellable ${good} to ${l.countedGood}`);
     if (damaged !== l.countedDamaged) parts.push(`damaged ${damaged} to ${l.countedDamaged}`);
+    if (expired !== Number(l.countedExpired || 0)) parts.push(`expired ${expired} to ${l.countedExpired || 0}`);
     if (parts.length) changed.push(`${l.itemName || old?.itemName || "item"}: ${parts.join(", ")}`);
   }
   const crates = new Map((before.containers || []).map((c) => [String(c.typeId), c.counted]));
@@ -98,9 +105,40 @@ function countChanges(before, after) {
 /** A cash figure somebody typed: a number, or text with something in it. Number(null) and Number([]) are 0, not an answer. */
 const isTyped = (v) => typeof v === "number" || (typeof v === "string" && v.trim() !== "");
 
-/** The two posting keys settlement uses, topped up for a company whose map predates them. Outside the transaction: the top-up commits on its own. */
+/**
+ * The batches this trip's returns put goods into, by item and by the condition they came back in: a return against an
+ * invoice went back into the batches that invoice took, anything else into a batch of the credit note's own. A write-off
+ * takes these first, so an expired batch is the one that leaves the books. Map(stockId -> { damaged: [], expired: [] }).
+ */
+async function returnedBatches(trip, { session }) {
+  const out = new Map();
+  const records = (trip.returns || []).filter((r) => (r.lines || []).some((l) => l.condition === "damaged" || l.condition === "expired"));
+  if (!records.length) return out;
+  const docs = new Map((await Transaction.find({ _id: { $in: records.map((r) => r.transactionId) }, status: "APPROVED" })
+    .select("items._id items.itemId items.allocations").session(session).lean()).map((d) => [String(d._id), d]));
+  const own = await StockBatch.find({ sourceTransactionId: { $in: [...docs.keys()] } }).select("stockId sourceTransactionId receivedQty").session(session).lean();
+  for (const record of records) {
+    const doc = docs.get(String(record.transactionId));
+    if (!doc) continue;
+    for (const line of record.lines) {
+      if (line.condition !== "damaged" && line.condition !== "expired") continue;
+      const mine = (doc.items || []).filter((l) => (line.docLineId ? String(l._id) === String(line.docLineId) : String(l.itemId) === String(line.stockId)));
+      const prefer = [
+        ...mine.flatMap((l) => (l.allocations || []).map((a) => ({ batchId: String(a.batchId), qty: Math.min(Number(a.qty) || 0, line.qty) }))),
+        ...own.filter((b) => String(b.sourceTransactionId) === String(doc._id) && String(b.stockId) === String(line.stockId))
+          .map((b) => ({ batchId: String(b._id), qty: Math.min(Number(b.receivedQty) || 0, line.qty) })),
+      ].filter((p) => p.qty > 0);
+      const entry = out.get(String(line.stockId)) || { damaged: [], expired: [] };
+      entry[line.condition].push(...prefer);
+      out.set(String(line.stockId), entry);
+    }
+  }
+  return out;
+}
+
+/** The posting keys settlement uses, topped up for a company whose map predates them. Outside the transaction: the top-up commits on its own. */
 async function ensureKeys(req) {
-  for (const key of ["salesman-shortages", "cash-over-short"]) {
+  for (const key of ["salesman-shortages", "cash-over-short", "damage-loss", "write-off-expiry"]) {
     try {
       await AccountConfigService.resolveAccount(key);
     } catch (err) {
@@ -129,8 +167,8 @@ async function mainCash(req, chosenId, session) {
 
 class VanTripSettlement {
   /**
-   * Count the van back in. `counts` is what was found, per item: [{ stockId, good, damaged }]; an item not listed was
-   * found nowhere. Moves nothing in the books: the shortage or surplus is written when the trip is settled.
+   * Count the van back in. `counts` is what was found, per item: [{ stockId, good, damaged, expired }]; an item not
+   * listed was found nowhere. Moves nothing in the books: losses and differences are written when the trip is settled.
    */
   static unload = withTransactionSession(async (id, input, by, ...rest) => {
     const session = rest[rest.length - 1];
@@ -227,16 +265,19 @@ class VanTripSettlement {
     const byId = new Map(stocks.map((s) => [String(s._id), s]));
     let varianceValue = 0;
     let damagedValue = 0;
+    let expiredValue = 0;
     const rows = trip.unload.lines.map((l) => {
       const cost = Number(byId.get(String(l.stockId))?.purchasePrice) || 0;
       const row = {
         stockId: String(l.stockId), itemName: l.itemName || byId.get(String(l.stockId))?.itemName || "",
         expectedGood: l.expectedGood, countedGood: l.countedGood, expectedDamaged: l.expectedDamaged, countedDamaged: l.countedDamaged,
+        ...(l.expectedExpired || l.countedExpired ? { expectedExpired: l.expectedExpired || 0, countedExpired: l.countedExpired || 0 } : {}),
         difference: l.difference, unitCost: cost,
-        varianceValue: round2(l.difference * cost), damagedValue: round2(l.countedDamaged * cost),
+        varianceValue: round2(l.difference * cost), damagedValue: round2(l.countedDamaged * cost), expiredValue: round2((l.countedExpired || 0) * cost),
       };
       varianceValue += row.varianceValue;
       damagedValue += row.damagedValue;
+      expiredValue += row.expiredValue;
       return row;
     });
 
@@ -270,7 +311,7 @@ class VanTripSettlement {
     return {
       trip: { id: String(trip._id), tripNo: trip.tripNo, vanCode: trip.vanCode },
       cash, expenses, cheques, missingCheques: missing, cards, transfers, cardTotal, transferTotal, transfersWaiting, rows,
-      stockVarianceValue: round2(varianceValue), damagedValue: round2(damagedValue),
+      stockVarianceValue: round2(varianceValue), damagedValue: round2(damagedValue), expiredValue: round2(expiredValue),
       containers, containersMissing, containersMissingValue,
       blockers, warnings,
     };
@@ -280,7 +321,7 @@ class VanTripSettlement {
     return this.plan(await loadTrip(id), input, { req });
   }
 
-  /** Settle the trip: the cash journal, the stock adjustments, the trip closed. Needs every warning acknowledged by code. */
+  /** Settle the trip: the cash journal, the write-offs and stock differences, the trip closed. Needs every warning acknowledged by code. */
   static async settle(id, input = {}, by, { req } = {}) {
     await ensureKeys(req); // before the transaction: the top-up commits on its own
     return this.#settleIn(id, input, by, { req });
@@ -328,27 +369,34 @@ class VanTripSettlement {
       voucherIds.push(voucher._id);
     }
 
-    // ---- stock: the damaged goods leave, then the units short or over are put right ------------------------------
+    // ---- stock: the expired and damaged goods are written off, then the units short or over are put right --------
+    const back = await returnedBatches(trip, { session });
+    const writeOff = (lossKey, prefer, includeExpired) => ({ lossKey, voucherType: "stock_writeoff", series: "WO", prefer, includeExpired });
     for (const row of plan.rows) {
       const m = rules.stockMoves(row);
-      for (const [qty, eventType, notes] of [
-        [m.damage, "DAMAGED_STOCK", `Damaged goods brought back on van trip ${trip.tripNo}`],
-        [m.variance, "STOCK_ADJUSTMENT", `Count difference on van trip ${trip.tripNo} (${trip.salesmanName})`],
+      const from = back.get(row.stockId) || {};
+      for (const [qty, eventType, notes, how] of [
+        [m.expiry, "DAMAGED_STOCK", `Expired goods brought back on van trip ${trip.tripNo}`, writeOff("write-off-expiry", from.expired, true)],
+        [m.damage, "DAMAGED_STOCK", `Damaged goods brought back on van trip ${trip.tripNo}`, writeOff("damage-loss", from.damaged, false)],
+        [m.variance, "STOCK_ADJUSTMENT", `Count difference on van trip ${trip.tripNo} (${trip.salesmanName})`, {}],
       ]) {
         if (!qty) continue;
-        const stock = await Stock.findById(row.stockId).session(session); // re-read: the first move changed it
+        const stock = await Stock.findById(row.stockId).session(session); // re-read: the move before changed it
         const target = rules.round3(Number(stock.currentStock) + qty);
         if (target < -1e-9) throw fail(`${stock.itemName} would go below zero; check the count`, 409, "STOCK_WOULD_GO_NEGATIVE", { stockId: row.stockId });
-        await StockAdjustmentService.apply({ stock, newQuantity: target, eventType, referenceNumber: trip.tripNo, notes, createdBy: by, date: countDate }, { session });
+        await StockAdjustmentService.apply({ stock, newQuantity: target, eventType, referenceNumber: trip.tripNo, notes, createdBy: by, date: countDate, ...how }, { session });
       }
     }
+    // each counted line keeps what a unit cost on the day, for the loss reports
+    const costOf = new Map(plan.rows.map((r) => [r.stockId, r.unitCost]));
+    for (const line of trip.unload.lines) line.unitCost = costOf.get(String(line.stockId));
 
     trip.settlement = {
       at: new Date(), by: String(by), byName: input.byName || "",
       cashExpected: cash.expected, cashHanded: cash.handed, cashVariance: cash.variance, expenses: plan.expenses,
       cheques: plan.cheques.map((c) => ({ ...c, handed: !plan.missingCheques.some((m) => m.chequeNo === c.chequeNo) })),
       cardTotal: plan.cardTotal, transferTotal: plan.transferTotal, transfersWaiting: plan.transfersWaiting,
-      stockVarianceValue: plan.stockVarianceValue, damagedValue: plan.damagedValue,
+      stockVarianceValue: plan.stockVarianceValue, damagedValue: plan.damagedValue, expiredValue: plan.expiredValue,
       ...(plan.containers.length ? { containersMissing: plan.containersMissing, containersMissingValue: plan.containersMissingValue } : {}),
       acknowledged: [...given].filter((c) => WARNING_CODES.includes(c)), voucherIds,
       notes: String(input.notes || "").slice(0, 500),

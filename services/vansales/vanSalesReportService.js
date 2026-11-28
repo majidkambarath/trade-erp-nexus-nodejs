@@ -141,8 +141,8 @@ class VanSalesReportService {
 
   /**
    * What each route (or salesman, or van) made over the SETTLED trips of a period: sales and returns net of VAT, their
-   * cost of goods from the stock movements the invoices made, the damaged goods and count differences written off at
-   * settlement, the road expenses, the cash short or over, and the km run. A trip not yet settled is left out: its
+   * cost of goods from the stock movements the invoices made, the damaged and expired goods and the count differences
+   * written off at settlement, the road expenses, the cash short or over, and the km run. A trip not yet settled is left out: its
    * figures can still change. `by`: route (default) | salesman | van.
    */
   static async routeProfit({ from, to, by = "route", onlySalesman = null } = {}) {
@@ -175,8 +175,8 @@ class VanSalesReportService {
       const s = t.settlement || {};
       return {
         key, name, ...perTrip.get(String(t._id)),
-        // goods written off: the damaged ones, plus units short at the count (a surplus counts back)
-        damaged: round2(Number(s.damagedValue || 0) - Number(s.stockVarianceValue || 0)),
+        // goods written off: the damaged and expired ones, plus units short at the count (a surplus counts back)
+        damaged: round2(Number(s.damagedValue || 0) + Number(s.expiredValue || 0) - Number(s.stockVarianceValue || 0)),
         expenses: round2(s.expenses || 0),
         cashVariance: round2(s.cashVariance || 0),
         km: rules.kmRun(t.odometer),

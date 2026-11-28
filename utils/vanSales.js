@@ -5,9 +5,9 @@
 // way utils/jobWork.js derives "with the job worker": loading moves nothing and posts nothing, and the goods leave
 // the books only when an invoice raised on the trip is approved (the normal sales path: FEFO, average cost, ledger).
 //
-//   physical on the van  = loaded - sold + returned (good and damaged)
+//   physical on the van  = loaded - sold + returned (good, damaged and expired)
 //   sellable on the van  = loaded - sold + returned in good condition
-//   damaged on the van   = returned damaged (restocked by the return in the books, unsellable in the world)
+//   damaged / expired    = returned so (restocked by the return in the books, unsellable in the world)
 //
 // Only a trip that is still LOADING / ON_ROUTE holds stock. Once the van is unloaded the goods are back at the depot.
 
@@ -17,8 +17,8 @@ const SELLING = new Set(["ON_ROUTE"]); // and only this one may sell, collect or
 const EPS = 0.0005;
 
 const round3 = (n) => Math.round((Number(n) + Number.EPSILON) * 1000) / 1000;
-// How goods taken back came back. Damaged goods are credited but never sold again.
-const RETURN_CONDITIONS = Object.freeze(["good", "damaged"]);
+// How goods taken back came back. Damaged and expired goods are credited but never sold again.
+const RETURN_CONDITIONS = Object.freeze(["good", "damaged", "expired"]);
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const idOf = (v) => (v && typeof v === "object" ? String(v._id || v) : v == null ? "" : String(v));
@@ -56,43 +56,45 @@ function soldOf(invoices) {
   return out;
 }
 
-/** What approved sales returns on the trip brought back: { good: Map, damaged: Map } (a line with no condition is good). */
+/** What approved sales returns on the trip brought back: { good, damaged, expired } Maps (a line with no condition is good). */
 function returnedOf(returns) {
   const good = new Map();
   const damaged = new Map();
+  const expired = new Map();
+  const into = { damaged, expired };
   for (const r of returns || []) {
     for (const l of r.items || []) {
       if (l.itemType === "service") continue;
-      bump(l.returnCondition === "damaged" ? damaged : good, l.itemId, l.qty);
+      bump(into[l.returnCondition] || good, l.itemId, l.qty);
     }
   }
-  return { good, damaged };
+  return { good, damaged, expired };
 }
 
 /**
  * What is on the van. `sellable` is what may still be sold; `physical` is what is really in the van (the depot's free
- * stock must leave it alone); `damaged` is the part of physical that cannot be sold. A trip that is not holding stock
- * has nothing on the van.
+ * stock must leave it alone); `damaged` and `expired` are the parts of physical that cannot be sold. A trip that is
+ * not holding stock has nothing on the van.
  */
-function onVan({ status, loaded = new Map(), sold = new Map(), returned = { good: new Map(), damaged: new Map() } }) {
+function onVan({ status, loaded = new Map(), sold = new Map(), returned = {} }) {
   const sellable = new Map();
   const physical = new Map();
   const damaged = new Map();
-  if (!HOLDING.has(status)) return { sellable, physical, damaged };
-  const ids = new Set([...loaded.keys(), ...sold.keys(), ...returned.good.keys(), ...returned.damaged.keys()]);
+  const expired = new Map();
+  if (!HOLDING.has(status)) return { sellable, physical, damaged, expired };
+  const { good = new Map(), damaged: broken = new Map(), expired: stale = new Map() } = returned;
+  const ids = new Set([...loaded.keys(), ...sold.keys(), ...good.keys(), ...broken.keys(), ...stale.keys()]);
   for (const id of ids) {
-    const l = loaded.get(id) || 0;
-    const s = sold.get(id) || 0;
-    const g = returned.good.get(id) || 0;
-    const d = returned.damaged.get(id) || 0;
-    const can = round3(l - s + g);
-    const dmg = round3(d);
+    const can = round3((loaded.get(id) || 0) - (sold.get(id) || 0) + (good.get(id) || 0));
+    const dmg = round3(broken.get(id) || 0);
+    const exp = round3(stale.get(id) || 0);
     if (Math.abs(can) > EPS) sellable.set(id, can);
     if (Math.abs(dmg) > EPS) damaged.set(id, dmg);
-    const phys = round3(can + dmg);
+    if (Math.abs(exp) > EPS) expired.set(id, exp);
+    const phys = round3(can + dmg + exp);
     if (Math.abs(phys) > EPS) physical.set(id, phys);
   }
-  return { sellable, physical, damaged };
+  return { sellable, physical, damaged, expired };
 }
 
 /**
@@ -200,48 +202,54 @@ function shortages(lines, available) {
 }
 
 /**
- * What the count at unload should show, item by item: the sellable goods that should be back, and the damaged ones.
- * `counted` is [{stockId, good, damaged}] from the person counting; an item not mentioned counts as nothing found.
+ * What the count at unload should show, item by item: the sellable goods that should be back, the damaged ones and the
+ * expired ones. `counted` is [{stockId, good, damaged, expired}] from the person counting; an item not mentioned counts
+ * as nothing found. A row carries expired figures only where there are some to show.
  */
-function unloadVariance({ sellable = new Map(), damaged = new Map() }, counted = []) {
+function unloadVariance({ sellable = new Map(), damaged = new Map(), expired = new Map() }, counted = []) {
   const found = new Map();
   for (const c of counted) {
     const id = idOf(c.stockId);
     if (!id) continue;
     const g = Number(c.good ?? 0);
     const d = Number(c.damaged ?? 0);
-    if (!(g >= 0) || !(d >= 0)) throw new VanError("A count cannot be negative", "COUNT_NEGATIVE", { stockId: id });
-    const cur = found.get(id) || { good: 0, damaged: 0 };
-    found.set(id, { good: round3(cur.good + g), damaged: round3(cur.damaged + d) });
+    const x = Number(c.expired ?? 0);
+    if (!(g >= 0) || !(d >= 0) || !(x >= 0)) throw new VanError("A count cannot be negative", "COUNT_NEGATIVE", { stockId: id });
+    const cur = found.get(id) || { good: 0, damaged: 0, expired: 0 };
+    found.set(id, { good: round3(cur.good + g), damaged: round3(cur.damaged + d), expired: round3(cur.expired + x) });
   }
-  const ids = new Set([...sellable.keys(), ...damaged.keys(), ...found.keys()]);
+  const ids = new Set([...sellable.keys(), ...damaged.keys(), ...expired.keys(), ...found.keys()]);
   const rows = [];
   for (const id of ids) {
     const eg = sellable.get(id) || 0;
     const ed = damaged.get(id) || 0;
-    const c = found.get(id) || { good: 0, damaged: 0 };
+    const ex = expired.get(id) || 0;
+    const c = found.get(id) || { good: 0, damaged: 0, expired: 0 };
     rows.push({
       stockId: id,
       expectedGood: round3(eg), countedGood: c.good,
       expectedDamaged: round3(ed), countedDamaged: c.damaged,
-      // units found minus units that should be there (good and damaged together: a damaged box is still a box)
-      difference: round3(c.good + c.damaged - eg - ed),
+      ...(ex || c.expired ? { expectedExpired: round3(ex), countedExpired: c.expired } : {}),
+      // units found minus units that should be there, in any condition: a damaged or expired box is still a box
+      difference: round3(c.good + c.damaged + c.expired - eg - ed - ex),
     });
   }
   return rows;
 }
 
 /**
- * What settling does to the BOOKS' stock for one counted row. The sales return restocked a damaged unit and the van
- * still holds it, so the books carry expectedGood + expectedDamaged for this van; the world holds countedGood at the
- * depot and countedDamaged in the bin. Two moves bring them together:
+ * What settling does to the BOOKS' stock for one counted row. The sales return restocked a damaged or expired unit and
+ * the van still holds it, so the books carry what should be on the van in every condition; the world holds countedGood at
+ * the depot and the rest in the bin. The moves bring them together:
+ *   expiry    = -countedExpired            (expired goods leave stock; only where some were found)
  *   damage    = -countedDamaged            (the damaged goods leave stock, they cannot be sold)
  *   variance  = + difference               (units short or over: what is found less what should be there)
- * Net: countedGood - expectedGood - expectedDamaged, which is what the books must change by.
+ * Net: countedGood - expected (good, damaged and expired), which is what the books must change by.
  */
 function stockMoves(row) {
   return {
     stockId: row.stockId,
+    ...(Number(row.countedExpired) > 0 ? { expiry: -round3(row.countedExpired) } : {}),
     damage: -round3(row.countedDamaged),
     variance: round3(row.difference),
   };

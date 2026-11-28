@@ -30,13 +30,13 @@ async function documentsOf(trip, { session } = {}) {
 }
 
 /**
- * The trip's stock figures: { loaded, sold, returned, sellable, physical, damaged, invoices, returns }.
+ * The trip's stock figures: { loaded, sold, returned, sellable, physical, damaged, expired, invoices, returns }.
  * `asOut` works out what the van held while it was still out, for a trip already counted in (a second count).
  */
 async function stockOf(trip, { session, asOut = false } = {}) {
   const { invoices, returns } = await documentsOf(trip, { session });
   const approved = new Set(returns.map((r) => String(r._id)));
-  // whether a returned line came back sellable or damaged is the trip's own record of it
+  // whether a returned line came back sellable, damaged or expired is the trip's own record of it
   const records = (trip.returns || []).filter((r) => approved.has(String(r.transactionId)));
   const returned = rules.returnedOf(
     records.map((r) => ({ items: (r.lines || []).map((l) => ({ itemId: l.stockId, qty: l.qty, returnCondition: l.condition })) }))

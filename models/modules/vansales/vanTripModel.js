@@ -66,8 +66,8 @@ const loadRequestSchema = new mongoose.Schema(
   { _id: false }
 );
 
-// A sales return taken on the road. Whether each line came back sellable or damaged is the TRIP's record, kept here and
-// not on the document line, so the invoice and return schemas and pricing stay exactly as they are.
+// A sales return taken on the road. Whether each line came back sellable, damaged or expired is the TRIP's record, kept
+// here and not on the document line, so the invoice and return schemas and pricing stay exactly as they are.
 const returnRecord = new mongoose.Schema(
   {
     transactionId: { type: mongoose.Schema.Types.ObjectId, ref: "Transaction", required: true },
@@ -77,7 +77,7 @@ const returnRecord = new mongoose.Schema(
       {
         stockId: { type: mongoose.Schema.Types.ObjectId, ref: "Stock", required: true },
         qty: { type: Number, required: true, min: 0 },
-        condition: { type: String, enum: ["good", "damaged"], default: "good" },
+        condition: { type: String, enum: ["good", "damaged", "expired"], default: "good" },
         // the return document's line these came back on (the item-by-item return); absent on older records
         docLineId: { type: mongoose.Schema.Types.ObjectId },
         _id: false,
@@ -107,7 +107,12 @@ const countFields = {
         countedGood: Number,
         expectedDamaged: Number,
         countedDamaged: Number,
+        // expired goods (no default: absent where there were none)
+        expectedExpired: Number,
+        countedExpired: Number,
         difference: Number,
+        // what one unit cost when the trip was settled, for the loss reports; never sent to a screen
+        unitCost: Number,
         _id: false,
       },
     ],
@@ -141,6 +146,7 @@ const settlementSchema = new mongoose.Schema(
     transfersWaiting: Number,
     stockVarianceValue: Number, // units short (negative) or over (positive), at average cost
     damagedValue: Number, // what the damaged goods were worth, written off
+    expiredValue: Number, // what the expired goods were worth, written off (absent on trips settled before expiry was kept apart)
     // containers missing from the van at count-in, and the deposit they were worth (charged to the salesman's shortage)
     containersMissing: Number,
     containersMissingValue: Number,

@@ -23,10 +23,31 @@ test("sellable is loaded - sold + good returns; physical adds the damaged ones; 
   assert.deepEqual(asObj(out.physical), { a: 15, b: 7 });
 });
 
+test("expired goods back on the van are kept apart from the sellable and the damaged ones", () => {
+  const returned = v.returnedOf([{ items: [{ itemId: "a", qty: 2, returnCondition: "expired" }, { itemId: "a", qty: 1, returnCondition: "damaged" }, { itemId: "b", qty: 3, returnCondition: "expired" }] }]);
+  assert.deepEqual(asObj(returned.expired), { a: 2, b: 3 });
+  const out = v.onVan({ status: "ON_ROUTE", loaded: M({ a: 10 }), sold: M({ a: 4 }), returned });
+  assert.deepEqual(asObj(out.sellable), { a: 6 });
+  assert.deepEqual(asObj(out.damaged), { a: 1 });
+  assert.deepEqual(asObj(out.expired), { a: 2, b: 3 });
+  assert.deepEqual(asObj(out.physical), { a: 9, b: 3 }, "the depot's free stock leaves them alone too");
+  assert.deepEqual(v.RETURN_CONDITIONS, ["good", "damaged", "expired"]);
+});
+
+test("the count with expired goods: shown only where there are some, and a negative count refused", () => {
+  const shelf = { sellable: M({ a: 5, b: 2 }), damaged: M({}), expired: M({ a: 2 }) };
+  const rows = Object.fromEntries(v.unloadVariance(shelf, [{ stockId: "a", good: 5, damaged: 0, expired: 1 }, { stockId: "b", good: 1, damaged: 0, expired: 1 }]).map((r) => [r.stockId, r]));
+  assert.deepEqual([rows.a.expectedExpired, rows.a.countedExpired, rows.a.difference], [2, 1, -1]);
+  assert.deepEqual([rows.b.expectedExpired, rows.b.countedExpired, rows.b.difference], [0, 1, 0], "found expired on the van: the same unit, now expired");
+  const [plain] = v.unloadVariance({ sellable: M({ c: 1 }) }, [{ stockId: "c", good: 1 }]);
+  assert.equal("countedExpired" in plain, false);
+  assert.throws(() => v.unloadVariance(shelf, [{ stockId: "a", good: 5, damaged: 0, expired: -1 }]), (e) => e.code === "COUNT_NEGATIVE");
+});
+
 test("a trip that is not out holds nothing: the goods are back at the depot or never left it", () => {
   for (const status of ["UNLOADED", "SETTLED", "CANCELLED"]) {
     const out = v.onVan({ status, loaded: M({ a: 5 }) });
-    assert.equal(out.sellable.size + out.physical.size + out.damaged.size, 0, status);
+    assert.equal(out.sellable.size + out.physical.size + out.damaged.size + out.expired.size, 0, status);
   }
   // LOADING does hold what is loaded (the van is being filled), though it cannot sell yet
   assert.deepEqual(asObj(v.onVan({ status: "LOADING", loaded: M({ a: 5 }) }).physical), { a: 5 });
@@ -82,12 +103,17 @@ test("settling moves the books by exactly counted good - expected good - expecte
     { expectedGood: 10, expectedDamaged: 0, countedGood: 11, countedDamaged: 0 },
     { expectedGood: 10, expectedDamaged: 2, countedGood: 10, countedDamaged: 1 },
     { expectedGood: 0, expectedDamaged: 3, countedGood: 0, countedDamaged: 3 },
+    { expectedGood: 6, expectedDamaged: 1, expectedExpired: 2, countedGood: 6, countedDamaged: 1, countedExpired: 2 },
+    { expectedGood: 6, expectedDamaged: 0, expectedExpired: 0, countedGood: 4, countedDamaged: 0, countedExpired: 2 },
+    { expectedGood: 0, expectedDamaged: 0, expectedExpired: 3, countedGood: 0, countedDamaged: 0, countedExpired: 1 },
   ];
   for (const c of cases) {
-    const row = { stockId: "a", ...c, difference: c.countedGood + c.countedDamaged - c.expectedGood - c.expectedDamaged };
+    const x = (n) => n || 0;
+    const row = { stockId: "a", ...c, difference: c.countedGood + c.countedDamaged + x(c.countedExpired) - c.expectedGood - c.expectedDamaged - x(c.expectedExpired) };
     const m = v.stockMoves(row);
-    assert.equal(m.damage + m.variance, c.countedGood - c.expectedGood - c.expectedDamaged, JSON.stringify(c));
-    assert.ok(m.damage <= 0, "damaged goods only ever leave stock");
+    assert.equal(x(m.expiry) + m.damage + m.variance, c.countedGood - c.expectedGood - c.expectedDamaged - x(c.expectedExpired), JSON.stringify(c));
+    assert.ok(m.damage <= 0 && x(m.expiry) <= 0, "damaged and expired goods only ever leave stock");
+    assert.equal("expiry" in m, x(c.countedExpired) > 0);
   }
 });
 

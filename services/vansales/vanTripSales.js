@@ -513,8 +513,8 @@ class VanTripSales {
   /**
    * Take goods back from a customer. Against one of their approved invoices (the invoice's prices), or - where the
    * organisation allows it, or for a supervisor - with no invoice at all, at the customer's own list price and up to the
-   * organisation's limit. Each line says whether it came back sellable (it goes back on the van) or damaged (it does
-   * not). The return is approved at once, like a sale, and carries the reason it came back.
+   * organisation's limit. Each line says whether it came back sellable (it goes back on the van), damaged or expired
+   * (credited, never sold again). The return is approved at once, like a sale, and carries the reason it came back.
    */
   static returnGoods = withTransactionSession(async (id, input, by, ...rest) => {
     const session = rest[rest.length - 1];
@@ -548,7 +548,7 @@ class VanTripSales {
         if (!line) throw fail(`Line ${i + 1} is not on ${original.transactionNo}`, 400, "LINE_NOT_IN_ORIGINAL");
         if (kinds.isService(line)) throw fail("A service cannot be returned to a van", 400, "VAN_GOODS_ONLY");
         items.push({ ...S.toPricingInput(line, qty, line.qty), returnOfLineId: line._id });
-        record.push({ stockId: line.itemId, qty, condition: w.condition === "damaged" ? "damaged" : "good" });
+        record.push({ stockId: line.itemId, qty, condition: conditionOf(w.condition) });
       }
     }
 
