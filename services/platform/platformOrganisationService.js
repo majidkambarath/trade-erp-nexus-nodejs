@@ -25,6 +25,8 @@ const UsageService = require("../core/usageService");
 const { EInvoiceSettings } = require("../../models/modules/einvoiceModels");
 const WafeqConnectService = require("../einvoice/wafeq/connectService");
 const { hasCountryFeature } = require("../../utils/countryRules");
+const ClientOnboardingService = require("./clientOnboardingService");
+const onboardingRules = require("../../utils/clientOnboarding");
 
 const HEAD_OFFICE = OrganisationService.HEAD_OFFICE;
 const inOrg = async (code, fn) => {
@@ -140,14 +142,32 @@ class PlatformOrganisationService {
   // Create an organisation, and optionally its first administrator (a super_admin, so they can manage their own
   // people). The administrator's email is checked FIRST: emails are unique across organisations, and finding a
   // clash after the organisation exists would leave it half made.
+  //
+  // `onboardingId` names the client's onboarding form this is made from (services/platform/clientOnboardingService.js):
+  // the form is claimed first, so two developers cannot make two organisations from it, given back if making the
+  // organisation fails, and once the organisation exists the client's letterhead and tax identity are written into it.
   static async create(input, ctx) {
-    const firstAdmin = input.firstAdmin;
+    const { onboardingId, ...orgInput } = input || {};
+    const firstAdmin = orgInput.firstAdmin;
     if (firstAdmin) {
       if (!firstAdmin.email || !firstAdmin.password || !firstAdmin.name) throw new AppError("The first administrator needs a name, an email and a password", 400, "FIRST_ADMIN_INCOMPLETE");
       if (await this.emailTaken(firstAdmin.email)) throw new AppError("That email already belongs to a user of an organisation", 409, "EMAIL_EXISTS");
     }
-    const made = await OrganisationService.create(input, { by: ctx.by?.email });
+    const form = onboardingId ? await ClientOnboardingService.claim(String(onboardingId)) : null;
+    let made;
+    try {
+      const tradeName = form && !orgInput.tradeName ? onboardingRules.normaliseAnswers(form.answers).company.tradeName : "";
+      made = await OrganisationService.create(tradeName ? { ...orgInput, tradeName } : orgInput, { by: ctx.by?.email });
+    } catch (error) {
+      if (form) await ClientOnboardingService.release(form._id);
+      throw error;
+    }
     const result = { ...made, firstAdmin: null, firstAdminError: null };
+    if (form) {
+      const applied = await ClientOnboardingService.applyTo(made.organisation.code, form);
+      await ClientOnboardingService.markCreated(form._id, made.organisation.code, applied, ctx);
+      result.onboarding = { id: String(form._id), applied };
+    }
     if (firstAdmin) {
       try {
         const user = await this.createUser(made.organisation.code, { ...firstAdmin, type: "super_admin" });
@@ -156,7 +176,11 @@ class PlatformOrganisationService {
         result.firstAdminError = error.message; // the organisation exists; the console shows this and lets the developer add one
       }
     }
-    await this.record({ ...ctx, action: "ORGANISATION_CREATED", organisation: made.organisation.code, summary: `Organisation created on the ${made.organisation.planCode} plan, books in ${made.organisation.baseCurrency}`, details: { provisioning: made.provisioning.complete } });
+    await this.record({
+      ...ctx, action: "ORGANISATION_CREATED", organisation: made.organisation.code,
+      summary: `Organisation created on the ${made.organisation.planCode} plan, books in ${made.organisation.baseCurrency}${form ? `, from the onboarding form of ${form.clientName}` : ""}`,
+      details: { provisioning: made.provisioning.complete, ...(form ? { onboarding: String(form._id) } : {}) },
+    });
     return result;
   }
 

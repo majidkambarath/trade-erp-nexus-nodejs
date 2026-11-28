@@ -50,6 +50,18 @@ router.patch("/organisations/:code/branches/:branch", c.updateBranch);
 
 router.get("/audit", c.audit);
 
+// A new client's onboarding form: the private link the client fills in, and making their organisation from it.
+router.get("/onboarding", c.onboardingList);
+router.post("/onboarding", c.onboardingCreate);
+router.get("/onboarding/:id", c.onboardingDetail);
+router.post("/onboarding/:id/link", c.onboardingNewLink);
+router.post("/onboarding/:id/revoke", c.onboardingRevoke);
+router.post("/onboarding/:id/reopen", c.onboardingReopen);
+router.post("/onboarding/:id/extend", c.onboardingExtend);
+router.get("/onboarding/:id/files/:fileId", c.onboardingFile);
+router.delete("/onboarding/:id/files/:fileId", c.onboardingDeleteFile);
+router.post("/onboarding/:id/users", c.onboardingUsers);
+
 // The questions Zarvia AI could not answer, from every organisation at once.
 router.get("/support-requests", c.supportRequests);
 router.get("/support-requests/:id", c.supportRequest);
