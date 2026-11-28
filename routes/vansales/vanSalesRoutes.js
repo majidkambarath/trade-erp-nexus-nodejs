@@ -53,6 +53,10 @@ router.put("/settings", requirePermission("vansales.manage"), c.saveSettings);
 // Reports: fixed paths before the :tripId ones, as every router here orders them.
 router.get("/reports/summary", requirePermission("vansales.view"), c.summary);
 router.get("/reports/route-profit", requirePermission("vansales.view"), c.routeProfit);
+router.get("/analysis/choices", requirePermission("vansales.view"), c.analysisChoices);
+for (const report of ["vans", "expenses", "returns", "trend", "items", "load", "collections", "coverage"]) {
+  router.get(`/analysis/${report}`, requirePermission("vansales.view"), c.analysis(report));
+}
 // the supervisor's live board: who may settle or manage the vans
 router.get("/board", requirePermission(["vansales.settle", "vansales.manage"]), c.board);
 

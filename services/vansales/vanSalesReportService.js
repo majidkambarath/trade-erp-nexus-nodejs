@@ -5,6 +5,7 @@ const VanVisit = require("../../models/modules/vansales/vanVisitModel");
 const AppError = require("../../utils/AppError");
 const rules = require("../../utils/vanSales");
 const { todayInOrg, addDays } = require("../../utils/documentExpiry");
+const { tripMoney } = require("./vanTripFigures");
 
 const asDay = (day) => new Date(`${String(day).slice(0, 10)}T00:00:00.000Z`);
 const validDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || "")) && !Number.isNaN(asDay(d).getTime());
@@ -149,32 +150,15 @@ class VanSalesReportService {
     const end = validDay(to) ? String(to).slice(0, 10) : todayInOrg();
     const start = validDay(from) ? String(from).slice(0, 10) : addDays(end, -29);
     if (start > end) throw new AppError("The period starts after it ends", 400, "INVALID_RANGE");
-    const InventoryMovement = require("../../models/modules/inventoryMovementModel");
     const trips = await VanTrip.find({ date: { $gte: asDay(start), $lte: asDay(end) }, status: "SETTLED", ...(onlySalesman ? { salesmanId: String(onlySalesman) } : {}) }).lean();
-    const ids = trips.map((t) => t._id);
-    const docs = ids.length ? await Transaction.find({ "vanTripRef.tripId": { $in: ids }, status: "APPROVED", type: { $in: ["sales_order", "sales_return"] } }).select("type totalAmount pricing vanTripRef").lean() : [];
-    const moves = docs.length ? await InventoryMovement.find({ referenceId: { $in: docs.map((d) => d._id) } }).select("referenceId cogsAmount totalValue quantity").lean() : [];
-    const costOf = new Map();
-    for (const m of moves) {
-      const k = String(m.referenceId);
-      // a sale's cost is its cost of goods; a return's is the cost it put back (stored positive both ways)
-      const c = m.cogsAmount !== null && m.cogsAmount !== undefined ? Number(m.cogsAmount) : Math.abs(Number(m.totalValue) || 0);
-      costOf.set(k, round2((costOf.get(k) || 0) + Math.abs(c)));
-    }
-    const perTrip = new Map(trips.map((t) => [String(t._id), { sales: 0, cost: 0, returns: 0, returnsCost: 0 }]));
-    for (const d of docs) {
-      const row = perTrip.get(String(d.vanTripRef.tripId));
-      if (!row) continue;
-      const net = round2(Number(d.totalAmount || 0) - Number(d.pricing?.lineVat || 0) - Number(d.pricing?.chargesVat || 0));
-      if (d.type === "sales_order") { row.sales = round2(row.sales + net); row.cost = round2(row.cost + (costOf.get(String(d._id)) || 0)); }
-      else { row.returns = round2(row.returns + net); row.returnsCost = round2(row.returnsCost + (costOf.get(String(d._id)) || 0)); }
-    }
+    const money = await tripMoney(trips.map((t) => t._id));
     const keyOf = (t) => (by === "salesman" ? [t.salesmanId, t.salesmanName] : by === "van" ? [String(t.vanId), `${t.vanCode} ${t.vanName || ""}`.trim()] : [t.routeId ? String(t.routeId) : "none", t.routeName || "No route"]);
     const rows = trips.map((t) => {
       const [key, name] = keyOf(t);
       const s = t.settlement || {};
+      const { sales, cost, returns, returnsCost } = money.get(String(t._id));
       return {
-        key, name, ...perTrip.get(String(t._id)),
+        key, name, sales, cost, returns, returnsCost,
         // goods written off: the damaged and expired ones, plus units short at the count (a surplus counts back)
         damaged: round2(Number(s.damagedValue || 0) + Number(s.expiredValue || 0) - Number(s.stockVarianceValue || 0)),
         expenses: round2(s.expenses || 0),

@@ -15,6 +15,8 @@ const VanSettingsService = require("../../services/vansales/vanSettingsService")
 const VanSlipService = require("../../services/vansales/vanSlipService");
 const logger = require("../../utils/logger");
 const vanRules = require("../../utils/vanSales");
+const VanAnalysisService = require("../../services/vansales/vanAnalysisService");
+const { mayViewCost } = require("../../utils/costVisibility");
 
 const by = (req) => req.admin?.id || "system";
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
@@ -435,3 +437,8 @@ exports.pinCustomer = catchAsync(async (req, res) => {
   ok(res, r);
 });
 exports.routeProfit = catchAsync(async (req, res) => ok(res, await VanSalesReportService.routeProfit({ from: req.query.from, to: req.query.to, by: req.query.by, onlySalesman: ownerFilter(req) })));
+
+// ---- the analysis reports: a salesman reads his own trips (no office bills), and costs only with inventory.viewCost ----
+const analysisViewer = (req) => ({ onlySalesman: ownerFilter(req), showCost: mayViewCost(req.admin) });
+exports.analysisChoices = catchAsync(async (req, res) => ok(res, await VanAnalysisService.choices(analysisViewer(req))));
+exports.analysis = (report) => catchAsync(async (req, res) => ok(res, await VanAnalysisService[report](req.query, analysisViewer(req))));

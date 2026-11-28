@@ -376,6 +376,7 @@ transactionSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
 transactionSchema.index({ partyId: 1, partyType: 1 });
 transactionSchema.index({ "returnOf.transactionId": 1 }, { sparse: true });
 transactionSchema.index({ "tradeOrderRef.tradeOrderId": 1 }, { sparse: true });
+transactionSchema.index({ "vanTripRef.tripId": 1 }); // a van trip's documents (count-in, settlement, van analysis)
 transactionSchema.index({ status: 1 });
 // The order lists read one type, newest first, by date or by when it was saved: without these every list sorted the whole collection.
 // The _id on the end is the tie-breaker that keeps a page boundary stable; without it the sort falls back to an

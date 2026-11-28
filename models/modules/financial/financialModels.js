@@ -318,6 +318,8 @@ voucherSchema.pre(["updateOne", "findOneAndUpdate"], function (next) {
 
 // Indexes (removed duplicate voucherNo index)
 voucherSchema.index({ voucherType: 1, date: -1 }); // For FinancialService.getAllVouchers
+voucherSchema.index({ "vanTripRef.tripId": 1 }); // a van trip's receipts and road expenses
+voucherSchema.index({ "vanRef.vanId": 1, date: 1 }); // a van's expenses over a period (van analysis)
 voucherSchema.index({ partyId: 1, partyType: 1, status: 1 }); // For FinancialService.getPartyStatement
 voucherSchema.index({ status: 1, approvalStatus: 1 }); // For FinancialService.getAllVouchers
 voucherSchema.index({ financialYear: 1, month: 1 }); // For FinancialService.getFinancialReports
