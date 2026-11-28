@@ -9,7 +9,6 @@ const StockBatch = require("../../models/modules/stockBatchModel");
 const rules = require("../../utils/vanSales");
 const kinds = require("../../utils/itemKinds");
 const BatchService = require("../stock/batchService");
-const JobWorkService = require("../stock/jobWorkService");
 const TradeOrderService = require("../orderPurchase/tradeOrderService");
 const PriceListService = require("./priceListService");
 const VanSettingsService = require("./vanSettingsService");
@@ -128,16 +127,12 @@ class VanPlanningService {
     for (const p of await this.preordersForTrip(trip._id)) for (const l of p.items) preorders.set(l.itemId, rules.round3((preorders.get(l.itemId) || 0) + Number(l.qty)));
     const mine = await stockOf(trip);
     const ids = [...new Set([...preorders.keys(), ...history.flatMap((h) => [...h.keys()])])];
-    const stocks = await Stock.find({ _id: { $in: ids } }).select("itemName currentStock itemType").lean();
-    const VanTripService = require("./vanTripService");
-    const [away, onVans] = await Promise.all([JobWorkService.withJobWorker(), VanTripService.withOnVans()]);
     const free = new Map();
     const names = new Map();
-    for (const s of stocks) {
+    for (const [id, s] of await require("../stock/reservationService").free(ids)) {
       if (kinds.isService(s)) continue;
-      const id = String(s._id);
       names.set(id, s.itemName);
-      free.set(id, rules.freeDepot({ currentStock: s.currentStock, withJobWorker: away.get(id) || 0, onVans: onVans.get(id) || 0 }));
+      free.set(id, s.free);
     }
     const lines = rules.suggestLoad({ preorders, history, onVan: mine.sellable, free, names, extraPercent: active.suggestExtraPercent }).filter((l) => names.has(l.stockId));
     return { runs: history.length, lines };

@@ -357,3 +357,25 @@ test("a van's own shops: each once, the most recent first, junk left out, cut to
   assert.deepEqual(v.recentCustomers([{ customerId: "a", at: "2026-11-01" }, { customerId: "b", at: "2026-11-02" }], { limit: 1 }).map((r) => r.customerId), ["b"]);
   assert.deepEqual(v.recentCustomers(undefined), []);
 });
+
+test("a van counted in holds back its damaged, expired and missing units until it is settled; good and extra units free nothing", () => {
+  const trip = (status, lines) => ({ status, unload: { lines } });
+  const lines = [
+    { stockId: "rice", countedGood: 8, countedDamaged: 1, countedExpired: 2, difference: -1 },
+    { stockId: "oil", countedGood: 7, countedDamaged: 0, difference: 2 },
+    { stockId: "milk", countedGood: 3, countedDamaged: 0, countedExpired: 0, difference: 0 },
+  ];
+  assert.deepEqual(asObj(v.countedInReserve(trip("UNLOADED", lines))), { rice: 4 });
+  assert.equal(v.countedInReserve(trip("SETTLED", lines)).size, 0, "settled: written off, nothing held");
+  assert.equal(v.countedInReserve(trip("ON_ROUTE", lines)).size, 0, "out: it is on the van, not counted in");
+  assert.equal(v.countedInReserve({ status: "UNLOADED" }).size, 0);
+  assert.equal(v.freeDepot({ currentStock: 20, withJobWorker: 2, onVans: 3, countedIn: 4 }), 11);
+  assert.equal(v.freeDepot({ currentStock: 5, countedIn: 9 }), 0, "never below zero");
+});
+
+test("a count that leaves out an item the van should hold is not a count of nothing", () => {
+  const stock = { sellable: M({ rice: 10, oil: 0 }), damaged: M({ milk: 1 }), expired: M({}) };
+  assert.deepEqual(v.uncounted(stock, [{ stockId: "rice", good: 9 }]), ["milk"], "oil has none left, so it need not be counted");
+  assert.deepEqual(v.uncounted(stock, [{ stockId: "rice", good: 0 }, { stockId: "milk", damaged: 0 }]), []);
+  assert.deepEqual(v.uncounted(stock, undefined).sort(), ["milk", "rice"]);
+});

@@ -226,6 +226,15 @@ test("the stock list shows what is sitting in vans, and a request body cannot ch
 });
 
 test("count in, then only a person who may settle can; the history says so", { skip }, async () => {
+  // where the storekeeper counts vans in, a salesman who only sells does not count his own
+  assert.equal((await call("owner", "PUT", "/van-sales/settings", { countIn: "storekeeper" })).status, 200);
+  const counted = await call("ali", "POST", `/van-sales/trips/${tripId}/unload`, { counts: [{ stockId: rice._id, good: 30, damaged: 0 }] });
+  assert.equal(counted.status, 403, JSON.stringify(counted.data));
+  assert.equal(counted.code, "COUNT_IN_BY_STOREKEEPER");
+  assert.equal((await call("owner", "PUT", "/van-sales/settings", { countIn: "salesman" })).status, 200);
+  // and a count that leaves an item out is refused whoever counts
+  const partial = await call("ali", "POST", `/van-sales/trips/${tripId}/unload`, { counts: [] });
+  assert.equal(partial.code, "COUNT_INCOMPLETE");
   const unload = await call("ali", "POST", `/van-sales/trips/${tripId}/unload`, { counts: [{ stockId: rice._id, good: 30, damaged: 0 }] });
   assert.equal(unload.status, 200, JSON.stringify(unload.data));
   assert.equal(unload.body.status, "UNLOADED");

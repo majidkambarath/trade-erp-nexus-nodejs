@@ -174,7 +174,8 @@ function assertMayReturnLoose(active, opts) {
 async function looseLines(trip, customer, wanted, date, opts, session = null) {
   const ids = wanted.map((w) => w?.stockId);
   if (ids.some((i) => !isId(i))) throw fail("An item being returned is not valid", 400, "ITEM_INVALID");
-  if (new Set(ids.map(String)).size !== ids.length) throw fail("Each item is listed once; add up its quantity on one line", 400, "ITEM_REPEATED");
+  const keys = wanted.map((w) => `${w?.stockId}|${conditionOf(w?.condition)}`);
+  if (new Set(keys).size !== keys.length) throw fail("Each item is listed once for each condition; add up its quantity on one line", 400, "ITEM_REPEATED");
   const stocks = await Stock.find({ _id: { $in: ids } }).select("itemId itemName itemType salesPrice status").session(session).lean();
   const byId = new Map(stocks.map((s) => [String(s._id), s]));
   const listed = await PriceListService.pricesFor({
@@ -195,13 +196,27 @@ async function looseLines(trip, customer, wanted, date, opts, session = null) {
     const price = typed ? Number(w.price) : list;
     if (!(price >= 0) || !Number.isFinite(price)) throw fail(`Line ${i + 1}: enter a price of zero or more`, 400, "PRICE_INVALID");
     if (!typed && !(price > 0)) throw fail(`${s.itemName} has no price for this customer, so it cannot be credited. A supervisor can enter one.`, 400, "RETURN_NO_PRICE", { stockId: String(s._id) });
-    items.push({ itemId: s._id, itemCode: s.itemId, description: s.itemName, qty, price, discountPercent: 0 });
+    const expiry = packExpiry(w.expiryDate, i + 1);
+    items.push({ itemId: s._id, itemCode: s.itemId, description: s.itemName, qty, price, discountPercent: 0, ...(expiry ? { expiryDate: expiry } : {}) });
     record.push({ stockId: s._id, qty, condition: conditionOf(w.condition) });
   }
   return { items, record };
 }
 
 const conditionOf = (c) => (rules.RETURN_CONDITIONS.includes(c) ? c : "good");
+
+/**
+ * The expiry date printed on a returned pack: none, or a real calendar day ("YYYY-MM-DD"). Goods that come back with no
+ * invoice go into a batch of their own, and this is that batch's expiry, so first-expiry-first-out and the expiry
+ * reports know about them (they used to make a batch with no expiry at all, which FEFO always took last).
+ */
+function packExpiry(raw, lineNo) {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const day = typeof raw === "string" ? raw.trim().slice(0, 10) : "";
+  const t = /^\d{4}-\d{2}-\d{2}$/.test(day) ? new Date(`${day}T00:00:00Z`).getTime() : NaN;
+  if (!Number.isFinite(t) || new Date(t).toISOString().slice(0, 10) !== day) throw fail(`Line ${lineNo}: give the expiry date printed on the pack as a date`, 400, "EXPIRY_DATE_INVALID");
+  return day;
+}
 
 // ---- goods taken back item by item: the invoices are found for the salesman --------------------------------------
 
@@ -231,7 +246,8 @@ function requestedReturn(input) {
     const key = `${w.stockId}|${condition}`;
     if (seen.has(key)) throw fail("Each item is listed once for each condition; add up its quantity on one line", 400, "ITEM_REPEATED");
     seen.add(key);
-    return { stockId: String(w.stockId), qty, condition };
+    const expiryDate = packExpiry(w.expiryDate, i + 1);
+    return { stockId: String(w.stockId), qty, condition, ...(expiryDate ? { expiryDate } : {}) };
   });
 }
 
@@ -292,10 +308,16 @@ async function planReturn({ customer, active }, requested, opts, day, session) {
     });
     return { invoiceId: g.invoiceId, number: g.number, date: g.date, original: doc, items, parts: merged.map((m) => m.parts) };
   });
-  const rest = mergeBy(matched.rest, (r) => r.stockId);
+  // what no invoice covers: one line per item and condition, with the expiry the salesman read off the pack
+  const expiryOf = new Map(requested.filter((r) => r.expiryDate).map((r) => [`${r.stockId}|${r.condition}`, r.expiryDate]));
+  const rest = mergeBy(matched.rest, (r) => `${r.stockId}|${r.condition}`)
+    .map((m) => ({ ...m, stockId: m.parts[0].stockId, condition: m.parts[0].condition, expiryDate: expiryOf.get(m.key) || null }));
   const linkRequired = rest.length ? Boolean((await ReturnService.settings(session)).requireReturnLink) : false;
   return { groups, rest, linkRequired, looseAllowed: !linkRequired && Boolean(active.returnsWithoutInvoice || opts.mayUnderprice) };
 }
+
+/** A line of what no invoice covers, as looseLines takes it. */
+const looseOf = (m) => ({ stockId: m.stockId, qty: m.qty, condition: m.condition, ...(m.expiryDate ? { expiryDate: m.expiryDate } : {}) });
 
 /** A priced document line's total shared over the conditions it came back in (the last takes what rounding leaves). */
 function sharesOf(processed, parts, names) {
@@ -627,10 +649,10 @@ class VanTripSales {
     const rest = { lines: [], total: 0, allowed: plan.looseAllowed, why: "", limit, overLimit: false };
     if (plan.rest.length && !plan.looseAllowed) {
       rest.lines = plan.rest.flatMap((m) => m.parts.map((p) => ({ stockId: p.stockId, name: names.get(p.stockId) || "", qty: p.qty, condition: p.condition, total: 0 })));
-      const listed = plan.rest.map((m) => `${m.qty} x ${names.get(m.key) || "an item"}`).join(", ");
+      const listed = plan.rest.map((m) => `${m.qty} x ${names.get(m.stockId) || "an item"}`).join(", ");
       rest.why = plan.linkRequired ? `Not on their invoices: ${listed}. This business needs an invoice for every return.` : `Not on their invoices: ${listed}. A supervisor must take these back.`;
     } else if (plan.rest.length) {
-      const { items } = await looseLines(door.trip, door.customer, plan.rest.map((m) => ({ stockId: m.key, qty: m.qty })), day, opts);
+      const { items } = await looseLines(door.trip, door.customer, plan.rest.map(looseOf), day, opts);
       const priced = await price(items);
       Object.assign(rest, { lines: sharesOf(priced.processedItems, plan.rest.map((m) => m.parts), names), total: round2(priced.totalAmount), overLimit: !opts.mayUnderprice && priced.totalAmount > limit + 0.005 });
     }
@@ -655,7 +677,7 @@ class VanTripSales {
     }
     const documents = plan.groups.map((g) => ({ original: g.original, items: g.items, parts: g.parts }));
     if (plan.rest.length) {
-      const { items } = await looseLines(trip, customer, plan.rest.map((m) => ({ stockId: m.key, qty: m.qty })), day, opts, session);
+      const { items } = await looseLines(trip, customer, plan.rest.map(looseOf), day, opts, session);
       documents.push({ original: null, items, parts: plan.rest.map((m) => m.parts) });
     }
     const creditNotes = [];

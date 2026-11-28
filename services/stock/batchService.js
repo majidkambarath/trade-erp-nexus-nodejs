@@ -112,9 +112,13 @@ class BatchService {
     const filter = { companyId, stockId, status: "active", qtyOnHand: { $gt: 0 } };
     if (onlyFromTransactionId) filter.sourceTransactionId = onlyFromTransactionId;
     const batches = await withSession(StockBatch.find(filter).lean(), session);
+    // an ordinary first-expiry-first-out take leaves alone the units a van brought back damaged or expired and has not
+    // settled yet (they are written off from those batches); a write-off that names its batches takes them as named
+    const held = prefer?.length || includeExpired ? new Map() : await require("../vansales/vanTripSettlement").heldReturnBatches(stockId, { session });
+    const planned = held.size ? batches.map((b) => ({ ...b, qtyOnHand: round3(b.qtyOnHand - (held.get(String(b._id)) || 0)) })) : batches;
     const { takes, unallocated } = prefer?.length || includeExpired
       ? this.preferred(batches, qty, { prefer, includeExpired, orderDate, minShelfLifeDays })
-      : this.plan(this.eligibleInOrder(batches, { orderDate, minShelfLifeDays }), qty);
+      : this.plan(this.eligibleInOrder(planned, { orderDate, minShelfLifeDays }), qty);
 
     const allocations = [];
     let short = unallocated;

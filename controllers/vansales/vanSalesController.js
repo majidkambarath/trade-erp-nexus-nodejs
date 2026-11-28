@@ -52,6 +52,16 @@ function assertMayAcknowledge(req) {
   }
 }
 
+// Where the organisation chose that the storekeeper counts a van back in, the salesman who only sells does not count his
+// own van: the person who loads it (vansales.load), or one who settles or manages the vans, does.
+async function assertMayCountIn(req) {
+  if (holds(req, "vansales.load") || holds(req, "vansales.settle") || holds(req, "vansales.manage")) return;
+  const active = await VanSettingsService.forTrip(await loadTrip(req.params.tripId));
+  if (active.countIn === "storekeeper") {
+    throw new AppError("The storekeeper counts the van back in at the warehouse. Bring the van to the store.", 403, "COUNT_IN_BY_STOREKEEPER", { required: ["vansales.load"] });
+  }
+}
+
 // ---- vans and routes -----------------------------------------------------------------------------------------
 exports.listVans = catchAsync(async (req, res) => ok(res, await VanService.list({ includeInactive: req.query.all === "1", onlySalesman: ownerFilter(req) })));
 exports.getVan = catchAsync(async (req, res) => {
@@ -278,6 +288,7 @@ exports.returnable = catchAsync(async (req, res) => ok(res, await VanTripSales.r
 
 exports.unload = catchAsync(async (req, res) => {
   await assertMayWork(req, { loaderToo: true });
+  await assertMayCountIn(req);
   const trip = await VanTripSettlement.unload(req.params.tripId, { ...(req.body || {}), byName: req.admin?.name }, by(req));
   await log(req, "VAN_UNLOADED", trip, `Van ${trip.vanCode} counted back in on ${trip.tripNo}`);
   ok(res, await VanTripService.getById(trip._id));

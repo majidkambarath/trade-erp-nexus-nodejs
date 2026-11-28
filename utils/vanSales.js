@@ -163,11 +163,40 @@ function acceptPlan(request, counts) {
 }
 
 /**
- * The depot's free stock for one item: what the books hold, less what is out with job workers and what is sitting in
- * vans. Never below zero.
+ * The depot's free stock for one item: what the books hold, less what is out with job workers, what is sitting in
+ * vans, and what vans counted back in are still holding back until they are settled. Never below zero.
  */
-function freeDepot({ currentStock = 0, withJobWorker = 0, onVans = 0 }) {
-  return Math.max(0, round3(Number(currentStock) - Number(withJobWorker) - Number(onVans)));
+function freeDepot({ currentStock = 0, withJobWorker = 0, onVans = 0, countedIn = 0 }) {
+  return Math.max(0, round3(Number(currentStock) - Number(withJobWorker) - Number(onVans) - Number(countedIn)));
+}
+
+/**
+ * What a van counted back in but not yet settled still keeps off the depot's free stock, per item: the damaged and
+ * expired units (in the books until settlement writes them off, but in a bin, not on a shelf) and the units it came back
+ * short (in the books, but nowhere). Good units counted back are free at once; units found OVER are not in the books yet,
+ * so they free nothing. Only an UNLOADED trip holds anything here. -> Map(stockId -> qty)
+ */
+function countedInReserve(trip) {
+  const out = new Map();
+  if (trip?.status !== "UNLOADED" || !trip.unload) return out;
+  for (const l of trip.unload.lines || []) {
+    const id = idOf(l.stockId);
+    if (!id) continue;
+    const held = round3((Number(l.countedDamaged) || 0) + (Number(l.countedExpired) || 0) + Math.max(0, -(Number(l.difference) || 0)));
+    if (held > EPS) out.set(id, round3((out.get(id) || 0) + held));
+  }
+  return out;
+}
+
+/**
+ * The items a count left out: every item the van should hold (sellable, damaged or expired) that has no line in what was
+ * counted. A box left blank is not a count of nothing. -> [stockId]
+ */
+function uncounted({ sellable = new Map(), damaged = new Map(), expired = new Map() }, counted = []) {
+  const given = new Set((counted || []).map((c) => idOf(c?.stockId)).filter(Boolean));
+  const expected = new Set();
+  for (const m of [sellable, damaged, expired]) for (const [id, q] of m) if (Number(q) > EPS) expected.add(idOf(id));
+  return [...expected].filter((id) => !given.has(id));
 }
 
 /** Check and tidy the lines of a load: positive quantities, one row per item, nothing blank. */
@@ -685,7 +714,7 @@ module.exports = {
   isSellerOnly,
   STATUSES, HOLDING, SELLING, MOVES, VanError, NOT_GIVEN, returnsByReason, openRequest, awaitingOf, acceptPlan,
   round2, round3, idOf, RETURN_CONDITIONS,
-  loadedOf, soldOf, returnedOf, onVan, onVansAll, freeDepot,
+  loadedOf, soldOf, returnedOf, onVan, onVansAll, freeDepot, countedInReserve, uncounted,
   validateLoadLines, shortages, unloadVariance, stockMoves, cashSettlement, missingCheques, routeToday,
   canMove, validateVan, validateRoute, overCashLimit, calls,
   suggestLoad, expiringOnLoad, addDays, nextRunDay,

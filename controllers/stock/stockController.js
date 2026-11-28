@@ -29,14 +29,18 @@ exports.getAllStock = catchAsync(async (req, res) => {
   let stocks = await StockService.getAllStock(req.query);
   // what is out with job workers (a coater): still on hand in the books, shown beside the level (utils/jobWork.js)
   const away = await require("../../services/stock/jobWorkService").withJobWorker();
-  // and what is sitting in vans (utils/vanSales.js): the same idea, derived from the van trips that are still out
-  const onVans = await require("../../services/vansales/vanTripService").withOnVans();
-  if (away.size || onVans.size) {
+  // and what is sitting in vans (utils/vanSales.js): the same idea, derived from the van trips that are still out; and
+  // what vans counted back in hold until they are settled (their damaged, expired and missing units)
+  const VanTripService = require("../../services/vansales/vanTripService");
+  const onVans = await VanTripService.withOnVans();
+  const counted = await VanTripService.countedIn();
+  if (away.size || onVans.size || counted.size) {
     stocks = stocks.map((s) => {
       const id = String(s._id);
       const jw = away.get(id);
       const vn = onVans.get(id);
-      return jw || vn ? { ...(s.toObject ? s.toObject() : s), ...(jw ? { withJobWorker: jw } : {}), ...(vn ? { onVan: vn } : {}) } : s;
+      const ci = counted.get(id);
+      return jw || vn || ci ? { ...(s.toObject ? s.toObject() : s), ...(jw ? { withJobWorker: jw } : {}), ...(vn ? { onVan: vn } : {}), ...(ci ? { awaitingSettlement: ci } : {}) } : s;
     });
   }
 
