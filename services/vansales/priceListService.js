@@ -86,6 +86,33 @@ class PriceListService {
    * The price of each item for a customer, as the sell screen should offer it: Map(stockId -> {price, source, listName}).
    * `items` is [{ stockId, qty, itemPrice }].
    */
+  /**
+   * The same prices for many customers at once, with ONE read of the price lists (the offline pack prices up to 300
+   * shops): Map(customerId -> Map(stockId -> {price, source, listName})). `priceFor` keeps only the lists that name the
+   * customer, and the route's, so handing it every candidate list gives the same answer as reading them per customer.
+   */
+  static async pricesForCustomers({ customerIds = [], routeId, items, date, session }) {
+    const ids = [...new Set((customerIds || []).map(String))].filter(isId);
+    let routeListId = null;
+    if (isId(routeId)) {
+      const q = VanRoute.findById(routeId).select("priceListId").lean();
+      routeListId = (await (session ? q.session(session) : q))?.priceListId || null;
+    }
+    const or = [];
+    if (ids.length) or.push({ customerIds: { $in: ids } });
+    if (routeListId) or.push({ _id: routeListId });
+    const q = PriceList.find({ active: true, $or: or }).lean();
+    const lists = or.length ? await (session ? q.session(session) : q) : [];
+    const onDay = date ? String(date).slice(0, 10) : todayInOrg();
+    const out = new Map();
+    for (const customerId of ids) {
+      const one = new Map();
+      for (const it of items || []) one.set(String(it.stockId), rules.priceFor({ stockId: it.stockId, qty: it.qty || 1, customerId, routeListId, date: onDay, lists, itemPrice: it.itemPrice }));
+      out.set(customerId, one);
+    }
+    return out;
+  }
+
   static async pricesFor({ customerId, routeId, items, date, session }) {
     const { lists, routeListId } = await this.candidates({ customerId, routeId, session });
     const onDay = date ? String(date).slice(0, 10) : todayInOrg();

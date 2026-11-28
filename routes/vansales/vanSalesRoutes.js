@@ -99,6 +99,8 @@ router.get("/trips/:tripId/customers/:customerId/insight", requirePermission("va
 router.get("/trips/:tripId/visits", requirePermission("vansales.view"), c.visits);
 router.post("/trips/:tripId/visits", requirePermission("vansales.sell"), c.recordVisit);
 router.post("/trips/:tripId/transfer", requirePermission("vansales.load"), c.transfer);
+// the shops to pick from on the trip: the van's own with no search, any matching customer with one
+router.get("/trips/:tripId/shops", requirePermission("vansales.sell"), c.shops);
 router.get("/trips/:tripId/offline", requirePermission("vansales.sell"), c.offlinePack);
 router.post("/trips/:tripId/sync", requirePermission("vansales.sell"), c.sync);
 // the trip's invoices and the slip of each, to print it again (the salesman's own trip: the controller checks)

@@ -431,6 +431,13 @@ class VanAnalysisService {
       };
     });
     const missed = routes.flatMap((r) => (r.customers || []).filter((c) => !calledAnywhere.has(id(c.customerId))).map((c) => ({ customerId: id(c.customerId), name: c.name || "", routeName: r.name })));
+    // a van that works with no route has no plan to miss, but it has its own shops: the ones it served lately that were
+    // not called on in this period are listed under the van, so a quiet shop is noticed before it is lost
+    const noRouteVans = new Map(trips.filter((t) => !t.routeId).map((t) => [id(t.vanId), t.vanCode]));
+    const { vanCustomers } = require("./vanCustomers");
+    for (const [vanId, vanCode] of noRouteVans) {
+      for (const c of await vanCustomers(vanId)) if (!calledAnywhere.has(c.customerId)) missed.push({ customerId: c.customerId, name: "", routeName: `${vanCode} - its own shops` });
+    }
     const unnamed = await customerNames(missed.filter((c) => !c.name).map((c) => c.customerId));
     const notCalled = missed.map((c) => ({ ...c, name: c.name || unnamed.get(c.customerId)?.name || "" }))
       .sort((a, b) => a.routeName.localeCompare(b.routeName) || a.name.localeCompare(b.name)).slice(0, 500);

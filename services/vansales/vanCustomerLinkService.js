@@ -30,7 +30,7 @@ class VanCustomerLinkService {
     if (link.sourceType !== "Transaction") throw notAvailable();
     const inv = await Transaction.findById(link.sourceId).select("type partyId vanTripRef items.itemId").lean();
     if (!inv || inv.type !== "sales_order" || !inv.vanTripRef?.tripId) throw notAvailable();
-    const trip = await VanTrip.findById(inv.vanTripRef.tripId).select("routeId routeName vanCode").lean();
+    const trip = await VanTrip.findById(inv.vanTripRef.tripId).select("routeId routeName vanCode vanId").lean();
     const route = trip?.routeId ? await VanRoute.findById(trip.routeId).select("name days customers").lean() : null;
     return { inv, trip, route, customerId: String(inv.partyId) };
   }
@@ -50,18 +50,19 @@ class VanCustomerLinkService {
       const ctx = await this.#context(link);
       const { customerOrdering: ordering } = await VanSettingsService.settings();
       const open = (await AgeingService.openInvoices({ type: "receivable", partyId: ctx.customerId })).filter((r) => String(r.partyId) === ctx.customerId);
-      const orders = await TradeOrder.find({ partyId: ctx.customerId, kind: "sales", "source.routeId": { $exists: true }, status: { $in: ["DRAFT", "CONFIRMED"] } }).sort({ expectedDate: 1 }).limit(10).lean();
+      const orders = await TradeOrder.find({ partyId: ctx.customerId, kind: "sales", "source.kind": { $in: ["van", "customer_link"] }, status: { $in: ["DRAFT", "CONFIRMED"] } }).sort({ expectedDate: 1 }).limit(10).lean();
       return {
         statement: {
           owed: rules.round2(open.reduce((t, r) => t + Number(r.outstanding || 0), 0)),
           overdue: rules.round2(open.filter((r) => Number(r.daysPastDue) > 0).reduce((t, r) => t + Number(r.outstanding || 0), 0)),
           open: open.slice(0, 20).map((r) => ({ number: r.transactionNo, date: r.date, outstanding: rules.round2(r.outstanding), overdue: Number(r.daysPastDue) > 0 })),
         },
+        // a route says the day the van comes; a van with no route comes when it comes, so no day is promised
         nextVisit: ctx.route ? rules.nextRunDay(ctx.route.days, todayInOrg()) : null,
         orders: orders.map((o) => ({ orderNo: o.orderNo, expectedDate: o.expectedDate ? o.expectedDate.toISOString().slice(0, 10) : null, requested: o.source?.kind === "customer_link", items: (o.items || []).map((l) => ({ name: l.description, qty: l.qty })) })),
         // an organisation can switch off ordering through the link: the page then shows what is owed and the next visit, with no form
-        canRequest: Boolean(ctx.route) && ordering,
-        items: ctx.route && ordering ? await this.#offer(ctx) : [],
+        canRequest: Boolean(ctx.trip) && ordering,
+        items: ctx.trip && ordering ? await this.#offer(ctx) : [],
       };
     });
   }
@@ -72,7 +73,7 @@ class VanCustomerLinkService {
       const ctx = await this.#context(link);
       const settings = await VanSettingsService.settings();
       if (!settings.customerOrdering) throw new AppError("This business does not take orders through this page.", 403, "VAN_ORDERING_OFF");
-      if (!ctx.route) throw new AppError("This van has no route, so there is no next visit to ask for.", 409, "ROUTE_REQUIRED");
+      if (!ctx.trip) throw notAvailable();
       const offer = new Map((await this.#offer(ctx)).map((i) => [i.stockId, i]));
       const raw = Array.isArray(body.lines) ? body.lines : [];
       if (raw.length > MAX_LINES) throw new AppError(`Ask for at most ${MAX_LINES} items at a time.`, 400, "TOO_MANY_LINES");
@@ -88,7 +89,8 @@ class VanCustomerLinkService {
       if (!lines.length) throw new AppError("Say how many of at least one item.", 400, "ITEMS_REQUIRED");
       const waiting = await TradeOrder.countDocuments({ partyId: ctx.customerId, "source.kind": "customer_link", status: "DRAFT" });
       if (waiting >= settings.maxOpenRequests) throw new AppError("You already have requests waiting for the van. The salesman will bring those first.", 409, "REQUEST_LIMIT");
-      const expected = rules.nextRunDay(ctx.route.days, todayInOrg());
+      // the route's next run day; a van with no route is asked for the next day, and the salesman brings it when he calls
+      const expected = rules.nextRunDay(ctx.route?.days, todayInOrg());
       const order = await TradeOrderService.create(
         {
           kind: "sales", partyId: ctx.customerId, date: todayInOrg(), expectedDate: expected, items: lines,
@@ -96,7 +98,7 @@ class VanCustomerLinkService {
         },
         "customer-link"
       );
-      await TradeOrder.updateOne({ _id: order._id }, { $set: { source: { kind: "customer_link", tripId: ctx.inv.vanTripRef.tripId, routeId: ctx.trip.routeId } } });
+      await TradeOrder.updateOne({ _id: order._id }, { $set: { source: { kind: "customer_link", tripId: ctx.inv.vanTripRef.tripId, ...(ctx.trip.vanId ? { vanId: ctx.trip.vanId } : {}), ...(ctx.trip.routeId ? { routeId: ctx.trip.routeId } : {}) } } });
       return { orderNo: order.orderNo, expectedDate: expected, lines: lines.length };
     });
   }

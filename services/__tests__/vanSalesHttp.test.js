@@ -145,17 +145,22 @@ test("a salesman may sell, collect and count in on his own trip, and sees only w
   // the offers are read by the salesman (the phone shows them); an order for next time is his to take
   const offers = await call("ali", "GET", "/van-sales/promotions");
   assert.equal(offers.status, 200, JSON.stringify(offers.data));
+  // this trip has no route: the order is for the van's next visit (tomorrow), planned by van rather than by route
   const order = await call("ali", "POST", `/van-sales/trips/${tripId}/preorders`, { customerId: String(cust._id), items: [{ itemId: rice._id, qty: 3 }] });
-  assert.equal(order.status, 400, JSON.stringify(order.data));
-  assert.equal(order.code, "ROUTE_REQUIRED", "this trip has no route, so there is no next visit to order for (past the permission check)");
+  assert.equal(order.status, 201, JSON.stringify(order.data));
+  assert.ok(order.body.source.vanId, "a van with no route keeps its orders for next time by van");
+  assert.equal(order.body.source.routeId, undefined, "no route is named");
+  const badDay = await call("ali", "POST", `/van-sales/trips/${tripId}/preorders`, { customerId: String(cust._id), items: [{ itemId: rice._id, qty: 3 }], expectedDate: "2020-01-01" });
+  assert.equal(badDay.code, "INVALID_DATE", "an order for next time is not for a day gone by");
 
-  // fuel from the van's cash is his to enter on his own trip; a pin needs the customer on the trip's route
+  // fuel from the van's cash is his to enter on his own trip; with no route he may pin a shop he sells to, once
   const fuel = await call("ali", "POST", `/van-sales/trips/${tripId}/expenses`, { kind: "fuel", amount: 20 });
   assert.equal(fuel.status, 201, JSON.stringify(fuel.data));
   assert.equal(fuel.body.trip.totals.expenses, 20);
   const pin = await call("ali", "POST", `/van-sales/trips/${tripId}/customers/${cust._id}/location`, { location: { lat: 25.2, lng: 55.3 } });
-  assert.equal(pin.status, 403);
-  assert.equal(pin.code, "CUSTOMER_NOT_ON_ROUTE");
+  assert.equal(pin.status, 200, JSON.stringify(pin.data));
+  const again = await call("ali", "POST", `/van-sales/trips/${tripId}/customers/${cust._id}/location`, { location: { lat: 25.3, lng: 55.4 } });
+  assert.equal(again.code, "LOCATION_ALREADY_SET", "moving a pin is a supervisor's call");
 
   // what a customer usually buys is the salesman's to read on his own trip: the invoice he just made is their last order
   const insight = await call("ali", "GET", `/van-sales/trips/${tripId}/customers/${cust._id}/insight`);

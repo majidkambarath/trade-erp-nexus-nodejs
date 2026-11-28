@@ -43,18 +43,23 @@ class VanFleetService {
   }
 
   /**
-   * Pin a shop where the van is standing: once, by the salesman of a trip whose route calls on the customer. Moving a
+   * Pin a shop where the van is standing: once, by the salesman of the trip. A trip with a route pins only a customer
+   * the route calls on; a trip with NO route (a van that sells wherever it goes) pins any shop it may sell to. Moving a
    * pin already set is a supervisor's call (`mayRepin`), so a salesman cannot move the shop to wherever he happens to be.
    */
   static async pinCustomer(tripId, customerId, location, by, { mayRepin = false } = {}) {
     const trip = await loadTrip(tripId);
-    if (!(await VanSettingsService.forTrip(trip)).captureLocation) throw fail("This business does not use the phone's location, so shops are not pinned from the van", 403, "LOCATION_OFF");
+    const active = await VanSettingsService.forTrip(trip);
+    if (!active.captureLocation) throw fail("This business does not use the phone's location, so shops are not pinned from the van", 403, "LOCATION_OFF");
     if (!isId(customerId)) throw fail("Choose the customer", 400, "CUSTOMER_REQUIRED");
     const here = cleanLocation(location);
     if (!here) throw fail("The phone did not give a usable location. Try again outside, with location switched on.", 400, "LOCATION_REQUIRED");
-    const route = trip.routeId ? await VanRoute.findById(trip.routeId).select("customers").lean() : null;
-    if (!mayRepin && !(route?.customers || []).some((c) => String(c.customerId) === String(customerId))) {
-      throw fail("Only a customer on this trip's route can be pinned from the van", 403, "CUSTOMER_NOT_ON_ROUTE");
+    if (!mayRepin) {
+      const route = trip.routeId ? await VanRoute.findById(trip.routeId).select("customers").lean() : null;
+      const onRoute = (route?.customers || []).some((c) => String(c.customerId) === String(customerId));
+      if (route ? !onRoute : active.customers === "route") {
+        throw fail(route ? "Only a customer on this trip's route can be pinned from the van" : "This van sells only to the customers on its route, so a shop cannot be pinned from a trip with no route", 403, "CUSTOMER_NOT_ON_ROUTE");
+      }
     }
     const c = await Customer.findById(customerId).select("customerName location");
     if (!c) throw fail("That customer does not exist", 404, "CUSTOMER_NOT_FOUND");

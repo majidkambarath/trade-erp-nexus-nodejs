@@ -15,6 +15,27 @@ const { addressOf } = require("../../utils/vanSlip");
 
 const isId = (v) => mongoose.isValidObjectId(v);
 const fail = (message, status, code, details) => new AppError(message, status, code, details);
+
+// The van's own pick list of customers: names, codes and what the sale screen needs, nothing about balances or contacts.
+const CUSTOMER_FIELDS = "customerName customerId phone status paymentTerms vanPaymentMode trnNumber trnNO vat.trn billingAddress city emirate location.lat";
+const customerChoice = (r) => ({
+  id: String(r._id), name: r.customerName || "", code: r.customerId || "", phone: r.phone || "",
+  terms: r.paymentTerms || "", active: r.status !== "Inactive", trn: r.vat?.trn || r.trnNumber || r.trnNO || "",
+  address: addressOf(r), // printed on the slip: the street and the place, nothing else of the record
+  payMode: r.vanPaymentMode || "", // how they usually pay: only pre-selects the van's sale screen
+  pinned: r.location?.lat !== undefined && r.location?.lat !== null, // whether the shop's place is set (never the place itself)
+});
+/**
+ * What a typed search matches: the name, the customer code or the phone as written, and - when the text holds five or
+ * more digits - the phone by its digits, since a phone is stored as +971501234567 and a salesman types 050 123 4567.
+ */
+function searchTerms(search) {
+  const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  const terms = [{ customerName: rx }, { customerId: rx }, { phone: rx }];
+  const digits = search.replace(/\D/g, "").replace(/^0+/, "");
+  if (digits.length >= 5) terms.push({ phone: new RegExp(digits.slice(-9)) });
+  return terms;
+}
 const wrap = (fn) => {
   try {
     return fn();
@@ -174,25 +195,25 @@ class VanService {
   static async customerChoices(query = {}) {
     const q = {};
     const search = String(query.search || "").trim().slice(0, 80);
-    if (search) {
-      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      q.$or = [{ customerName: rx }, { customerId: rx }, { phone: rx }];
-    }
+    if (search) q.$or = searchTerms(search);
     if (String(query.status || "") !== "all") q.status = { $ne: "Inactive" };
     const limit = Math.min(500, Math.max(1, Math.round(Number(query.limit)) || 200));
-    const FIELDS = "customerName customerId phone status paymentTerms vanPaymentMode trnNumber trnNO vat.trn billingAddress city emirate";
-    const rows = await Customer.find(q).select(FIELDS).sort({ customerName: 1, _id: 1 }).limit(limit).lean();
+    const rows = await Customer.find(q).select(CUSTOMER_FIELDS).sort({ customerName: 1, _id: 1 }).limit(limit).lean();
     // `ids` names customers who must be in the answer whatever the page holds: the shop being sold to is past the limit
     // in a long list, and without it the screen would not know their terms or usual way of paying
     const wanted = String(query.ids || "").split(",").map((x) => x.trim()).filter((x) => /^[a-f0-9]{24}$/i.test(x)).slice(0, 50);
     const missing = wanted.filter((id) => !rows.some((r) => String(r._id) === id));
-    if (missing.length) rows.push(...(await Customer.find({ _id: { $in: missing }, ...(q.status ? { status: q.status } : {}) }).select(FIELDS).lean()));
-    return rows.map((r) => ({
-      id: String(r._id), name: r.customerName || "", code: r.customerId || "", phone: r.phone || "",
-      terms: r.paymentTerms || "", active: r.status !== "Inactive", trn: r.vat?.trn || r.trnNumber || r.trnNO || "",
-      address: addressOf(r), // printed on the slip: the street and the place, nothing else of the record
-      payMode: r.vanPaymentMode || "", // how they usually pay: only pre-selects the van's sale screen
-    }));
+    if (missing.length) rows.push(...(await Customer.find({ _id: { $in: missing }, ...(q.status ? { status: q.status } : {}) }).select(CUSTOMER_FIELDS).lean()));
+    return rows.map(customerChoice);
+  }
+
+  /** The same narrow rows for customers named by id, in the order given (inactive ones left out). */
+  static async customersByIds(ids = []) {
+    const wanted = [...new Set((ids || []).map(String))].filter(isId);
+    if (!wanted.length) return [];
+    const rows = await Customer.find({ _id: { $in: wanted }, status: { $ne: "Inactive" } }).select(CUSTOMER_FIELDS).lean();
+    const at = new Map(wanted.map((id, i) => [id, i]));
+    return rows.sort((a, b) => at.get(String(a._id)) - at.get(String(b._id))).map(customerChoice);
   }
 
   /**

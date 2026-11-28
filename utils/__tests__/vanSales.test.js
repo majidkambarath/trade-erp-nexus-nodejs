@@ -333,3 +333,27 @@ test("load requests: an open request, what is loaded but not accepted, and what 
   assert.throws(() => v.acceptPlan(loaded, [{ stockId: "a", accepted: [3] }]), { code: "QTY_INVALID" });
   assert.throws(() => v.acceptPlan(loaded, [{ stockId: "z", accepted: 1 }]), { code: "LINE_NOT_LOADED" });
 });
+
+test("a van with no route is quiet whenever nothing has been done for two hours; it has no stops to finish", () => {
+  const now = new Date("2026-11-17T12:00:00Z");
+  const r = v.boardRow({ status: "ON_ROUTE", stops: [], lastAt: "2026-11-17T09:00:00Z", now });
+  assert.deepEqual([r.done, r.total, r.next, r.quiet], [0, 0, null, true]);
+  assert.equal(v.boardRow({ status: "ON_ROUTE", stops: [], lastAt: "2026-11-17T11:00:00Z", now }).quiet, false, "busy an hour ago");
+  assert.equal(v.boardRow({ status: "UNLOADED", stops: [], lastAt: "2026-11-17T06:00:00Z", now }).quiet, false, "back at the depot");
+});
+
+test("a van's own shops: each once, the most recent first, junk left out, cut to the limit", () => {
+  const rows = v.recentCustomers([
+    { customerId: "a", at: "2026-11-01T08:00:00Z" },
+    { customerId: "b", at: new Date("2026-11-03T08:00:00Z") },
+    { customerId: "a", at: "2026-11-05T08:00:00Z" },
+    { customerId: { _id: "c" }, at: "2026-11-02T08:00:00Z" },
+    { customerId: "", at: "2026-11-06T08:00:00Z" },
+    { customerId: "d", at: "not a date" },
+    null,
+  ]);
+  assert.deepEqual(rows.map((r) => r.customerId), ["a", "b", "c"]);
+  assert.equal(rows[0].lastAt, "2026-11-05T08:00:00.000Z", "the latest time a shop was served");
+  assert.deepEqual(v.recentCustomers([{ customerId: "a", at: "2026-11-01" }, { customerId: "b", at: "2026-11-02" }], { limit: 1 }).map((r) => r.customerId), ["b"]);
+  assert.deepEqual(v.recentCustomers(undefined), []);
+});

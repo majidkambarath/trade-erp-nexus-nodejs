@@ -12,7 +12,7 @@ const NumberSeriesService = require("../core/numberSeriesService");
 const JobWorkService = require("../stock/jobWorkService");
 const { withTransactionSession } = require("../../utils/withTransactionSession");
 const { getTenant } = require("../../utils/tenant");
-const { allBranches } = require("../../utils/tenantContext");
+const { allBranches, runInBranchOf } = require("../../utils/tenantContext");
 const { todayInOrg } = require("../../utils/documentExpiry");
 const { loadTrip, stockOf } = require("./vanTripStock");
 const VanSettingsService = require("./vanSettingsService");
@@ -176,10 +176,13 @@ class VanTripService {
     }));
   }
 
-  /** The salesman's own trips that are not finished: what the My van screen opens on. */
+  /**
+   * The salesman's own trips that are not finished: what the My van screen opens on. Found in every branch (a trip
+   * belongs to the branch it was opened in, which need not be the salesman's own), each read in its own branch.
+   */
   static async mine(adminId) {
-    const trips = await VanTrip.find({ salesmanId: String(adminId), status: { $in: ["LOADING", "ON_ROUTE", "UNLOADED"] } }).sort({ date: -1, _id: -1 }).limit(5);
-    return Promise.all(trips.map((t) => this.present(t)));
+    const trips = await allBranches(() => VanTrip.find({ salesmanId: String(adminId), status: { $in: ["LOADING", "ON_ROUTE", "UNLOADED"] } }).sort({ date: -1, _id: -1 }).limit(5));
+    return Promise.all(trips.map((t) => runInBranchOf(t, () => this.present(t))));
   }
 
   // ---- opening and loading ----------------------------------------------------------------------------------
@@ -207,6 +210,11 @@ class VanTripService {
       const r = await VanRoute.findById(routeId).select("name").session(session).lean();
       if (!r) throw fail("That route does not exist", 400, "ROUTE_NOT_FOUND");
       routeName = r.name;
+    }
+    // a van that may sell only to its route's customers, sent out with no route, could sell to nobody: say so now,
+    // at the start, rather than at every door it stops at
+    if (!routeId && (await VanSettingsService.forVan(van, { session })).customers === "route") {
+      throw fail(`${van.code} sells only to the customers on its route, and no route is set. Give the trip a route, or let the van sell to any customer.`, 400, "ROUTE_REQUIRED");
     }
     const day = input.date ? String(input.date).slice(0, 10) : todayInOrg();
     const { companyId, branchId } = getTenant();

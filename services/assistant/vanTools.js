@@ -119,8 +119,11 @@ async function runLookup(name, input, ctx) {
   }
   // route_owing
   if (!trip) return answer(tables.routeOwingTable(null));
+  // the route's customers; a van with no route answers for its own shops (the ones it served lately)
   const route = trip.routeId ? await VanRoute.findById(trip.routeId).select("customers").lean() : null;
-  const ids = new Set((route?.customers || []).map((c) => String(c.customerId)));
+  const ids = new Set(route
+    ? (route.customers || []).map((c) => String(c.customerId))
+    : (await require("../vansales/vanCustomers").vanCustomers(trip.vanId)).map((c) => c.customerId));
   const open = ids.size ? (await AgeingService.openInvoices({ type: "receivable" })).filter((r) => ids.has(String(r.partyId))) : [];
   return answer(tables.routeOwingTable(trip, open, orgLocale.baseCurrency()));
 }
