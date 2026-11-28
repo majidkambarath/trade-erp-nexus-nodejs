@@ -15,9 +15,13 @@
 // Rows are Extended JSON (one per line), so an ObjectId stays an ObjectId and a date stays a date. Plain
 // JSON.stringify would hand them back as strings and the restore would be subtly wrong everywhere.
 //
-// WHAT IS NOT IN HERE: the attachment FILES. They are on the server's disk (services/core/attachmentService.js
-// writes under uploads/attachments), not in the database. The manifest counts them and lists their keys, so a
-// restore can at least say what is missing. Copy that directory separately.
+// WHAT IS NOT IN HERE: the attachment FILES. They are in Cloudinary (older rows: on the server's disk under
+// uploads/attachments; services/core/attachmentService.js), not in the database. The manifest counts them and
+// lists their keys, so a restore can at least say what is missing.
+//
+// IT ONLY READS. The connection switches off Mongoose's autoCreate and autoIndex, which would otherwise create
+// every model's collection and build its indexes on the database being backed up: that counts against a shared
+// Atlas cluster's 500-collection cap, and it fails outright for the read-only database user the nightly job uses.
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "..", "..", ".env") });
 
@@ -118,7 +122,7 @@ async function exportOrganisation(code, dir) {
     counts,
     attachments: {
       count: attachmentKeys.length,
-      note: "these files are on the server's disk under uploads/attachments and are NOT in this backup",
+      note: "these files are in Cloudinary (older ones on the server's disk under uploads/attachments) and are NOT in this backup",
       keys: attachmentKeys,
     },
   };
@@ -145,7 +149,8 @@ async function exportPlatform(dir) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!process.env.MONGO_URI) throw new Error("MONGO_URI is not set");
-  await mongoose.connect(process.env.MONGO_URI, args.db ? { dbName: args.db } : {});
+  // a backup must not write anything: no collections created, no indexes built (see the top of this file)
+  await mongoose.connect(process.env.MONGO_URI, { autoCreate: false, autoIndex: false, ...(args.db ? { dbName: args.db } : {}) });
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const root = path.join(args.outDir, stamp);

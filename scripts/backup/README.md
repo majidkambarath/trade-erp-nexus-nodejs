@@ -64,9 +64,16 @@ The import prints the row count and refuses if it disagrees with the manifest. T
 
 There is deliberately **no timer inside the server**. The app runs on an instance whose disk does not survive
 a deploy, so a backup written there would be deleted by the next one — which is the very problem backups
-exist for. The schedule has to live outside the app. Pick one:
+exist for. The schedule has to live outside the app.
 
-- **Your own machine (simplest, and what to start with).** A daily task that runs the export against the
+**The chosen schedule is the GitHub Actions workflow `.github/workflows/backup.yml`:** nightly, one job per
+Atlas cluster, encrypted, kept 35 days in GitHub and copied off-site to Backblaze B2. Its secrets and the B2
+set-up are in `docs/BACKUP_AND_DR.md`. The export connects with `autoCreate` and `autoIndex` off, so it only reads
+and works with a read-only database user.
+
+Other ways, if GitHub cannot be used:
+
+- **Your own machine.** A daily task that runs the export against the
   production `MONGO_URI` and keeps the output on a disk you control. On Windows:
 
   ```

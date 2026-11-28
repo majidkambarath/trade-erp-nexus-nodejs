@@ -1,23 +1,36 @@
-# A daily backup of every organisation (scripts/backup/export.js --all), encrypted, kept as a workflow artifact for 35 days.
+# A nightly backup of every organisation on every Atlas cluster (scripts/backup/export.js --all), encrypted, kept as a
+# workflow artifact for 35 days and, once the B2_* secrets exist, copied off-site to Backblaze B2.
 #
-# It does NOTHING until two repository secrets exist (Settings > Secrets and variables > Actions):
-#   MONGO_URI          the production connection string (read access is enough)
-#   BACKUP_PASSPHRASE  a long random passphrase. Keep a copy somewhere else: without it a backup cannot be opened.
+# One job per cluster (the matrix below). Repository secrets (Settings > Secrets and variables > Actions):
+#   MONGO_URI               the shared cluster (brivox-production, abc, the demos)
+#   MONGO_URI_GOLDEN_ARROW  Golden Arrow's own cluster
+#     Use a database user with the Atlas role "Only read any database": the export only reads.
+#   BACKUP_PASSPHRASE       a long random passphrase. Keep a copy somewhere else: without it a backup cannot be opened.
+#   B2_KEY_ID, B2_APP_KEY, B2_BUCKET, B2_ENDPOINT
+#                           the off-site copy (all four or none). The key should be WRITE ONLY for that one bucket, so a
+#                           leaked key cannot delete the backups; B2's lifecycle rules do the deleting (docs/BACKUP_AND_DR.md).
+#
+# A missing cluster secret or passphrase FAILS the run on purpose: a backup that passes while copying nothing is worse
+# than one that fails, and GitHub emails a failed scheduled run.
 #
 # A dump holds every client's books, password hashes and two-factor secrets, so it never leaves the runner unencrypted.
-# To open one: download the artifact, then
-#   openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in backup.tar.gz.enc -out backup.tar.gz -pass env:BACKUP_PASSPHRASE
+# To open one: download it (artifact or B2), then
+#   openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in backup-<cluster>-<day>.tar.gz.enc -out backup.tar.gz -pass env:BACKUP_PASSPHRASE
 #   tar -xzf backup.tar.gz
 # and restore one organisation with scripts/backup/import.js (docs/BACKUP_AND_DR.md).
 #
-# GitHub keeps artifacts only as long as the repository's retention allows (here 35 days). Keep monthly copies somewhere
-# that is not GitHub and not Atlas as well: a backup that lives only beside what it protects is one failure from gone.
+# A new client on its own cluster: add a line to the matrix and its secret.
 name: backup
 
 on:
   schedule:
     - cron: "30 22 * * *" # 02:30 in Dubai
   workflow_dispatch:
+    inputs:
+      monthly:
+        description: "Also keep this copy as the month's copy in B2 (when the run on the 1st failed)"
+        type: boolean
+        default: false
 
 concurrency:
   group: backup
@@ -28,47 +41,103 @@ permissions:
 
 jobs:
   backup:
+    name: backup (${{ matrix.cluster }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false # one cluster failing must not stop the other's backup
+      matrix:
+        include:
+          - cluster: shared # cluster0: brivox-production, abc, the demos
+            uri_secret: MONGO_URI
+          - cluster: golden-arrow # Golden Arrow's own cluster
+            uri_secret: MONGO_URI_GOLDEN_ARROW
     env:
-      MONGO_URI: ${{ secrets.MONGO_URI }}
+      CLUSTER: ${{ matrix.cluster }}
+      URI_SECRET: ${{ matrix.uri_secret }}
+      MONGO_URI: ${{ secrets[matrix.uri_secret] }}
       BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+      B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      B2_APP_KEY: ${{ secrets.B2_APP_KEY }}
+      B2_BUCKET: ${{ secrets.B2_BUCKET }}
+      B2_ENDPOINT: ${{ secrets.B2_ENDPOINT }}
+      MONTHLY_BY_HAND: ${{ inputs.monthly }}
       NODE_ENV: production
     steps:
-      - name: Stop unless the secrets are set
-        id: ready
+      - name: Check the secrets
         run: |
-          if [ -z "$MONGO_URI" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
-            echo "MONGO_URI and BACKUP_PASSPHRASE are not both set: nothing is backed up. See the comment at the top of this file."
-            echo "go=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "go=true" >> "$GITHUB_OUTPUT"
+          missing=""
+          [ -n "$MONGO_URI" ] || missing="$missing $URI_SECRET"
+          [ -n "$BACKUP_PASSPHRASE" ] || missing="$missing BACKUP_PASSPHRASE"
+          if [ -n "$missing" ]; then
+            echo "::error::Nothing was backed up for the $CLUSTER cluster: set the repository secret(s)$missing (Settings > Secrets and variables > Actions). See docs/BACKUP_AND_DR.md."
+            exit 1
+          fi
+          set=0
+          for v in B2_KEY_ID B2_APP_KEY B2_BUCKET B2_ENDPOINT; do
+            if [ -n "${!v}" ]; then set=$((set + 1)); fi
+          done
+          if [ "$set" -ne 0 ] && [ "$set" -ne 4 ]; then
+            echo "::error::Only some of B2_KEY_ID, B2_APP_KEY, B2_BUCKET and B2_ENDPOINT are set: set all four, or none."
+            exit 1
+          fi
+          if [ "$set" -eq 0 ]; then
+            echo "::warning::No off-site copy for $CLUSTER: the B2_* secrets are not set, so this backup is kept in GitHub only (35 days)."
           fi
       - uses: actions/checkout@v4
-        if: steps.ready.outputs.go == 'true'
       - uses: actions/setup-node@v4
-        if: steps.ready.outputs.go == 'true'
         with:
           node-version-file: .nvmrc
           cache: npm
       - name: Install
-        if: steps.ready.outputs.go == 'true'
         run: npm ci --omit=dev
       - name: Export every organisation
-        if: steps.ready.outputs.go == 'true'
-        run: node scripts/backup/export.js --all --out "$RUNNER_TEMP/backup"
+        run: node scripts/backup/export.js --all --out "$RUNNER_TEMP/backup" | tee "$RUNNER_TEMP/export.log"
       - name: Encrypt
-        if: steps.ready.outputs.go == 'true'
+        id: pack
         run: |
+          day=$(TZ=Asia/Dubai date +%F) # the cron fires at 22:30 UTC, when the UTC date is still the day before
+          name="backup-$CLUSTER-$day.tar.gz.enc"
           cd "$RUNNER_TEMP"
           tar -czf backup.tar.gz backup
-          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in backup.tar.gz -out backup.tar.gz.enc -pass env:BACKUP_PASSPHRASE
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in backup.tar.gz -out "$name" -pass env:BACKUP_PASSPHRASE
           rm -rf backup backup.tar.gz
-          sha256sum backup.tar.gz.enc
+          sum=$(sha256sum "$name" | cut -d' ' -f1)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "day=$day" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Backup of the $CLUSTER cluster, $day (Dubai)"
+            echo '```'
+            grep -v '^Restore with:' export.log
+            echo '```'
+            echo "SHA-256 of \`$name\`: \`$sum\`"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
-        if: steps.ready.outputs.go == 'true'
         with:
-          name: backup-${{ github.run_id }}
-          path: ${{ runner.temp }}/backup.tar.gz.enc
+          name: backup-${{ matrix.cluster }}-${{ steps.pack.outputs.day }}
+          path: ${{ runner.temp }}/${{ steps.pack.outputs.name }}
           retention-days: 35
           if-no-files-found: error
+      - name: Copy off-site (Backblaze B2)
+        if: env.B2_KEY_ID != '' && env.B2_APP_KEY != '' && env.B2_BUCKET != '' && env.B2_ENDPOINT != ''
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APP_KEY }}
+          # newer AWS CLIs send checksum headers that S3-compatible stores refuse
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          NAME: ${{ steps.pack.outputs.name }}
+          DAY: ${{ steps.pack.outputs.day }}
+        run: |
+          cd "$RUNNER_TEMP"
+          endpoint="$B2_ENDPOINT"
+          case "$endpoint" in https://*) ;; *) endpoint="https://$endpoint" ;; esac
+          # the region is part of B2's endpoint (s3.<region>.backblazeb2.com) and the request is signed for it
+          region=$(printf '%s' "$endpoint" | sed -nE 's#^https://s3\.([a-z0-9-]+)\.backblazeb2\.com/?$#\1#p')
+          export AWS_DEFAULT_REGION="${region:-us-east-1}"
+          aws s3 cp "$NAME" "s3://$B2_BUCKET/daily/$CLUSTER/$DAY.tar.gz.enc" --endpoint-url "$endpoint" --no-progress
+          if [ "${DAY:8:2}" = "01" ] || [ "$MONTHLY_BY_HAND" = "true" ]; then
+            aws s3 cp "$NAME" "s3://$B2_BUCKET/monthly/$CLUSTER/${DAY:0:7}.tar.gz.enc" --endpoint-url "$endpoint" --no-progress
+            echo "Kept as the copy for ${DAY:0:7}." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "Copied to B2: daily/$CLUSTER/$DAY.tar.gz.enc" >> "$GITHUB_STEP_SUMMARY"

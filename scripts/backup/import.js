@@ -21,8 +21,9 @@
 // them still resolves. Every row is checked against the organisation being restored before anything is
 // written, so the bypass cannot be used to smuggle rows into a different organisation.
 //
-// WHAT IT CANNOT PUT BACK: the attachment files (see the manifest's attachments.keys). Copy those into
-// uploads/attachments separately, or the rows will point at files that are not there.
+// WHAT IT CANNOT PUT BACK: the attachment files (see the manifest's attachments.keys). Those in Cloudinary are
+// still the source's assets (treat a restored copy as read-only); older ones kept on the server's disk must be
+// copied into uploads/attachments separately, or their rows will point at files that are not there.
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "..", "..", ".env") });
 

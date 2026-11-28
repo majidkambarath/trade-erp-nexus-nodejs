@@ -26,22 +26,60 @@ tier has no point-in-time recovery of its own; the daily export is the backup.
 
 ## The schedule
 
-`.github/workflows/backup.yml` runs every day at 02:30 Dubai time (and on demand from the Actions tab). It
-exports every organisation, compresses and **encrypts** the result (AES-256, passphrase in a repository secret),
-and keeps it as a workflow artifact for 35 days.
+`.github/workflows/backup.yml` runs every day at 02:30 Dubai time (and on demand: Actions > backup > Run
+workflow). It runs **one job per Atlas cluster**, exports every organisation on it, compresses and **encrypts** the
+result (AES-256), keeps it as a workflow artifact for 35 days, and copies it off-site to **Backblaze B2**. The run's
+summary lists the rows per organisation and the file's SHA-256.
 
-**It does nothing until these repository secrets are set**: `MONGO_URI` (production, read access is enough) and
-`BACKUP_PASSPHRASE`. Keep the passphrase somewhere other than GitHub: without it no backup can be opened.
+| Cluster (matrix entry) | Who is on it | Secret with its connection string |
+| --- | --- | --- |
+| `shared` | brivox-production, abc, al-manara-garage, al-khaleej-frozen, the demos | `MONGO_URI` |
+| `golden-arrow` | golden-arrow | `MONGO_URI_GOLDEN_ARROW` |
 
-Also keep a **monthly copy outside GitHub and outside Atlas** (download the artifact; it is already encrypted). A
-backup kept only beside what it protects is one failure from gone. Old copies are client data: delete them on a
-schedule once they are past the retention period.
+A new client on its own cluster: add a line to the workflow's matrix and its secret.
+
+**Repository secrets** (Settings > Secrets and variables > Actions):
+
+- the connection strings above. Make each with a database user that can only read: in Atlas, Database Access >
+  Add new database user, role **Only read any database**, a long generated password. The export only reads (it
+  creates no collections and builds no indexes), so it needs nothing more. GitHub's machines have no fixed
+  address, so the cluster's Network Access must allow `0.0.0.0/0`. The read-only user and its password are then
+  the protection.
+- `BACKUP_PASSPHRASE`: a long random passphrase. **Keep a copy in a password manager.** Without it no backup can be
+  opened, and GitHub never shows a secret again.
+- `B2_KEY_ID`, `B2_APP_KEY`, `B2_BUCKET`, `B2_ENDPOINT` (all four or none): the off-site copy, below.
+
+**A missing connection string or passphrase FAILS the run** (red, naming the secret). GitHub emails a failed
+scheduled run to whoever last edited the schedule, so check that email. With no `B2_*` secrets the run passes with
+a warning and keeps the copy in GitHub only.
+
+**Off-site copy (Backblaze B2).** A backup kept only beside what it protects is one failure from gone, so every
+copy also goes to a private B2 bucket:
+
+- `daily/<cluster>/<YYYY-MM-DD>.tar.gz.enc`, every run;
+- `monthly/<cluster>/<YYYY-MM>.tar.gz.enc` on the 1st (Dubai date). If that run failed, run the workflow by hand
+  with **monthly** ticked.
+
+Setting it up, once:
+
+1. Create a **private** bucket (Buckets > Create a bucket, files private).
+2. Under the bucket's Lifecycle Settings, add custom rules. Prefix `daily/`: hide after 35 days, delete 1 day after
+   hiding. Prefix `monthly/`: hide after 365 days, delete 1 day after hiding. Old copies are client data, and these
+   rules are what deletes them.
+3. Create an application key (Application Keys > Add a new application key): allow access to **that bucket
+   only**, type of access **Write Only**. A leaked key can then add files but never delete the backups; the
+   lifecycle rules do the deleting.
+4. Put its keyID in `B2_KEY_ID`, its applicationKey in `B2_APP_KEY`, the bucket name in `B2_BUCKET`, and the
+   bucket's S3 endpoint (shown on the bucket, for example `s3.eu-central-003.backblazeb2.com`) in `B2_ENDPOINT`.
+5. Run the workflow by hand and check that a file appears under `daily/` for each cluster.
+
+The whole shared cluster was about 200 KB encrypted on 28 Nov 2026, so B2's free 10 GB lasts for years.
 
 ## Restoring
 
-1. Download the artifact and decrypt it:
-   `openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in backup.tar.gz.enc -out backup.tar.gz -pass env:BACKUP_PASSPHRASE`
-   then `tar -xzf backup.tar.gz`.
+1. Download the copy (the run's artifact, or the file from B2) and decrypt it:
+   `openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in backup-<cluster>-<day>.tar.gz.enc -out backup.tar.gz -pass env:BACKUP_PASSPHRASE`
+   then `tar -xzf backup.tar.gz`. A wrong passphrase answers `bad decrypt`.
 2. Restore the organisation into an **empty** database:
    `node scripts/backup/import.js --from backup/<stamp>/<org> --confirm --db <new database name>`.
    It checks every file against its checksum first and refuses a changed or missing one, refuses to write into a
@@ -73,6 +111,7 @@ is working. A drill that fails means the backup cannot be trusted until it passe
 | 2026-11-27 | test organisation (throwaway database) | every collection, files checked against their checksums | balanced | passed (automated test `backupDrill.test.js`) | ~1 min |
 | 2026-11-27 | brivox-production (live, shared cluster) | 729 rows, 37 files checked against their checksums | 54,799.59 / 54,799.59 | passed | 125 s |
 | 2026-11-27 | golden-arrow (live, its own cluster, via `.env.golden-arrow`) | 226 rows, 29 files checked against their checksums | 0 / 0 (no ledger entries yet) | passed | 135 s |
+| 2026-11-28 | brivox-production (live, shared cluster), the nightly job's path | export with no `.env` (as on GitHub), encrypted and decrypted with the workflow's `openssl` lines (byte-identical), restored into a throwaway database: 732 of 732 rows; collection counts unchanged on both clusters (the export wrote nothing) | 54,799.59 / 54,799.59 | passed | ~2 min |
 
 The first drill against production was run on 27 Nov 2026 for both live clients (above). Next: once a quarter.
 A client on its own cluster is drilled with that cluster's env file loaded (its `MONGO_URI` must win over `.env`).
